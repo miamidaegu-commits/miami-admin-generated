@@ -319,8 +319,8 @@ function addCalendarDaysToYmd(startYmd, deltaDays) {
   return formatLocalDateToYmd(next)
 }
 
-/** 신규 정규반 저장 직후 자동 일정 등에 쓰는 기본 기간(시작일 포함 약 8주) */
-const GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS = 7 * 8 - 1
+/** 신규 정규반 저장 직후 자동 일정 등에 쓰는 기본 기간(시작일 포함 약 1년, 365일) */
+const GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS = 365 - 1
 
 /**
  * groupClassId + date + time 기준 중복은 건너뜀. Firestore addDoc 순차 호출.
@@ -463,6 +463,10 @@ export default function Dashboard() {
   })
   const [groupLessonSeriesFormErrors, setGroupLessonSeriesFormErrors] = useState({})
   const [busyGroupLessonSeries, setBusyGroupLessonSeries] = useState(false)
+  const [groupLessonPurgeModalOpen, setGroupLessonPurgeModalOpen] = useState(false)
+  const [groupLessonPurgeFromDate, setGroupLessonPurgeFromDate] = useState('')
+  const [groupLessonPurgeFormErrors, setGroupLessonPurgeFormErrors] = useState({})
+  const [busyGroupLessonPurge, setBusyGroupLessonPurge] = useState(false)
 
   const groupLessonSeriesPlannedCount = useMemo(() => {
     if (!groupLessonSeriesModalOpen || !selectedGroupClass) return null
@@ -1714,7 +1718,7 @@ export default function Dashboard() {
             })
             if (created > 0 || skippedDup > 0) {
               alert(
-                `반을 저장했습니다. 약 8주간 수업 일정 ${created}건이 자동으로 만들어졌습니다. (중복 ${skippedDup}건 건너뜀)`
+                `반을 저장했습니다. 약 1년간 수업 일정 ${created}건이 자동으로 만들어졌습니다. (중복 ${skippedDup}건 건너뜀)`
               )
             }
           }
@@ -2005,11 +2009,17 @@ export default function Dashboard() {
         await addDoc(collection(db, 'groupLessons'), {
           groupClassId: selectedGroupClass.id,
           groupClassName: selectedGroupClass.name || '',
-          teacher: selectedGroupClass.teacher || '',
+          teacher: normalizeText(selectedGroupClass.teacher || ''),
           date: result.date,
           time: result.time,
           subject: result.subject,
           completed: false,
+          countedStudentIDs: [],
+          attendanceAppliedAt: null,
+          bookingMode: 'fixed',
+          capacity: Number(selectedGroupClass.maxStudents || 0),
+          bookedCount: 0,
+          isBookable: false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
@@ -2029,7 +2039,7 @@ export default function Dashboard() {
       await updateDoc(doc(db, 'groupLessons', lesson.id), {
         groupClassId: selectedGroupClass.id,
         groupClassName: selectedGroupClass.name || '',
-        teacher: selectedGroupClass.teacher || '',
+        teacher: normalizeText(selectedGroupClass.teacher || ''),
         date: result.date,
         time: result.time,
         subject: result.subject,
@@ -2176,6 +2186,87 @@ export default function Dashboard() {
       alert(`그룹 수업 삭제 실패: ${error.message}`)
     } finally {
       setBusyGroupLessonId(null)
+    }
+  }
+
+  function closeGroupLessonPurgeModal() {
+    setGroupLessonPurgeModalOpen(false)
+    setGroupLessonPurgeFromDate('')
+    setGroupLessonPurgeFormErrors({})
+  }
+
+  function openGroupLessonPurgeModal() {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 사용할 수 있습니다.')
+      return
+    }
+    if (!selectedGroupClass?.id) return
+    setGroupLessonPurgeFromDate(formatLocalDateToYmd(new Date()))
+    setGroupLessonPurgeFormErrors({})
+    setGroupLessonPurgeModalOpen(true)
+  }
+
+  async function submitGroupLessonPurgeFromDate() {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 사용할 수 있습니다.')
+      return
+    }
+    if (!selectedGroupClass?.id) return
+
+    const fromD = String(groupLessonPurgeFromDate || '').trim()
+    if (!fromD) {
+      setGroupLessonPurgeFormErrors({ purgeDate: '기준일을 선택해주세요.' })
+      return
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromD) || !parseYmdToLocalDate(fromD)) {
+      setGroupLessonPurgeFormErrors({ purgeDate: '유효한 기준일을 선택해주세요.' })
+      return
+    }
+    setGroupLessonPurgeFormErrors({})
+
+    const gid = String(selectedGroupClass.id)
+    const toDelete = groupLessons.filter(
+      (gl) =>
+        Boolean(gl?.id) &&
+        String(gl.groupClassId || '') === gid &&
+        String(gl.date || '').trim() >= fromD
+    )
+
+    if (toDelete.length === 0) {
+      alert('선택한 기준일 이후(포함)로 삭제할 수업 일정이 없습니다.')
+      return
+    }
+
+    const classLabel = selectedGroupClass.name || '-'
+    if (
+      !window.confirm(
+        `「${classLabel}」 반의 수업 일정 중,\n기준일 ${fromD} 이후(당일 포함) ${toDelete.length}건을 삭제합니다.\n\n지난 일정(기준일 이전)은 그대로 둡니다.\n이 작업은 되돌릴 수 없습니다. 계속할까요?`
+      )
+    ) {
+      return
+    }
+
+    const chunkSize = 400
+    let deleted = 0
+
+    try {
+      setBusyGroupLessonPurge(true)
+      for (let i = 0; i < toDelete.length; i += chunkSize) {
+        const batch = writeBatch(db)
+        const chunk = toDelete.slice(i, i + chunkSize)
+        for (const gl of chunk) {
+          batch.delete(doc(db, 'groupLessons', gl.id))
+        }
+        await batch.commit()
+        deleted += chunk.length
+      }
+      closeGroupLessonPurgeModal()
+      alert(`삭제 완료: ${deleted}건의 일정을 삭제했습니다.`)
+    } catch (error) {
+      console.error('이후 일정 삭제 실패:', error)
+      alert(`삭제 실패: ${error.message}`)
+    } finally {
+      setBusyGroupLessonPurge(false)
     }
   }
 
@@ -3051,10 +3142,45 @@ export default function Dashboard() {
               >
                 {busyGroupLessonSeries ? '생성 중...' : '추가 일정 생성'}
               </button>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  onClick={openGroupLessonPurgeModal}
+                  disabled={
+                    busyGroupLessonPurge ||
+                    busyGroupLessonId === '__add__' ||
+                    busyGroupLessonSeries ||
+                    groupLessonsLoading ||
+                    busyGroupId === '__add__' ||
+                    busyGroupId === selectedGroupClass.id
+                  }
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #664444',
+                    background: '#3a2525',
+                    color: 'rgba(255, 230, 230, 0.95)',
+                    fontSize: 13,
+                    cursor:
+                      busyGroupLessonPurge ||
+                      busyGroupLessonId === '__add__' ||
+                      busyGroupLessonSeries ||
+                      groupLessonsLoading ||
+                      busyGroupId === '__add__' ||
+                      busyGroupId === selectedGroupClass.id
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                  title="기준일 이후(당일 포함)의 이 반 수업 일정만 삭제합니다. 관리자 전용입니다."
+                >
+                  {busyGroupLessonPurge ? '처리 중...' : '이후 일정 삭제'}
+                </button>
+              ) : null}
             </div>
             <p style={{ margin: '-8px 0 16px 0', fontSize: 11, opacity: 0.6, lineHeight: 1.45 }}>
               특별 수업 추가: 보강·특강 등 날짜 한 건 · 추가 일정 생성: 관리자용으로 기간을 정해 같은
               규칙으로 일정을 더 만듭니다.
+              {isAdmin ? ' · 이후 일정 삭제: 폐강·일정 정리 시 기준일 이후 일정만 일괄 삭제(관리자).' : ''}
             </p>
 
             {groupStudentsLoading ? (
@@ -3950,7 +4076,7 @@ export default function Dashboard() {
 
             {groupModal.type === 'add' ? (
               <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.72, lineHeight: 1.45 }}>
-                반 정보·수업 시간·반복 요일을 저장하면, 시작일부터 약 8주간 수업 일정이 자동으로
+                반 정보·수업 시간·반복 요일을 저장하면, 시작일부터 약 1년간 수업 일정이 자동으로
                 만들어집니다.
               </p>
             ) : null}
@@ -4718,6 +4844,118 @@ export default function Dashboard() {
                 }}
               >
                 {isGroupLessonSeriesSubmitting ? '생성 중...' : '일정 생성'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'groups' && groupLessonPurgeModalOpen && selectedGroupClass ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="group-lesson-purge-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeGroupLessonPurgeModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="group-lesson-purge-modal-title"
+              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
+            >
+              이후 일정 삭제
+            </h2>
+            <p style={{ margin: '0 0 10px 0', fontSize: 13, opacity: 0.85 }}>
+              {selectedGroupClass.name || '-'}
+            </p>
+            <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.68, lineHeight: 1.45 }}>
+              기준일 이후(당일 포함)의 이 반 수업 일정만 삭제합니다. 기준일보다 이른 날짜 일정은
+              그대로 둡니다.
+            </p>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
+              <span style={{ opacity: 0.85 }}>삭제 기준일</span>
+              <input
+                type="date"
+                value={groupLessonPurgeFromDate}
+                onChange={(e) =>
+                  setGroupLessonPurgeFromDate(e.target.value)
+                }
+                disabled={busyGroupLessonPurge}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #444',
+                  background: '#1f1f1f',
+                  color: 'white',
+                }}
+              />
+              {groupLessonPurgeFormErrors.purgeDate ? (
+                <span style={{ color: '#f08080', fontSize: 12 }}>
+                  {groupLessonPurgeFormErrors.purgeDate}
+                </span>
+              ) : null}
+            </label>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                marginTop: 20,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeGroupLessonPurgeModal}
+                disabled={busyGroupLessonPurge}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: busyGroupLessonPurge ? 'not-allowed' : 'pointer',
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={submitGroupLessonPurgeFromDate}
+                disabled={busyGroupLessonPurge}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #664444',
+                  background: '#4a2a2a',
+                  color: 'white',
+                  cursor: busyGroupLessonPurge ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {busyGroupLessonPurge ? '삭제 중...' : '삭제 실행'}
               </button>
             </div>
           </div>
