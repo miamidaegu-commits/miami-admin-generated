@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.role == "admin";
+    }
+
+    function isMe(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    match /users/{uid} {
+      allow read: if isMe(uid) || isAdmin();
+      allow create: if isMe(uid) || isAdmin();
+      allow update: if isMe(uid) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /lessons/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /privateStudents/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /groupClasses/{docId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

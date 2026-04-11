@@ -1,0 +1,140 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function currentUid() {
+      return request.auth.uid;
+    }
+
+    function currentUserDoc() {
+      return get(/databases/$(database)/documents/users/$(currentUid())).data;
+    }
+
+    function isAdmin() {
+      return signedIn() && currentUserDoc().role == "admin";
+    }
+
+    function isTeacher() {
+      return signedIn() && currentUserDoc().role == "teacher";
+    }
+
+    function isMe(uid) {
+      return signedIn() && currentUid() == uid;
+    }
+
+    function myTeacherName() {
+      return currentUserDoc().teacherName;
+    }
+
+    function lessonBelongsToTeacher(data) {
+      return isTeacher() &&
+        (
+          (data.teacherName is string && data.teacherName == myTeacherName()) ||
+          (data.teacher is string && data.teacher == myTeacherName())
+        );
+    }
+
+    function privateStudentBelongsToTeacher(data) {
+      return isTeacher() &&
+        (data.teacher is string && data.teacher == myTeacherName());
+    }
+
+    function groupClassBelongsToTeacher(data) {
+      return isTeacher() &&
+        (data.teacher is string && data.teacher == myTeacherName());
+    }
+
+    function parentGroupClassBelongsToTeacher(groupClassId) {
+      return isTeacher() &&
+        get(/databases/$(database)/documents/groupClasses/$(groupClassId)).data.teacher == myTeacherName();
+    }
+
+    match /users/{uid} {
+      allow read: if isMe(uid) || isAdmin();
+      allow create: if isMe(uid) || isAdmin();
+      allow update: if isMe(uid) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /lessons/{lessonId} {
+      allow read: if isAdmin() || lessonBelongsToTeacher(resource.data);
+      allow create: if isAdmin() || lessonBelongsToTeacher(request.resource.data);
+      allow update: if isAdmin() || lessonBelongsToTeacher(resource.data);
+      allow delete: if isAdmin() || lessonBelongsToTeacher(resource.data);
+    }
+
+    match /privateStudents/{studentId} {
+      allow read: if isAdmin() || privateStudentBelongsToTeacher(resource.data);
+      allow create: if isAdmin() || privateStudentBelongsToTeacher(request.resource.data);
+      allow update: if isAdmin() || privateStudentBelongsToTeacher(resource.data);
+      allow delete: if isAdmin() || privateStudentBelongsToTeacher(resource.data);
+    }
+
+    match /groupClasses/{groupClassId} {
+      allow read: if isAdmin() || groupClassBelongsToTeacher(resource.data);
+      allow create: if isAdmin() || groupClassBelongsToTeacher(request.resource.data);
+      allow update: if isAdmin() || groupClassBelongsToTeacher(resource.data);
+      allow delete: if isAdmin() || groupClassBelongsToTeacher(resource.data);
+    }
+
+    match /groupStudents/{groupStudentId} {
+      allow read: if isAdmin() || (
+        isTeacher() &&
+        resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+      );
+
+      allow create: if isAdmin() || (
+        isTeacher() &&
+        request.resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(request.resource.data.groupClassId)
+      );
+
+      allow update: if isAdmin() || (
+        isTeacher() &&
+        resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+      );
+
+      allow delete: if isAdmin() || (
+        isTeacher() &&
+        resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+      );
+    }
+
+    match /groupLessons/{groupLessonId} {
+      allow read: if isAdmin() || (
+        isTeacher() &&
+        resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+      );
+
+      allow create: if isAdmin() || (
+        isTeacher() &&
+        request.resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(request.resource.data.groupClassId)
+      );
+
+      allow update: if isAdmin() || (
+        isTeacher() &&
+        resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+      );
+
+      allow delete: if isAdmin() || (
+        isTeacher() &&
+        resource.data.groupClassId is string &&
+        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+      );
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
