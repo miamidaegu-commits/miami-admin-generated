@@ -272,9 +272,7 @@ export default function Dashboard() {
   const [groupStudentsLoading, setGroupStudentsLoading] = useState(false)
   const [groupStudentAddModalOpen, setGroupStudentAddModalOpen] = useState(false)
   const [groupStudentForm, setGroupStudentForm] = useState({
-    studentId: '',
-    paidLessons: '0',
-    attendanceCount: '0',
+    packageId: '',
     startDate: '',
   })
   const [groupStudentFormErrors, setGroupStudentFormErrors] = useState({})
@@ -773,18 +771,23 @@ export default function Dashboard() {
     return map
   }, [privateStudents])
 
-  const privateStudentsForSelectedGroupTeacher = useMemo(() => {
-    const teacherRaw = selectedGroupClass?.teacher
-    if (!teacherRaw) return []
-    const tNorm = normalizeText(teacherRaw)
-    return [...privateStudents]
-      .filter((s) => normalizeText(s.teacher) === tNorm)
-      .sort((a, b) => {
-        const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
-        if (byName !== 0) return byName
-        return String(a.id || '').localeCompare(String(b.id || ''), 'ko')
+  const groupStudentEligiblePackages = useMemo(() => {
+    const gid = selectedGroupClass?.id
+    if (!gid) return []
+    return studentPackages
+      .filter((p) => {
+        if (p.packageType !== 'group') return false
+        if (String(p.groupClassId || '') !== String(gid)) return false
+        if (p.status !== 'active') return false
+        if (Number(p.remainingCount || 0) <= 0) return false
+        return true
       })
-  }, [privateStudents, selectedGroupClass?.teacher])
+      .sort((a, b) => {
+        const byStudent = String(a.studentName || '').localeCompare(String(b.studentName || ''), 'ko')
+        if (byStudent !== 0) return byStudent
+        return String(a.title || '').localeCompare(String(b.title || ''), 'ko')
+      })
+  }, [studentPackages, selectedGroupClass?.id])
 
   const sortedPrivateStudents = useMemo(() => {
     return [...privateStudents].sort((a, b) => {
@@ -1484,9 +1487,7 @@ export default function Dashboard() {
     }
 
     setGroupStudentForm({
-      studentId: '',
-      paidLessons: '0',
-      attendanceCount: '0',
+      packageId: '',
       startDate: '',
     })
     setGroupStudentFormErrors({})
@@ -1495,14 +1496,8 @@ export default function Dashboard() {
 
   function validateGroupStudentFormFields(form) {
     const errors = {}
-    const studentId = String(form.studentId || '').trim()
-    if (!studentId) errors.studentId = '학생을 선택해주세요.'
-
-    const paid = parseRequiredNonNegativeIntField(form.paidLessons)
-    if (!paid.ok) errors.paidLessons = '0 이상의 정수를 입력해주세요.'
-
-    const att = parseRequiredNonNegativeIntField(form.attendanceCount)
-    if (!att.ok) errors.attendanceCount = '0 이상의 정수를 입력해주세요.'
+    const packageId = String(form.packageId || '').trim()
+    if (!packageId) errors.packageId = '그룹 패키지를 선택해주세요.'
 
     const dateStr = String(form.startDate || '').trim()
     if (!dateStr) {
@@ -1530,9 +1525,7 @@ export default function Dashboard() {
     return {
       valid: Object.keys(errors).length === 0,
       errors,
-      studentId,
-      paidLessons: paid.ok ? paid.value : 0,
-      attendanceCount: att.ok ? att.value : 0,
+      packageId,
       startDate: startTimestamp,
     }
   }
@@ -1549,39 +1542,63 @@ export default function Dashboard() {
     setGroupStudentFormErrors(result.errors)
     if (!result.valid || !result.startDate) return
 
-    const selectedPrivateStudent = studentById.get(result.studentId)
-    const classTeacherNorm = normalizeText(selectedGroupClass.teacher || '')
+    const selectedPackage = studentPackages.find((p) => p.id === result.packageId)
+    if (!selectedPackage) {
+      alert('선택한 패키지를 찾을 수 없습니다.')
+      return
+    }
     if (
-      !selectedPrivateStudent ||
-      normalizeText(selectedPrivateStudent.teacher || '') !== classTeacherNorm
+      selectedPackage.packageType !== 'group' ||
+      String(selectedPackage.groupClassId || '') !== String(selectedGroupClass.id) ||
+      selectedPackage.status !== 'active'
     ) {
-      alert('선택한 학생을 찾을 수 없거나 이 그룹 담당 선생님과 일치하지 않습니다.')
+      alert('이 그룹에서 사용할 수 없는 패키지입니다.')
+      return
+    }
+
+    if (Number(selectedPackage.remainingCount || 0) <= 0) {
+      alert('남은 횟수가 없는 패키지입니다.')
+      return
+    }
+
+    const studentId = String(selectedPackage.studentId || '').trim()
+    if (!studentId) {
+      alert('패키지에 studentId가 없습니다.')
       return
     }
 
     if (
       groupStudents.some(
         (gs) =>
-          String(gs.studentId || '').trim() === result.studentId &&
-          String(gs.groupClassId || '') === String(selectedGroupClass.id)
+          String(gs.studentId || '').trim() === studentId &&
+          String(gs.groupClassId || '') === String(selectedGroupClass.id) &&
+          String(gs.status || 'active') === 'active'
       )
     ) {
       alert('이미 이 그룹에 등록된 학생입니다.')
       return
     }
 
+    const studentName = String(selectedPackage.studentName || '').trim() || '-'
+    const teacher = normalizeText(
+      selectedGroupClass.teacher || selectedPackage.teacher || ''
+    )
+
     try {
       setBusyGroupStudentId('__add__')
-      const studentName = String(selectedPrivateStudent.name || '').trim() || '-'
       await addDoc(collection(db, 'groupStudents'), {
         groupClassId: selectedGroupClass.id,
         classID: selectedGroupClass.id,
-        studentId: result.studentId,
+        studentId,
         studentName,
         name: studentName,
-        paidLessons: result.paidLessons,
-        attendanceCount: result.attendanceCount,
+        teacher,
+        packageId: selectedPackage.id,
+        packageType: selectedPackage.packageType,
+        paidLessons: Number(selectedPackage.totalCount || 0),
+        attendanceCount: Number(selectedPackage.usedCount || 0),
         startDate: result.startDate,
+        status: 'active',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
@@ -3607,7 +3624,7 @@ export default function Dashboard() {
           <div
             style={{
               width: '100%',
-              maxWidth: 420,
+              maxWidth: 460,
               background: '#151922',
               border: '1px solid #2e3240',
               borderRadius: 12,
@@ -3629,13 +3646,13 @@ export default function Dashboard() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>등록된 학생 선택</span>
+                <span style={{ opacity: 0.85 }}>등록 가능한 그룹 패키지 선택</span>
                 <select
-                  value={groupStudentForm.studentId}
+                  value={groupStudentForm.packageId}
                   onChange={(e) =>
                     setGroupStudentForm((prev) => ({
                       ...prev,
-                      studentId: e.target.value,
+                      packageId: e.target.value,
                     }))
                   }
                   style={{
@@ -3646,44 +3663,30 @@ export default function Dashboard() {
                     color: 'white',
                   }}
                 >
-                  <option value="">학생을 선택하세요</option>
-                  {privateStudentsForSelectedGroupTeacher.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name || '-'}
-                      {s.teacher ? ` (${s.teacher})` : ''}
+                  <option value="">패키지를 선택하세요</option>
+                  {groupStudentEligiblePackages.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.studentName || '-'} — {p.title || '(제목 없음)'}
                     </option>
                   ))}
                 </select>
-                {privateStudentsForSelectedGroupTeacher.length === 0 ? (
+                {groupStudentEligiblePackages.length === 0 ? (
                   <span style={{ fontSize: 12, opacity: 0.75 }}>
-                    이 그룹 선생님과 동일한 담당의 등록 학생이 없습니다.
+                    이 그룹에 연결된 활성 group 패키지가 없습니다.
                   </span>
                 ) : null}
-                {groupStudentFormErrors.studentId ? (
+                {groupStudentFormErrors.packageId ? (
                   <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupStudentFormErrors.studentId}
+                    {groupStudentFormErrors.packageId}
                   </span>
                 ) : null}
               </label>
 
               {(() => {
-                const ps = groupStudentForm.studentId
-                  ? studentById.get(groupStudentForm.studentId)
+                const pkg = groupStudentForm.packageId
+                  ? studentPackages.find((p) => p.id === groupStudentForm.packageId)
                   : null
-                if (!ps) return null
-                const paidM = parseRequiredNonNegativeIntField(
-                  String(ps.paidLessons ?? '').trim() === '' ? '0' : ps.paidLessons
-                )
-                const attM = parseRequiredNonNegativeIntField(
-                  String(ps.attendanceCount ?? '').trim() === '' ? '0' : ps.attendanceCount
-                )
-                const remaining =
-                  paidM.ok && attM.ok ? paidM.value - attM.value : null
-                const phone = ps.phone != null && String(ps.phone).trim() !== '' ? String(ps.phone).trim() : ''
-                const carNumber =
-                  ps.carNumber != null && String(ps.carNumber).trim() !== ''
-                    ? String(ps.carNumber).trim()
-                    : ''
+                if (!pkg) return null
                 return (
                   <div
                     style={{
@@ -3697,78 +3700,20 @@ export default function Dashboard() {
                     }}
                   >
                     <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>
-                      학생 정보 (개인 수업 마스터, 읽기 전용)
+                      패키지 정보 (읽기 전용)
                     </div>
-                    <div>이름: {ps.name || '-'}</div>
-                    <div>teacher: {ps.teacher ?? '-'}</div>
-                    <div>
-                      paidLessons:{' '}
-                      {paidM.ok ? paidM.value : String(ps.paidLessons ?? '-')}
-                    </div>
-                    <div>
-                      attendanceCount:{' '}
-                      {attM.ok ? attM.value : String(ps.attendanceCount ?? '-')}
-                    </div>
-                    {remaining != null ? <div>남은 횟수: {remaining}</div> : null}
-                    {phone ? <div>phone: {phone}</div> : null}
-                    {carNumber ? <div>carNumber: {carNumber}</div> : null}
+                    <div>studentName: {pkg.studentName ?? '-'}</div>
+                    <div>teacher: {pkg.teacher ?? '-'}</div>
+                    <div>title: {pkg.title ?? '-'}</div>
+                    <div>totalCount: {pkg.totalCount ?? '-'}</div>
+                    <div>usedCount: {pkg.usedCount ?? '-'}</div>
+                    <div>remainingCount: {pkg.remainingCount ?? '-'}</div>
+                    <div>expiresAt: {formatGroupStudentStartDate(pkg.expiresAt)}</div>
+                    <div>amountPaid: {pkg.amountPaid ?? 0}</div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>memo: {pkg.memo || '—'}</div>
                   </div>
                 )
               })()}
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>결제 횟수 (paidLessons)</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={groupStudentForm.paidLessons}
-                  onChange={(e) =>
-                    setGroupStudentForm((prev) => ({
-                      ...prev,
-                      paidLessons: e.target.value,
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupStudentFormErrors.paidLessons ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupStudentFormErrors.paidLessons}
-                  </span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>차감 횟수 (attendanceCount)</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={groupStudentForm.attendanceCount}
-                  onChange={(e) =>
-                    setGroupStudentForm((prev) => ({
-                      ...prev,
-                      attendanceCount: e.target.value,
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupStudentFormErrors.attendanceCount ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupStudentFormErrors.attendanceCount}
-                  </span>
-                ) : null}
-              </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>시작일</span>
