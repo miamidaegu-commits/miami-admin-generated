@@ -1626,7 +1626,7 @@ export default function Dashboard() {
     }
 
     const label = `${group.name || ''} (${group.teacher || ''})`.trim()
-    if (!window.confirm(`이 그룹을 삭제할까요?\n${label}`)) return
+    if (!window.confirm(`이 반을 삭제할까요?\n${label}`)) return
 
     try {
       setBusyGroupId(group.id)
@@ -1787,7 +1787,7 @@ export default function Dashboard() {
     }
 
     const label = getGroupStudentDisplayName(row)
-    if (!window.confirm(`이 학생을 그룹에서 제거할까요?\n${label}`)) return
+    if (!window.confirm(`이 학생을 이 반에서 제거할까요?\n${label}`)) return
 
     try {
       setBusyGroupStudentId(row.id)
@@ -1933,7 +1933,7 @@ export default function Dashboard() {
     const subjectStr = String(selectedGroupClass.subject || '').trim()
     if (wd.length === 0 || !timeStr || !subjectStr) {
       alert(
-        '그룹에 요일(weekdays)·시간(time)·과목(subject)이 모두 설정되어 있어야 반복 수업을 만들 수 있습니다.'
+        '반에 요일(weekdays)·시간(time)·과목(subject)이 모두 설정되어 있어야 수업 일정을 만들 수 있습니다.'
       )
       return
     }
@@ -1992,7 +1992,7 @@ export default function Dashboard() {
     const timeStr = String(gc.time || '').trim()
     const subjectStr = String(gc.subject || '').trim()
     if (weekdaySet.size === 0 || !timeStr || !subjectStr) {
-      alert('그룹 설정(요일·시간·과목)을 확인해주세요.')
+      alert('반 설정(요일·시간·과목)을 확인해주세요.')
       return
     }
 
@@ -2040,11 +2040,11 @@ export default function Dashboard() {
         created += 1
       }
 
-      alert(`반복 수업 생성 완료: ${created}건 생성, 중복 건너뜀 ${skippedDup}건`)
+      alert(`수업 일정 생성 완료: ${created}건 생성, 중복 건너뜀 ${skippedDup}건`)
       closeGroupLessonSeriesModal()
     } catch (error) {
-      console.error('반복 그룹 수업 생성 실패:', error)
-      alert(`반복 그룹 수업 생성 실패: ${error.message}`)
+      console.error('수업 일정 생성 실패:', error)
+      alert(`수업 일정 생성 실패: ${error.message}`)
     } finally {
       setBusyGroupLessonSeries(false)
     }
@@ -2057,7 +2057,7 @@ export default function Dashboard() {
     }
 
     const label = `${lesson.date || ''} ${lesson.time || ''} ${lesson.subject || ''}`.trim()
-    if (!window.confirm(`이 그룹 수업을 삭제할까요?\n${label}`)) return
+    if (!window.confirm(`이 수업 일정을 삭제할까요?\n${label}`)) return
 
     try {
       setBusyGroupLessonId(lesson.id)
@@ -2346,7 +2346,7 @@ export default function Dashboard() {
   {[
     { key: 'calendar', label: 'Calendar' },
     { key: 'students', label: 'Students' },
-    { key: 'groups', label: 'Groups' },
+    { key: 'groups', label: '반 관리' },
   ].map((item) => (
     <button
       key={item.key}
@@ -2390,7 +2390,7 @@ export default function Dashboard() {
     ? 'Calendar'
     : activeSection === 'students'
     ? 'Students'
-    : 'Groups'}
+    : '반 관리'}
 </h1>
             <p className="page-sub">
               {userProfile?.teacherName
@@ -2688,7 +2688,7 @@ export default function Dashboard() {
       }}
     >
       <h2 className="section-title" style={{ margin: 0 }}>
-        Group Management
+        반 관리
       </h2>
       {canManageGroupClasses ? (
         <button
@@ -2705,7 +2705,7 @@ export default function Dashboard() {
               busyGroupId === '__add__' || groupClassesLoading ? 'not-allowed' : 'pointer',
           }}
         >
-          {busyGroupId === '__add__' ? '추가 중...' : '그룹 추가'}
+          {busyGroupId === '__add__' ? '만드는 중...' : '반 만들기'}
         </button>
       ) : null}
     </div>
@@ -2713,7 +2713,7 @@ export default function Dashboard() {
     {groupClassesLoading ? (
       <p>불러오는 중...</p>
     ) : sortedGroupClasses.length === 0 ? (
-      <p style={{ opacity: 0.8 }}>등록된 그룹이 없습니다.</p>
+      <p style={{ opacity: 0.8 }}>등록된 반이 없습니다. 위에서 반을 만들 수 있습니다.</p>
     ) : (
       <>
         <div className="activity-table">
@@ -2800,6 +2800,12 @@ export default function Dashboard() {
           })}
         </div>
 
+        {!selectedGroupClass && sortedGroupClasses.length > 0 ? (
+          <p style={{ marginTop: 16, opacity: 0.75, fontSize: 13 }}>
+            반을 선택하면 학생과 수업 일정을 관리할 수 있습니다.
+          </p>
+        ) : null}
+
         {selectedGroupClass ? (
           <div
             style={{
@@ -2810,45 +2816,29 @@ export default function Dashboard() {
               background: '#151922',
             }}
           >
+            <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
+              등록 학생 — {selectedGroupClass.name || '-'}
+            </h3>
+            <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
+              담당 선생님 {selectedGroupClass.teacher || '-'} · 정원{' '}
+              {selectedGroupClass.maxStudents ?? '-'}명
+            </p>
+            <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
+              기본 시간 {selectedGroupClass.time || '—'} · 과목{' '}
+              {selectedGroupClass.subject || '—'} · 요일{' '}
+              {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'}
+            </p>
+
             <div
               style={{
                 display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 12,
-                marginBottom: 16,
                 flexWrap: 'wrap',
+                gap: 8,
+                marginTop: 14,
+                marginBottom: 16,
+                alignItems: 'center',
               }}
             >
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
-                  그룹 학생 — {selectedGroupClass.name || '-'}
-                </h3>
-                <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
-                  선생님 {selectedGroupClass.teacher || '-'} · 최대{' '}
-                  {selectedGroupClass.maxStudents ?? '-'}명
-                </p>
-                {selectedGroupClass.time ||
-                selectedGroupClass.subject ||
-                (Array.isArray(selectedGroupClass.weekdays) &&
-                  selectedGroupClass.weekdays.length > 0) ? (
-                  <p style={{ margin: '6px 0 0 0', opacity: 0.65, fontSize: 12 }}>
-                    {selectedGroupClass.time ? `시간 ${selectedGroupClass.time}` : ''}
-                    {selectedGroupClass.time && selectedGroupClass.subject ? ' · ' : ''}
-                    {selectedGroupClass.subject ? `과목 ${selectedGroupClass.subject}` : ''}
-                    {(() => {
-                      const wd = formatGroupWeekdaysDisplay(selectedGroupClass.weekdays)
-                      if (!wd) return null
-                      return (
-                        <>
-                          {selectedGroupClass.time || selectedGroupClass.subject ? ' · ' : ''}
-                          요일 {wd}
-                        </>
-                      )
-                    })()}
-                  </p>
-                ) : null}
-              </div>
               {canAddStudent ? (
                 <button
                   type="button"
@@ -2874,15 +2864,93 @@ export default function Dashboard() {
                         : 'pointer',
                   }}
                 >
-                  {busyGroupStudentId === '__add__' ? '추가 중...' : '학생 추가'}
+                  {busyGroupStudentId === '__add__' ? '등록 중...' : '학생 등록'}
                 </button>
               ) : null}
+              <button
+                type="button"
+                onClick={openGroupLessonAddModal}
+                disabled={
+                  !canUseDirectLessonCreation ||
+                  busyGroupLessonId === '__add__' ||
+                  busyGroupLessonSeries ||
+                  groupLessonsLoading ||
+                  busyGroupId === '__add__' ||
+                  busyGroupId === selectedGroupClass.id
+                }
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  border: '1px solid #444',
+                  background: '#1f2a44',
+                  color: 'white',
+                  cursor:
+                    !canUseDirectLessonCreation ||
+                    busyGroupLessonId === '__add__' ||
+                    busyGroupLessonSeries ||
+                    groupLessonsLoading ||
+                    busyGroupId === '__add__' ||
+                    busyGroupId === selectedGroupClass.id
+                      ? 'not-allowed'
+                      : 'pointer',
+                }}
+                title={
+                  requiresLessonApproval
+                    ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
+                    : !canCreateLessonDirectly
+                    ? '직접 수업 생성 권한이 없습니다.'
+                    : undefined
+                }
+              >
+                {busyGroupLessonId === '__add__' ? '추가 중...' : '한 번만 수업 추가'}
+              </button>
+              <button
+                type="button"
+                onClick={openGroupLessonSeriesModal}
+                disabled={
+                  !canUseDirectLessonCreation ||
+                  busyGroupLessonId === '__add__' ||
+                  busyGroupLessonSeries ||
+                  groupLessonsLoading ||
+                  busyGroupId === '__add__' ||
+                  busyGroupId === selectedGroupClass.id
+                }
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: 10,
+                  border: '1px solid #335533',
+                  background: '#2a3d2a',
+                  color: 'white',
+                  cursor:
+                    !canUseDirectLessonCreation ||
+                    busyGroupLessonId === '__add__' ||
+                    busyGroupLessonSeries ||
+                    groupLessonsLoading ||
+                    busyGroupId === '__add__' ||
+                    busyGroupId === selectedGroupClass.id
+                      ? 'not-allowed'
+                      : 'pointer',
+                }}
+                title={
+                  requiresLessonApproval
+                    ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
+                    : !canCreateLessonDirectly
+                    ? '직접 수업 생성 권한이 없습니다.'
+                    : undefined
+                }
+              >
+                {busyGroupLessonSeries ? '생성 중...' : '수업 일정 생성'}
+              </button>
             </div>
+            <p style={{ margin: '-8px 0 16px 0', fontSize: 11, opacity: 0.6, lineHeight: 1.45 }}>
+              한 번만 수업 추가: 보강·특강 등 임시 일정용 · 수업 일정 생성: 반에 저장된 요일·시간으로
+              여러 날짜를 한 번에 만듭니다.
+            </p>
 
             {groupStudentsLoading ? (
               <p style={{ opacity: 0.85 }}>학생 목록 불러오는 중...</p>
             ) : sortedGroupStudentsForSelectedClass.length === 0 ? (
-              <p style={{ opacity: 0.8 }}>이 그룹에 등록된 학생이 없습니다.</p>
+              <p style={{ opacity: 0.8 }}>이 반에 등록된 학생이 없습니다.</p>
             ) : (
               <div className="activity-table">
                 <div
@@ -2953,106 +3021,17 @@ export default function Dashboard() {
 
             <div style={{ height: 20 }} />
 
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 12,
-                marginBottom: 12,
-                flexWrap: 'wrap',
-              }}
-            >
-              <div>
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
-                  그룹 수업
-                </h3>
-                <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
-                  선택된 그룹의 수업을 관리합니다.
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  onClick={openGroupLessonAddModal}
-                  disabled={
-                    !canUseDirectLessonCreation ||
-                    busyGroupLessonId === '__add__' ||
-                    busyGroupLessonSeries ||
-                    groupLessonsLoading ||
-                    busyGroupId === '__add__' ||
-                    busyGroupId === selectedGroupClass.id
-                  }
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 10,
-                    border: '1px solid #444',
-                    background: '#1f2a44',
-                    color: 'white',
-                    cursor:
-                      !canUseDirectLessonCreation ||
-                      busyGroupLessonId === '__add__' ||
-                      busyGroupLessonSeries ||
-                      groupLessonsLoading ||
-                      busyGroupId === '__add__' ||
-                      busyGroupId === selectedGroupClass.id
-                        ? 'not-allowed'
-                        : 'pointer',
-                  }}
-                  title={
-                    requiresLessonApproval
-                      ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
-                      : !canCreateLessonDirectly
-                      ? '직접 수업 생성 권한이 없습니다.'
-                      : undefined
-                  }
-                >
-                  {busyGroupLessonId === '__add__' ? '추가 중...' : '그룹 수업 추가'}
-                </button>
-                <button
-                  type="button"
-                  onClick={openGroupLessonSeriesModal}
-                  disabled={
-                    !canUseDirectLessonCreation ||
-                    busyGroupLessonId === '__add__' ||
-                    busyGroupLessonSeries ||
-                    groupLessonsLoading ||
-                    busyGroupId === '__add__' ||
-                    busyGroupId === selectedGroupClass.id
-                  }
-                  style={{
-                    padding: '10px 14px',
-                    borderRadius: 10,
-                    border: '1px solid #335533',
-                    background: '#2a3d2a',
-                    color: 'white',
-                    cursor:
-                      !canUseDirectLessonCreation ||
-                      busyGroupLessonId === '__add__' ||
-                      busyGroupLessonSeries ||
-                      groupLessonsLoading ||
-                      busyGroupId === '__add__' ||
-                      busyGroupId === selectedGroupClass.id
-                        ? 'not-allowed'
-                        : 'pointer',
-                  }}
-                  title={
-                    requiresLessonApproval
-                      ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
-                      : !canCreateLessonDirectly
-                      ? '직접 수업 생성 권한이 없습니다.'
-                      : undefined
-                  }
-                >
-                  {busyGroupLessonSeries ? '생성 중...' : '반복 수업 생성'}
-                </button>
-              </div>
+            <div style={{ marginBottom: 12 }}>
+              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>수업 일정</h3>
+              <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
+                이 반에서 실제로 진행되는 날짜별 수업입니다.
+              </p>
             </div>
 
             {groupLessonsLoading ? (
-              <p style={{ opacity: 0.85 }}>그룹 수업 불러오는 중...</p>
+              <p style={{ opacity: 0.85 }}>수업 일정을 불러오는 중...</p>
             ) : sortedGroupLessonsForSelectedClass.length === 0 ? (
-              <p style={{ opacity: 0.8 }}>등록된 그룹 수업이 없습니다.</p>
+              <p style={{ opacity: 0.8 }}>등록된 수업 일정이 없습니다.</p>
             ) : (
               <div className="activity-table">
                 <div
@@ -3856,7 +3835,7 @@ export default function Dashboard() {
               id="group-modal-title"
               style={{ margin: '0 0 16px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              {groupModal.type === 'add' ? '그룹 추가' : '그룹 수정'}
+              {groupModal.type === 'add' ? '반 만들기' : '반 수정'}
             </h2>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -4099,7 +4078,7 @@ export default function Dashboard() {
               id="group-student-modal-title"
               style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              그룹 학생 추가
+              학생 등록
             </h2>
             <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
               {selectedGroupClass.name || '-'}
@@ -4107,7 +4086,7 @@ export default function Dashboard() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>등록 가능한 그룹 패키지 선택</span>
+                <span style={{ opacity: 0.85 }}>이 반에서 사용할 패키지 선택</span>
                 <select
                   value={groupStudentForm.packageId}
                   onChange={(e) =>
@@ -4133,7 +4112,7 @@ export default function Dashboard() {
                 </select>
                 {groupStudentEligiblePackages.length === 0 ? (
                   <span style={{ fontSize: 12, opacity: 0.75 }}>
-                    이 그룹에 연결된 활성 group 패키지가 없습니다.
+                    이 반에 연결된 활성 group 패키지가 없습니다.
                   </span>
                 ) : null}
                 {groupStudentFormErrors.packageId ? (
@@ -4283,7 +4262,7 @@ export default function Dashboard() {
               id="group-lesson-modal-title"
               style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              {groupLessonModal.type === 'add' ? '그룹 수업 추가' : '그룹 수업 수정'}
+              {groupLessonModal.type === 'add' ? '한 번만 수업 추가' : '수업 수정'}
             </h2>
             <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
               {selectedGroupClass.name || '-'}
@@ -4436,7 +4415,7 @@ export default function Dashboard() {
               id="group-lesson-series-modal-title"
               style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              반복 그룹 수업 생성
+              수업 일정 생성
             </h2>
             <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
               {selectedGroupClass.name || '-'}
@@ -4454,7 +4433,7 @@ export default function Dashboard() {
                 opacity: 0.95,
               }}
             >
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>그룹 설정 (읽기 전용)</div>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>이 반의 수업 정보 (읽기 전용)</div>
               <div>시간: {selectedGroupClass.time || '—'}</div>
               <div>과목: {selectedGroupClass.subject || '—'}</div>
               <div>
