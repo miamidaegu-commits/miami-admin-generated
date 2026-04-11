@@ -1285,15 +1285,7 @@ export default function Dashboard() {
         }))
         return
       }
-      const studentTeacherNorm = normalizeText(st.teacher || '')
-      const groupTeacherNorm = normalizeText(g.teacher || '')
-      if (studentTeacherNorm !== groupTeacherNorm) {
-        alert(
-          '학생 담당 선생님과 선택한 그룹의 담당 선생님이 일치하지 않습니다. 같은 선생님 담당인지 확인해 주세요.'
-        )
-        return
-      }
-      teacher = groupTeacherNorm
+      teacher = normalizeText(g.teacher || '')
       groupClassId = g.id
       groupClassName = g.name || null
     }
