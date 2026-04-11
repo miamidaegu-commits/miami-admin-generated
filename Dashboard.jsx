@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import {
   addDoc,
+  arrayRemove,
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   serverTimestamp,
   Timestamp,
   updateDoc,
@@ -288,6 +291,21 @@ function formatLocalDateToYmd(date) {
   return `${y}-${m}-${d}`
 }
 
+/** groupStudents.startDate → yyyy-mm-dd (없으면 null) */
+function groupStudentStartDateToYmd(gs) {
+  const raw = gs?.startDate
+  if (raw == null || raw === '') return null
+  if (typeof raw?.toDate === 'function') {
+    const d = raw.toDate()
+    return d ? formatLocalDateToYmd(d) : null
+  }
+  if (raw?.seconds != null) {
+    return formatLocalDateToYmd(new Date(raw.seconds * 1000))
+  }
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  return null
+}
+
 function* iterateYmdRangeInclusive(startYmd, endYmd) {
   const start = parseYmdToLocalDate(startYmd)
   const end = parseYmdToLocalDate(endYmd)
@@ -467,6 +485,8 @@ export default function Dashboard() {
   const [groupLessonPurgeFromDate, setGroupLessonPurgeFromDate] = useState('')
   const [groupLessonPurgeFormErrors, setGroupLessonPurgeFormErrors] = useState({})
   const [busyGroupLessonPurge, setBusyGroupLessonPurge] = useState(false)
+  const [groupLessonAttendanceModal, setGroupLessonAttendanceModal] = useState(null)
+  const [busyGroupAttendanceStudentId, setBusyGroupAttendanceStudentId] = useState(null)
 
   const groupLessonSeriesPlannedCount = useMemo(() => {
     if (!groupLessonSeriesModalOpen || !selectedGroupClass) return null
@@ -825,6 +845,7 @@ export default function Dashboard() {
       setGroupLessonFormErrors({})
       setGroupLessonSeriesModalOpen(false)
       setGroupLessonSeriesFormErrors({})
+      setGroupLessonAttendanceModal(null)
     }
   }, [activeSection])
 
@@ -851,6 +872,17 @@ export default function Dashboard() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [groupLessonSeriesModalOpen])
+
+  useEffect(() => {
+    if (!groupLessonAttendanceModal) return
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        setGroupLessonAttendanceModal(null)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [groupLessonAttendanceModal])
 
   useEffect(() => {
     if (!selectedGroupClass?.id) {
@@ -1106,6 +1138,92 @@ export default function Dashboard() {
       )
     )
   }, [groupStudents])
+
+  const groupLessonAttendanceModalRows = useMemo(() => {
+    const modalLesson = groupLessonAttendanceModal?.lesson
+    const gid = selectedGroupClass?.id
+    if (!modalLesson?.id || !gid) return []
+
+    const lesson =
+      groupLessons.find((l) => l.id === modalLesson.id) || modalLesson
+
+    const lessonDate = String(lesson.date || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lessonDate)) return []
+
+    const countedRaw = lesson.countedStudentIDs
+    const countedSet = new Set(
+      Array.isArray(countedRaw) ? countedRaw.map((id) => String(id || '').trim()) : []
+    )
+
+    const eligible = groupStudents.filter((gs) => {
+      if (String(gs.groupClassId || '') !== String(gid)) return false
+      if (String(gs.status || 'active') !== 'active') return false
+      const startYmd = groupStudentStartDateToYmd(gs)
+      if (startYmd && lessonDate < startYmd) return false
+      return true
+    })
+
+    const withPkgFirst = [...eligible].sort((a, b) => {
+      const ap = a.packageId ? 0 : 1
+      const bp = b.packageId ? 0 : 1
+      if (ap !== bp) return ap - bp
+      return String(a.studentName || a.name || '').localeCompare(
+        String(b.studentName || b.name || ''),
+        'ko'
+      )
+    })
+
+    return withPkgFirst.map((gs) => {
+      const studentId = String(gs.studentId || '').trim()
+      const pkg = gs.packageId
+        ? studentPackages.find((p) => p.id === gs.packageId)
+        : null
+      const pkgOk =
+        pkg &&
+        pkg.packageType === 'group' &&
+        String(pkg.groupClassId || '') === String(gid)
+
+      const title = pkgOk ? String(pkg.title || '').trim() || '—' : '—'
+      const remaining = pkgOk ? Number(pkg.remainingCount ?? 0) : null
+      const used = pkgOk ? Number(pkg.usedCount ?? 0) : null
+
+      const isCounted = studentId && countedSet.has(studentId)
+
+      let statusLabel = '미차감'
+      if (isCounted) {
+        statusLabel = '차감됨'
+      } else if (!pkgOk || !gs.packageId) {
+        statusLabel = '패키지 없음'
+      } else if (remaining != null && remaining <= 0) {
+        statusLabel = '패키지 소진'
+      }
+
+      return {
+        groupStudent: gs,
+        studentId,
+        packageDoc: pkgOk ? pkg : null,
+        packageTitle: title,
+        remainingCount: remaining,
+        usedCount: used,
+        isCounted,
+        statusLabel,
+        canDeduct: pkgOk && !isCounted && remaining != null && remaining > 0,
+        canUndo: pkgOk && isCounted && used != null && used > 0,
+      }
+    })
+  }, [
+    groupLessonAttendanceModal,
+    groupLessons,
+    selectedGroupClass?.id,
+    groupStudents,
+    studentPackages,
+  ])
+
+  const groupLessonForAttendanceModal = useMemo(() => {
+    const m = groupLessonAttendanceModal?.lesson
+    if (!m?.id) return null
+    return groupLessons.find((l) => l.id === m.id) || m
+  }, [groupLessonAttendanceModal, groupLessons])
 
   function getMatchedStudentId(lesson) {
   if (lesson.studentId) return lesson.studentId
@@ -2270,6 +2388,196 @@ export default function Dashboard() {
     }
   }
 
+  function closeGroupLessonAttendanceModal() {
+    setGroupLessonAttendanceModal(null)
+  }
+
+  function openGroupLessonAttendanceModal(lesson) {
+    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+      alert('출석 관리 권한이 없습니다.')
+      return
+    }
+    if (!lesson?.id) return
+    setGroupLessonAttendanceModal({ lesson })
+  }
+
+  async function applyGroupLessonAttendanceDeduction(groupStudentRow, lesson) {
+    const gid = selectedGroupClass?.id
+    if (!gid || !lesson?.id) return
+    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+      alert('출석 관리 권한이 없습니다.')
+      return
+    }
+
+    const studentId = String(groupStudentRow.studentId || '').trim()
+    if (!studentId) {
+      alert('studentId가 없습니다.')
+      return
+    }
+
+    const pkgId = String(groupStudentRow.packageId || '').trim()
+    if (!pkgId) {
+      alert('연결된 패키지가 없습니다.')
+      return
+    }
+
+    const lessonDate = String(lesson.date || '').trim()
+    const startYmd = groupStudentStartDateToYmd(groupStudentRow)
+    if (startYmd && lessonDate && lessonDate < startYmd) {
+      alert('이 수업 날짜는 해당 학생의 반 시작일 이전입니다.')
+      return
+    }
+
+    const busyKey = `${lesson.id}__${groupStudentRow.id}`
+    try {
+      setBusyGroupAttendanceStudentId(busyKey)
+      await runTransaction(db, async (transaction) => {
+        const lessonRef = doc(db, 'groupLessons', lesson.id)
+        const pkgRef = doc(db, 'studentPackages', pkgId)
+        const gsRef = doc(db, 'groupStudents', groupStudentRow.id)
+
+        const lessonSnap = await transaction.get(lessonRef)
+        const pkgSnap = await transaction.get(pkgRef)
+        const gsSnap = await transaction.get(gsRef)
+
+        if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
+        if (!pkgSnap.exists()) throw new Error('패키지를 찾을 수 없습니다.')
+        if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
+
+        const lData = lessonSnap.data()
+        if (String(lData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수업입니다.')
+
+        const pData = pkgSnap.data()
+        if (pData.packageType !== 'group') throw new Error('그룹 패키지가 아닙니다.')
+        if (String(pData.groupClassId || '') !== String(gid)) throw new Error('다른 반 패키지입니다.')
+        if (String(pData.studentId || '').trim() !== studentId) {
+          throw new Error('학생과 패키지가 일치하지 않습니다.')
+        }
+
+        const counted = Array.isArray(lData.countedStudentIDs)
+          ? lData.countedStudentIDs.map((x) => String(x || '').trim())
+          : []
+        if (counted.includes(studentId)) throw new Error('이미 차감된 학생입니다.')
+
+        const rem = Number(pData.remainingCount ?? 0)
+        if (rem <= 0) throw new Error('남은 횟수가 없습니다.')
+
+        const used = Number(pData.usedCount ?? 0)
+
+        const gsData = gsSnap.data()
+        if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
+        if (String(gsData.status || 'active') !== 'active') throw new Error('비활성 학생입니다.')
+
+        const att = Number(gsData.attendanceCount ?? 0)
+
+        transaction.update(pkgRef, {
+          usedCount: used + 1,
+          remainingCount: rem - 1,
+          updatedAt: serverTimestamp(),
+        })
+        transaction.update(gsRef, {
+          attendanceCount: att + 1,
+          updatedAt: serverTimestamp(),
+        })
+        transaction.update(lessonRef, {
+          countedStudentIDs: arrayUnion(studentId),
+          attendanceAppliedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      })
+    } catch (error) {
+      console.error('차감 실패:', error)
+      alert(`차감 실패: ${error.message}`)
+    } finally {
+      setBusyGroupAttendanceStudentId(null)
+    }
+  }
+
+  async function applyGroupLessonAttendanceUndo(groupStudentRow, lesson) {
+    const gid = selectedGroupClass?.id
+    if (!gid || !lesson?.id) return
+    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+      alert('출석 관리 권한이 없습니다.')
+      return
+    }
+
+    const studentId = String(groupStudentRow.studentId || '').trim()
+    if (!studentId) {
+      alert('studentId가 없습니다.')
+      return
+    }
+
+    const pkgId = String(groupStudentRow.packageId || '').trim()
+    if (!pkgId) {
+      alert('연결된 패키지가 없습니다.')
+      return
+    }
+
+    const busyKey = `${lesson.id}__${groupStudentRow.id}`
+    try {
+      setBusyGroupAttendanceStudentId(busyKey)
+      await runTransaction(db, async (transaction) => {
+        const lessonRef = doc(db, 'groupLessons', lesson.id)
+        const pkgRef = doc(db, 'studentPackages', pkgId)
+        const gsRef = doc(db, 'groupStudents', groupStudentRow.id)
+
+        const lessonSnap = await transaction.get(lessonRef)
+        const pkgSnap = await transaction.get(pkgRef)
+        const gsSnap = await transaction.get(gsRef)
+
+        if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
+        if (!pkgSnap.exists()) throw new Error('패키지를 찾을 수 없습니다.')
+        if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
+
+        const lData = lessonSnap.data()
+        if (String(lData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수업입니다.')
+
+        const pData = pkgSnap.data()
+        if (pData.packageType !== 'group') throw new Error('그룹 패키지가 아닙니다.')
+        if (String(pData.groupClassId || '') !== String(gid)) throw new Error('다른 반 패키지입니다.')
+        if (String(pData.studentId || '').trim() !== studentId) {
+          throw new Error('학생과 패키지가 일치하지 않습니다.')
+        }
+
+        const counted = Array.isArray(lData.countedStudentIDs)
+          ? lData.countedStudentIDs.map((x) => String(x || '').trim())
+          : []
+        if (!counted.includes(studentId)) throw new Error('차감 기록이 없습니다.')
+
+        const used = Number(pData.usedCount ?? 0)
+        if (used <= 0) throw new Error('usedCount를 더 줄일 수 없습니다.')
+
+        const rem = Number(pData.remainingCount ?? 0)
+
+        const gsData = gsSnap.data()
+        if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
+
+        const att = Number(gsData.attendanceCount ?? 0)
+        if (att <= 0) throw new Error('출석 횟수를 더 줄일 수 없습니다.')
+
+        transaction.update(pkgRef, {
+          usedCount: used - 1,
+          remainingCount: rem + 1,
+          updatedAt: serverTimestamp(),
+        })
+        transaction.update(gsRef, {
+          attendanceCount: att - 1,
+          updatedAt: serverTimestamp(),
+        })
+        transaction.update(lessonRef, {
+          countedStudentIDs: arrayRemove(studentId),
+          attendanceAppliedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      })
+    } catch (error) {
+      console.error('차감 복구 실패:', error)
+      alert(`차감 복구 실패: ${error.message}`)
+    } finally {
+      setBusyGroupAttendanceStudentId(null)
+    }
+  }
+
   const isStudentModalSubmitting =
     Boolean(studentModal) &&
     (studentModal.type === 'add'
@@ -3273,7 +3581,7 @@ export default function Dashboard() {
                 <div
                   className="table-head"
                   style={{
-                    gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(140px, auto)',
+                    gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
                   }}
                 >
                   <span>날짜</span>
@@ -3284,18 +3592,51 @@ export default function Dashboard() {
 
                 {sortedGroupLessonsForSelectedClass.map((gl) => {
                   const rowBusy = busyGroupLessonId === gl.id
+                  const attendanceBusyThisLesson =
+                    Boolean(busyGroupAttendanceStudentId) &&
+                    busyGroupAttendanceStudentId.startsWith(`${gl.id}__`)
                   return (
                     <div
                       key={gl.id}
                       className="table-row"
                       style={{
-                        gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(140px, auto)',
+                        gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
                       }}
                     >
                       <span>{gl.date || '-'}</span>
                       <span>{gl.time || '-'}</span>
                       <span>{gl.subject || '-'}</span>
                       <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {canManageAttendance ? (
+                          <button
+                            type="button"
+                            onClick={() => openGroupLessonAttendanceModal(gl)}
+                            disabled={
+                              rowBusy ||
+                              attendanceBusyThisLesson ||
+                              busyGroupLessonId === '__add__' ||
+                              busyGroupId === '__add__' ||
+                              busyGroupId === selectedGroupClass.id
+                            }
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #335555',
+                              background: '#1a3338',
+                              color: 'white',
+                              cursor:
+                                rowBusy ||
+                                attendanceBusyThisLesson ||
+                                busyGroupLessonId === '__add__' ||
+                                busyGroupId === '__add__' ||
+                                busyGroupId === selectedGroupClass.id
+                                  ? 'not-allowed'
+                                  : 'pointer',
+                            }}
+                          >
+                            출결/차감
+                          </button>
+                        ) : null}
                         {canEditLesson ? (
                           <button
                             type="button"
@@ -4956,6 +5297,162 @@ export default function Dashboard() {
                 }}
               >
                 {busyGroupLessonPurge ? '삭제 중...' : '삭제 실행'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'groups' &&
+      groupLessonAttendanceModal &&
+      selectedGroupClass &&
+      groupLessonForAttendanceModal ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="group-lesson-attendance-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeGroupLessonAttendanceModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 640,
+              maxHeight: 'min(85vh, 720px)',
+              overflow: 'auto',
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="group-lesson-attendance-modal-title"
+              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
+            >
+              출결 / 차감
+            </h2>
+            <p style={{ margin: '0 0 6px 0', fontSize: 13, opacity: 0.88 }}>
+              {selectedGroupClass.name || '-'}
+            </p>
+            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.78 }}>
+              {groupLessonForAttendanceModal.date || '-'} · {groupLessonForAttendanceModal.time || '-'} ·{' '}
+              {groupLessonForAttendanceModal.subject || '-'}
+            </p>
+
+            {groupLessonAttendanceModalRows.length === 0 ? (
+              <p style={{ margin: 0, fontSize: 13, opacity: 0.75 }}>
+                이 수업에 차감할 수 있는 학생이 없습니다. (반 시작일·상태·패키지를 확인하세요.)
+              </p>
+            ) : (
+              <div className="activity-table">
+                <div
+                  className="table-head"
+                  style={{
+                    gridTemplateColumns: '1.1fr 1fr 0.55fr 0.9fr minmax(150px, auto)',
+                  }}
+                >
+                  <span>학생</span>
+                  <span>패키지</span>
+                  <span>잔여</span>
+                  <span>상태</span>
+                  <span>작업</span>
+                </div>
+                {groupLessonAttendanceModalRows.map((row) => {
+                  const gs = row.groupStudent
+                  const lessonRef = groupLessonForAttendanceModal
+                  const rowBusy =
+                    busyGroupAttendanceStudentId === `${lessonRef.id}__${gs.id}`
+                  return (
+                    <div
+                      key={gs.id}
+                      className="table-row"
+                      style={{
+                        gridTemplateColumns: '1.1fr 1fr 0.55fr 0.9fr minmax(150px, auto)',
+                      }}
+                    >
+                      <span>{row.groupStudent.studentName || row.groupStudent.name || '-'}</span>
+                      <span style={{ wordBreak: 'break-word' }}>{row.packageTitle}</span>
+                      <span>
+                        {row.remainingCount != null ? row.remainingCount : '—'}
+                      </span>
+                      <span>{row.statusLabel}</span>
+                      <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            applyGroupLessonAttendanceDeduction(gs, lessonRef)
+                          }
+                          disabled={!row.canDeduct || rowBusy}
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #335533',
+                            background: row.canDeduct && !rowBusy ? '#2a3d2a' : '#2a2a2a',
+                            color: 'white',
+                            cursor: !row.canDeduct || rowBusy ? 'not-allowed' : 'pointer',
+                            fontSize: 12,
+                          }}
+                        >
+                          {rowBusy ? '처리 중' : '차감'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyGroupLessonAttendanceUndo(gs, lessonRef)}
+                          disabled={!row.canUndo || rowBusy}
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #554433',
+                            background: row.canUndo && !rowBusy ? '#3d352a' : '#2a2a2a',
+                            color: 'white',
+                            cursor: !row.canUndo || rowBusy ? 'not-allowed' : 'pointer',
+                            fontSize: 12,
+                          }}
+                        >
+                          {rowBusy ? '처리 중' : '차감복구'}
+                        </button>
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                marginTop: 18,
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeGroupLessonAttendanceModal}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: 'pointer',
+                }}
+              >
+                닫기
               </button>
             </div>
           </div>
