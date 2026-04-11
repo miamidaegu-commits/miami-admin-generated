@@ -1158,59 +1158,59 @@ export default function Dashboard() {
     const eligible = groupStudents.filter((gs) => {
       if (String(gs.groupClassId || '') !== String(gid)) return false
       if (String(gs.status || 'active') !== 'active') return false
+      const pkgId = String(gs.packageId || '').trim()
+      if (!pkgId) return false
+      const pkg = studentPackages.find((p) => p.id === pkgId)
+      if (
+        !pkg ||
+        pkg.packageType !== 'group' ||
+        String(pkg.groupClassId || '') !== String(gid)
+      ) {
+        return false
+      }
       const startYmd = groupStudentStartDateToYmd(gs)
       if (startYmd && lessonDate < startYmd) return false
       return true
     })
 
-    const withPkgFirst = [...eligible].sort((a, b) => {
-      const ap = a.packageId ? 0 : 1
-      const bp = b.packageId ? 0 : 1
-      if (ap !== bp) return ap - bp
-      return String(a.studentName || a.name || '').localeCompare(
-        String(b.studentName || b.name || ''),
-        'ko'
+    return [...eligible]
+      .sort((a, b) =>
+        String(a.studentName || a.name || '').localeCompare(
+          String(b.studentName || b.name || ''),
+          'ko'
+        )
       )
-    })
+      .map((gs) => {
+        const studentId = String(gs.studentId || '').trim()
+        const pkg = studentPackages.find((p) => p.id === gs.packageId)
+        const pkgOk = Boolean(pkg)
 
-    return withPkgFirst.map((gs) => {
-      const studentId = String(gs.studentId || '').trim()
-      const pkg = gs.packageId
-        ? studentPackages.find((p) => p.id === gs.packageId)
-        : null
-      const pkgOk =
-        pkg &&
-        pkg.packageType === 'group' &&
-        String(pkg.groupClassId || '') === String(gid)
+        const title = pkgOk ? String(pkg.title || '').trim() || '—' : '—'
+        const remaining = pkgOk ? Number(pkg.remainingCount ?? 0) : 0
+        const used = pkgOk ? Number(pkg.usedCount ?? 0) : 0
 
-      const title = pkgOk ? String(pkg.title || '').trim() || '—' : '—'
-      const remaining = pkgOk ? Number(pkg.remainingCount ?? 0) : null
-      const used = pkgOk ? Number(pkg.usedCount ?? 0) : null
+        const isCounted = Boolean(studentId && countedSet.has(studentId))
 
-      const isCounted = studentId && countedSet.has(studentId)
+        let statusLabel = '미차감'
+        if (isCounted) {
+          statusLabel = '차감됨'
+        } else if (remaining <= 0) {
+          statusLabel = '패키지 소진'
+        }
 
-      let statusLabel = '미차감'
-      if (isCounted) {
-        statusLabel = '차감됨'
-      } else if (!pkgOk || !gs.packageId) {
-        statusLabel = '패키지 없음'
-      } else if (remaining != null && remaining <= 0) {
-        statusLabel = '패키지 소진'
-      }
-
-      return {
-        groupStudent: gs,
-        studentId,
-        packageDoc: pkgOk ? pkg : null,
-        packageTitle: title,
-        remainingCount: remaining,
-        usedCount: used,
-        isCounted,
-        statusLabel,
-        canDeduct: pkgOk && !isCounted && remaining != null && remaining > 0,
-        canUndo: pkgOk && isCounted && used != null && used > 0,
-      }
-    })
+        return {
+          groupStudent: gs,
+          studentId,
+          packageDoc: pkgOk ? pkg : null,
+          packageTitle: title,
+          remainingCount: remaining,
+          usedCount: used,
+          isCounted,
+          statusLabel,
+          canDeduct: pkgOk && !isCounted && remaining > 0,
+          canUndo: pkgOk && isCounted && used > 0,
+        }
+      })
   }, [
     groupLessonAttendanceModal,
     groupLessons,
@@ -3634,7 +3634,7 @@ export default function Dashboard() {
                                   : 'pointer',
                             }}
                           >
-                            출결/차감
+                            {attendanceBusyThisLesson ? '처리 중' : '출결/차감'}
                           </button>
                         ) : null}
                         {canEditLesson ? (
@@ -5392,40 +5392,46 @@ export default function Dashboard() {
                       </span>
                       <span>{row.statusLabel}</span>
                       <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            applyGroupLessonAttendanceDeduction(gs, lessonRef)
-                          }
-                          disabled={!row.canDeduct || rowBusy}
-                          style={{
-                            padding: '6px 10px',
-                            borderRadius: 8,
-                            border: '1px solid #335533',
-                            background: row.canDeduct && !rowBusy ? '#2a3d2a' : '#2a2a2a',
-                            color: 'white',
-                            cursor: !row.canDeduct || rowBusy ? 'not-allowed' : 'pointer',
-                            fontSize: 12,
-                          }}
-                        >
-                          {rowBusy ? '처리 중' : '차감'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => applyGroupLessonAttendanceUndo(gs, lessonRef)}
-                          disabled={!row.canUndo || rowBusy}
-                          style={{
-                            padding: '6px 10px',
-                            borderRadius: 8,
-                            border: '1px solid #554433',
-                            background: row.canUndo && !rowBusy ? '#3d352a' : '#2a2a2a',
-                            color: 'white',
-                            cursor: !row.canUndo || rowBusy ? 'not-allowed' : 'pointer',
-                            fontSize: 12,
-                          }}
-                        >
-                          {rowBusy ? '처리 중' : '차감복구'}
-                        </button>
+                        {!row.isCounted && row.canDeduct ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              applyGroupLessonAttendanceDeduction(gs, lessonRef)
+                            }
+                            disabled={rowBusy}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #335533',
+                              background: !rowBusy ? '#2a3d2a' : '#2a2a2a',
+                              color: 'white',
+                              cursor: rowBusy ? 'not-allowed' : 'pointer',
+                              fontSize: 12,
+                            }}
+                          >
+                            {rowBusy ? '처리 중' : '차감'}
+                          </button>
+                        ) : null}
+                        {row.isCounted ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              applyGroupLessonAttendanceUndo(gs, lessonRef)
+                            }
+                            disabled={!row.canUndo || rowBusy}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #554433',
+                              background: row.canUndo && !rowBusy ? '#3d352a' : '#2a2a2a',
+                              color: 'white',
+                              cursor: !row.canUndo || rowBusy ? 'not-allowed' : 'pointer',
+                              fontSize: 12,
+                            }}
+                          >
+                            {rowBusy ? '처리 중' : '차감복구'}
+                          </button>
+                        ) : null}
                       </span>
                     </div>
                   )
