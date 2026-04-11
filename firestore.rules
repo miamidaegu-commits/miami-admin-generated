@@ -48,6 +48,11 @@ service cloud.firestore {
         (data.teacher is string && data.teacher == myTeacherName());
     }
 
+    function studentPackageBelongsToTeacher(data) {
+      return isTeacher() &&
+        (data.teacher is string && data.teacher == myTeacherName());
+    }
+
     function parentGroupClassBelongsToTeacher(groupClassId) {
       return isTeacher() &&
         get(/databases/$(database)/documents/groupClasses/$(groupClassId)).data.teacher == myTeacherName();
@@ -131,6 +136,13 @@ service cloud.firestore {
         resource.data.groupClassId is string &&
         parentGroupClassBelongsToTeacher(resource.data.groupClassId)
       );
+    }
+
+    match /studentPackages/{packageId} {
+      allow read: if isAdmin() || studentPackageBelongsToTeacher(resource.data);
+      allow create: if isAdmin();
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /{document=**} {

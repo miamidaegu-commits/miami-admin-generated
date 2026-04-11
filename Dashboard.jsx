@@ -313,6 +313,19 @@ export default function Dashboard() {
   })
   const [privateLessonEditFormErrors, setPrivateLessonEditFormErrors] = useState({})
   const [busyPrivateLessonCrudId, setBusyPrivateLessonCrudId] = useState(null)
+  const [studentPackages, setStudentPackages] = useState([])
+  const [studentPackageModalStudent, setStudentPackageModalStudent] = useState(null)
+  const [studentPackageForm, setStudentPackageForm] = useState({
+    packageType: 'private',
+    title: '',
+    totalCount: '1',
+    groupClassId: '',
+    expiresAt: '',
+    amountPaid: '',
+    memo: '',
+  })
+  const [studentPackageFormErrors, setStudentPackageFormErrors] = useState({})
+  const [busyStudentPackageSubmit, setBusyStudentPackageSubmit] = useState(false)
 
   useEffect(() => {
     if (!user?.uid) return
@@ -482,6 +495,8 @@ export default function Dashboard() {
     if (activeSection !== 'students') {
       setStudentModal(null)
       setStudentFormErrors({})
+      setStudentPackageModalStudent(null)
+      setStudentPackageFormErrors({})
     }
   }, [activeSection])
 
@@ -537,6 +552,76 @@ export default function Dashboard() {
     )
     return () => unsubscribe()
   }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setStudentPackages([])
+      return
+    }
+    if (!userProfile?.role) {
+      setStudentPackages([])
+      return
+    }
+
+    if (userProfile.role === 'admin') {
+      const unsubscribe = onSnapshot(
+        collection(db, 'studentPackages'),
+        (snapshot) => {
+          const rows = snapshot.docs.map((docItem) => ({
+            id: docItem.id,
+            ...docItem.data(),
+          }))
+          setStudentPackages(rows)
+        },
+        (error) => {
+          console.error('studentPackages 불러오기 실패:', error)
+          setStudentPackages([])
+        }
+      )
+      return () => unsubscribe()
+    }
+
+    if (userProfile.role === 'teacher') {
+      const teacherKey = normalizeText(userProfile.teacherName || '')
+      if (!teacherKey) {
+        setStudentPackages([])
+        return
+      }
+      const q = query(
+        collection(db, 'studentPackages'),
+        where('teacher', '==', teacherKey)
+      )
+      const unsubscribe = onSnapshot(
+        q,
+        (snapshot) => {
+          const rows = snapshot.docs.map((docItem) => ({
+            id: docItem.id,
+            ...docItem.data(),
+          }))
+          setStudentPackages(rows)
+        },
+        (error) => {
+          console.error('studentPackages 불러오기 실패:', error)
+          setStudentPackages([])
+        }
+      )
+      return () => unsubscribe()
+    }
+
+    setStudentPackages([])
+  }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!studentPackageModalStudent) return
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        setStudentPackageModalStudent(null)
+        setStudentPackageFormErrors({})
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [studentPackageModalStudent])
 
   useEffect(() => {
     if (activeSection !== 'groups') {
@@ -1090,6 +1175,158 @@ export default function Dashboard() {
     }
   }
 
+  function closeStudentPackageModal() {
+    setStudentPackageModalStudent(null)
+    setStudentPackageFormErrors({})
+  }
+
+  function openStudentPackageModal(student) {
+    if (userProfile?.role !== 'admin') return
+    setStudentPackageModalStudent(student)
+    setStudentPackageForm({
+      packageType: 'private',
+      title: '',
+      totalCount: '1',
+      groupClassId: '',
+      expiresAt: '',
+      amountPaid: '',
+      memo: '',
+    })
+    setStudentPackageFormErrors({})
+  }
+
+  function validateStudentPackageFormFields(form) {
+    const errors = {}
+    const title = String(form.title || '').trim()
+    if (!title) errors.title = '패키지 제목을 입력해주세요.'
+
+    const totalParsed = parseRequiredMinOneIntField(form.totalCount)
+    if (!totalParsed.ok) errors.totalCount = '1 이상의 정수를 입력해주세요.'
+
+    const packageType = form.packageType
+    let groupClassId = String(form.groupClassId || '').trim()
+    if (packageType === 'group' || packageType === 'openGroup') {
+      if (!groupClassId) errors.groupClassId = '그룹을 선택해주세요.'
+    } else {
+      groupClassId = ''
+    }
+
+    let expiresAtTs = null
+    const expStr = String(form.expiresAt || '').trim()
+    if (expStr) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(expStr)) {
+        errors.expiresAt = '날짜 형식이 올바르지 않습니다.'
+      } else {
+        const [y, mo, d] = expStr.split('-').map(Number)
+        const dt = new Date(y, mo - 1, d)
+        if (
+          dt.getFullYear() !== y ||
+          dt.getMonth() !== mo - 1 ||
+          dt.getDate() !== d
+        ) {
+          errors.expiresAt = '유효한 날짜를 선택해주세요.'
+        } else {
+          expiresAtTs = Timestamp.fromDate(new Date(y, mo - 1, d))
+        }
+      }
+    }
+
+    let amountPaid = 0
+    const amountRaw = String(form.amountPaid ?? '').trim()
+    if (amountRaw !== '') {
+      const n = Number(amountRaw)
+      if (!Number.isFinite(n) || n < 0) {
+        errors.amountPaid = '0 이상의 숫자를 입력해주세요.'
+      } else {
+        amountPaid = n
+      }
+    }
+
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      title,
+      totalCount: totalParsed.ok ? totalParsed.value : 1,
+      packageType,
+      groupClassId,
+      expiresAt: expiresAtTs,
+      amountPaid,
+      memo: String(form.memo || '').trim(),
+    }
+  }
+
+  async function submitStudentPackageModal() {
+    if (!studentPackageModalStudent) return
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 패키지를 추가할 수 있습니다.')
+      return
+    }
+
+    const result = validateStudentPackageFormFields(studentPackageForm)
+    setStudentPackageFormErrors(result.errors)
+    if (!result.valid) return
+
+    const st = studentPackageModalStudent
+    const studentId = st.id
+    const studentName = String(st.name || '').trim() || '-'
+
+    let teacher = ''
+    let groupClassId = null
+    let groupClassName = null
+
+    if (result.packageType === 'private') {
+      teacher = normalizeText(st.teacher || '')
+    } else if (result.packageType === 'group' || result.packageType === 'openGroup') {
+      const g = groupClasses.find((gc) => gc.id === result.groupClassId)
+      if (!g) {
+        setStudentPackageFormErrors((prev) => ({
+          ...prev,
+          groupClassId: '선택한 그룹을 찾을 수 없습니다.',
+        }))
+        return
+      }
+      const studentTeacherNorm = normalizeText(st.teacher || '')
+      const groupTeacherNorm = normalizeText(g.teacher || '')
+      if (studentTeacherNorm !== groupTeacherNorm) {
+        alert(
+          '학생 담당 선생님과 선택한 그룹의 담당 선생님이 일치하지 않습니다. 같은 선생님 담당인지 확인해 주세요.'
+        )
+        return
+      }
+      teacher = groupTeacherNorm
+      groupClassId = g.id
+      groupClassName = g.name || null
+    }
+
+    try {
+      setBusyStudentPackageSubmit(true)
+      await addDoc(collection(db, 'studentPackages'), {
+        studentId,
+        studentName,
+        teacher,
+        packageType: result.packageType,
+        groupClassId,
+        groupClassName,
+        title: result.title,
+        totalCount: result.totalCount,
+        usedCount: 0,
+        remainingCount: result.totalCount,
+        status: 'active',
+        expiresAt: result.expiresAt,
+        amountPaid: result.amountPaid,
+        memo: result.memo,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      closeStudentPackageModal()
+    } catch (error) {
+      console.error('학생 패키지 추가 실패:', error)
+      alert(`학생 패키지 추가 실패: ${error.message}`)
+    } finally {
+      setBusyStudentPackageSubmit(false)
+    }
+  }
+
   async function handleDeleteStudent(student) {
     if (!(userProfile?.role === 'admin' || userProfile?.canDeleteStudent === true)) {
       alert('학생 삭제 권한이 없습니다.')
@@ -1540,6 +1777,8 @@ export default function Dashboard() {
   const isPrivateLessonEditSubmitting = Boolean(
     privateLessonEditModal && busyPrivateLessonCrudId === privateLessonEditModal.lesson.id
   )
+
+  const isStudentPackageModalSubmitting = busyStudentPackageSubmit
 
   const isAdmin = userProfile?.role === 'admin'
   const canAddStudent = isAdmin || userProfile?.canAddStudent === true
@@ -2004,7 +2243,7 @@ export default function Dashboard() {
         <div
           className="table-head"
           style={{
-            gridTemplateColumns: '1.1fr 1.1fr 0.75fr 0.85fr 0.75fr minmax(140px, auto)',
+            gridTemplateColumns: '1.1fr 1.1fr 0.75fr 0.85fr 0.75fr minmax(200px, auto)',
           }}
         >
           <span>이름</span>
@@ -2027,7 +2266,7 @@ export default function Dashboard() {
               className="table-row"
               style={{
                 gridTemplateColumns:
-                  '1.1fr 1.1fr 0.75fr 0.85fr 0.75fr minmax(140px, auto)',
+                  '1.1fr 1.1fr 0.75fr 0.85fr 0.75fr minmax(200px, auto)',
               }}
             >
               <span>{student.name || '-'}</span>
@@ -2040,14 +2279,21 @@ export default function Dashboard() {
                   <button
                     type="button"
                     onClick={() => openStudentEditModal(student)}
-                    disabled={rowBusy || busyStudentId === '__add__'}
+                    disabled={
+                      rowBusy ||
+                      busyStudentId === '__add__' ||
+                      busyStudentPackageSubmit
+                    }
                     style={{
                       padding: '6px 10px',
                       borderRadius: 8,
                       border: '1px solid #555',
                       background: '#1f2a44',
                       color: 'white',
-                      cursor: rowBusy || busyStudentId === '__add__' ? 'not-allowed' : 'pointer',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit
+                          ? 'not-allowed'
+                          : 'pointer',
                     }}
                   >
                     {rowBusy ? '처리 중...' : '수정'}
@@ -2057,17 +2303,48 @@ export default function Dashboard() {
                   <button
                     type="button"
                     onClick={() => handleDeleteStudent(student)}
-                    disabled={rowBusy || busyStudentId === '__add__'}
+                    disabled={
+                      rowBusy ||
+                      busyStudentId === '__add__' ||
+                      busyStudentPackageSubmit
+                    }
                     style={{
                       padding: '6px 10px',
                       borderRadius: 8,
                       border: '1px solid #553333',
                       background: '#4a2a2a',
                       color: 'white',
-                      cursor: rowBusy || busyStudentId === '__add__' ? 'not-allowed' : 'pointer',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit
+                          ? 'not-allowed'
+                          : 'pointer',
                     }}
                   >
                     {rowBusy ? '처리 중...' : '삭제'}
+                  </button>
+                ) : null}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => openStudentPackageModal(student)}
+                    disabled={
+                      rowBusy ||
+                      busyStudentId === '__add__' ||
+                      busyStudentPackageSubmit
+                    }
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #335533',
+                      background: '#2a3d2a',
+                      color: 'white',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit
+                          ? 'not-allowed'
+                          : 'pointer',
+                    }}
+                  >
+                    패키지 추가
                   </button>
                 ) : null}
               </span>
@@ -2891,6 +3168,272 @@ export default function Dashboard() {
                 }}
               >
                 {isStudentModalSubmitting ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'students' && studentPackageModalStudent ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="student-package-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeStudentPackageModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 480,
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="student-package-modal-title"
+              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
+            >
+              학생 패키지 추가
+            </h2>
+            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.85 }}>
+              {studentPackageModalStudent.name || '-'} · {studentPackageModalStudent.teacher || '-'}
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>패키지 유형</span>
+                <select
+                  value={studentPackageForm.packageType}
+                  onChange={(e) => {
+                    const packageType = e.target.value
+                    setStudentPackageForm((prev) => ({
+                      ...prev,
+                      packageType,
+                      groupClassId:
+                        packageType === 'private' ? '' : prev.groupClassId,
+                    }))
+                  }}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                >
+                  <option value="private">개인 (private)</option>
+                  <option value="group">그룹 (group)</option>
+                  <option value="openGroup">오픈 그룹 (openGroup)</option>
+                </select>
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>제목</span>
+                <input
+                  type="text"
+                  value={studentPackageForm.title}
+                  onChange={(e) =>
+                    setStudentPackageForm((prev) => ({ ...prev, title: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageFormErrors.title ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageFormErrors.title}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>총 횟수 (totalCount)</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={studentPackageForm.totalCount}
+                  onChange={(e) =>
+                    setStudentPackageForm((prev) => ({ ...prev, totalCount: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageFormErrors.totalCount ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageFormErrors.totalCount}
+                  </span>
+                ) : null}
+              </label>
+
+              {studentPackageForm.packageType === 'group' ||
+              studentPackageForm.packageType === 'openGroup' ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>그룹 수업</span>
+                  <select
+                    value={studentPackageForm.groupClassId}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({
+                        ...prev,
+                        groupClassId: e.target.value,
+                      }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="">그룹을 선택하세요</option>
+                    {sortedGroupClasses.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.name || '-'} ({g.teacher || '-'})
+                      </option>
+                    ))}
+                  </select>
+                  {studentPackageFormErrors.groupClassId ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageFormErrors.groupClassId}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>만료일 (선택)</span>
+                <input
+                  type="date"
+                  value={studentPackageForm.expiresAt}
+                  onChange={(e) =>
+                    setStudentPackageForm((prev) => ({ ...prev, expiresAt: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageFormErrors.expiresAt ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageFormErrors.expiresAt}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={studentPackageForm.amountPaid}
+                  onChange={(e) =>
+                    setStudentPackageForm((prev) => ({ ...prev, amountPaid: e.target.value }))
+                  }
+                  placeholder="0"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageFormErrors.amountPaid ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageFormErrors.amountPaid}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>메모 (선택)</span>
+                <textarea
+                  value={studentPackageForm.memo}
+                  onChange={(e) =>
+                    setStudentPackageForm((prev) => ({ ...prev, memo: e.target.value }))
+                  }
+                  rows={3}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                    resize: 'vertical',
+                  }}
+                />
+              </label>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                marginTop: 20,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeStudentPackageModal}
+                disabled={isStudentPackageModalSubmitting}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: isStudentPackageModalSubmitting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={submitStudentPackageModal}
+                disabled={isStudentPackageModalSubmitting}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #4a6fff55',
+                  background: '#1f2a44',
+                  color: 'white',
+                  cursor: isStudentPackageModalSubmitting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {isStudentPackageModalSubmitting ? '저장 중...' : '저장'}
               </button>
             </div>
           </div>
