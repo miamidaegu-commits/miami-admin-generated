@@ -311,6 +311,84 @@ function countWeekdayHitsInRange(startYmd, endYmd, weekdaySet) {
   return n
 }
 
+/** yyyy-mm-dd 기준으로 달력일을 더한 yyyy-mm-dd (로컬) */
+function addCalendarDaysToYmd(startYmd, deltaDays) {
+  const d = parseYmdToLocalDate(startYmd)
+  if (!d || !Number.isFinite(deltaDays)) return null
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + Math.trunc(deltaDays))
+  return formatLocalDateToYmd(next)
+}
+
+/** 신규 정규반 저장 직후 자동 일정 등에 쓰는 기본 기간(시작일 포함 약 8주) */
+const GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS = 7 * 8 - 1
+
+/**
+ * groupClassId + date + time 기준 중복은 건너뜀. Firestore addDoc 순차 호출.
+ */
+async function createGroupLessonsInDateRange({
+  groupClassId,
+  groupClassName,
+  teacher,
+  time,
+  subject,
+  weekdays,
+  maxStudents,
+  startYmd,
+  endYmd,
+  existingLessons,
+}) {
+  const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(weekdays))
+  const timeStr = String(time || '').trim()
+  const subjectStr = String(subject || '').trim()
+  const teacherNorm = normalizeText(teacher || '')
+  const capacity = Number(maxStudents)
+  const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
+
+  let created = 0
+  let skippedDup = 0
+
+  if (weekdaySet.size === 0 || !timeStr || !subjectStr) return { created, skippedDup }
+
+  const prior = Array.isArray(existingLessons) ? existingLessons : []
+
+  for (const dateStr of iterateYmdRangeInclusive(startYmd, endYmd)) {
+    const dt = parseYmdToLocalDate(dateStr)
+    if (!dt || !weekdaySet.has(jsDateToGroupWeekdayCode(dt))) continue
+
+    const dup = prior.some(
+      (gl) =>
+        String(gl.groupClassId || '') === String(groupClassId) &&
+        String(gl.date || '') === dateStr &&
+        String(gl.time || '').trim() === timeStr
+    )
+    if (dup) {
+      skippedDup += 1
+      continue
+    }
+
+    await addDoc(collection(db, 'groupLessons'), {
+      groupClassId,
+      groupClassName: groupClassName || '',
+      teacher: teacherNorm,
+      date: dateStr,
+      time: timeStr,
+      subject: subjectStr,
+      completed: false,
+      countedStudentIDs: [],
+      attendanceAppliedAt: null,
+      bookingMode: 'fixed',
+      capacity: cap,
+      bookedCount: 0,
+      isBookable: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    })
+    created += 1
+  }
+
+  return { created, skippedDup }
+}
+
 export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -343,6 +421,7 @@ export default function Dashboard() {
     name: '',
     teacher: '',
     maxStudents: '1',
+    startDate: '',
     time: '',
     subject: '',
     weekdays: [],
@@ -1488,6 +1567,7 @@ export default function Dashboard() {
       name: '',
       teacher: '',
       maxStudents: '1',
+      startDate: formatLocalDateToYmd(new Date()),
       time: '',
       subject: '',
       weekdays: [],
@@ -1507,6 +1587,7 @@ export default function Dashboard() {
       name: group.name || '',
       teacher: group.teacher || '',
       maxStudents: groupMaxStudentsToFormString(group.maxStudents),
+      startDate: '',
       time: String(group.time || '').trim(),
       subject: String(group.subject || '').trim(),
       weekdays: normalizeGroupWeekdaysFromDoc(group.weekdays),
@@ -1516,7 +1597,8 @@ export default function Dashboard() {
     setGroupModal({ type: 'edit', group })
   }
 
-  function validateGroupFormFields(form) {
+  function validateGroupFormFields(form, options = {}) {
+    const { forNewClass } = options
     const errors = {}
     const name = form.name.trim()
     const teacher = form.teacher.trim()
@@ -1525,6 +1607,18 @@ export default function Dashboard() {
 
     const maxStudents = parseRequiredMinOneIntField(form.maxStudents)
     if (!maxStudents.ok) errors.maxStudents = '1 이상의 정수를 입력해주세요.'
+
+    let startDate = ''
+    if (forNewClass) {
+      startDate = String(form.startDate || '').trim()
+      if (!startDate) {
+        errors.startDate = '시작일을 선택해주세요.'
+      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+        errors.startDate = '시작일 형식이 올바르지 않습니다.'
+      } else if (!parseYmdToLocalDate(startDate)) {
+        errors.startDate = '유효한 시작일을 선택해주세요.'
+      }
+    }
 
     const timeStr = String(form.time || '').trim()
     if (!timeStr) {
@@ -1557,6 +1651,7 @@ export default function Dashboard() {
       name,
       teacher,
       maxStudents: maxStudents.ok ? maxStudents.value : 1,
+      startDate: forNewClass ? startDate : '',
       time: timeStr,
       subject,
       weekdays,
@@ -1567,16 +1662,22 @@ export default function Dashboard() {
   async function submitGroupModal() {
     if (!groupModal) return
 
-    const result = validateGroupFormFields(groupForm)
+    const result = validateGroupFormFields(groupForm, {
+      forNewClass: groupModal.type === 'add',
+    })
     setGroupFormErrors(result.errors)
     if (!result.valid) return
 
     const teacherKey = normalizeText(result.teacher)
 
+    const canAutoCreateLessons =
+      (userProfile?.role === 'admin' || userProfile?.canCreateLessonDirectly === true) &&
+      userProfile?.requiresLessonApproval !== true
+
     if (groupModal.type === 'add') {
       try {
         setBusyGroupId('__add__')
-        await addDoc(collection(db, 'groupClasses'), {
+        const docRef = await addDoc(collection(db, 'groupClasses'), {
           name: result.name,
           teacher: teacherKey,
           maxStudents: result.maxStudents,
@@ -1587,6 +1688,38 @@ export default function Dashboard() {
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
+        const newId = docRef.id
+
+        if (
+          result.recurrenceMode === 'fixedWeekdays' &&
+          canAutoCreateLessons &&
+          result.startDate
+        ) {
+          const endYmd = addCalendarDaysToYmd(
+            result.startDate,
+            GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS
+          )
+          if (endYmd) {
+            const { created, skippedDup } = await createGroupLessonsInDateRange({
+              groupClassId: newId,
+              groupClassName: result.name,
+              teacher: teacherKey,
+              time: result.time,
+              subject: result.subject,
+              weekdays: result.weekdays,
+              maxStudents: result.maxStudents,
+              startYmd: result.startDate,
+              endYmd,
+              existingLessons: groupLessons,
+            })
+            if (created > 0 || skippedDup > 0) {
+              alert(
+                `반을 저장했습니다. 약 8주간 수업 일정 ${created}건이 자동으로 만들어졌습니다. (중복 ${skippedDup}건 건너뜀)`
+              )
+            }
+          }
+        }
+
         closeGroupModal()
       } catch (error) {
         console.error('그룹 추가 실패:', error)
@@ -1996,55 +2129,31 @@ export default function Dashboard() {
       return
     }
 
-    const teacherNorm = normalizeText(gc.teacher || '')
-    const capacity = Number(gc.maxStudents)
-    const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
-
     let created = 0
     let skippedDup = 0
 
     try {
       setBusyGroupLessonSeries(true)
-      for (const dateStr of iterateYmdRangeInclusive(result.startDate, result.endDate)) {
-        const dt = parseYmdToLocalDate(dateStr)
-        if (!dt || !weekdaySet.has(jsDateToGroupWeekdayCode(dt))) continue
+      const batchResult = await createGroupLessonsInDateRange({
+        groupClassId: gc.id,
+        groupClassName: gc.name || '',
+        teacher: gc.teacher,
+        time: gc.time,
+        subject: gc.subject,
+        weekdays: gc.weekdays,
+        maxStudents: gc.maxStudents,
+        startYmd: result.startDate,
+        endYmd: result.endDate,
+        existingLessons: groupLessons,
+      })
+      created = batchResult.created
+      skippedDup = batchResult.skippedDup
 
-        const dup = groupLessons.some(
-          (gl) =>
-            String(gl.groupClassId || '') === String(gc.id) &&
-            String(gl.date || '') === dateStr &&
-            String(gl.time || '').trim() === timeStr
-        )
-        if (dup) {
-          skippedDup += 1
-          continue
-        }
-
-        await addDoc(collection(db, 'groupLessons'), {
-          groupClassId: gc.id,
-          groupClassName: gc.name || '',
-          teacher: teacherNorm,
-          date: dateStr,
-          time: timeStr,
-          subject: subjectStr,
-          completed: false,
-          countedStudentIDs: [],
-          attendanceAppliedAt: null,
-          bookingMode: 'fixed',
-          capacity: cap,
-          bookedCount: 0,
-          isBookable: false,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
-        created += 1
-      }
-
-      alert(`수업 일정 생성 완료: ${created}건 생성, 중복 건너뜀 ${skippedDup}건`)
+      alert(`추가 일정 생성 완료: ${created}건 생성, 중복 건너뜀 ${skippedDup}건`)
       closeGroupLessonSeriesModal()
     } catch (error) {
-      console.error('수업 일정 생성 실패:', error)
-      alert(`수업 일정 생성 실패: ${error.message}`)
+      console.error('추가 일정 생성 실패:', error)
+      alert(`추가 일정 생성 실패: ${error.message}`)
     } finally {
       setBusyGroupLessonSeries(false)
     }
@@ -2705,7 +2814,7 @@ export default function Dashboard() {
               busyGroupId === '__add__' || groupClassesLoading ? 'not-allowed' : 'pointer',
           }}
         >
-          {busyGroupId === '__add__' ? '만드는 중...' : '반 만들기'}
+          {busyGroupId === '__add__' ? '만드는 중...' : '정규반 만들기'}
         </button>
       ) : null}
     </div>
@@ -2902,7 +3011,7 @@ export default function Dashboard() {
                     : undefined
                 }
               >
-                {busyGroupLessonId === '__add__' ? '추가 중...' : '한 번만 수업 추가'}
+                {busyGroupLessonId === '__add__' ? '추가 중...' : '특별 수업 추가'}
               </button>
               <button
                 type="button"
@@ -2916,11 +3025,12 @@ export default function Dashboard() {
                   busyGroupId === selectedGroupClass.id
                 }
                 style={{
-                  padding: '10px 14px',
+                  padding: '8px 12px',
                   borderRadius: 10,
-                  border: '1px solid #335533',
-                  background: '#2a3d2a',
-                  color: 'white',
+                  border: '1px solid #444',
+                  background: 'transparent',
+                  color: 'rgba(255,255,255,0.75)',
+                  fontSize: 13,
                   cursor:
                     !canUseDirectLessonCreation ||
                     busyGroupLessonId === '__add__' ||
@@ -2936,15 +3046,15 @@ export default function Dashboard() {
                     ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
                     : !canCreateLessonDirectly
                     ? '직접 수업 생성 권한이 없습니다.'
-                    : undefined
+                    : '관리자용: 기간을 지정해 일정을 추가로 만듭니다.'
                 }
               >
-                {busyGroupLessonSeries ? '생성 중...' : '수업 일정 생성'}
+                {busyGroupLessonSeries ? '생성 중...' : '추가 일정 생성'}
               </button>
             </div>
             <p style={{ margin: '-8px 0 16px 0', fontSize: 11, opacity: 0.6, lineHeight: 1.45 }}>
-              한 번만 수업 추가: 보강·특강 등 임시 일정용 · 수업 일정 생성: 반에 저장된 요일·시간으로
-              여러 날짜를 한 번에 만듭니다.
+              특별 수업 추가: 보강·특강 등 날짜 한 건 · 추가 일정 생성: 관리자용으로 기간을 정해 같은
+              규칙으로 일정을 더 만듭니다.
             </p>
 
             {groupStudentsLoading ? (
@@ -3821,7 +3931,7 @@ export default function Dashboard() {
           <div
             style={{
               width: '100%',
-              maxWidth: 480,
+              maxWidth: 520,
               background: '#151922',
               border: '1px solid #2e3240',
               borderRadius: 12,
@@ -3833,166 +3943,230 @@ export default function Dashboard() {
           >
             <h2
               id="group-modal-title"
-              style={{ margin: '0 0 16px 0', fontSize: '1.1rem', fontWeight: 600 }}
+              style={{ margin: '0 0 10px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              {groupModal.type === 'add' ? '반 만들기' : '반 수정'}
+              {groupModal.type === 'add' ? '정규반 만들기' : '반 수정'}
             </h2>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                반복 모드: fixedWeekdays (고정 요일, 읽기 전용)
+            {groupModal.type === 'add' ? (
+              <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.72, lineHeight: 1.45 }}>
+                반 정보·수업 시간·반복 요일을 저장하면, 시작일부터 약 8주간 수업 일정이 자동으로
+                만들어집니다.
+              </p>
+            ) : null}
+
+            <div
+              style={{
+                maxHeight: 'min(72vh, 560px)',
+                overflowY: 'auto',
+                paddingRight: 4,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 14,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.92 }}>
+                  반 정보
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>반 이름</span>
+                    <input
+                      type="text"
+                      value={groupForm.name}
+                      onChange={(e) =>
+                        setGroupForm((prev) => ({ ...prev, name: e.target.value }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {groupFormErrors.name ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.name}</span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>담당 선생님</span>
+                    <input
+                      type="text"
+                      value={groupForm.teacher}
+                      onChange={(e) =>
+                        setGroupForm((prev) => ({ ...prev, teacher: e.target.value }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {groupFormErrors.teacher ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {groupFormErrors.teacher}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>정원 (명)</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={groupForm.maxStudents}
+                      onChange={(e) =>
+                        setGroupForm((prev) => ({ ...prev, maxStudents: e.target.value }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {groupFormErrors.maxStudents ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {groupFormErrors.maxStudents}
+                      </span>
+                    ) : null}
+                  </label>
+                </div>
               </div>
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>이름</span>
-                <input
-                  type="text"
-                  value={groupForm.name}
-                  onChange={(e) =>
-                    setGroupForm((prev) => ({ ...prev, name: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupFormErrors.name ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.name}</span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>선생님</span>
-                <input
-                  type="text"
-                  value={groupForm.teacher}
-                  onChange={(e) =>
-                    setGroupForm((prev) => ({ ...prev, teacher: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupFormErrors.teacher ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.teacher}</span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>최대 인원 (maxStudents)</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={groupForm.maxStudents}
-                  onChange={(e) =>
-                    setGroupForm((prev) => ({ ...prev, maxStudents: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupFormErrors.maxStudents ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupFormErrors.maxStudents}
-                  </span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>시간 (HH:mm)</span>
-                <input
-                  type="time"
-                  value={groupForm.time}
-                  onChange={(e) =>
-                    setGroupForm((prev) => ({ ...prev, time: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupFormErrors.time ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.time}</span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>과목</span>
-                <input
-                  type="text"
-                  value={groupForm.subject}
-                  onChange={(e) =>
-                    setGroupForm((prev) => ({ ...prev, subject: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupFormErrors.subject ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupFormErrors.subject}
-                  </span>
-                ) : null}
-              </label>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>요일 (1=일 … 7=토)</span>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px' }}>
-                  {GROUP_RECURRENCE_WEEKDAY_TOGGLES.map(({ value, label }) => {
-                    const checked =
-                      Array.isArray(groupForm.weekdays) && groupForm.weekdays.includes(value)
-                    return (
-                      <label
-                        key={value}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 6,
-                          cursor: 'pointer',
-                          fontSize: 13,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => {
-                            setGroupForm((prev) => {
-                              const prevWd = Array.isArray(prev.weekdays) ? prev.weekdays : []
-                              const set = new Set(prevWd)
-                              if (set.has(value)) set.delete(value)
-                              else set.add(value)
-                              return { ...prev, weekdays: [...set].sort((a, b) => a - b) }
-                            })
-                          }}
-                        />
-                        {label}
-                      </label>
-                    )
-                  })}
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.92 }}>
+                  수업 정보
                 </div>
-                {groupFormErrors.weekdays ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupFormErrors.weekdays}
-                  </span>
-                ) : null}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {groupModal.type === 'add' ? (
+                    <label
+                      style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
+                    >
+                      <span style={{ opacity: 0.85 }}>수업 시작일 (자동 일정 기준)</span>
+                      <input
+                        type="date"
+                        value={groupForm.startDate}
+                        onChange={(e) =>
+                          setGroupForm((prev) => ({ ...prev, startDate: e.target.value }))
+                        }
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          border: '1px solid #444',
+                          background: '#1f1f1f',
+                          color: 'white',
+                        }}
+                      />
+                      {groupFormErrors.startDate ? (
+                        <span style={{ color: '#f08080', fontSize: 12 }}>
+                          {groupFormErrors.startDate}
+                        </span>
+                      ) : null}
+                    </label>
+                  ) : null}
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>기본 시간 (HH:mm)</span>
+                    <input
+                      type="time"
+                      value={groupForm.time}
+                      onChange={(e) =>
+                        setGroupForm((prev) => ({ ...prev, time: e.target.value }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {groupFormErrors.time ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.time}</span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>과목</span>
+                    <input
+                      type="text"
+                      value={groupForm.subject}
+                      onChange={(e) =>
+                        setGroupForm((prev) => ({ ...prev, subject: e.target.value }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {groupFormErrors.subject ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {groupFormErrors.subject}
+                      </span>
+                    ) : null}
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.92 }}>
+                  반복 설정
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
+                  recurrenceMode: <code style={{ fontSize: 11 }}>fixedWeekdays</code> (고정 요일,
+                  읽기 전용)
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>요일 (1=일 … 7=토)</span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px' }}>
+                    {GROUP_RECURRENCE_WEEKDAY_TOGGLES.map(({ value, label }) => {
+                      const checked =
+                        Array.isArray(groupForm.weekdays) && groupForm.weekdays.includes(value)
+                      return (
+                        <label
+                          key={value}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            cursor: 'pointer',
+                            fontSize: 13,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => {
+                              setGroupForm((prev) => {
+                                const prevWd = Array.isArray(prev.weekdays) ? prev.weekdays : []
+                                const set = new Set(prevWd)
+                                if (set.has(value)) set.delete(value)
+                                else set.add(value)
+                                return { ...prev, weekdays: [...set].sort((a, b) => a - b) }
+                              })
+                            }}
+                          />
+                          {label}
+                        </label>
+                      )
+                    })}
+                  </div>
+                  {groupFormErrors.weekdays ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {groupFormErrors.weekdays}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
 
@@ -4262,7 +4436,7 @@ export default function Dashboard() {
               id="group-lesson-modal-title"
               style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              {groupLessonModal.type === 'add' ? '한 번만 수업 추가' : '수업 수정'}
+              {groupLessonModal.type === 'add' ? '특별 수업 추가' : '수업 수정'}
             </h2>
             <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
               {selectedGroupClass.name || '-'}
@@ -4415,8 +4589,11 @@ export default function Dashboard() {
               id="group-lesson-series-modal-title"
               style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              수업 일정 생성
+              추가 일정 생성
             </h2>
+            <p style={{ margin: '0 0 4px 0', fontSize: 12, opacity: 0.62, lineHeight: 1.4 }}>
+              관리자 보조: 기간을 지정해 같은 반 규칙으로 일정을 더 만듭니다.
+            </p>
             <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
               {selectedGroupClass.name || '-'}
             </p>
@@ -4540,7 +4717,7 @@ export default function Dashboard() {
                   cursor: isGroupLessonSeriesSubmitting ? 'not-allowed' : 'pointer',
                 }}
               >
-                {isGroupLessonSeriesSubmitting ? '생성 중...' : '생성'}
+                {isGroupLessonSeriesSubmitting ? '생성 중...' : '일정 생성'}
               </button>
             </div>
           </div>
