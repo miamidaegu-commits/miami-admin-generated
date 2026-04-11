@@ -267,6 +267,50 @@ function formatGroupWeekdaysDisplay(nums) {
   return sorted.map((d) => GROUP_WEEKDAY_LABELS[d] || String(d)).join(', ')
 }
 
+/** JS Date.getDay() (0=일) → groupClasses.weekdays 코드 (1=일 … 7=토) */
+function jsDateToGroupWeekdayCode(date) {
+  const day = date.getDay()
+  return day === 0 ? 1 : day + 1
+}
+
+function parseYmdToLocalDate(ymd) {
+  const [y, mo, d] = String(ymd).split('-').map(Number)
+  if (!y || !mo || !d) return null
+  const dt = new Date(y, mo - 1, d)
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null
+  return dt
+}
+
+function formatLocalDateToYmd(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+function* iterateYmdRangeInclusive(startYmd, endYmd) {
+  const start = parseYmdToLocalDate(startYmd)
+  const end = parseYmdToLocalDate(endYmd)
+  if (!start || !end || start > end) return
+  let cur = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+  const endTime = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime()
+  while (cur.getTime() <= endTime) {
+    yield formatLocalDateToYmd(cur)
+    cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1)
+  }
+}
+
+function countWeekdayHitsInRange(startYmd, endYmd, weekdaySet) {
+  if (!weekdaySet || weekdaySet.size === 0) return 0
+  let n = 0
+  for (const ymd of iterateYmdRangeInclusive(startYmd, endYmd)) {
+    const dt = parseYmdToLocalDate(ymd)
+    if (!dt) continue
+    if (weekdaySet.has(jsDateToGroupWeekdayCode(dt))) n += 1
+  }
+  return n
+}
+
 export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -323,6 +367,7 @@ export default function Dashboard() {
       return aKey.localeCompare(bKey)
     })
   }, [groupLessons])
+
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
   const [groupLessonModal, setGroupLessonModal] = useState(null)
   const [groupLessonForm, setGroupLessonForm] = useState({
@@ -332,6 +377,33 @@ export default function Dashboard() {
   })
   const [groupLessonFormErrors, setGroupLessonFormErrors] = useState({})
   const [busyGroupLessonId, setBusyGroupLessonId] = useState(null)
+  const [groupLessonSeriesModalOpen, setGroupLessonSeriesModalOpen] = useState(false)
+  const [groupLessonSeriesForm, setGroupLessonSeriesForm] = useState({
+    startDate: '',
+    endDate: '',
+  })
+  const [groupLessonSeriesFormErrors, setGroupLessonSeriesFormErrors] = useState({})
+  const [busyGroupLessonSeries, setBusyGroupLessonSeries] = useState(false)
+
+  const groupLessonSeriesPlannedCount = useMemo(() => {
+    if (!groupLessonSeriesModalOpen || !selectedGroupClass) return null
+    const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(selectedGroupClass.weekdays))
+    if (weekdaySet.size === 0) return null
+    const s = String(groupLessonSeriesForm.startDate || '').trim()
+    const e = String(groupLessonSeriesForm.endDate || '').trim()
+    if (!s || !e) return null
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !/^\d{4}-\d{2}-\d{2}$/.test(e)) return null
+    const ds = parseYmdToLocalDate(s)
+    const de = parseYmdToLocalDate(e)
+    if (!ds || !de || ds > de) return null
+    return countWeekdayHitsInRange(s, e, weekdaySet)
+  }, [
+    groupLessonSeriesModalOpen,
+    selectedGroupClass,
+    groupLessonSeriesForm.startDate,
+    groupLessonSeriesForm.endDate,
+  ])
+
   const [privateLessonModalOpen, setPrivateLessonModalOpen] = useState(false)
   const [privateLessonForm, setPrivateLessonForm] = useState({
     studentId: '',
@@ -668,6 +740,8 @@ export default function Dashboard() {
       setGroupStudentFormErrors({})
       setGroupLessonModal(null)
       setGroupLessonFormErrors({})
+      setGroupLessonSeriesModalOpen(false)
+      setGroupLessonSeriesFormErrors({})
     }
   }, [activeSection])
 
@@ -682,6 +756,18 @@ export default function Dashboard() {
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [groupModal])
+
+  useEffect(() => {
+    if (!groupLessonSeriesModalOpen) return
+    function onKeyDown(e) {
+      if (e.key === 'Escape') {
+        setGroupLessonSeriesModalOpen(false)
+        setGroupLessonSeriesFormErrors({})
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [groupLessonSeriesModalOpen])
 
   useEffect(() => {
     if (!selectedGroupClass?.id) {
@@ -1825,6 +1911,145 @@ export default function Dashboard() {
     }
   }
 
+  function closeGroupLessonSeriesModal() {
+    setGroupLessonSeriesModalOpen(false)
+    setGroupLessonSeriesFormErrors({})
+  }
+
+  function openGroupLessonSeriesModal() {
+    const canCreateDirectly =
+      userProfile?.role === 'admin' || userProfile?.canCreateLessonDirectly === true
+    const requiresApproval = userProfile?.requiresLessonApproval === true
+
+    if (!canCreateDirectly || requiresApproval) {
+      alert('직접 수업 생성 권한이 없거나 승인 절차가 필요합니다.')
+      return
+    }
+
+    if (!selectedGroupClass?.id) return
+
+    const wd = normalizeGroupWeekdaysFromDoc(selectedGroupClass.weekdays)
+    const timeStr = String(selectedGroupClass.time || '').trim()
+    const subjectStr = String(selectedGroupClass.subject || '').trim()
+    if (wd.length === 0 || !timeStr || !subjectStr) {
+      alert(
+        '그룹에 요일(weekdays)·시간(time)·과목(subject)이 모두 설정되어 있어야 반복 수업을 만들 수 있습니다.'
+      )
+      return
+    }
+
+    setGroupLessonSeriesForm({ startDate: '', endDate: '' })
+    setGroupLessonSeriesFormErrors({})
+    setGroupLessonSeriesModalOpen(true)
+  }
+
+  function validateGroupLessonSeriesFormFields(form) {
+    const errors = {}
+    const startDate = String(form.startDate || '').trim()
+    const endDate = String(form.endDate || '').trim()
+
+    if (!startDate) errors.startDate = '시작일을 선택해주세요.'
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) errors.startDate = '시작일 형식이 올바르지 않습니다.'
+    else if (!parseYmdToLocalDate(startDate)) errors.startDate = '유효한 시작일을 선택해주세요.'
+
+    if (!endDate) errors.endDate = '종료일을 선택해주세요.'
+    else if (!/^\d{4}-\d{2}-\d{2}$/.test(endDate)) errors.endDate = '종료일 형식이 올바르지 않습니다.'
+    else if (!parseYmdToLocalDate(endDate)) errors.endDate = '유효한 종료일을 선택해주세요.'
+
+    if (!errors.startDate && !errors.endDate && startDate && endDate) {
+      const ds = parseYmdToLocalDate(startDate)
+      const de = parseYmdToLocalDate(endDate)
+      if (ds && de && ds > de) {
+        errors.endDate = '종료일은 시작일 이후여야 합니다.'
+      }
+    }
+
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      startDate,
+      endDate,
+    }
+  }
+
+  async function submitGroupLessonSeriesModal() {
+    if (!selectedGroupClass?.id) return
+
+    const canCreateDirectly =
+      userProfile?.role === 'admin' || userProfile?.canCreateLessonDirectly === true
+    const requiresApproval = userProfile?.requiresLessonApproval === true
+    if (!canCreateDirectly || requiresApproval) {
+      alert('직접 수업 생성 권한이 없거나 승인 절차가 필요합니다.')
+      return
+    }
+
+    const result = validateGroupLessonSeriesFormFields(groupLessonSeriesForm)
+    setGroupLessonSeriesFormErrors(result.errors)
+    if (!result.valid) return
+
+    const gc = selectedGroupClass
+    const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(gc.weekdays))
+    const timeStr = String(gc.time || '').trim()
+    const subjectStr = String(gc.subject || '').trim()
+    if (weekdaySet.size === 0 || !timeStr || !subjectStr) {
+      alert('그룹 설정(요일·시간·과목)을 확인해주세요.')
+      return
+    }
+
+    const teacherNorm = normalizeText(gc.teacher || '')
+    const capacity = Number(gc.maxStudents)
+    const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
+
+    let created = 0
+    let skippedDup = 0
+
+    try {
+      setBusyGroupLessonSeries(true)
+      for (const dateStr of iterateYmdRangeInclusive(result.startDate, result.endDate)) {
+        const dt = parseYmdToLocalDate(dateStr)
+        if (!dt || !weekdaySet.has(jsDateToGroupWeekdayCode(dt))) continue
+
+        const dup = groupLessons.some(
+          (gl) =>
+            String(gl.groupClassId || '') === String(gc.id) &&
+            String(gl.date || '') === dateStr &&
+            String(gl.time || '').trim() === timeStr
+        )
+        if (dup) {
+          skippedDup += 1
+          continue
+        }
+
+        await addDoc(collection(db, 'groupLessons'), {
+          groupClassId: gc.id,
+          groupClassName: gc.name || '',
+          teacher: teacherNorm,
+          date: dateStr,
+          time: timeStr,
+          subject: subjectStr,
+          completed: false,
+          countedStudentIDs: [],
+          attendanceAppliedAt: null,
+          bookingMode: 'fixed',
+          capacity: cap,
+          bookedCount: 0,
+          isBookable: false,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        created += 1
+      }
+
+      alert(`반복 수업 생성 완료: ${created}건 생성, 중복 건너뜀 ${skippedDup}건`)
+      closeGroupLessonSeriesModal()
+    } catch (error) {
+      console.error('반복 그룹 수업 생성 실패:', error)
+      alert(`반복 그룹 수업 생성 실패: ${error.message}`)
+    } finally {
+      setBusyGroupLessonSeries(false)
+    }
+  }
+
   async function handleDeleteGroupLesson(lesson) {
     if (!(userProfile?.role === 'admin' || userProfile?.canDeleteLesson === true)) {
       alert('수업 삭제 권한이 없습니다.')
@@ -1864,6 +2089,8 @@ export default function Dashboard() {
     (groupLessonModal.type === 'add'
       ? busyGroupLessonId === '__add__'
       : busyGroupLessonId === groupLessonModal.lesson.id)
+
+  const isGroupLessonSeriesSubmitting = busyGroupLessonSeries
 
   const isPrivateLessonModalSubmitting = busyPrivateLessonAdd
   const isPrivateLessonEditSubmitting = Boolean(
@@ -2744,41 +2971,82 @@ export default function Dashboard() {
                   선택된 그룹의 수업을 관리합니다.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={openGroupLessonAddModal}
-                disabled={
-                  !canUseDirectLessonCreation ||
-                  busyGroupLessonId === '__add__' ||
-                  groupLessonsLoading ||
-                  busyGroupId === '__add__' ||
-                  busyGroupId === selectedGroupClass.id
-                }
-                style={{
-                  padding: '10px 14px',
-                  borderRadius: 10,
-                  border: '1px solid #444',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor:
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={openGroupLessonAddModal}
+                  disabled={
                     !canUseDirectLessonCreation ||
                     busyGroupLessonId === '__add__' ||
+                    busyGroupLessonSeries ||
                     groupLessonsLoading ||
                     busyGroupId === '__add__' ||
                     busyGroupId === selectedGroupClass.id
-                      ? 'not-allowed'
-                      : 'pointer',
-                }}
-                title={
-                  requiresLessonApproval
-                    ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
-                    : !canCreateLessonDirectly
-                    ? '직접 수업 생성 권한이 없습니다.'
-                    : undefined
-                }
-              >
-                {busyGroupLessonId === '__add__' ? '추가 중...' : '그룹 수업 추가'}
-              </button>
+                  }
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 10,
+                    border: '1px solid #444',
+                    background: '#1f2a44',
+                    color: 'white',
+                    cursor:
+                      !canUseDirectLessonCreation ||
+                      busyGroupLessonId === '__add__' ||
+                      busyGroupLessonSeries ||
+                      groupLessonsLoading ||
+                      busyGroupId === '__add__' ||
+                      busyGroupId === selectedGroupClass.id
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                  title={
+                    requiresLessonApproval
+                      ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
+                      : !canCreateLessonDirectly
+                      ? '직접 수업 생성 권한이 없습니다.'
+                      : undefined
+                  }
+                >
+                  {busyGroupLessonId === '__add__' ? '추가 중...' : '그룹 수업 추가'}
+                </button>
+                <button
+                  type="button"
+                  onClick={openGroupLessonSeriesModal}
+                  disabled={
+                    !canUseDirectLessonCreation ||
+                    busyGroupLessonId === '__add__' ||
+                    busyGroupLessonSeries ||
+                    groupLessonsLoading ||
+                    busyGroupId === '__add__' ||
+                    busyGroupId === selectedGroupClass.id
+                  }
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 10,
+                    border: '1px solid #335533',
+                    background: '#2a3d2a',
+                    color: 'white',
+                    cursor:
+                      !canUseDirectLessonCreation ||
+                      busyGroupLessonId === '__add__' ||
+                      busyGroupLessonSeries ||
+                      groupLessonsLoading ||
+                      busyGroupId === '__add__' ||
+                      busyGroupId === selectedGroupClass.id
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                  title={
+                    requiresLessonApproval
+                      ? '승인 절차가 필요해 직접 수업 생성을 사용할 수 없습니다.'
+                      : !canCreateLessonDirectly
+                      ? '직접 수업 생성 권한이 없습니다.'
+                      : undefined
+                  }
+                >
+                  {busyGroupLessonSeries ? '생성 중...' : '반복 수업 생성'}
+                </button>
+              </div>
             </div>
 
             {groupLessonsLoading ? (
@@ -4126,6 +4394,174 @@ export default function Dashboard() {
                 }}
               >
                 {isGroupLessonModalSubmitting ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'groups' && groupLessonSeriesModalOpen && selectedGroupClass ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="group-lesson-series-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeGroupLessonSeriesModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 460,
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="group-lesson-series-modal-title"
+              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
+            >
+              반복 그룹 수업 생성
+            </h2>
+            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
+              {selectedGroupClass.name || '-'}
+            </p>
+
+            <div
+              style={{
+                fontSize: 13,
+                lineHeight: 1.5,
+                padding: 12,
+                borderRadius: 8,
+                border: '1px solid #333',
+                background: '#1a1d26',
+                marginBottom: 12,
+                opacity: 0.95,
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>그룹 설정 (읽기 전용)</div>
+              <div>시간: {selectedGroupClass.time || '—'}</div>
+              <div>과목: {selectedGroupClass.subject || '—'}</div>
+              <div>
+                요일:{' '}
+                {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'}
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>시작일</span>
+                <input
+                  type="date"
+                  value={groupLessonSeriesForm.startDate}
+                  onChange={(e) =>
+                    setGroupLessonSeriesForm((prev) => ({
+                      ...prev,
+                      startDate: e.target.value,
+                    }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {groupLessonSeriesFormErrors.startDate ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {groupLessonSeriesFormErrors.startDate}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>종료일</span>
+                <input
+                  type="date"
+                  value={groupLessonSeriesForm.endDate}
+                  onChange={(e) =>
+                    setGroupLessonSeriesForm((prev) => ({
+                      ...prev,
+                      endDate: e.target.value,
+                    }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {groupLessonSeriesFormErrors.endDate ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {groupLessonSeriesFormErrors.endDate}
+                  </span>
+                ) : null}
+              </label>
+
+              {groupLessonSeriesPlannedCount != null ? (
+                <p style={{ margin: 0, fontSize: 12, opacity: 0.8 }}>
+                  이 기간·요일 기준 생성 후보: <strong>{groupLessonSeriesPlannedCount}</strong>건
+                  (이미 같은 날짜·시간 수업이 있으면 건너뜁니다)
+                </p>
+              ) : null}
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                marginTop: 20,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeGroupLessonSeriesModal}
+                disabled={isGroupLessonSeriesSubmitting}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: isGroupLessonSeriesSubmitting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={submitGroupLessonSeriesModal}
+                disabled={isGroupLessonSeriesSubmitting}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #4a6fff55',
+                  background: '#1f2a44',
+                  color: 'white',
+                  cursor: isGroupLessonSeriesSubmitting ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {isGroupLessonSeriesSubmitting ? '생성 중...' : '생성'}
               </button>
             </div>
           </div>
