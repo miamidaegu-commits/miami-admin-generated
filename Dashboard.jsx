@@ -231,7 +231,41 @@ function formatGroupStudentStartDate(raw) {
   return '-'
 }
 
+const GROUP_RECURRENCE_WEEKDAY_TOGGLES = [
+  { value: 2, label: '월' },
+  { value: 3, label: '화' },
+  { value: 4, label: '수' },
+  { value: 5, label: '목' },
+  { value: 6, label: '금' },
+  { value: 7, label: '토' },
+  { value: 1, label: '일' },
+]
 
+const GROUP_WEEKDAY_LABELS = {
+  1: '일',
+  2: '월',
+  3: '화',
+  4: '수',
+  5: '목',
+  6: '금',
+  7: '토',
+}
+
+function normalizeGroupWeekdaysFromDoc(raw) {
+  if (!Array.isArray(raw)) return []
+  const nums = raw
+    .map((v) => Number(v))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7)
+  return [...new Set(nums)].sort((a, b) => a - b)
+}
+
+function formatGroupWeekdaysDisplay(nums) {
+  const arr = normalizeGroupWeekdaysFromDoc(nums)
+  if (arr.length === 0) return ''
+  const order = [2, 3, 4, 5, 6, 7, 1]
+  const sorted = [...arr].sort((a, b) => order.indexOf(a) - order.indexOf(b))
+  return sorted.map((d) => GROUP_WEEKDAY_LABELS[d] || String(d)).join(', ')
+}
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -265,6 +299,10 @@ export default function Dashboard() {
     name: '',
     teacher: '',
     maxStudents: '1',
+    time: '',
+    subject: '',
+    weekdays: [],
+    recurrenceMode: 'fixedWeekdays',
   })
   const [groupFormErrors, setGroupFormErrors] = useState({})
   const [selectedGroupClass, setSelectedGroupClass] = useState(null)
@@ -1364,6 +1402,10 @@ export default function Dashboard() {
       name: '',
       teacher: '',
       maxStudents: '1',
+      time: '',
+      subject: '',
+      weekdays: [],
+      recurrenceMode: 'fixedWeekdays',
     })
     setGroupFormErrors({})
     setGroupModal({ type: 'add' })
@@ -1379,6 +1421,10 @@ export default function Dashboard() {
       name: group.name || '',
       teacher: group.teacher || '',
       maxStudents: groupMaxStudentsToFormString(group.maxStudents),
+      time: String(group.time || '').trim(),
+      subject: String(group.subject || '').trim(),
+      weekdays: normalizeGroupWeekdaysFromDoc(group.weekdays),
+      recurrenceMode: 'fixedWeekdays',
     })
     setGroupFormErrors({})
     setGroupModal({ type: 'edit', group })
@@ -1394,12 +1440,41 @@ export default function Dashboard() {
     const maxStudents = parseRequiredMinOneIntField(form.maxStudents)
     if (!maxStudents.ok) errors.maxStudents = '1 이상의 정수를 입력해주세요.'
 
+    const timeStr = String(form.time || '').trim()
+    if (!timeStr) {
+      errors.time = '시간을 입력해주세요.'
+    } else if (!/^\d{2}:\d{2}$/.test(timeStr)) {
+      errors.time = 'HH:mm 형식으로 입력해주세요.'
+    } else {
+      const [h, m] = timeStr.split(':').map(Number)
+      if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+        errors.time = '유효한 시간을 입력해주세요.'
+      }
+    }
+
+    const subject = String(form.subject || '').trim()
+    if (!subject) errors.subject = '과목을 입력해주세요.'
+
+    const weekdays = normalizeGroupWeekdaysFromDoc(
+      Array.isArray(form.weekdays) ? form.weekdays : []
+    )
+    if (weekdays.length === 0) {
+      errors.weekdays = '요일을 1개 이상 선택해주세요.'
+    }
+
+    const recurrenceMode =
+      form.recurrenceMode === 'fixedWeekdays' ? 'fixedWeekdays' : 'fixedWeekdays'
+
     return {
       valid: Object.keys(errors).length === 0,
       errors,
       name,
       teacher,
       maxStudents: maxStudents.ok ? maxStudents.value : 1,
+      time: timeStr,
+      subject,
+      weekdays,
+      recurrenceMode,
     }
   }
 
@@ -1419,6 +1494,10 @@ export default function Dashboard() {
           name: result.name,
           teacher: teacherKey,
           maxStudents: result.maxStudents,
+          time: result.time,
+          subject: result.subject,
+          weekdays: result.weekdays,
+          recurrenceMode: result.recurrenceMode,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
@@ -1439,6 +1518,10 @@ export default function Dashboard() {
         name: result.name,
         teacher: teacherKey,
         maxStudents: result.maxStudents,
+        time: result.time,
+        subject: result.subject,
+        weekdays: result.weekdays,
+        recurrenceMode: result.recurrenceMode,
         updatedAt: serverTimestamp(),
       })
       closeGroupModal()
@@ -2518,6 +2601,26 @@ export default function Dashboard() {
                   선생님 {selectedGroupClass.teacher || '-'} · 최대{' '}
                   {selectedGroupClass.maxStudents ?? '-'}명
                 </p>
+                {selectedGroupClass.time ||
+                selectedGroupClass.subject ||
+                (Array.isArray(selectedGroupClass.weekdays) &&
+                  selectedGroupClass.weekdays.length > 0) ? (
+                  <p style={{ margin: '6px 0 0 0', opacity: 0.65, fontSize: 12 }}>
+                    {selectedGroupClass.time ? `시간 ${selectedGroupClass.time}` : ''}
+                    {selectedGroupClass.time && selectedGroupClass.subject ? ' · ' : ''}
+                    {selectedGroupClass.subject ? `과목 ${selectedGroupClass.subject}` : ''}
+                    {(() => {
+                      const wd = formatGroupWeekdaysDisplay(selectedGroupClass.weekdays)
+                      if (!wd) return null
+                      return (
+                        <>
+                          {selectedGroupClass.time || selectedGroupClass.subject ? ' · ' : ''}
+                          요일 {wd}
+                        </>
+                      )
+                    })()}
+                  </p>
+                ) : null}
               </div>
               {canAddStudent ? (
                 <button
@@ -3471,7 +3574,7 @@ export default function Dashboard() {
           <div
             style={{
               width: '100%',
-              maxWidth: 420,
+              maxWidth: 480,
               background: '#151922',
               border: '1px solid #2e3240',
               borderRadius: 12,
@@ -3489,6 +3592,10 @@ export default function Dashboard() {
             </h2>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                반복 모드: fixedWeekdays (고정 요일, 읽기 전용)
+              </div>
+
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>이름</span>
                 <input
@@ -3554,6 +3661,92 @@ export default function Dashboard() {
                   </span>
                 ) : null}
               </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>시간 (HH:mm)</span>
+                <input
+                  type="time"
+                  value={groupForm.time}
+                  onChange={(e) =>
+                    setGroupForm((prev) => ({ ...prev, time: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {groupFormErrors.time ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.time}</span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>과목</span>
+                <input
+                  type="text"
+                  value={groupForm.subject}
+                  onChange={(e) =>
+                    setGroupForm((prev) => ({ ...prev, subject: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {groupFormErrors.subject ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {groupFormErrors.subject}
+                  </span>
+                ) : null}
+              </label>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>요일 (1=일 … 7=토)</span>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px' }}>
+                  {GROUP_RECURRENCE_WEEKDAY_TOGGLES.map(({ value, label }) => {
+                    const checked =
+                      Array.isArray(groupForm.weekdays) && groupForm.weekdays.includes(value)
+                    return (
+                      <label
+                        key={value}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          cursor: 'pointer',
+                          fontSize: 13,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setGroupForm((prev) => {
+                              const prevWd = Array.isArray(prev.weekdays) ? prev.weekdays : []
+                              const set = new Set(prevWd)
+                              if (set.has(value)) set.delete(value)
+                              else set.add(value)
+                              return { ...prev, weekdays: [...set].sort((a, b) => a - b) }
+                            })
+                          }}
+                        />
+                        {label}
+                      </label>
+                    )
+                  })}
+                </div>
+                {groupFormErrors.weekdays ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {groupFormErrors.weekdays}
+                  </span>
+                ) : null}
+              </div>
             </div>
 
             <div
