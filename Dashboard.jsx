@@ -638,6 +638,12 @@ export default function Dashboard() {
   })
   const [studentPackageEditFormErrors, setStudentPackageEditFormErrors] = useState({})
   const [busyStudentPackageActionId, setBusyStudentPackageActionId] = useState(null)
+  const [studentPackageReRegisterSourcePackage, setStudentPackageReRegisterSourcePackage] =
+    useState(null)
+  const [postGroupReEnrollModalData, setPostGroupReEnrollModalData] = useState(null)
+  const [postGroupReEnrollStartDate, setPostGroupReEnrollStartDate] = useState('')
+  const [postGroupReEnrollErrors, setPostGroupReEnrollErrors] = useState({})
+  const [busyPostGroupReEnroll, setBusyPostGroupReEnroll] = useState(false)
   const [expandedStudentPackageStudentId, setExpandedStudentPackageStudentId] =
     useState(null)
 
@@ -1847,6 +1853,13 @@ export default function Dashboard() {
   function closeStudentPackageModal() {
     setStudentPackageModalStudent(null)
     setStudentPackageFormErrors({})
+    setStudentPackageReRegisterSourcePackage(null)
+  }
+
+  function closePostGroupReEnrollModal() {
+    setPostGroupReEnrollModalData(null)
+    setPostGroupReEnrollStartDate('')
+    setPostGroupReEnrollErrors({})
   }
 
   function closePostStudentCreateModal() {
@@ -1867,25 +1880,79 @@ export default function Dashboard() {
     openStudentPackageModal(st, 'group')
   }
 
-  function openStudentPackageModal(student, initialPackageType) {
+  function openStudentPackageModal(student, initialPackageType, reRegisterSourcePackage) {
     if (userProfile?.role !== 'admin') return
-    const packageType =
+    let packageType =
       initialPackageType === 'group' ||
       initialPackageType === 'openGroup' ||
       initialPackageType === 'private'
         ? initialPackageType
         : 'private'
+
     setStudentPackageModalStudent(student)
-    setStudentPackageForm({
-      packageType,
-      title: '',
-      totalCount: '1',
-      groupClassId: '',
-      expiresAt: '',
-      amountPaid: '',
-      memo: '',
-    })
+
+    if (reRegisterSourcePackage) {
+      const src = reRegisterSourcePackage
+      const srcPt = src.packageType
+      if (srcPt === 'group' || srcPt === 'openGroup' || srcPt === 'private') {
+        packageType = srcPt
+      }
+      const groupClassId =
+        packageType === 'group' || packageType === 'openGroup'
+          ? String(src.groupClassId || '')
+          : ''
+      const totalCount =
+        src.totalCount != null && String(src.totalCount).trim() !== ''
+          ? String(src.totalCount)
+          : '1'
+      setStudentPackageForm({
+        packageType,
+        title: String(src.title || '').trim(),
+        totalCount,
+        groupClassId,
+        expiresAt: '',
+        amountPaid: '',
+        memo: '',
+      })
+    } else {
+      setStudentPackageForm({
+        packageType,
+        title: '',
+        totalCount: '1',
+        groupClassId: '',
+        expiresAt: '',
+        amountPaid: '',
+        memo: '',
+      })
+    }
     setStudentPackageFormErrors({})
+    setStudentPackageReRegisterSourcePackage(reRegisterSourcePackage || null)
+  }
+
+  function openStudentPackageReRegisterModal(pkg) {
+    if (userProfile?.role !== 'admin') return
+    if (!pkg?.id) return
+    const sid = String(pkg.studentId || '').trim()
+    if (!sid) {
+      alert('수강권에 연결된 학생 ID가 없습니다.')
+      return
+    }
+    const pt = pkg.packageType
+    if (pt !== 'private' && pt !== 'group' && pt !== 'openGroup') {
+      alert('유형을 확인할 수 없어 재등록할 수 없습니다.')
+      return
+    }
+
+    const fromList = privateStudents.find((s) => s.id === sid)
+    const studentObj = fromList
+      ? fromList
+      : {
+          id: sid,
+          name: String(pkg.studentName || '').trim() || '-',
+          teacher: normalizeText(pkg.teacher || ''),
+        }
+
+    openStudentPackageModal(studentObj, pt, pkg)
   }
 
   function validateStudentPackageFormFields(form) {
@@ -1983,9 +2050,11 @@ export default function Dashboard() {
       groupClassName = g.name || null
     }
 
+    const sourcePkg = studentPackageReRegisterSourcePackage
+
     try {
       setBusyStudentPackageSubmit(true)
-      await addDoc(collection(db, 'studentPackages'), {
+      const docRef = await addDoc(collection(db, 'studentPackages'), {
         studentId,
         studentName,
         teacher,
@@ -2004,11 +2073,114 @@ export default function Dashboard() {
         updatedAt: serverTimestamp(),
       })
       closeStudentPackageModal()
+
+      if (
+        sourcePkg &&
+        (result.packageType === 'group' || result.packageType === 'openGroup') &&
+        groupClassId
+      ) {
+        setPostGroupReEnrollModalData({
+          newPackageId: docRef.id,
+          newPackageType: result.packageType,
+          studentId,
+          studentName,
+          teacher,
+          groupClassId,
+          groupClassName,
+          totalCount: result.totalCount,
+          usedCount: 0,
+        })
+        setPostGroupReEnrollStartDate(formatLocalYmd(new Date()))
+        setPostGroupReEnrollErrors({})
+      }
     } catch (error) {
       console.error('학생 수강권 추가 실패:', error)
       alert(`학생 수강권 추가 실패: ${error.message}`)
     } finally {
       setBusyStudentPackageSubmit(false)
+    }
+  }
+
+  async function submitPostGroupReEnroll() {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 등록할 수 있습니다.')
+      return
+    }
+    const data = postGroupReEnrollModalData
+    if (!data?.newPackageId || !data.groupClassId) {
+      alert('등록 정보가 올바르지 않습니다.')
+      return
+    }
+
+    const errors = {}
+    const dateStr = String(postGroupReEnrollStartDate || '').trim()
+    if (!dateStr) {
+      errors.startDate = '시작일을 선택해주세요.'
+    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      errors.startDate = '시작일 형식이 올바르지 않습니다.'
+    } else {
+      const [y, mo, d] = dateStr.split('-').map(Number)
+      const dt = new Date(y, mo - 1, d)
+      if (
+        dt.getFullYear() !== y ||
+        dt.getMonth() !== mo - 1 ||
+        dt.getDate() !== d
+      ) {
+        errors.startDate = '유효한 날짜를 선택해주세요.'
+      }
+    }
+    setPostGroupReEnrollErrors(errors)
+    if (Object.keys(errors).length > 0) return
+
+    const [y, mo, d] = dateStr.split('-').map(Number)
+    const startTimestamp = Timestamp.fromDate(new Date(y, mo - 1, d))
+
+    const enrollStudentId = String(data.studentId || '').trim()
+    const gid = String(data.groupClassId || '').trim()
+    const teacherNorm = normalizeText(data.teacher || '')
+
+    try {
+      setBusyPostGroupReEnroll(true)
+      const snap = await getDocs(
+        query(collection(db, 'groupStudents'), where('studentId', '==', enrollStudentId))
+      )
+
+      const batch = writeBatch(db)
+      snap.forEach((d) => {
+        const row = d.data()
+        if (String(row.groupClassId || '') !== gid) return
+        if (String(row.status || 'active') !== 'active') return
+        batch.update(doc(db, 'groupStudents', d.id), {
+          status: 'ended',
+          updatedAt: serverTimestamp(),
+        })
+      })
+
+      const newGsRef = doc(collection(db, 'groupStudents'))
+      batch.set(newGsRef, {
+        groupClassId: gid,
+        classID: gid,
+        studentId: enrollStudentId,
+        studentName: String(data.studentName || '').trim() || '-',
+        name: String(data.studentName || '').trim() || '-',
+        teacher: teacherNorm,
+        packageId: data.newPackageId,
+        packageType: data.newPackageType,
+        paidLessons: Number(data.totalCount ?? 0),
+        attendanceCount: 0,
+        startDate: startTimestamp,
+        status: 'active',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+
+      await batch.commit()
+      closePostGroupReEnrollModal()
+    } catch (error) {
+      console.error('같은 반 재등록 실패:', error)
+      alert(`같은 반 재등록 실패: ${error.message}`)
+    } finally {
+      setBusyPostGroupReEnroll(false)
     }
   }
 
@@ -4034,6 +4206,30 @@ export default function Dashboard() {
                             >
                               종료
                             </button>
+                            {String(pkg.status || 'active').toLowerCase() === 'exhausted' ||
+                            String(pkg.status || 'active').toLowerCase() === 'ended' ? (
+                              <button
+                                type="button"
+                                onClick={() => openStudentPackageReRegisterModal(pkg)}
+                                disabled={
+                                  busyStudentPackageActionId != null || busyStudentPackageSubmit
+                                }
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 8,
+                                  border: '1px solid #335544',
+                                  background: '#243528',
+                                  color: 'white',
+                                  cursor:
+                                    busyStudentPackageActionId != null || busyStudentPackageSubmit
+                                      ? 'not-allowed'
+                                      : 'pointer',
+                                  fontSize: 13,
+                                }}
+                              >
+                                재등록
+                              </button>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -5622,6 +5818,117 @@ export default function Dashboard() {
                 {busyStudentPackageActionId === studentPackageEditModalPackage.id
                   ? '저장 중...'
                   : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'students' && isAdmin && postGroupReEnrollModalData ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="post-group-re-enroll-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1003,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closePostGroupReEnrollModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 440,
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="post-group-re-enroll-modal-title"
+              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
+            >
+              새 수강권을 만들었습니다
+            </h2>
+            <p style={{ margin: '0 0 12px 0', fontSize: 14, opacity: 0.9 }}>
+              같은 반에 바로 다시 등록할까요?
+            </p>
+            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.82 }}>
+              {postGroupReEnrollModalData.studentName || '-'} ·{' '}
+              {postGroupReEnrollModalData.groupClassName || '-'}
+            </p>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+              <span style={{ opacity: 0.85 }}>시작일</span>
+              <input
+                type="date"
+                value={postGroupReEnrollStartDate}
+                onChange={(e) => setPostGroupReEnrollStartDate(e.target.value)}
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #444',
+                  background: '#1f1f1f',
+                  color: 'white',
+                }}
+              />
+              {postGroupReEnrollErrors.startDate ? (
+                <span style={{ color: '#f08080', fontSize: 12 }}>
+                  {postGroupReEnrollErrors.startDate}
+                </span>
+              ) : null}
+            </label>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                marginTop: 20,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                onClick={closePostGroupReEnrollModal}
+                disabled={busyPostGroupReEnroll}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: busyPostGroupReEnroll ? 'not-allowed' : 'pointer',
+                }}
+              >
+                나중에 하기
+              </button>
+              <button
+                type="button"
+                onClick={submitPostGroupReEnroll}
+                disabled={busyPostGroupReEnroll}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #4a6fff55',
+                  background: '#1f2a44',
+                  color: 'white',
+                  cursor: busyPostGroupReEnroll ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {busyPostGroupReEnroll ? '처리 중...' : '같은 반에 다시 등록'}
               </button>
             </div>
           </div>
