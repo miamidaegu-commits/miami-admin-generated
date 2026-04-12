@@ -319,6 +319,63 @@ function formatStudentPackageDetailMemo(raw) {
   return s || '-'
 }
 
+function creditTransactionCreatedAtToMillis(raw) {
+  if (!raw) return 0
+  if (typeof raw?.toMillis === 'function') return raw.toMillis()
+  if (typeof raw?.toDate === 'function') {
+    const d = raw.toDate()
+    return d && Number.isFinite(d.getTime()) ? d.getTime() : 0
+  }
+  if (raw?.seconds != null) {
+    return Number(raw.seconds) * 1000 + Math.floor(Number(raw.nanoseconds || 0) / 1e6)
+  }
+  return 0
+}
+
+function formatCreditTransactionCreatedAtDisplay(raw) {
+  if (!raw) return '-'
+  let d = null
+  if (typeof raw?.toDate === 'function') d = raw.toDate()
+  else if (typeof raw?.toMillis === 'function') d = new Date(raw.toMillis())
+  else if (raw?.seconds != null) d = new Date(raw.seconds * 1000)
+  if (!d || !Number.isFinite(d.getTime())) return '-'
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(d)
+}
+
+function formatCreditTransactionDeltaCountDisplay(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '-'
+  if (v === 0) return '0'
+  if (v > 0) return `+${v}`
+  return String(v)
+}
+
+function formatCreditTransactionActionTypeLabel(actionType) {
+  const key = String(actionType ?? '').trim()
+  if (!key) return '-'
+  const map = {
+    package_created: '수강권 발급',
+    package_adjusted: '총 횟수 조정',
+    package_updated: '수강권 정보 수정',
+    private_deduct_cancel: '개인 차감취소',
+    private_deduct_restore: '개인 차감복구',
+    group_deduct: '그룹 차감',
+    group_deduct_restore: '그룹 차감복구',
+    package_ended: '수강권 종료',
+    group_reenroll: '그룹 재등록',
+  }
+  return map[key] ?? key
+}
+
 const GROUP_RECURRENCE_WEEKDAY_TOGGLES = [
   { value: 2, label: '월' },
   { value: 3, label: '화' },
@@ -646,6 +703,10 @@ export default function Dashboard() {
   const [busyPostGroupReEnroll, setBusyPostGroupReEnroll] = useState(false)
   const [expandedStudentPackageStudentId, setExpandedStudentPackageStudentId] =
     useState(null)
+  const [studentPackageHistoryModalPackage, setStudentPackageHistoryModalPackage] =
+    useState(null)
+  const [studentPackageHistoryRows, setStudentPackageHistoryRows] = useState([])
+  const [studentPackageHistoryLoading, setStudentPackageHistoryLoading] = useState(false)
 
   useEffect(() => {
     if (!user?.uid) return
@@ -2292,6 +2353,42 @@ export default function Dashboard() {
   function closeStudentPackageEditModal() {
     setStudentPackageEditModalPackage(null)
     setStudentPackageEditFormErrors({})
+  }
+
+  function closeStudentPackageHistoryModal() {
+    setStudentPackageHistoryModalPackage(null)
+    setStudentPackageHistoryRows([])
+    setStudentPackageHistoryLoading(false)
+  }
+
+  async function openStudentPackageHistoryModal(pkg) {
+    if (userProfile?.role !== 'admin' || !pkg?.id) return
+    setStudentPackageHistoryModalPackage(pkg)
+    setStudentPackageHistoryRows([])
+    setStudentPackageHistoryLoading(true)
+    try {
+      const q = query(
+        collection(db, 'creditTransactions'),
+        where('packageId', '==', pkg.id)
+      )
+      const snap = await getDocs(q)
+      const rows = snap.docs.map((docItem) => ({
+        id: docItem.id,
+        ...docItem.data(),
+      }))
+      rows.sort(
+        (a, b) =>
+          creditTransactionCreatedAtToMillis(b.createdAt) -
+          creditTransactionCreatedAtToMillis(a.createdAt)
+      )
+      setStudentPackageHistoryRows(rows)
+    } catch (error) {
+      console.error('수강권 이력 조회 실패:', error)
+      alert(`수강권 이력을 불러오지 못했습니다: ${error.message}`)
+      setStudentPackageHistoryRows([])
+    } finally {
+      setStudentPackageHistoryLoading(false)
+    }
   }
 
   function openStudentPackageEditModal(pkg) {
@@ -4399,6 +4496,27 @@ export default function Dashboard() {
                             </button>
                             <button
                               type="button"
+                              onClick={() => openStudentPackageHistoryModal(pkg)}
+                              disabled={
+                                busyStudentPackageActionId != null || busyStudentPackageSubmit
+                              }
+                              style={{
+                                padding: '6px 12px',
+                                borderRadius: 8,
+                                border: '1px solid #3a4a66',
+                                background: '#1a2338',
+                                color: 'white',
+                                cursor:
+                                  busyStudentPackageActionId != null || busyStudentPackageSubmit
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                                fontSize: 13,
+                              }}
+                            >
+                              이력 보기
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => endStudentPackage(pkg)}
                               disabled={
                                 String(pkg.status || '').toLowerCase() === 'ended' ||
@@ -6168,6 +6286,148 @@ export default function Dashboard() {
                 }}
               >
                 {busyPostGroupReEnroll ? '처리 중...' : '같은 반에 등록'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'students' && isAdmin && studentPackageHistoryModalPackage ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="student-package-history-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1004,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeStudentPackageHistoryModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 640,
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="student-package-history-modal-title"
+              style={{ margin: '0 0 10px 0', fontSize: '1.1rem', fontWeight: 600 }}
+            >
+              수강권 이력
+            </h2>
+            <div
+              style={{
+                marginBottom: 14,
+                fontSize: 13,
+                opacity: 0.88,
+                lineHeight: 1.55,
+              }}
+            >
+              <div>
+                <span style={{ opacity: 0.72 }}>수강권 제목</span>{' '}
+                {studentPackageHistoryModalPackage.title != null &&
+                String(studentPackageHistoryModalPackage.title).trim()
+                  ? String(studentPackageHistoryModalPackage.title)
+                  : '-'}
+              </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>학생</span>{' '}
+                {String(studentPackageHistoryModalPackage.studentName || '').trim() || '-'}
+              </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>유형</span>{' '}
+                {formatStudentPackageDetailTypeLabel(studentPackageHistoryModalPackage.packageType)}
+              </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>연결 반</span>{' '}
+                {studentPackageHistoryModalPackage.groupClassName != null &&
+                String(studentPackageHistoryModalPackage.groupClassName).trim()
+                  ? String(studentPackageHistoryModalPackage.groupClassName)
+                  : '-'}
+              </div>
+            </div>
+
+            {studentPackageHistoryLoading ? (
+              <p style={{ margin: '12px 0', fontSize: 13, opacity: 0.85 }}>불러오는 중...</p>
+            ) : studentPackageHistoryRows.length === 0 ? (
+              <p style={{ margin: '12px 0', fontSize: 13, opacity: 0.85 }}>
+                등록된 이력이 없습니다.
+              </p>
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10,
+                  marginTop: 4,
+                }}
+              >
+                {studentPackageHistoryRows.map((row) => (
+                  <div
+                    key={row.id}
+                    style={{
+                      border: '1px solid #2a3140',
+                      borderRadius: 8,
+                      padding: '10px 12px',
+                      fontSize: 13,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ opacity: 0.9, marginBottom: 4 }}>
+                      <strong>{formatCreditTransactionCreatedAtDisplay(row.createdAt)}</strong>
+                      {' · '}
+                      {formatCreditTransactionActionTypeLabel(row.actionType)}
+                      {' · '}
+                      {formatCreditTransactionDeltaCountDisplay(row.deltaCount)}
+                    </div>
+                    <div style={{ opacity: 0.82, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                      메모: {String(row.memo ?? '').trim() || '-'}
+                    </div>
+                    <div style={{ opacity: 0.72, fontSize: 12, marginTop: 4 }}>
+                      처리 역할: {String(row.actorRole ?? '').trim() || '-'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                marginTop: 18,
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeStudentPackageHistoryModal}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: 'pointer',
+                }}
+              >
+                닫기
               </button>
             </div>
           </div>
