@@ -7,6 +7,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
@@ -165,6 +166,49 @@ function countUsedAsOfTodayForStudent(allLessons, targetStudentName) {
   }
 
   return usedCount
+}
+
+/** Firestore 기준으로 private 패키지의 usedCount / remainingCount 재계산 */
+async function recomputePrivatePackageUsage(packageId) {
+  const pid = String(packageId || '').trim()
+  if (!pid) return
+
+  const pkgRef = doc(db, 'studentPackages', pid)
+  const pkgSnap = await getDoc(pkgRef)
+  if (!pkgSnap.exists()) return
+
+  const pkg = pkgSnap.data()
+  if (pkg.packageType !== 'private') return
+
+  const packageTeacher = normalizeText(pkg.teacher || '')
+  if (!packageTeacher) return
+
+  const snap = await getDocs(
+    query(
+      collection(db, 'lessons'),
+      where('packageId', '==', pid),
+      where('teacher', '==', packageTeacher)
+    )
+  )
+
+  const today = getTodayStorageDateString()
+  let usedCount = 0
+  snap.docs.forEach((lessonDoc) => {
+    const data = lessonDoc.data()
+    const dateStr = getLessonStorageDateString(data)
+    if (!dateStr || dateStr > today) return
+    if (data.isDeductCancelled === true) return
+    usedCount += 1
+  })
+
+  const total = Number(pkg.totalCount ?? 0)
+  const remainingCount = Math.max(0, total - usedCount)
+
+  await updateDoc(pkgRef, {
+    usedCount,
+    remainingCount,
+    updatedAt: serverTimestamp(),
+  })
 }
 
 /** 0 이상 정수 문자열만 허용 (앞뒤 공백 제거 후 검사) */
@@ -1369,9 +1413,13 @@ export default function Dashboard() {
       return
     }
 
-    const studentId = getMatchedStudentId(lesson)
+    const packageId = String(lesson.packageId || '').trim()
+    const usePackagePath = Boolean(packageId)
 
-    if (!studentId) {
+    const studentId = getMatchedStudentId(lesson)
+    const resolvedStudentId = String(lesson.studentId || '').trim() || studentId || ''
+
+    if (!usePackagePath && !studentId) {
       alert('이 lesson은 studentId 연결이 없습니다. 먼저 "기존 lessons를 Timestamp + studentId로 변환"을 눌러주세요.')
       return
     }
@@ -1399,30 +1447,76 @@ export default function Dashboard() {
           : item
       )
 
-      const nextAttendanceCount = countUsedAsOfTodayForStudent(
-        nextLessons,
-        getStudentName(lesson)
-      )
-
       const batch = writeBatch(db)
       const lessonRef = doc(db, 'lessons', lesson.id)
-      const studentRef = doc(db, 'privateStudents', studentId)
 
-      batch.update(lessonRef, {
-        isDeductCancelled: nextCancelled,
-        deductMemo: nextMemo,
-        updatedAt: serverTimestamp(),
-        studentId,
-        studentName: getStudentName(lesson),
-        teacherName: getTeacherName(lesson),
-      })
+      if (usePackagePath) {
+        const selectedPackage = studentPackages.find((p) => p.id === packageId)
+        if (!selectedPackage) {
+          alert('연결된 수강권을 찾을 수 없습니다.')
+          return
+        }
+        if (selectedPackage.packageType !== 'private') {
+          alert('개인 수강권이 아닙니다.')
+          return
+        }
+        if (!resolvedStudentId) {
+          alert('이 lesson은 studentId 연결이 없습니다. 먼저 "기존 lessons를 Timestamp + studentId로 변환"을 눌러주세요.')
+          return
+        }
+        const pkgSid = String(selectedPackage.studentId || '').trim()
+        if (pkgSid !== resolvedStudentId) {
+          alert('수업의 학생과 수강권의 학생이 일치하지 않습니다.')
+          return
+        }
+        const adminUser = userProfile?.role === 'admin'
+        const pkgTeacher = normalizeText(selectedPackage.teacher || '')
+        const lessonTeacher = normalizeText(getTeacherName(lesson))
+        if (!pkgTeacher || !lessonTeacher || pkgTeacher !== lessonTeacher) {
+          alert('수업 담당 선생님과 수강권 담당 선생님이 일치하지 않습니다.')
+          return
+        }
+        if (!adminUser) {
+          const myT = normalizeText(userProfile?.teacherName || '')
+          if (!myT || pkgTeacher !== myT) {
+            alert('본인 담당 수강권만 차감 처리할 수 있습니다.')
+            return
+          }
+        }
 
-      batch.update(studentRef, {
-        attendanceCount: nextAttendanceCount,
-        updatedAt: serverTimestamp(),
-      })
+        batch.update(lessonRef, {
+          isDeductCancelled: nextCancelled,
+          deductMemo: nextMemo,
+          updatedAt: serverTimestamp(),
+        })
+      } else {
+        const nextAttendanceCount = countUsedAsOfTodayForStudent(
+          nextLessons,
+          getStudentName(lesson)
+        )
+
+        const studentRef = doc(db, 'privateStudents', studentId)
+
+        batch.update(lessonRef, {
+          isDeductCancelled: nextCancelled,
+          deductMemo: nextMemo,
+          updatedAt: serverTimestamp(),
+          studentId,
+          studentName: getStudentName(lesson),
+          teacherName: getTeacherName(lesson),
+        })
+
+        batch.update(studentRef, {
+          attendanceCount: nextAttendanceCount,
+          updatedAt: serverTimestamp(),
+        })
+      }
 
       await batch.commit()
+
+      if (usePackagePath) {
+        await recomputePrivatePackageUsage(packageId)
+      }
     } catch (error) {
       console.error('차감 처리 실패:', error)
       alert(`차감 처리 실패: ${error.message}`)
@@ -2932,6 +3026,7 @@ export default function Dashboard() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
+      await recomputePrivatePackageUsage(selectedPackage.id)
       closePrivateLessonModal()
     } catch (error) {
       console.error('개인 수업 추가 실패:', error)
@@ -2990,6 +3085,10 @@ export default function Dashboard() {
         startAt: Timestamp.fromDate(startDate),
         updatedAt: serverTimestamp(),
       })
+      const pkgId = String(lesson.packageId || '').trim()
+      if (pkgId) {
+        await recomputePrivatePackageUsage(pkgId)
+      }
       closePrivateLessonEditModal()
     } catch (error) {
       console.error('개인 수업 수정 실패:', error)
@@ -3008,9 +3107,14 @@ export default function Dashboard() {
     const label = `${getLessonStorageDateString(lesson)} ${lessonTimeInputValue(lesson)} ${lesson.subject || ''}`.trim()
     if (!window.confirm(`이 개인 수업을 삭제할까요?\n${label || lesson.id}`)) return
 
+    const packageIdBeforeDelete = String(lesson.packageId || '').trim()
+
     try {
       setBusyPrivateLessonCrudId(lesson.id)
       await deleteDoc(doc(db, 'lessons', lesson.id))
+      if (packageIdBeforeDelete) {
+        await recomputePrivatePackageUsage(packageIdBeforeDelete)
+      }
     } catch (error) {
       console.error('개인 수업 삭제 실패:', error)
       alert(`개인 수업 삭제 실패: ${error.message}`)
@@ -3985,12 +4089,23 @@ export default function Dashboard() {
               {displayedLessons.map((lesson) => {
                 const lessonDate = getLessonDate(lesson)
                 const matchedStudent = getMatchedStudent(lesson)
-                const remainingLessons = matchedStudent
-                  ? Number(matchedStudent.paidLessons || 0) -
-                    Number(matchedStudent.attendanceCount || 0)
-                  : '-'
+                const pkgForRemaining = lesson.packageId
+                  ? studentPackages.find((p) => p.id === lesson.packageId)
+                  : null
+                const remainingLessons =
+                  lesson.packageId && pkgForRemaining
+                    ? Number(pkgForRemaining.remainingCount ?? 0)
+                    : matchedStudent
+                      ? Number(matchedStudent.paidLessons || 0) -
+                        Number(matchedStudent.attendanceCount || 0)
+                      : '-'
                 const canDeductionAction =
-                  canManageAttendance && Boolean(getMatchedStudentId(lesson))
+                  canManageAttendance &&
+                  (lesson.packageId
+                    ? Boolean(
+                        pkgForRemaining && pkgForRemaining.packageType === 'private'
+                      )
+                    : Boolean(getMatchedStudentId(lesson)))
                 const todayString = getTodayStorageDateString()
                 const lessonDateStr = getLessonStorageDateString(lesson)
                 const statusLabel = lesson.isDeductCancelled
