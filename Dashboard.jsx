@@ -1747,6 +1747,8 @@ export default function Dashboard() {
         teacher: String(payload.teacher ?? ''),
         packageId: String(payload.packageId ?? ''),
         packageType: String(payload.packageType ?? ''),
+        packageTitle: String(payload.packageTitle ?? ''),
+        groupClassName: String(payload.groupClassName ?? ''),
         sourceType: String(payload.sourceType ?? ''),
         sourceId: String(payload.sourceId ?? ''),
         actionType: String(payload.actionType ?? ''),
@@ -2140,6 +2142,26 @@ export default function Dashboard() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
+      await addCreditTransaction({
+        studentId,
+        studentName,
+        teacher,
+        packageId: docRef.id,
+        packageType: result.packageType,
+        packageTitle: String(result.title || '').trim(),
+        groupClassName: groupClassName ? String(groupClassName).trim() : '',
+        sourceType: 'studentPackage',
+        sourceId: docRef.id,
+        actionType: 'package_created',
+        deltaCount: Number(result.totalCount || 0),
+        memo: [
+          String(result.title || '').trim(),
+          groupClassName ? String(groupClassName).trim() : '',
+          '신규 수강권 발급',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      })
       closeStudentPackageModal()
 
       if (
@@ -2388,6 +2410,71 @@ export default function Dashboard() {
         updates.expiresAt = result.expiresAt
       }
       await updateDoc(pkgRef, updates)
+
+      const oldTotalCount = Number(pkg.totalCount ?? 0)
+      const diff = result.totalCount - oldTotalCount
+      const oldTitle = String(pkg.title || '').trim()
+      const titleChanged = oldTitle !== result.title
+      const oldAmt =
+        pkg.amountPaid != null && String(pkg.amountPaid).trim() !== ''
+          ? Number(pkg.amountPaid)
+          : 0
+      const amountChanged = oldAmt !== result.amountPaid
+      const oldExpYmd = studentDocFieldToYmdString(pkg.expiresAt) || ''
+      const newExpYmd = result.expiresClear
+        ? ''
+        : String(studentPackageEditForm.expiresAt || '').trim()
+      const expiresChanged = oldExpYmd !== newExpYmd
+      const oldMemo = String(pkg.memo || '')
+      const memoChanged = oldMemo !== result.memo
+      const sid = String(pkg.studentId || '').trim()
+      const sname = String(pkg.studentName || '').trim() || '-'
+      const pteacher = normalizeText(pkg.teacher || '')
+      const ptype = String(pkg.packageType || '')
+      const ptitle = String(result.title || '').trim()
+      const gname = pkg.groupClassName ? String(pkg.groupClassName).trim() : ''
+
+      if (diff !== 0) {
+        await addCreditTransaction({
+          studentId: sid,
+          studentName: sname,
+          teacher: pteacher,
+          packageId: pkg.id,
+          packageType: ptype,
+          packageTitle: ptitle,
+          groupClassName: gname,
+          sourceType: 'studentPackage',
+          sourceId: pkg.id,
+          actionType: 'package_adjusted',
+          deltaCount: diff,
+          memo: [ptitle, gname, `총 횟수 조정 (${oldTotalCount} → ${result.totalCount})`]
+            .filter(Boolean)
+            .join(' · '),
+        })
+      } else if (titleChanged || amountChanged || expiresChanged || memoChanged) {
+        const parts = []
+        if (titleChanged) parts.push('제목')
+        if (amountChanged) parts.push('금액')
+        if (expiresChanged) parts.push('만료일')
+        if (memoChanged) parts.push('메모')
+        await addCreditTransaction({
+          studentId: sid,
+          studentName: sname,
+          teacher: pteacher,
+          packageId: pkg.id,
+          packageType: ptype,
+          packageTitle: ptitle,
+          groupClassName: gname,
+          sourceType: 'studentPackage',
+          sourceId: pkg.id,
+          actionType: 'package_updated',
+          deltaCount: 0,
+          memo: [ptitle, gname, `수강권 정보 수정 (${parts.join(', ')})`]
+            .filter(Boolean)
+            .join(' · '),
+        })
+      }
+
       closeStudentPackageEditModal()
     } catch (error) {
       console.error('수강권 수정 실패:', error)
