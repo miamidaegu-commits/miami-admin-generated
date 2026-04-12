@@ -169,6 +169,14 @@ function countUsedAsOfTodayForStudent(allLessons, targetStudentName) {
   return usedCount
 }
 
+/** remainingCount에 맞춰 status 동기화 (수동 종료 ended는 유지) */
+function getNextStudentPackageStatus(currentStatus, remainingCount) {
+  if (String(currentStatus || '').toLowerCase() === 'ended') return 'ended'
+  const rem = Number(remainingCount ?? 0)
+  if (!Number.isFinite(rem) || rem <= 0) return 'exhausted'
+  return 'active'
+}
+
 /** Firestore 기준으로 private 패키지의 usedCount / remainingCount 재계산 */
 async function recomputePrivatePackageUsage(packageId) {
   const pid = String(packageId || '').trim()
@@ -204,10 +212,12 @@ async function recomputePrivatePackageUsage(packageId) {
 
   const total = Number(pkg.totalCount ?? 0)
   const remainingCount = Math.max(0, total - usedCount)
+  const status = getNextStudentPackageStatus(pkg.status, remainingCount)
 
   await updateDoc(pkgRef, {
     usedCount,
     remainingCount,
+    status,
     updatedAt: serverTimestamp(),
   })
 }
@@ -2107,10 +2117,12 @@ export default function Dashboard() {
       setBusyStudentPackageActionId(pkg.id)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
       const remainingCount = Math.max(0, result.totalCount - usedCount)
+      const status = getNextStudentPackageStatus(pkg.status, remainingCount)
       const updates = {
         title: result.title,
         totalCount: result.totalCount,
         remainingCount,
+        status,
         amountPaid: result.amountPaid,
         memo: result.memo,
         updatedAt: serverTimestamp(),
@@ -3031,9 +3043,14 @@ export default function Dashboard() {
 
         const att = Number(gsData.attendanceCount ?? 0)
 
+        const newUsed = used + 1
+        const newRem = rem - 1
+        const status = getNextStudentPackageStatus(pData.status, newRem)
+
         transaction.update(pkgRef, {
-          usedCount: used + 1,
-          remainingCount: rem - 1,
+          usedCount: newUsed,
+          remainingCount: newRem,
+          status,
           updatedAt: serverTimestamp(),
         })
         transaction.update(gsRef, {
@@ -3131,9 +3148,14 @@ export default function Dashboard() {
         const att = Number(gsData.attendanceCount ?? 0)
         if (att <= 0) throw new Error('출석 횟수를 더 줄일 수 없습니다.')
 
+        const newUsed = used - 1
+        const newRem = rem + 1
+        const status = getNextStudentPackageStatus(pData.status, newRem)
+
         transaction.update(pkgRef, {
-          usedCount: used - 1,
-          remainingCount: rem + 1,
+          usedCount: newUsed,
+          remainingCount: newRem,
+          status,
           updatedAt: serverTimestamp(),
         })
         transaction.update(gsRef, {
