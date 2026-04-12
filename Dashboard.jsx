@@ -433,6 +433,15 @@ function formatLocalDateToYmd(date) {
   return `${y}-${m}-${d}`
 }
 
+function isGroupStudentRowActive(gs) {
+  const raw = gs?.status
+  const s =
+    raw == null || String(raw).trim() === ''
+      ? 'active'
+      : String(raw).trim().toLowerCase()
+  return s === 'active'
+}
+
 /** groupStudents.startDate → yyyy-mm-dd (없으면 null) */
 function groupStudentStartDateToYmd(gs) {
   const raw = gs?.startDate
@@ -611,6 +620,8 @@ export default function Dashboard() {
   }, [groupLessons])
 
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
+  const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
+  const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
   const [groupLessonModal, setGroupLessonModal] = useState(null)
   const [groupLessonForm, setGroupLessonForm] = useState({
     date: '',
@@ -1141,6 +1152,155 @@ export default function Dashboard() {
   }, [selectedGroupClass?.id])
 
   useEffect(() => {
+    if (!user?.uid) {
+      setStudentSummaryGroupStudents([])
+      setStudentSummaryGroupLessons([])
+      return
+    }
+    if (!userProfile?.role) {
+      setStudentSummaryGroupStudents([])
+      setStudentSummaryGroupLessons([])
+      return
+    }
+
+    const role = userProfile.role
+    const teacherName = String(userProfile.teacherName ?? '').trim()
+
+    if (role === 'admin') {
+      const unsubGs = onSnapshot(
+        collection(db, 'groupStudents'),
+        (snapshot) => {
+          const rows = snapshot.docs.map((docItem) => ({
+            id: docItem.id,
+            ...docItem.data(),
+          }))
+          setStudentSummaryGroupStudents(rows)
+        },
+        (error) => {
+          console.error('studentSummary groupStudents 불러오기 실패:', error)
+          setStudentSummaryGroupStudents([])
+        }
+      )
+      const unsubGl = onSnapshot(
+        collection(db, 'groupLessons'),
+        (snapshot) => {
+          const rows = snapshot.docs.map((docItem) => ({
+            id: docItem.id,
+            ...docItem.data(),
+          }))
+          setStudentSummaryGroupLessons(rows)
+        },
+        (error) => {
+          console.error('studentSummary groupLessons 불러오기 실패:', error)
+          setStudentSummaryGroupLessons([])
+        }
+      )
+      return () => {
+        unsubGs()
+        unsubGl()
+      }
+    }
+
+    if (role === 'teacher' && teacherName) {
+      const ids = groupClasses.map((g) => g.id).filter(Boolean)
+      if (ids.length === 0) {
+        setStudentSummaryGroupStudents([])
+        setStudentSummaryGroupLessons([])
+        return
+      }
+
+      const chunks = []
+      for (let i = 0; i < ids.length; i += 10) {
+        chunks.push(ids.slice(i, i + 10))
+      }
+
+      const chunkMapsGs = new Map()
+      const chunkMapsGl = new Map()
+
+      const mergeGs = () => {
+        const byId = new Map()
+        for (let i = 0; i < chunks.length; i++) {
+          const m = chunkMapsGs.get(i)
+          if (!m) continue
+          for (const row of m.values()) {
+            byId.set(row.id, row)
+          }
+        }
+        setStudentSummaryGroupStudents(Array.from(byId.values()))
+      }
+
+      const mergeGl = () => {
+        const byId = new Map()
+        for (let i = 0; i < chunks.length; i++) {
+          const m = chunkMapsGl.get(i)
+          if (!m) continue
+          for (const row of m.values()) {
+            byId.set(row.id, row)
+          }
+        }
+        setStudentSummaryGroupLessons(Array.from(byId.values()))
+      }
+
+      const unsubs = []
+
+      chunks.forEach((chunk, chunkIndex) => {
+        const qGs = query(
+          collection(db, 'groupStudents'),
+          where('groupClassId', 'in', chunk)
+        )
+        unsubs.push(
+          onSnapshot(
+            qGs,
+            (snapshot) => {
+              const m = new Map()
+              snapshot.docs.forEach((docItem) => {
+                m.set(docItem.id, { id: docItem.id, ...docItem.data() })
+              })
+              chunkMapsGs.set(chunkIndex, m)
+              mergeGs()
+            },
+            (error) => {
+              console.error('studentSummary groupStudents 불러오기 실패:', error)
+              chunkMapsGs.set(chunkIndex, new Map())
+              mergeGs()
+            }
+          )
+        )
+
+        const qGl = query(
+          collection(db, 'groupLessons'),
+          where('groupClassId', 'in', chunk)
+        )
+        unsubs.push(
+          onSnapshot(
+            qGl,
+            (snapshot) => {
+              const m = new Map()
+              snapshot.docs.forEach((docItem) => {
+                m.set(docItem.id, { id: docItem.id, ...docItem.data() })
+              })
+              chunkMapsGl.set(chunkIndex, m)
+              mergeGl()
+            },
+            (error) => {
+              console.error('studentSummary groupLessons 불러오기 실패:', error)
+              chunkMapsGl.set(chunkIndex, new Map())
+              mergeGl()
+            }
+          )
+        )
+      })
+
+      return () => {
+        unsubs.forEach((u) => u())
+      }
+    }
+
+    setStudentSummaryGroupStudents([])
+    setStudentSummaryGroupLessons([])
+  }, [user?.uid, userProfile?.role, userProfile?.teacherName, groupClasses])
+
+  useEffect(() => {
     if (!groupLessonModal) return
     function onKeyDown(e) {
       if (e.key === 'Escape') {
@@ -1283,6 +1443,97 @@ export default function Dashboard() {
     }
     return map
   }, [studentPackages])
+
+  const activeGroupRegistrationsByStudentId = useMemo(() => {
+    const pkgById = new Map(studentPackages.map((p) => [p.id, p]))
+    const gcById = new Map(groupClasses.map((g) => [g.id, g]))
+    const map = new Map()
+    for (const gs of studentSummaryGroupStudents) {
+      if (!isGroupStudentRowActive(gs)) continue
+      const sid = String(gs.studentId || '').trim()
+      if (!sid) continue
+      const gid = String(gs.groupClassId || '').trim()
+      const pkgId = String(gs.packageId || '').trim()
+      const gc = gid ? gcById.get(gid) : null
+      const className =
+        gc?.name != null && String(gc.name).trim() ? String(gc.name).trim() : '-'
+      const startDisplay = formatGroupStudentStartDate(gs.startDate)
+      const pkg = pkgId ? pkgById.get(pkgId) : null
+      const pkgTitle =
+        pkg?.title != null && String(pkg.title).trim() ? String(pkg.title).trim() : '-'
+      const remainingDisplay =
+        pkg && pkg.remainingCount != null && pkg.remainingCount !== ''
+          ? String(pkg.remainingCount)
+          : '-'
+      if (!map.has(sid)) map.set(sid, [])
+      map.get(sid).push({
+        key: gs.id,
+        className,
+        startDisplay,
+        packageTitle: pkgTitle,
+        remainingDisplay,
+      })
+    }
+    return map
+  }, [studentSummaryGroupStudents, groupClasses, studentPackages])
+
+  const nextPrivateLessonByStudentId = useMemo(() => {
+    const today = getTodayStorageDateString()
+    const best = new Map()
+    for (const lesson of lessons) {
+      const sid = String(lesson.studentId || '').trim()
+      if (!sid) continue
+      const dateStr = getLessonStorageDateString(lesson)
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
+      if (dateStr < today) continue
+      const timeStr = String(lesson.time || '').trim() || '00:00'
+      const sortKey = `${dateStr} ${timeStr}`
+      const prev = best.get(sid)
+      if (!prev || sortKey < prev.sortKey) {
+        best.set(sid, { lesson, sortKey })
+      }
+    }
+    const out = new Map()
+    for (const [sid, v] of best) {
+      out.set(sid, v.lesson)
+    }
+    return out
+  }, [lessons])
+
+  const nextGroupLessonByStudentId = useMemo(() => {
+    const today = getTodayStorageDateString()
+    const activeGidsByStudent = new Map()
+    for (const gs of studentSummaryGroupStudents) {
+      if (!isGroupStudentRowActive(gs)) continue
+      const sid = String(gs.studentId || '').trim()
+      const gid = String(gs.groupClassId || '').trim()
+      if (!sid || !gid) continue
+      if (!activeGidsByStudent.has(sid)) activeGidsByStudent.set(sid, new Set())
+      activeGidsByStudent.get(sid).add(gid)
+    }
+
+    const out = new Map()
+    for (const sid of activeGidsByStudent.keys()) {
+      const gids = activeGidsByStudent.get(sid)
+      let bestLesson = null
+      let bestKey = null
+      for (const gl of studentSummaryGroupLessons) {
+        const gid = String(gl.groupClassId || '').trim()
+        if (!gids.has(gid)) continue
+        const dateStr = String(gl.date || '').trim()
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
+        if (dateStr < today) continue
+        const timeStr = String(gl.time || '').trim() || '00:00'
+        const sortKey = `${dateStr} ${timeStr}`
+        if (bestKey === null || sortKey < bestKey) {
+          bestKey = sortKey
+          bestLesson = gl
+        }
+      }
+      if (bestLesson) out.set(sid, bestLesson)
+    }
+    return out
+  }, [studentSummaryGroupStudents, studentSummaryGroupLessons])
 
   const privateLessonEligiblePackages = useMemo(() => {
     const sid = String(privateLessonForm.studentId || '').trim()
@@ -4394,6 +4645,212 @@ export default function Dashboard() {
                   background: 'var(--surface2)',
                 }}
               >
+                {(() => {
+                  const regRows =
+                    activeGroupRegistrationsByStudentId.get(student.id) ?? []
+                  const nextPrivateLesson = nextPrivateLessonByStudentId.get(student.id)
+                  const nextGroupLesson = nextGroupLessonByStudentId.get(student.id)
+                  const nextPrivateDateObj = nextPrivateLesson
+                    ? getLessonDate(nextPrivateLesson)
+                    : null
+                  const nextPrivateDateLabel =
+                    nextPrivateDateObj && Number.isFinite(nextPrivateDateObj.getTime())
+                      ? formatDate(nextPrivateDateObj)
+                      : nextPrivateLesson
+                        ? getLessonStorageDateString(nextPrivateLesson) || '-'
+                        : '-'
+                  const nextPrivateTimeLabel =
+                    nextPrivateDateObj && Number.isFinite(nextPrivateDateObj.getTime())
+                      ? formatTime(nextPrivateDateObj)
+                      : nextPrivateLesson
+                        ? String(nextPrivateLesson.time || '').trim() || '-'
+                        : '-'
+                  const nextGroupClassName = nextGroupLesson
+                    ? (() => {
+                        const gid = String(nextGroupLesson.groupClassId || '').trim()
+                        const gc = groupClasses.find((g) => g.id === gid)
+                        return gc?.name != null && String(gc.name).trim()
+                          ? String(gc.name).trim()
+                          : '-'
+                      })()
+                    : '-'
+                  const nextGroupDateStr = nextGroupLesson
+                    ? String(nextGroupLesson.date || '').trim()
+                    : ''
+                  const nextGroupDateLabel =
+                    nextGroupDateStr && /^\d{4}-\d{2}-\d{2}$/.test(nextGroupDateStr)
+                      ? (() => {
+                          const d = parseYmdToLocalDate(nextGroupDateStr)
+                          return d ? formatDate(d) : nextGroupDateStr
+                        })()
+                      : '-'
+                  const nextGroupTimeLabel = nextGroupLesson
+                    ? String(nextGroupLesson.time || '').trim() || '-'
+                    : '-'
+                  const nextGroupSubjectLabel = nextGroupLesson
+                    ? String(nextGroupLesson.subject || '').trim() || '-'
+                    : '-'
+
+                  return (
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 14,
+                        marginBottom: 16,
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            marginBottom: 8,
+                            opacity: 0.95,
+                          }}
+                        >
+                          현재 등록
+                        </div>
+                        {regRows.length === 0 ? (
+                          <p style={{ margin: 0, fontSize: 13, opacity: 0.82 }}>
+                            현재 등록된 반이 없습니다.
+                          </p>
+                        ) : (
+                          <div
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 8,
+                            }}
+                          >
+                            {regRows.map((row) => (
+                              <div
+                                key={row.key}
+                                style={{
+                                  fontSize: 13,
+                                  lineHeight: 1.55,
+                                  padding: '8px 10px',
+                                  borderRadius: 8,
+                                  border: '1px solid var(--border)',
+                                  background: 'var(--surface)',
+                                }}
+                              >
+                                <div>
+                                  <span style={{ opacity: 0.72 }}>반 이름</span>{' '}
+                                  {row.className}
+                                </div>
+                                <div>
+                                  <span style={{ opacity: 0.72 }}>시작일</span>{' '}
+                                  {row.startDisplay}
+                                </div>
+                                <div>
+                                  <span style={{ opacity: 0.72 }}>수강권</span>{' '}
+                                  {row.packageTitle}
+                                </div>
+                                <div>
+                                  <span style={{ opacity: 0.72 }}>남은 횟수</span>{' '}
+                                  {row.remainingDisplay}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            marginBottom: 8,
+                            opacity: 0.95,
+                          }}
+                        >
+                          다음 개인 수업
+                        </div>
+                        {!nextPrivateLesson ? (
+                          <p style={{ margin: 0, fontSize: 13, opacity: 0.82 }}>
+                            예정된 개인 수업이 없습니다.
+                          </p>
+                        ) : (
+                          <div
+                            style={{
+                              fontSize: 13,
+                              lineHeight: 1.55,
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              border: '1px solid var(--border)',
+                              background: 'var(--surface)',
+                            }}
+                          >
+                            <div>
+                              <span style={{ opacity: 0.72 }}>날짜</span>{' '}
+                              {nextPrivateDateLabel}
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>시간</span>{' '}
+                              {nextPrivateTimeLabel}
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>과목</span>{' '}
+                              {String(nextPrivateLesson.subject || '').trim() || '-'}
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>선생님</span>{' '}
+                              {getTeacherName(nextPrivateLesson)}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            marginBottom: 8,
+                            opacity: 0.95,
+                          }}
+                        >
+                          다음 그룹 수업
+                        </div>
+                        {!nextGroupLesson ? (
+                          <p style={{ margin: 0, fontSize: 13, opacity: 0.82 }}>
+                            예정된 그룹 수업이 없습니다.
+                          </p>
+                        ) : (
+                          <div
+                            style={{
+                              fontSize: 13,
+                              lineHeight: 1.55,
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              border: '1px solid var(--border)',
+                              background: 'var(--surface)',
+                            }}
+                          >
+                            <div>
+                              <span style={{ opacity: 0.72 }}>반 이름</span>{' '}
+                              {nextGroupClassName}
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>날짜</span>{' '}
+                              {nextGroupDateLabel}
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>시간</span>{' '}
+                              {nextGroupTimeLabel}
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>과목</span>{' '}
+                              {nextGroupSubjectLabel}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
                 {pkgList.length === 0 ? (
                   <p style={{ margin: 0, fontSize: 14, opacity: 0.88 }}>
                     등록된 수강권이 없습니다.
