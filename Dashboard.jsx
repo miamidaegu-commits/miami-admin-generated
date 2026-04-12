@@ -492,6 +492,14 @@ function groupStudentStartDateToYmd(gs) {
   return null
 }
 
+function isGroupStudentStartedByYmd(gs, ymd) {
+  const startYmd = groupStudentStartDateToYmd(gs)
+  if (!startYmd) return true
+  const y = String(ymd || '').trim()
+  if (!y || !/^\d{4}-\d{2}-\d{2}$/.test(y)) return true
+  return startYmd <= y
+}
+
 function* iterateYmdRangeInclusive(startYmd, endYmd) {
   const start = parseYmdToLocalDate(startYmd)
   const end = parseYmdToLocalDate(endYmd)
@@ -521,6 +529,54 @@ function addCalendarDaysToYmd(startYmd, deltaDays) {
   if (!d || !Number.isFinite(deltaDays)) return null
   const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + Math.trunc(deltaDays))
   return formatLocalDateToYmd(next)
+}
+
+function studentPackageExpiresAtToYmd(raw) {
+  if (raw == null || raw === '') return ''
+  if (typeof raw === 'string') {
+    const t = String(raw).trim()
+    return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : ''
+  }
+  if (typeof raw?.toDate === 'function') {
+    const d = raw.toDate()
+    return d ? formatLocalDateToYmd(d) : ''
+  }
+  if (raw?.seconds != null) {
+    return formatLocalDateToYmd(new Date(raw.seconds * 1000))
+  }
+  return ''
+}
+
+/** Students 주의 배지용: 같은 범위의 수강권을 묶어 재등록 필요 여부를 판정 */
+function studentPackageAttentionScope(pkg) {
+  const pt = String(pkg?.packageType || '').trim()
+  if (pt === 'private') {
+    return `private:${normalizeText(pkg.teacher || '')}`
+  }
+  if (pt === 'group') {
+    return `group:${String(pkg.groupClassId ?? '').trim()}`
+  }
+  if (pt === 'openGroup') {
+    return `openGroup:${String(pkg.groupClassId ?? '').trim()}`
+  }
+  return `other:${pt || 'na'}:${String(pkg?.id || '')}`
+}
+
+function isStudentPackageRowActive(pkg) {
+  const raw = pkg?.status
+  const s =
+    raw == null || String(raw).trim() === ''
+      ? 'active'
+      : String(raw).trim().toLowerCase()
+  return s === 'active'
+}
+
+function buildStudentPackageScopeKey({ packageType, teacher, groupClassId }) {
+  return studentPackageAttentionScope({
+    packageType,
+    teacher,
+    groupClassId,
+  })
 }
 
 /** 신규 정규반 저장 직후 자동 일정 등에 쓰는 기본 기간(시작일 포함 약 1년, 365일) */
@@ -760,6 +816,8 @@ export default function Dashboard() {
   const [studentGroupPackageFilter, setStudentGroupPackageFilter] = useState('all')
   const [studentNextLessonFilter, setStudentNextLessonFilter] = useState('all')
   const [studentSortKey, setStudentSortKey] = useState('name')
+  const [studentAttentionFilter, setStudentAttentionFilter] = useState('all')
+  const [studentTodayLessonOnly, setStudentTodayLessonOnly] = useState(false)
 
   useEffect(() => {
     if (!user?.uid) return
@@ -1487,11 +1545,13 @@ export default function Dashboard() {
   }, [studentPackages])
 
   const activeGroupRegistrationsByStudentId = useMemo(() => {
+    const today = getTodayStorageDateString()
     const pkgById = new Map(studentPackages.map((p) => [p.id, p]))
     const gcById = new Map(groupClasses.map((g) => [g.id, g]))
     const map = new Map()
     for (const gs of studentSummaryGroupStudents) {
       if (!isGroupStudentRowActive(gs)) continue
+      if (!isGroupStudentStartedByYmd(gs, today)) continue
       const sid = String(gs.studentId || '').trim()
       if (!sid) continue
       const gid = String(gs.groupClassId || '').trim()
@@ -1544,27 +1604,37 @@ export default function Dashboard() {
 
   const nextGroupLessonByStudentId = useMemo(() => {
     const today = getTodayStorageDateString()
-    const activeGidsByStudent = new Map()
+    const activeGsRows = []
     for (const gs of studentSummaryGroupStudents) {
       if (!isGroupStudentRowActive(gs)) continue
       const sid = String(gs.studentId || '').trim()
       const gid = String(gs.groupClassId || '').trim()
       if (!sid || !gid) continue
-      if (!activeGidsByStudent.has(sid)) activeGidsByStudent.set(sid, new Set())
-      activeGidsByStudent.get(sid).add(gid)
+      activeGsRows.push({ sid, gid, gs })
     }
 
+    const sidSet = new Set(activeGsRows.map((r) => r.sid))
+
     const out = new Map()
-    for (const sid of activeGidsByStudent.keys()) {
-      const gids = activeGidsByStudent.get(sid)
+    for (const sid of sidSet) {
       let bestLesson = null
       let bestKey = null
       for (const gl of studentSummaryGroupLessons) {
         const gid = String(gl.groupClassId || '').trim()
-        if (!gids.has(gid)) continue
         const dateStr = String(gl.date || '').trim()
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
         if (dateStr < today) continue
+
+        let eligible = false
+        for (const row of activeGsRows) {
+          if (row.sid !== sid || row.gid !== gid) continue
+          if (isGroupStudentStartedByYmd(row.gs, dateStr)) {
+            eligible = true
+            break
+          }
+        }
+        if (!eligible) continue
+
         const timeStr = String(gl.time || '').trim() || '00:00'
         const sortKey = `${dateStr} ${timeStr}`
         if (bestKey === null || sortKey < bestKey) {
@@ -1585,6 +1655,174 @@ export default function Dashboard() {
     }
     return [...set].sort((a, b) => a.localeCompare(b, 'ko'))
   }, [privateStudents])
+
+  const studentAttentionFlagsByStudentId = useMemo(() => {
+    const today = getTodayStorageDateString()
+    const limitYmd = addCalendarDaysToYmd(today, 14) || today
+
+    /** sid -> scope -> { hasActive, activeLowRem, hasExhausted } */
+    const scopeAgg = new Map()
+    const expiringBySid = new Set()
+
+    for (const p of studentPackages) {
+      const sid = String(p.studentId || '').trim()
+      if (!sid) continue
+
+      const st = String(p.status == null || String(p.status).trim() === '' ? 'active' : p.status)
+        .trim()
+        .toLowerCase()
+
+      if (st === 'active') {
+        const scope = studentPackageAttentionScope(p)
+        if (!scopeAgg.has(sid)) scopeAgg.set(sid, new Map())
+        const byScope = scopeAgg.get(sid)
+        if (!byScope.has(scope)) {
+          byScope.set(scope, {
+            hasActive: false,
+            activeLowRem: false,
+            hasExhausted: false,
+          })
+        }
+        const cell = byScope.get(scope)
+        cell.hasActive = true
+        const rem = Number(p.remainingCount ?? 0)
+        if (Number.isFinite(rem) && rem <= 1) {
+          cell.activeLowRem = true
+        }
+        const expYmd = studentPackageExpiresAtToYmd(p.expiresAt)
+        if (expYmd && /^\d{4}-\d{2}-\d{2}$/.test(expYmd) && expYmd >= today && expYmd <= limitYmd) {
+          expiringBySid.add(sid)
+        }
+      } else if (st === 'exhausted') {
+        const scope = studentPackageAttentionScope(p)
+        if (!scopeAgg.has(sid)) scopeAgg.set(sid, new Map())
+        const byScope = scopeAgg.get(sid)
+        if (!byScope.has(scope)) {
+          byScope.set(scope, {
+            hasActive: false,
+            activeLowRem: false,
+            hasExhausted: false,
+          })
+        }
+        byScope.get(scope).hasExhausted = true
+      }
+    }
+
+    const map = new Map()
+    for (const [sid, byScope] of scopeAgg) {
+      let hasRenewalNeeded = false
+      for (const cell of byScope.values()) {
+        if (cell.hasActive) {
+          if (cell.activeLowRem) hasRenewalNeeded = true
+        } else if (cell.hasExhausted) {
+          hasRenewalNeeded = true
+        }
+      }
+      map.set(sid, {
+        hasRenewalNeeded,
+        hasExpiringSoon: expiringBySid.has(sid),
+      })
+    }
+
+    for (const sid of expiringBySid) {
+      if (map.has(sid)) continue
+      map.set(sid, { hasRenewalNeeded: false, hasExpiringSoon: true })
+    }
+
+    return map
+  }, [studentPackages])
+
+  const studentPackageModalActiveSameScopeDuplicates = useMemo(() => {
+    const st = studentPackageModalStudent
+    if (!st?.id) return []
+    const pt = String(studentPackageForm.packageType || 'private').trim()
+    if (pt !== 'private' && pt !== 'group' && pt !== 'openGroup') return []
+
+    let teacherForScope = String(st.teacher || '')
+    let gid = ''
+    if (pt === 'group' || pt === 'openGroup') {
+      gid = String(studentPackageForm.groupClassId || '').trim()
+      if (!gid) return []
+      teacherForScope = ''
+    }
+
+    const scopeKey = buildStudentPackageScopeKey({
+      packageType: pt,
+      teacher: teacherForScope,
+      groupClassId: gid,
+    })
+
+    const sid = String(st.id).trim()
+    return studentPackages.filter((p) => {
+      if (String(p.studentId || '').trim() !== sid) return false
+      if (!isStudentPackageRowActive(p)) return false
+      return studentPackageAttentionScope(p) === scopeKey
+    })
+  }, [
+    studentPackageModalStudent,
+    studentPackageForm.packageType,
+    studentPackageForm.groupClassId,
+    studentPackages,
+  ])
+
+  const studentIdsWithLessonTodaySet = useMemo(() => {
+    const today = getTodayStorageDateString()
+    const ids = new Set()
+
+    for (const lesson of lessons) {
+      const d = getLessonStorageDateString(lesson)
+      if (d !== today) continue
+      const sid = String(lesson.studentId || '').trim()
+      if (sid) ids.add(sid)
+    }
+
+    const todayGroupClassIds = new Set()
+    for (const gl of studentSummaryGroupLessons) {
+      const ds = String(gl.date || '').trim()
+      if (ds === today && /^\d{4}-\d{2}-\d{2}$/.test(ds)) {
+        const gid = String(gl.groupClassId || '').trim()
+        if (gid) todayGroupClassIds.add(gid)
+      }
+    }
+
+    for (const gs of studentSummaryGroupStudents) {
+      if (!isGroupStudentRowActive(gs)) continue
+      if (!isGroupStudentStartedByYmd(gs, today)) continue
+      const gid = String(gs.groupClassId || '').trim()
+      if (!todayGroupClassIds.has(gid)) continue
+      const sid = String(gs.studentId || '').trim()
+      if (sid) ids.add(sid)
+    }
+
+    return ids
+  }, [lessons, studentSummaryGroupLessons, studentSummaryGroupStudents])
+
+  const studentListKpis = useMemo(() => {
+    const totalStudents = privateStudents.length
+
+    let renewalNeededCount = 0
+    let expiringSoonCount = 0
+    for (const flags of studentAttentionFlagsByStudentId.values()) {
+      if (flags?.hasRenewalNeeded) renewalNeededCount += 1
+      if (flags?.hasExpiringSoon) expiringSoonCount += 1
+    }
+
+    const activeGroupRegistrationStudentCount = activeGroupRegistrationsByStudentId.size
+    const todayLessonStudentCount = studentIdsWithLessonTodaySet.size
+
+    return {
+      totalStudents,
+      renewalNeededCount,
+      expiringSoonCount,
+      activeGroupRegistrationStudentCount,
+      todayLessonStudentCount,
+    }
+  }, [
+    privateStudents,
+    studentAttentionFlagsByStudentId,
+    activeGroupRegistrationsByStudentId,
+    studentIdsWithLessonTodaySet,
+  ])
 
   const filteredSortedPrivateStudents = useMemo(() => {
     const admin = userProfile?.role === 'admin'
@@ -1634,6 +1872,17 @@ export default function Dashboard() {
       const hasNext = Boolean(nextPriv || nextGrp)
       if (studentNextLessonFilter === 'has' && !hasNext) return false
       if (studentNextLessonFilter === 'none' && hasNext) return false
+
+      const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
+        hasRenewalNeeded: false,
+        hasExpiringSoon: false,
+      }
+      if (studentAttentionFilter === 'renewal' && !att.hasRenewalNeeded) return false
+      if (studentAttentionFilter === 'expiring' && !att.hasExpiringSoon) return false
+
+      if (studentTodayLessonOnly && !studentIdsWithLessonTodaySet.has(student.id)) {
+        return false
+      }
 
       return true
     })
@@ -1689,11 +1938,15 @@ export default function Dashboard() {
     studentGroupPackageFilter,
     studentNextLessonFilter,
     studentSortKey,
+    studentAttentionFilter,
+    studentTodayLessonOnly,
     userProfile?.role,
     activeGroupRegistrationsByStudentId,
     studentPackageTableSummaryByStudentId,
     nextPrivateLessonByStudentId,
     nextGroupLessonByStudentId,
+    studentAttentionFlagsByStudentId,
+    studentIdsWithLessonTodaySet,
   ])
 
   const privateLessonEligiblePackages = useMemo(() => {
@@ -2591,6 +2844,24 @@ export default function Dashboard() {
       teacher = normalizeText(g.teacher || '')
       groupClassId = g.id
       groupClassName = g.name || null
+    }
+
+    const scopeKey = buildStudentPackageScopeKey({
+      packageType: result.packageType,
+      teacher: result.packageType === 'private' ? String(st.teacher || '') : '',
+      groupClassId:
+        result.packageType === 'private' ? '' : String(groupClassId || '').trim(),
+    })
+    const activeSameScope = studentPackages.filter((p) => {
+      if (String(p.studentId || '').trim() !== studentId) return false
+      if (!isStudentPackageRowActive(p)) return false
+      return studentPackageAttentionScope(p) === scopeKey
+    })
+    if (activeSameScope.length > 0) {
+      const ok = window.confirm(
+        '같은 범위의 사용 중 수강권이 이미 있습니다. 그래도 새 수강권을 발급할까요?'
+      )
+      if (!ok) return
     }
 
     const sourcePkg = studentPackageReRegisterSourcePackage
@@ -4648,6 +4919,105 @@ export default function Dashboard() {
         display: 'flex',
         flexWrap: 'wrap',
         gap: 10,
+        marginBottom: 14,
+      }}
+    >
+      {(
+        [
+          {
+            key: 'total',
+            title: '전체 학생',
+            value: studentListKpis.totalStudents,
+            hint: '등록된 학생',
+            selected:
+              studentAttentionFilter === 'all' &&
+              studentRegistrationFilter === 'all' &&
+              studentNextLessonFilter === 'all' &&
+              !studentTodayLessonOnly,
+            onClick: () => {
+              setStudentAttentionFilter('all')
+              setStudentRegistrationFilter('all')
+              setStudentNextLessonFilter('all')
+              setStudentTodayLessonOnly(false)
+            },
+          },
+          {
+            key: 'renewal',
+            title: '재등록 필요',
+            value: studentListKpis.renewalNeededCount,
+            hint: '주의 기준',
+            selected: studentAttentionFilter === 'renewal' && !studentTodayLessonOnly,
+            onClick: () => {
+              setStudentAttentionFilter('renewal')
+              setStudentTodayLessonOnly(false)
+            },
+          },
+          {
+            key: 'expiring',
+            title: '만료 임박',
+            value: studentListKpis.expiringSoonCount,
+            hint: '14일 이내',
+            selected: studentAttentionFilter === 'expiring' && !studentTodayLessonOnly,
+            onClick: () => {
+              setStudentAttentionFilter('expiring')
+              setStudentTodayLessonOnly(false)
+            },
+          },
+          {
+            key: 'registered',
+            title: '현재 등록',
+            value: studentListKpis.activeGroupRegistrationStudentCount,
+            hint: '활성 그룹 등록',
+            selected: studentRegistrationFilter === 'has' && !studentTodayLessonOnly,
+            onClick: () => {
+              setStudentRegistrationFilter('has')
+              setStudentAttentionFilter('all')
+              setStudentTodayLessonOnly(false)
+            },
+          },
+          {
+            key: 'today',
+            title: '오늘 수업',
+            value: studentListKpis.todayLessonStudentCount,
+            hint: '개인·그룹',
+            selected: studentTodayLessonOnly,
+            onClick: () => {
+              setStudentTodayLessonOnly(true)
+            },
+          },
+        ]
+      ).map((card) => (
+        <button
+          key={card.key}
+          type="button"
+          onClick={card.onClick}
+          disabled={loading}
+          style={{
+            flex: '1 1 120px',
+            minWidth: 108,
+            maxWidth: 200,
+            padding: '12px 14px',
+            borderRadius: 10,
+            border: card.selected ? '1px solid #5a7fd0' : '1px solid var(--border)',
+            background: card.selected ? 'rgba(40, 55, 90, 0.45)' : 'var(--surface2)',
+            color: 'inherit',
+            textAlign: 'left',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            opacity: loading ? 0.65 : 1,
+          }}
+        >
+          <div style={{ fontSize: 12, opacity: 0.78, marginBottom: 4 }}>{card.title}</div>
+          <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1.2 }}>{card.value}</div>
+          <div style={{ fontSize: 11, opacity: 0.65, marginTop: 4 }}>{card.hint}</div>
+        </button>
+      ))}
+    </div>
+
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 10,
         alignItems: 'center',
         marginBottom: 14,
       }}
@@ -4776,6 +5146,26 @@ export default function Dashboard() {
         </select>
       </label>
       <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>주의</span>
+        <select
+          value={studentAttentionFilter}
+          onChange={(e) => setStudentAttentionFilter(e.target.value)}
+          disabled={loading}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            color: 'inherit',
+            fontSize: 13,
+          }}
+        >
+          <option value="all">전체</option>
+          <option value="renewal">재등록 필요</option>
+          <option value="expiring">만료 임박</option>
+        </select>
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
         <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>정렬</span>
         <select
           value={studentSortKey}
@@ -4831,6 +5221,10 @@ export default function Dashboard() {
           }
           const pkgList = studentPackagesSortedByStudentId.get(student.id) ?? []
           const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
+          const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
+            hasRenewalNeeded: false,
+            hasExpiringSoon: false,
+          }
 
           return (
             <Fragment key={student.id}>
@@ -4841,7 +5235,45 @@ export default function Dashboard() {
                   'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(200px, auto)',
               }}
             >
-              <span>{student.name || '-'}</span>
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                <span>{student.name || '-'}</span>
+                {att.hasRenewalNeeded || att.hasExpiringSoon ? (
+                  <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                    {att.hasRenewalNeeded ? (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          lineHeight: 1.3,
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          background: 'rgba(180, 100, 40, 0.35)',
+                          border: '1px solid rgba(220, 140, 60, 0.45)',
+                          color: 'inherit',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        재등록 필요
+                      </span>
+                    ) : null}
+                    {att.hasExpiringSoon ? (
+                      <span
+                        style={{
+                          fontSize: 10,
+                          lineHeight: 1.3,
+                          padding: '2px 6px',
+                          borderRadius: 4,
+                          background: 'rgba(80, 120, 180, 0.35)',
+                          border: '1px solid rgba(100, 140, 200, 0.45)',
+                          color: 'inherit',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        만료 임박
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </span>
               <span>{student.teacher || '-'}</span>
               <span>{student.phone != null && String(student.phone).trim() ? String(student.phone).trim() : '-'}</span>
               <span>{formatStudentFirstRegisteredForTable(student.firstRegisteredAt)}</span>
@@ -6655,6 +7087,39 @@ export default function Dashboard() {
                 />
               </label>
             </div>
+
+            {studentPackageModalActiveSameScopeDuplicates.length > 0 ? (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(220, 140, 60, 0.55)',
+                  background: 'rgba(80, 50, 20, 0.35)',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 8, opacity: 0.95 }}>
+                  같은 범위의 사용 중 수강권이 이미 있습니다.
+                </div>
+                <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.9 }}>
+                  {studentPackageModalActiveSameScopeDuplicates.map((p) => (
+                    <li key={p.id} style={{ marginBottom: 6 }}>
+                      <span style={{ opacity: 0.85 }}>제목</span> {String(p.title || '').trim() || '-'}
+                      {' · '}
+                      <span style={{ opacity: 0.85 }}>남은</span>{' '}
+                      {p.remainingCount != null && p.remainingCount !== ''
+                        ? String(p.remainingCount)
+                        : '-'}
+                      {' · '}
+                      <span style={{ opacity: 0.85 }}>만료</span>{' '}
+                      {formatGroupStudentStartDate(p.expiresAt)}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
 
             <div
               style={{
