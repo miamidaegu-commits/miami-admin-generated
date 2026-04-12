@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import {
   addDoc,
@@ -276,6 +276,36 @@ function formatGroupStudentStartDate(raw) {
     return parsed ? formatDate(parsed) : raw
   }
   return '-'
+}
+
+function formatStudentPackageDetailTypeLabel(packageType) {
+  if (packageType === 'private') return '개인'
+  if (packageType === 'group') return '그룹'
+  if (packageType === 'openGroup') return '오픈 그룹'
+  return packageType != null && String(packageType) !== '' ? String(packageType) : '-'
+}
+
+function formatStudentPackageDetailStatusLabel(status) {
+  const raw =
+    status == null || String(status).trim() === ''
+      ? 'active'
+      : String(status).toLowerCase()
+  if (raw === 'active') return '사용 중'
+  if (raw === 'exhausted') return '소진'
+  if (raw === 'ended' || raw === 'inactive') return '종료'
+  return String(status)
+}
+
+function formatStudentPackageDetailAmountPaid(raw) {
+  if (raw == null || raw === '') return '-'
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return '-'
+  return n === 0 ? '0' : String(n)
+}
+
+function formatStudentPackageDetailMemo(raw) {
+  const s = String(raw ?? '').trim()
+  return s || '-'
 }
 
 const GROUP_RECURRENCE_WEEKDAY_TOGGLES = [
@@ -586,6 +616,8 @@ export default function Dashboard() {
   })
   const [studentPackageFormErrors, setStudentPackageFormErrors] = useState({})
   const [busyStudentPackageSubmit, setBusyStudentPackageSubmit] = useState(false)
+  const [expandedStudentPackageStudentId, setExpandedStudentPackageStudentId] =
+    useState(null)
 
   useEffect(() => {
     if (!user?.uid) return
@@ -1085,6 +1117,84 @@ export default function Dashboard() {
     })
   }, [privateStudents])
 
+  const studentPackageTableSummaryByStudentId = useMemo(() => {
+    const map = new Map()
+    for (const p of studentPackages) {
+      if (String(p.status || 'active') !== 'active') continue
+      const sid = String(p.studentId || '').trim()
+      if (!sid) continue
+      if (!map.has(sid)) {
+        map.set(sid, {
+          privateCount: 0,
+          privateRemainingTotal: 0,
+          groupCount: 0,
+          groupRemainingTotal: 0,
+        })
+      }
+      const agg = map.get(sid)
+      const rem = Number(p.remainingCount ?? 0)
+      const pt = p.packageType
+      if (pt === 'private') {
+        agg.privateCount += 1
+        agg.privateRemainingTotal += rem
+      } else if (pt === 'group' || pt === 'openGroup') {
+        agg.groupCount += 1
+        agg.groupRemainingTotal += rem
+      }
+    }
+    return map
+  }, [studentPackages])
+
+  const studentPackagesSortedByStudentId = useMemo(() => {
+    const statusOrder = (s) => {
+      const v = String(s == null || String(s).trim() === '' ? 'active' : s).toLowerCase()
+      return v === 'active' ? 0 : 1
+    }
+    const typeOrder = (pt) => {
+      if (pt === 'private') return 0
+      if (pt === 'group') return 1
+      if (pt === 'openGroup') return 2
+      return 3
+    }
+    const createdMs = (p) => {
+      const c = p?.createdAt
+      if (c && typeof c.toDate === 'function') return c.toDate().getTime()
+      if (c?.seconds != null) return Number(c.seconds) * 1000
+      return 0
+    }
+    const expiresMs = (p) => {
+      const raw = p?.expiresAt
+      if (raw == null || raw === '') return Number.POSITIVE_INFINITY
+      if (typeof raw.toDate === 'function') return raw.toDate().getTime()
+      if (raw?.seconds != null) return Number(raw.seconds) * 1000
+      if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(String(raw).trim())) {
+        const [y, mo, d] = String(raw).trim().split('-').map(Number)
+        return new Date(y, mo - 1, d).getTime()
+      }
+      return Number.POSITIVE_INFINITY
+    }
+
+    const map = new Map()
+    for (const p of studentPackages) {
+      const sid = String(p.studentId || '').trim()
+      if (!sid) continue
+      if (!map.has(sid)) map.set(sid, [])
+      map.get(sid).push(p)
+    }
+    for (const arr of map.values()) {
+      arr.sort((a, b) => {
+        const so = statusOrder(a.status) - statusOrder(b.status)
+        if (so !== 0) return so
+        const to = typeOrder(a.packageType) - typeOrder(b.packageType)
+        if (to !== 0) return to
+        const co = createdMs(b) - createdMs(a)
+        if (co !== 0) return co
+        return expiresMs(a) - expiresMs(b)
+      })
+    }
+    return map
+  }, [studentPackages])
+
   const privateLessonEligiblePackages = useMemo(() => {
     const sid = String(privateLessonForm.studentId || '').trim()
     if (!sid) return []
@@ -1541,6 +1651,18 @@ export default function Dashboard() {
       return formatLocalYmd(value.toDate())
     }
     return ''
+  }
+
+  function formatStudentFirstRegisteredForTable(value) {
+    const ymd = studentDocFieldToYmdString(value)
+    return ymd || '-'
+  }
+
+  function formatStudentPackageCellSummary(count, remainingTotal) {
+    const c = Number(count) || 0
+    if (c <= 0) return '수강권 없음'
+    const rem = Number(remainingTotal) || 0
+    return `${c}개 / 남은 ${rem}회`
   }
 
   function openStudentAddModal() {
@@ -3426,38 +3548,78 @@ export default function Dashboard() {
         <div
           className="table-head"
           style={{
-            gridTemplateColumns: '1.1fr 1.1fr 0.75fr 0.85fr 0.75fr minmax(200px, auto)',
+            gridTemplateColumns:
+              'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(200px, auto)',
           }}
         >
           <span>이름</span>
           <span>선생님</span>
-          <span>결제 횟수</span>
-          <span>차감 횟수</span>
-          <span>남은 횟수</span>
+          <span>전화번호</span>
+          <span>첫 등록일</span>
+          <span>개인 수강권</span>
+          <span>그룹 수강권</span>
           <span>작업</span>
         </div>
 
         {sortedPrivateStudents.map((student) => {
-          const paid = Number(student.paidLessons ?? 0)
-          const attended = Number(student.attendanceCount ?? 0)
-          const remaining = paid - attended
           const rowBusy = busyStudentId === student.id
+          const pkgSum = studentPackageTableSummaryByStudentId.get(student.id) ?? {
+            privateCount: 0,
+            privateRemainingTotal: 0,
+            groupCount: 0,
+            groupRemainingTotal: 0,
+          }
+          const pkgList = studentPackagesSortedByStudentId.get(student.id) ?? []
+          const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
 
           return (
+            <Fragment key={student.id}>
             <div
-              key={student.id}
               className="table-row"
               style={{
                 gridTemplateColumns:
-                  '1.1fr 1.1fr 0.75fr 0.85fr 0.75fr minmax(200px, auto)',
+                  'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(200px, auto)',
               }}
             >
               <span>{student.name || '-'}</span>
               <span>{student.teacher || '-'}</span>
-              <span>{paid}</span>
-              <span>{attended}</span>
-              <span>{remaining}</span>
+              <span>{student.phone != null && String(student.phone).trim() ? String(student.phone).trim() : '-'}</span>
+              <span>{formatStudentFirstRegisteredForTable(student.firstRegisteredAt)}</span>
+              <span>
+                {formatStudentPackageCellSummary(
+                  pkgSum.privateCount,
+                  pkgSum.privateRemainingTotal
+                )}
+              </span>
+              <span>
+                {formatStudentPackageCellSummary(
+                  pkgSum.groupCount,
+                  pkgSum.groupRemainingTotal
+                )}
+              </span>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedStudentPackageStudentId((cur) =>
+                      cur === student.id ? null : student.id
+                    )
+                  }
+                  disabled={rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit}
+                  style={{
+                    padding: '6px 10px',
+                    borderRadius: 8,
+                    border: '1px solid #4a6fff44',
+                    background: '#1a2238',
+                    color: 'white',
+                    cursor:
+                      rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit
+                        ? 'not-allowed'
+                        : 'pointer',
+                  }}
+                >
+                  {isPkgDetailExpanded ? '접기' : '수강권 보기'}
+                </button>
                 {canEditStudent ? (
                   <button
                     type="button"
@@ -3532,6 +3694,91 @@ export default function Dashboard() {
                 ) : null}
               </span>
             </div>
+            {isPkgDetailExpanded ? (
+              <div
+                style={{
+                  padding: '14px 1.25rem',
+                  borderBottom: '1px solid var(--border)',
+                  background: 'var(--surface2)',
+                }}
+              >
+                {pkgList.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: 14, opacity: 0.88 }}>
+                    등록된 수강권이 없습니다.
+                  </p>
+                ) : (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 12,
+                    }}
+                  >
+                    {pkgList.map((pkg) => (
+                      <div
+                        key={pkg.id}
+                        style={{
+                          padding: 12,
+                          borderRadius: 10,
+                          border: '1px solid var(--border)',
+                          background: 'var(--surface)',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'minmax(92px, 0.38fr) 1fr',
+                            gap: '6px 14px',
+                            fontSize: 13,
+                            alignItems: 'start',
+                          }}
+                        >
+                          <span style={{ opacity: 0.72 }}>유형</span>
+                          <span>{formatStudentPackageDetailTypeLabel(pkg.packageType)}</span>
+                          <span style={{ opacity: 0.72 }}>제목</span>
+                          <span>{pkg.title != null && String(pkg.title).trim() ? String(pkg.title) : '-'}</span>
+                          <span style={{ opacity: 0.72 }}>상태</span>
+                          <span>{formatStudentPackageDetailStatusLabel(pkg.status)}</span>
+                          <span style={{ opacity: 0.72 }}>연결 반</span>
+                          <span>
+                            {pkg.groupClassName != null && String(pkg.groupClassName).trim()
+                              ? String(pkg.groupClassName)
+                              : '-'}
+                          </span>
+                          <span style={{ opacity: 0.72 }}>총 횟수</span>
+                          <span>
+                            {pkg.totalCount != null && pkg.totalCount !== ''
+                              ? String(pkg.totalCount)
+                              : '-'}
+                          </span>
+                          <span style={{ opacity: 0.72 }}>사용 횟수</span>
+                          <span>
+                            {pkg.usedCount != null && pkg.usedCount !== ''
+                              ? String(pkg.usedCount)
+                              : '-'}
+                          </span>
+                          <span style={{ opacity: 0.72 }}>남은 횟수</span>
+                          <span>
+                            {pkg.remainingCount != null && pkg.remainingCount !== ''
+                              ? String(pkg.remainingCount)
+                              : '-'}
+                          </span>
+                          <span style={{ opacity: 0.72 }}>만료일</span>
+                          <span>{formatGroupStudentStartDate(pkg.expiresAt)}</span>
+                          <span style={{ opacity: 0.72 }}>결제 금액</span>
+                          <span>{formatStudentPackageDetailAmountPaid(pkg.amountPaid)}</span>
+                          <span style={{ opacity: 0.72 }}>메모</span>
+                          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {formatStudentPackageDetailMemo(pkg.memo)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
+            </Fragment>
           )
         })}
       </div>
