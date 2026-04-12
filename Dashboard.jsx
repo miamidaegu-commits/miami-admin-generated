@@ -805,6 +805,8 @@ export default function Dashboard() {
   const [busyPostGroupReEnroll, setBusyPostGroupReEnroll] = useState(false)
   const [expandedStudentPackageStudentId, setExpandedStudentPackageStudentId] =
     useState(null)
+  const [showAllStudentPackagesInDetail, setShowAllStudentPackagesInDetail] =
+    useState(false)
   const [studentPackageHistoryModalPackage, setStudentPackageHistoryModalPackage] =
     useState(null)
   const [studentPackageHistoryRows, setStudentPackageHistoryRows] = useState([])
@@ -5219,7 +5221,7 @@ export default function Dashboard() {
             groupCount: 0,
             groupRemainingTotal: 0,
           }
-          const pkgList = studentPackagesSortedByStudentId.get(student.id) ?? []
+          const pkgListAll = studentPackagesSortedByStudentId.get(student.id) ?? []
           const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
           const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
             hasRenewalNeeded: false,
@@ -5600,11 +5602,80 @@ export default function Dashboard() {
                     </div>
                   )
                 })()}
-                {pkgList.length === 0 ? (
+                {pkgListAll.length === 0 ? (
                   <p style={{ margin: 0, fontSize: 14, opacity: 0.88 }}>
                     등록된 수강권이 없습니다.
                   </p>
                 ) : (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        gap: 8,
+                        marginBottom: 10,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'inline-flex',
+                          borderRadius: 8,
+                          border: '1px solid var(--border)',
+                          overflow: 'hidden',
+                          fontSize: 12,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setShowAllStudentPackagesInDetail(false)}
+                          style={{
+                            padding: '6px 12px',
+                            border: 'none',
+                            background: !showAllStudentPackagesInDetail
+                              ? 'rgba(90, 127, 208, 0.35)'
+                              : 'transparent',
+                            color: 'inherit',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                          }}
+                        >
+                          사용 중만 보기
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowAllStudentPackagesInDetail(true)}
+                          style={{
+                            padding: '6px 12px',
+                            border: 'none',
+                            borderLeft: '1px solid var(--border)',
+                            background: showAllStudentPackagesInDetail
+                              ? 'rgba(90, 127, 208, 0.35)'
+                              : 'transparent',
+                            color: 'inherit',
+                            cursor: 'pointer',
+                            fontSize: 12,
+                          }}
+                        >
+                          전체 보기
+                        </button>
+                      </div>
+                    </div>
+                    {(() => {
+                      const pkgListActive = pkgListAll.filter((p) =>
+                        isStudentPackageRowActive(p)
+                      )
+                      const displayedPkgList = showAllStudentPackagesInDetail
+                        ? pkgListAll
+                        : pkgListActive
+                      if (!showAllStudentPackagesInDetail && pkgListActive.length === 0) {
+                        return (
+                          <p style={{ margin: 0, fontSize: 14, opacity: 0.88 }}>
+                            사용 중인 수강권이 없습니다. 전체 보기를 켜면 지난 수강권을 볼 수 있습니다.
+                          </p>
+                        )
+                      }
+                      return (
                   <div
                     style={{
                       display: 'flex',
@@ -5612,7 +5683,7 @@ export default function Dashboard() {
                       gap: 12,
                     }}
                   >
-                    {pkgList.map((pkg) => (
+                    {displayedPkgList.map((pkg) => (
                       <div
                         key={pkg.id}
                         style={{
@@ -5775,6 +5846,9 @@ export default function Dashboard() {
                       </div>
                     ))}
                   </div>
+                      )
+                    })()}
+                  </>
                 )}
               </div>
             ) : null}
