@@ -1247,7 +1247,7 @@ export default function Dashboard() {
         if (isCounted) {
           statusLabel = '차감됨'
         } else if (remaining <= 0) {
-          statusLabel = '수강권 소진'
+          statusLabel = '남은 횟수 없음'
         }
 
         return {
@@ -1973,7 +1973,12 @@ export default function Dashboard() {
   function validateGroupStudentFormFields(form) {
     const errors = {}
     const packageId = String(form.packageId || '').trim()
-    if (!packageId) errors.packageId = '그룹 수강권을 선택해주세요.'
+    const adminUi = userProfile?.role === 'admin'
+    if (!packageId) {
+      errors.packageId = adminUi
+        ? '사용할 그룹 수강권을 선택해주세요.'
+        : '사용할 등록을 선택해주세요.'
+    }
 
     const dateStr = String(form.startDate || '').trim()
     if (!dateStr) {
@@ -2018,9 +2023,14 @@ export default function Dashboard() {
     setGroupStudentFormErrors(result.errors)
     if (!result.valid || !result.startDate) return
 
+    const adminUi = userProfile?.role === 'admin'
     const selectedPackage = studentPackages.find((p) => p.id === result.packageId)
     if (!selectedPackage) {
-      alert('선택한 수강권을 찾을 수 없습니다.')
+      alert(
+        adminUi
+          ? '등록된 수강권을 찾을 수 없습니다.'
+          : '선택한 수업 등록을 찾을 수 없습니다.'
+      )
       return
     }
     if (
@@ -2028,18 +2038,26 @@ export default function Dashboard() {
       String(selectedPackage.groupClassId || '') !== String(selectedGroupClass.id) ||
       selectedPackage.status !== 'active'
     ) {
-      alert('이 그룹에서 사용할 수 없는 수강권입니다.')
+      alert(
+        adminUi
+          ? '이 그룹에서 사용할 수 없는 수강권입니다.'
+          : '이 그룹에서 사용할 수 없는 등록입니다.'
+      )
       return
     }
 
     if (Number(selectedPackage.remainingCount || 0) <= 0) {
-      alert('남은 횟수가 없는 수강권입니다.')
+      alert(adminUi ? '남은 횟수가 없는 수강권입니다.' : '남은 횟수가 없습니다.')
       return
     }
 
     const studentId = String(selectedPackage.studentId || '').trim()
     if (!studentId) {
-      alert('수강권에 studentId가 없습니다.')
+      alert(
+        adminUi
+          ? '수강권에 학생 연결(studentId)이 없습니다.'
+          : '등록에 학생 연결이 없습니다.'
+      )
       return
     }
 
@@ -2469,7 +2487,11 @@ export default function Dashboard() {
 
     const pkgId = String(groupStudentRow.packageId || '').trim()
     if (!pkgId) {
-      alert('연결된 수강권이 없습니다.')
+      alert(
+        userProfile?.role === 'admin'
+          ? '연결된 수강권이 없습니다.'
+          : '연결된 수업 등록이 없습니다.'
+      )
       return
     }
 
@@ -2484,6 +2506,7 @@ export default function Dashboard() {
     try {
       setBusyGroupAttendanceStudentId(busyKey)
       await runTransaction(db, async (transaction) => {
+        const adminUi = userProfile?.role === 'admin'
         const lessonRef = doc(db, 'groupLessons', lesson.id)
         const pkgRef = doc(db, 'studentPackages', pkgId)
         const gsRef = doc(db, 'groupStudents', groupStudentRow.id)
@@ -2493,17 +2516,27 @@ export default function Dashboard() {
         const gsSnap = await transaction.get(gsRef)
 
         if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-        if (!pkgSnap.exists()) throw new Error('수강권을 찾을 수 없습니다.')
+        if (!pkgSnap.exists()) {
+          throw new Error(
+            adminUi ? '수강권을 찾을 수 없습니다.' : '등록 정보를 찾을 수 없습니다.'
+          )
+        }
         if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
         if (String(lData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수업입니다.')
 
         const pData = pkgSnap.data()
-        if (pData.packageType !== 'group') throw new Error('그룹 수강권이 아닙니다.')
-        if (String(pData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수강권입니다.')
+        if (pData.packageType !== 'group') {
+          throw new Error(adminUi ? '그룹 수강권이 아닙니다.' : '그룹 등록이 아닙니다.')
+        }
+        if (String(pData.groupClassId || '') !== String(gid)) {
+          throw new Error(adminUi ? '다른 반 수강권입니다.' : '다른 반 등록입니다.')
+        }
         if (String(pData.studentId || '').trim() !== studentId) {
-          throw new Error('학생과 수강권이 일치하지 않습니다.')
+          throw new Error(
+            adminUi ? '학생과 수강권이 일치하지 않습니다.' : '학생과 등록 정보가 일치하지 않습니다.'
+          )
         }
 
         const counted = Array.isArray(lData.countedStudentIDs)
@@ -2561,7 +2594,11 @@ export default function Dashboard() {
 
     const pkgId = String(groupStudentRow.packageId || '').trim()
     if (!pkgId) {
-      alert('연결된 수강권이 없습니다.')
+      alert(
+        userProfile?.role === 'admin'
+          ? '연결된 수강권이 없습니다.'
+          : '연결된 수업 등록이 없습니다.'
+      )
       return
     }
 
@@ -2569,6 +2606,7 @@ export default function Dashboard() {
     try {
       setBusyGroupAttendanceStudentId(busyKey)
       await runTransaction(db, async (transaction) => {
+        const adminUi = userProfile?.role === 'admin'
         const lessonRef = doc(db, 'groupLessons', lesson.id)
         const pkgRef = doc(db, 'studentPackages', pkgId)
         const gsRef = doc(db, 'groupStudents', groupStudentRow.id)
@@ -2578,17 +2616,27 @@ export default function Dashboard() {
         const gsSnap = await transaction.get(gsRef)
 
         if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-        if (!pkgSnap.exists()) throw new Error('수강권을 찾을 수 없습니다.')
+        if (!pkgSnap.exists()) {
+          throw new Error(
+            adminUi ? '수강권을 찾을 수 없습니다.' : '등록 정보를 찾을 수 없습니다.'
+          )
+        }
         if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
         if (String(lData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수업입니다.')
 
         const pData = pkgSnap.data()
-        if (pData.packageType !== 'group') throw new Error('그룹 수강권이 아닙니다.')
-        if (String(pData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수강권입니다.')
+        if (pData.packageType !== 'group') {
+          throw new Error(adminUi ? '그룹 수강권이 아닙니다.' : '그룹 등록이 아닙니다.')
+        }
+        if (String(pData.groupClassId || '') !== String(gid)) {
+          throw new Error(adminUi ? '다른 반 수강권입니다.' : '다른 반 등록입니다.')
+        }
         if (String(pData.studentId || '').trim() !== studentId) {
-          throw new Error('학생과 수강권이 일치하지 않습니다.')
+          throw new Error(
+            adminUi ? '학생과 수강권이 일치하지 않습니다.' : '학생과 등록 정보가 일치하지 않습니다.'
+          )
         }
 
         const counted = Array.isArray(lData.countedStudentIDs)
@@ -2730,7 +2778,11 @@ export default function Dashboard() {
     const subject = String(form.subject || '').trim()
 
     if (!studentId) errors.studentId = '학생을 선택해주세요.'
-    if (!packageId) errors.packageId = '사용할 개인 수강권을 선택해주세요.'
+    if (!packageId) {
+      errors.packageId = isAdmin
+        ? '사용할 개인 수강권을 선택해주세요.'
+        : '사용할 수업을 선택해주세요.'
+    }
     if (!date) errors.date = '날짜를 선택해주세요.'
     if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.date = '날짜 형식이 올바르지 않습니다.'
     if (!time) errors.time = '시간을 선택해주세요.'
@@ -2766,35 +2818,43 @@ export default function Dashboard() {
     if (!selectedPackage) {
       setPrivateLessonFormErrors((prev) => ({
         ...prev,
-        packageId: '수강권을 찾을 수 없습니다.',
+        packageId: isAdmin
+          ? '등록된 수강권을 찾을 수 없습니다.'
+          : '선택한 수업 등록을 찾을 수 없습니다.',
       }))
       return
     }
     if (selectedPackage.packageType !== 'private') {
       setPrivateLessonFormErrors((prev) => ({
         ...prev,
-        packageId: '개인 수강권이 아닙니다.',
+        packageId: isAdmin ? '개인 수강권이 아닙니다.' : '개인 수업 등록이 아닙니다.',
       }))
       return
     }
     if (String(selectedPackage.studentId || '').trim() !== student.id) {
       setPrivateLessonFormErrors((prev) => ({
         ...prev,
-        packageId: '선택한 학생과 수강권이 일치하지 않습니다.',
+        packageId: isAdmin
+          ? '선택한 학생과 수강권이 일치하지 않습니다.'
+          : '선택한 학생과 수업 등록이 일치하지 않습니다.',
       }))
       return
     }
     if (selectedPackage.status !== 'active') {
       setPrivateLessonFormErrors((prev) => ({
         ...prev,
-        packageId: '활성 수강권만 사용할 수 있습니다.',
+        packageId: isAdmin
+          ? '활성 수강권만 사용할 수 있습니다.'
+          : '사용 가능한 등록만 선택할 수 있습니다.',
       }))
       return
     }
     if (Number(selectedPackage.remainingCount ?? 0) <= 0) {
       setPrivateLessonFormErrors((prev) => ({
         ...prev,
-        packageId: '남은 횟수가 있는 수강권을 선택해주세요.',
+        packageId: isAdmin
+          ? '남은 횟수가 있는 수강권을 선택해주세요.'
+          : '남은 횟수가 있는 등록을 선택해주세요.',
       }))
       return
     }
@@ -2813,7 +2873,7 @@ export default function Dashboard() {
       if (!myT || pkgTeacher !== myT) {
         setPrivateLessonFormErrors((prev) => ({
           ...prev,
-          packageId: '본인 담당 수강권만 사용할 수 있습니다.',
+          packageId: '본인 담당 등록만 사용할 수 있습니다.',
         }))
         return
       }
@@ -4844,7 +4904,9 @@ export default function Dashboard() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>이 반에서 사용할 수강권을 선택</span>
+                <span style={{ opacity: 0.85 }}>
+                  {isAdmin ? '이 반에서 사용할 수강권을 선택' : '이 반에서 사용할 등록을 선택'}
+                </span>
                 <select
                   value={groupStudentForm.packageId}
                   onChange={(e) =>
@@ -4861,7 +4923,9 @@ export default function Dashboard() {
                     color: 'white',
                   }}
                 >
-                  <option value="">수강권을 선택하세요</option>
+                  <option value="">
+                    {isAdmin ? '사용할 수강권을 선택하세요' : '등록을 선택하세요'}
+                  </option>
                   {groupStudentEligiblePackages.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.studentName || '-'} — {p.title || '(제목 없음)'}
@@ -4870,7 +4934,9 @@ export default function Dashboard() {
                 </select>
                 {groupStudentEligiblePackages.length === 0 ? (
                   <span style={{ fontSize: 12, opacity: 0.75 }}>
-                    이 반에 연결된 활성 그룹 수강권이 없습니다.
+                    {isAdmin
+                      ? '이 반에 연결된 활성 그룹 수강권이 없습니다.'
+                      : '이 반에서 사용할 수 있는 남은 횟수가 있는 그룹 등록이 없습니다.'}
                   </span>
                 ) : null}
                 {groupStudentFormErrors.packageId ? (
@@ -4898,14 +4964,14 @@ export default function Dashboard() {
                     }}
                   >
                     <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>
-                      수강권 정보 (읽기 전용)
+                      {isAdmin ? '수강권 정보 (읽기 전용)' : '수업 등록 정보 (읽기 전용)'}
                     </div>
                     <div>studentName: {pkg.studentName ?? '-'}</div>
                     <div>teacher: {pkg.teacher ?? '-'}</div>
                     <div>title: {pkg.title ?? '-'}</div>
                     <div>totalCount: {pkg.totalCount ?? '-'}</div>
                     <div>usedCount: {pkg.usedCount ?? '-'}</div>
-                    <div>remainingCount: {pkg.remainingCount ?? '-'}</div>
+                    <div>남은 횟수: {pkg.remainingCount ?? '-'}</div>
                     <div>expiresAt: {formatGroupStudentStartDate(pkg.expiresAt)}</div>
                     <div>amountPaid: {pkg.amountPaid ?? 0}</div>
                     <div style={{ whiteSpace: 'pre-wrap' }}>memo: {pkg.memo || '—'}</div>
@@ -5473,7 +5539,11 @@ export default function Dashboard() {
 
             {groupLessonAttendanceModalRows.length === 0 ? (
               <p style={{ margin: 0, fontSize: 13, opacity: 0.75 }}>
-                이 수업에 차감할 수 있는 학생이 없습니다. (반 시작일·상태·수강권을 확인하세요.)
+                이 수업에 차감할 수 있는 학생이 없습니다. (
+                {isAdmin
+                  ? '반 시작일·상태·수강권을 확인하세요.'
+                  : '반 시작일·상태·남은 횟수를 확인하세요.'}
+                )
               </p>
             ) : (
               <div className="activity-table">
@@ -5484,8 +5554,8 @@ export default function Dashboard() {
                   }}
                 >
                   <span>학생</span>
-                  <span>수강권</span>
-                  <span>잔여</span>
+                  <span>{isAdmin ? '수강권' : '등록명'}</span>
+                  <span>남은 횟수</span>
                   <span>상태</span>
                   <span>작업</span>
                 </div>
@@ -5657,7 +5727,9 @@ export default function Dashboard() {
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>사용할 개인 수강권을 선택</span>
+                <span style={{ opacity: 0.85 }}>
+                  {isAdmin ? '사용할 개인 수강권을 선택' : '사용할 수업을 선택'}
+                </span>
                 <select
                   value={privateLessonForm.packageId}
                   onChange={(e) =>
@@ -5675,12 +5747,14 @@ export default function Dashboard() {
                 >
                   <option value="">
                     {String(privateLessonForm.studentId || '').trim()
-                      ? '수강권 선택'
+                      ? isAdmin
+                        ? '수강권 선택'
+                        : '수업 선택'
                       : '먼저 학생을 선택하세요'}
                   </option>
                   {privateLessonEligiblePackages.map((pkg) => (
                     <option key={pkg.id} value={pkg.id}>
-                      {String(pkg.title || '').trim() || '—'} (잔여{' '}
+                      {String(pkg.title || '').trim() || '—'} (남은 횟수{' '}
                       {Number(pkg.remainingCount ?? 0)})
                     </option>
                   ))}
@@ -5704,7 +5778,9 @@ export default function Dashboard() {
                     opacity: 0.95,
                   }}
                 >
-                  <div style={{ marginBottom: 6, fontWeight: 600, opacity: 0.9 }}>선택 수강권</div>
+                  <div style={{ marginBottom: 6, fontWeight: 600, opacity: 0.9 }}>
+                    {isAdmin ? '선택 수강권' : '선택 정보'}
+                  </div>
                   <div>
                     <span style={{ opacity: 0.7 }}>title: </span>
                     {String(privateLessonSelectedPackagePreview.title || '').trim() || '—'}
@@ -5718,7 +5794,7 @@ export default function Dashboard() {
                     {privateLessonSelectedPackagePreview.usedCount ?? '—'}
                   </div>
                   <div>
-                    <span style={{ opacity: 0.7 }}>remainingCount: </span>
+                    <span style={{ opacity: 0.7 }}>남은 횟수: </span>
                     {privateLessonSelectedPackagePreview.remainingCount ?? '—'}
                   </div>
                   <div>
