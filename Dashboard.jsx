@@ -1651,6 +1651,26 @@ export default function Dashboard() {
 
       if (usePackagePath) {
         await recomputePrivatePackageUsage(packageId)
+        const pkgForLog = studentPackages.find((p) => p.id === packageId)
+        if (pkgForLog) {
+          const datePart = [lesson.date, lesson.time, lesson.subject]
+            .filter(Boolean)
+            .join(' ')
+          await addCreditTransaction({
+            studentId: resolvedStudentId,
+            studentName: String(pkgForLog.studentName || '').trim() || '-',
+            teacher: normalizeText(pkgForLog.teacher || ''),
+            packageId,
+            packageType: pkgForLog.packageType || 'private',
+            sourceType: 'lesson',
+            sourceId: lesson.id,
+            actionType: nextCancelled
+              ? 'private_deduct_cancel'
+              : 'private_deduct_restore',
+            deltaCount: nextCancelled ? 1 : -1,
+            memo: datePart ? `개인 수업 ${datePart}` : '개인 수업 차감 토글',
+          })
+        }
       }
     } catch (error) {
       console.error('차감 처리 실패:', error)
@@ -1691,6 +1711,54 @@ export default function Dashboard() {
     if (c <= 0) return '수강권 없음'
     const rem = Number(remainingTotal) || 0
     return `${c}개 / 남은 ${rem}회`
+  }
+
+  async function getNextGroupLessonDateYmd(groupClassId) {
+    const gid = String(groupClassId || '').trim()
+    if (!gid) return formatLocalYmd(new Date())
+
+    const today = getTodayStorageDateString()
+
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'groupLessons'), where('groupClassId', '==', gid))
+      )
+      let best = null
+      snap.docs.forEach((docItem) => {
+        const data = docItem.data()
+        const dateStr = String(data.date || '').trim()
+        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return
+        if (dateStr < today) return
+        if (best === null || dateStr < best) best = dateStr
+      })
+      if (best) return best
+    } catch (error) {
+      console.error('다음 수업일 조회 실패:', error)
+    }
+
+    return formatLocalYmd(new Date())
+  }
+
+  async function addCreditTransaction(payload) {
+    try {
+      await addDoc(collection(db, 'creditTransactions'), {
+        studentId: String(payload.studentId ?? ''),
+        studentName: String(payload.studentName ?? ''),
+        teacher: String(payload.teacher ?? ''),
+        packageId: String(payload.packageId ?? ''),
+        packageType: String(payload.packageType ?? ''),
+        sourceType: String(payload.sourceType ?? ''),
+        sourceId: String(payload.sourceId ?? ''),
+        actionType: String(payload.actionType ?? ''),
+        deltaCount: Number(payload.deltaCount ?? 0),
+        memo: String(payload.memo ?? ''),
+        actorUid: user?.uid || '',
+        actorRole: userProfile?.role || '',
+        createdAt: serverTimestamp(),
+      })
+    } catch (error) {
+      console.error('creditTransactions 기록 실패:', error)
+    }
   }
 
   function openStudentAddModal() {
@@ -2079,6 +2147,8 @@ export default function Dashboard() {
         (result.packageType === 'group' || result.packageType === 'openGroup') &&
         groupClassId
       ) {
+        const nextStartYmd = await getNextGroupLessonDateYmd(groupClassId)
+        const todayYmd = getTodayStorageDateString()
         setPostGroupReEnrollModalData({
           newPackageId: docRef.id,
           newPackageType: result.packageType,
@@ -2089,8 +2159,9 @@ export default function Dashboard() {
           groupClassName,
           totalCount: result.totalCount,
           usedCount: 0,
+          showNextLessonAutoHint: nextStartYmd !== todayYmd,
         })
-        setPostGroupReEnrollStartDate(formatLocalYmd(new Date()))
+        setPostGroupReEnrollStartDate(nextStartYmd)
         setPostGroupReEnrollErrors({})
       }
     } catch (error) {
@@ -2175,6 +2246,18 @@ export default function Dashboard() {
       })
 
       await batch.commit()
+      await addCreditTransaction({
+        studentId: enrollStudentId,
+        studentName: String(data.studentName || '').trim() || '-',
+        teacher: teacherNorm,
+        packageId: data.newPackageId,
+        packageType: String(data.newPackageType || 'group'),
+        sourceType: 'groupClass',
+        sourceId: gid,
+        actionType: 'group_reenroll',
+        deltaCount: 0,
+        memo: `같은 반 재등록 · ${String(data.groupClassName || '').trim() || '-'} · 시작 ${dateStr}`,
+      })
       closePostGroupReEnrollModal()
     } catch (error) {
       console.error('같은 반 재등록 실패:', error)
@@ -2351,6 +2434,20 @@ export default function Dashboard() {
       } else {
         await updateDoc(pkgRef, { status: 'ended', updatedAt: serverTimestamp() })
       }
+      await addCreditTransaction({
+        studentId: String(pkg.studentId || '').trim(),
+        studentName: String(pkg.studentName || '').trim() || '-',
+        teacher: normalizeText(pkg.teacher || ''),
+        packageId: pkg.id,
+        packageType: String(pkg.packageType || ''),
+        sourceType: 'studentPackage',
+        sourceId: pkg.id,
+        actionType: 'package_ended',
+        deltaCount: 0,
+        memo: [String(pkg.title || '').trim(), pkg.groupClassName ? String(pkg.groupClassName) : '']
+          .filter(Boolean)
+          .join(' · ') || '수강권 종료',
+      })
     } catch (error) {
       console.error('수강권 종료 실패:', error)
       alert(`수강권 종료 실패: ${error.message}`)
@@ -3235,6 +3332,22 @@ export default function Dashboard() {
           updatedAt: serverTimestamp(),
         })
       })
+      const pkgLog = studentPackages.find((p) => p.id === pkgId)
+      const gName = selectedGroupClass?.name || ''
+      const datePart = [lesson.date, lesson.time, lesson.subject].filter(Boolean).join(' ')
+      await addCreditTransaction({
+        studentId,
+        studentName:
+          String(groupStudentRow.studentName || groupStudentRow.name || '').trim() || '-',
+        teacher: normalizeText(pkgLog?.teacher || ''),
+        packageId: pkgId,
+        packageType: pkgLog?.packageType || 'group',
+        sourceType: 'groupLesson',
+        sourceId: lesson.id,
+        actionType: 'group_deduct',
+        deltaCount: -1,
+        memo: [datePart, gName].filter(Boolean).join(' · ') || '그룹 출석 차감',
+      })
     } catch (error) {
       console.error('차감 실패:', error)
       alert(`차감 실패: ${error.message}`)
@@ -3339,6 +3452,22 @@ export default function Dashboard() {
           attendanceAppliedAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
+      })
+      const pkgLogUndo = studentPackages.find((p) => p.id === pkgId)
+      const gNameUndo = selectedGroupClass?.name || ''
+      const datePartUndo = [lesson.date, lesson.time, lesson.subject].filter(Boolean).join(' ')
+      await addCreditTransaction({
+        studentId,
+        studentName:
+          String(groupStudentRow.studentName || groupStudentRow.name || '').trim() || '-',
+        teacher: normalizeText(pkgLogUndo?.teacher || ''),
+        packageId: pkgId,
+        packageType: pkgLogUndo?.packageType || 'group',
+        sourceType: 'groupLesson',
+        sourceId: lesson.id,
+        actionType: 'group_deduct_restore',
+        deltaCount: 1,
+        memo: [datePartUndo, gNameUndo].filter(Boolean).join(' · ') || '그룹 출석 차감 복구',
       })
     } catch (error) {
       console.error('차감 복구 실패:', error)
@@ -5860,18 +5989,41 @@ export default function Dashboard() {
               id="post-group-re-enroll-modal-title"
               style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
-              새 수강권을 만들었습니다
+              같은 반에 이어서 등록할까요?
             </h2>
-            <p style={{ margin: '0 0 12px 0', fontSize: 14, opacity: 0.9 }}>
-              같은 반에 바로 다시 등록할까요?
+            <p style={{ margin: '0 0 10px 0', fontSize: 14, opacity: 0.9, lineHeight: 1.5 }}>
+              새 그룹 수강권이 만들어졌습니다. 시작일만 확인하면 같은 반에 바로 이어서 등록할 수
+              있습니다.
             </p>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.82 }}>
-              {postGroupReEnrollModalData.studentName || '-'} ·{' '}
-              {postGroupReEnrollModalData.groupClassName || '-'}
+            <p
+              style={{
+                margin: `0 0 ${
+                  postGroupReEnrollModalData.showNextLessonAutoHint ? 10 : 16
+                }px 0`,
+                fontSize: 13,
+                opacity: 0.88,
+              }}
+            >
+              학생: <strong>{postGroupReEnrollModalData.studentName || '-'}</strong>
+              {' · '}
+              반: <strong>{postGroupReEnrollModalData.groupClassName || '-'}</strong>
+              {' · '}
+              총 횟수:{' '}
+              <strong>
+                {postGroupReEnrollModalData.totalCount != null
+                  ? String(postGroupReEnrollModalData.totalCount)
+                  : '-'}
+                회
+              </strong>
             </p>
+            {postGroupReEnrollModalData.showNextLessonAutoHint ? (
+              <p style={{ margin: '0 0 16px 0', fontSize: 12, opacity: 0.75, lineHeight: 1.45 }}>
+                다음 수업일이 자동으로 선택되었습니다.
+              </p>
+            ) : null}
 
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-              <span style={{ opacity: 0.85 }}>시작일</span>
+              <span style={{ opacity: 0.85 }}>시작일 (기본: 다음 수업일)</span>
               <input
                 type="date"
                 value={postGroupReEnrollStartDate}
@@ -5928,7 +6080,7 @@ export default function Dashboard() {
                   cursor: busyPostGroupReEnroll ? 'not-allowed' : 'pointer',
                 }}
               >
-                {busyPostGroupReEnroll ? '처리 중...' : '같은 반에 다시 등록'}
+                {busyPostGroupReEnroll ? '처리 중...' : '같은 반에 등록'}
               </button>
             </div>
           </div>

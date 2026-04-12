@@ -53,6 +53,12 @@ service cloud.firestore {
         (data.teacher is string && data.teacher == myTeacherName());
     }
 
+    function creditTransactionBelongsToTeacher(data) {
+      return isTeacher() &&
+        data.teacher is string &&
+        data.teacher == myTeacherName();
+    }
+
     function canManageAttendance() {
       return signedIn() &&
         currentUserDoc().role == "teacher" &&
@@ -176,6 +182,13 @@ service cloud.firestore {
         studentPackageBelongsToTeacher(request.resource.data)
       );
       allow delete: if isAdmin();
+    }
+
+    match /creditTransactions/{txId} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() || canManageAttendance();
+      allow update: if false;
+      allow delete: if false;
     }
 
     match /{document=**} {
