@@ -465,8 +465,11 @@ export default function Dashboard() {
   const [studentForm, setStudentForm] = useState({
     name: '',
     teacher: '',
-    paidLessons: '0',
-    attendanceCount: '0',
+    phone: '',
+    carNumber: '',
+    learningPurpose: '',
+    firstRegisteredAt: '',
+    note: '',
   })
   const [studentFormErrors, setStudentFormErrors] = useState({})
   const [selectedDate, setSelectedDate] = useState(new Date())
@@ -1133,13 +1136,6 @@ export default function Dashboard() {
     return privateLessonEligiblePackages.find((p) => p.id === id) || null
   }, [privateLessonForm.packageId, privateLessonEligiblePackages])
 
-  const studentFormRemainingPreview = useMemo(() => {
-    const paidParsed = parseRequiredNonNegativeIntField(studentForm.paidLessons)
-    const attParsed = parseRequiredNonNegativeIntField(studentForm.attendanceCount)
-    if (!paidParsed.ok || !attParsed.ok) return null
-    return paidParsed.value - attParsed.value
-  }, [studentForm.paidLessons, studentForm.attendanceCount])
-
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aDate = getLessonDate(a)
@@ -1531,11 +1527,20 @@ export default function Dashboard() {
     setStudentFormErrors({})
   }
 
-  function studentFieldToFormIntString(value) {
-    const n = Number(value)
-    if (!Number.isFinite(n)) return '0'
-    const i = Math.trunc(n)
-    return String(Math.max(0, i))
+  function formatLocalYmd(d) {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+
+  function studentDocFieldToYmdString(value) {
+    if (value == null || value === '') return ''
+    if (typeof value === 'string') return value.trim()
+    if (typeof value.toDate === 'function') {
+      return formatLocalYmd(value.toDate())
+    }
+    return ''
   }
 
   function openStudentAddModal() {
@@ -1550,8 +1555,11 @@ export default function Dashboard() {
         userProfile?.role === 'admin'
           ? ''
           : normalizeText(userProfile?.teacherName || ''),
-      paidLessons: '0',
-      attendanceCount: '0',
+      phone: '',
+      carNumber: '',
+      learningPurpose: '',
+      firstRegisteredAt: formatLocalYmd(new Date()),
+      note: '',
     })
     setStudentFormErrors({})
     setStudentModal({ type: 'add' })
@@ -1569,8 +1577,11 @@ export default function Dashboard() {
         userProfile?.role === 'admin'
           ? student.teacher || ''
           : normalizeText(userProfile?.teacherName || ''),
-      paidLessons: studentFieldToFormIntString(student.paidLessons),
-      attendanceCount: studentFieldToFormIntString(student.attendanceCount),
+      phone: student.phone != null ? String(student.phone) : '',
+      carNumber: student.carNumber != null ? String(student.carNumber) : '',
+      learningPurpose: student.learningPurpose != null ? String(student.learningPurpose) : '',
+      firstRegisteredAt: studentDocFieldToYmdString(student.firstRegisteredAt),
+      note: student.note != null ? String(student.note) : '',
     })
     setStudentFormErrors({})
     setStudentModal({ type: 'edit', student })
@@ -1583,19 +1594,41 @@ export default function Dashboard() {
     if (!name) errors.name = '이름을 입력해주세요.'
     if (!teacher) errors.teacher = '선생님 이름을 입력해주세요.'
 
-    const paid = parseRequiredNonNegativeIntField(form.paidLessons)
-    if (!paid.ok) errors.paidLessons = '0 이상의 정수를 입력해주세요.'
+    const phone = String(form.phone ?? '').trim()
+    const carNumber = String(form.carNumber ?? '').trim()
+    const learningPurpose = String(form.learningPurpose ?? '').trim()
+    const note = String(form.note ?? '').trim()
 
-    const att = parseRequiredNonNegativeIntField(form.attendanceCount)
-    if (!att.ok) errors.attendanceCount = '0 이상의 정수를 입력해주세요.'
+    let firstRegisteredAt = ''
+    const firstRegRaw = String(form.firstRegisteredAt ?? '').trim()
+    if (firstRegRaw) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(firstRegRaw)) {
+        errors.firstRegisteredAt = '날짜 형식이 올바르지 않습니다.'
+      } else {
+        const [y, mo, d] = firstRegRaw.split('-').map(Number)
+        const dt = new Date(y, mo - 1, d)
+        if (
+          dt.getFullYear() !== y ||
+          dt.getMonth() !== mo - 1 ||
+          dt.getDate() !== d
+        ) {
+          errors.firstRegisteredAt = '유효한 날짜를 선택해주세요.'
+        } else {
+          firstRegisteredAt = firstRegRaw
+        }
+      }
+    }
 
     return {
       valid: Object.keys(errors).length === 0,
       errors,
       name,
       teacher,
-      paidLessons: paid.ok ? paid.value : 0,
-      attendanceCount: att.ok ? att.value : 0,
+      phone,
+      carNumber,
+      learningPurpose,
+      firstRegisteredAt,
+      note,
     }
   }
 
@@ -1616,8 +1649,13 @@ export default function Dashboard() {
         const docRef = await addDoc(collection(db, 'privateStudents'), {
           name: result.name,
           teacher: teacherStored,
-          paidLessons: result.paidLessons,
-          attendanceCount: result.attendanceCount,
+          phone: result.phone,
+          carNumber: result.carNumber,
+          learningPurpose: result.learningPurpose,
+          firstRegisteredAt: result.firstRegisteredAt,
+          note: result.note,
+          paidLessons: 0,
+          attendanceCount: 0,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
@@ -1627,8 +1665,8 @@ export default function Dashboard() {
             id: docRef.id,
             name: result.name,
             teacher: teacherStored,
-            paidLessons: result.paidLessons,
-            attendanceCount: result.attendanceCount,
+            paidLessons: 0,
+            attendanceCount: 0,
           })
         }
       } catch (error) {
@@ -1646,8 +1684,11 @@ export default function Dashboard() {
       await updateDoc(doc(db, 'privateStudents', student.id), {
         name: result.name,
         teacher: teacherStored,
-        paidLessons: result.paidLessons,
-        attendanceCount: result.attendanceCount,
+        phone: result.phone,
+        carNumber: result.carNumber,
+        learningPurpose: result.learningPurpose,
+        firstRegisteredAt: result.firstRegisteredAt,
+        note: result.note,
         updatedAt: serverTimestamp(),
       })
       closeStudentModal()
@@ -4262,7 +4303,7 @@ export default function Dashboard() {
           <div
             style={{
               width: '100%',
-              maxWidth: 420,
+              maxWidth: 460,
               background: '#151922',
               border: '1px solid #2e3240',
               borderRadius: 12,
@@ -4274,10 +4315,13 @@ export default function Dashboard() {
           >
             <h2
               id="student-modal-title"
-              style={{ margin: '0 0 16px 0', fontSize: '1.1rem', fontWeight: 600 }}
+              style={{ margin: '0 0 6px 0', fontSize: '1.1rem', fontWeight: 600 }}
             >
               {studentModal.type === 'add' ? '학생 추가' : '학생 수정'}
             </h2>
+            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.78, lineHeight: 1.45 }}>
+              기본 정보를 입력해 주세요. 담당 선생님은 시스템 연동을 위해 함께 저장됩니다.
+            </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
@@ -4303,7 +4347,7 @@ export default function Dashboard() {
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>선생님</span>
+                <span style={{ opacity: 0.85 }}>선생님 (호환용)</span>
                 <input
                   type="text"
                   value={studentForm.teacher}
@@ -4328,13 +4372,31 @@ export default function Dashboard() {
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>결제 횟수 (paidLessons)</span>
+                <span style={{ opacity: 0.85 }}>전화번호</span>
+                <input
+                  type="tel"
+                  value={studentForm.phone}
+                  onChange={(e) =>
+                    setStudentForm((prev) => ({ ...prev, phone: e.target.value }))
+                  }
+                  autoComplete="tel"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>차번호</span>
                 <input
                   type="text"
-                  inputMode="numeric"
-                  value={studentForm.paidLessons}
+                  value={studentForm.carNumber}
                   onChange={(e) =>
-                    setStudentForm((prev) => ({ ...prev, paidLessons: e.target.value }))
+                    setStudentForm((prev) => ({ ...prev, carNumber: e.target.value }))
                   }
                   style={{
                     padding: '10px 12px',
@@ -4344,52 +4406,77 @@ export default function Dashboard() {
                     color: 'white',
                   }}
                 />
-                {studentFormErrors.paidLessons ? (
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>수강 목적</span>
+                <textarea
+                  value={studentForm.learningPurpose}
+                  onChange={(e) =>
+                    setStudentForm((prev) => ({ ...prev, learningPurpose: e.target.value }))
+                  }
+                  rows={2}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                    resize: 'vertical',
+                    minHeight: 48,
+                    fontFamily: 'inherit',
+                    fontSize: 13,
+                  }}
+                />
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>첫 등록일</span>
+                <input
+                  type="date"
+                  value={studentForm.firstRegisteredAt}
+                  onChange={(e) =>
+                    setStudentForm((prev) => ({
+                      ...prev,
+                      firstRegisteredAt: e.target.value,
+                    }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentFormErrors.firstRegisteredAt ? (
                   <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {studentFormErrors.paidLessons}
+                    {studentFormErrors.firstRegisteredAt}
                   </span>
                 ) : null}
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>차감 횟수 (attendanceCount)</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={studentForm.attendanceCount}
+                <span style={{ opacity: 0.85 }}>메모</span>
+                <textarea
+                  value={studentForm.note}
                   onChange={(e) =>
-                    setStudentForm((prev) => ({ ...prev, attendanceCount: e.target.value }))
+                    setStudentForm((prev) => ({ ...prev, note: e.target.value }))
                   }
+                  rows={3}
                   style={{
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
                     background: '#1f1f1f',
                     color: 'white',
+                    resize: 'vertical',
+                    minHeight: 72,
+                    fontFamily: 'inherit',
+                    fontSize: 13,
                   }}
                 />
-                {studentFormErrors.attendanceCount ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {studentFormErrors.attendanceCount}
-                  </span>
-                ) : null}
               </label>
-
-              <div
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px dashed #444',
-                  background: '#1a1d26',
-                  fontSize: 13,
-                  opacity: 0.95,
-                }}
-              >
-                남은 횟수 (표시만){' '}
-                <strong>
-                  {studentFormRemainingPreview === null ? '—' : studentFormRemainingPreview}
-                </strong>
-              </div>
             </div>
 
             <div
