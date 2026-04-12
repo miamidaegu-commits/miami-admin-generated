@@ -6,6 +6,7 @@ import {
   arrayUnion,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -616,6 +617,17 @@ export default function Dashboard() {
   })
   const [studentPackageFormErrors, setStudentPackageFormErrors] = useState({})
   const [busyStudentPackageSubmit, setBusyStudentPackageSubmit] = useState(false)
+  const [studentPackageEditModalPackage, setStudentPackageEditModalPackage] =
+    useState(null)
+  const [studentPackageEditForm, setStudentPackageEditForm] = useState({
+    title: '',
+    totalCount: '',
+    expiresAt: '',
+    amountPaid: '',
+    memo: '',
+  })
+  const [studentPackageEditFormErrors, setStudentPackageEditFormErrors] = useState({})
+  const [busyStudentPackageActionId, setBusyStudentPackageActionId] = useState(null)
   const [expandedStudentPackageStudentId, setExpandedStudentPackageStudentId] =
     useState(null)
 
@@ -1987,6 +1999,179 @@ export default function Dashboard() {
       alert(`학생 수강권 추가 실패: ${error.message}`)
     } finally {
       setBusyStudentPackageSubmit(false)
+    }
+  }
+
+  function closeStudentPackageEditModal() {
+    setStudentPackageEditModalPackage(null)
+    setStudentPackageEditFormErrors({})
+  }
+
+  function openStudentPackageEditModal(pkg) {
+    if (userProfile?.role !== 'admin') return
+    if (!pkg?.id) return
+    setStudentPackageEditModalPackage(pkg)
+    setStudentPackageEditForm({
+      title: String(pkg.title || '').trim(),
+      totalCount:
+        pkg.totalCount != null && String(pkg.totalCount).trim() !== ''
+          ? String(pkg.totalCount)
+          : '1',
+      expiresAt: studentDocFieldToYmdString(pkg.expiresAt),
+      amountPaid:
+        pkg.amountPaid != null && String(pkg.amountPaid).trim() !== ''
+          ? String(pkg.amountPaid)
+          : '',
+      memo: String(pkg.memo || ''),
+    })
+    setStudentPackageEditFormErrors({})
+  }
+
+  function validateStudentPackageEditFormFields(form, usedCountRaw) {
+    const errors = {}
+    const usedCount = Number(usedCountRaw ?? 0)
+    if (!Number.isFinite(usedCount) || usedCount < 0) {
+      errors._used = '사용 횟수가 올바르지 않습니다.'
+    }
+
+    const title = String(form.title || '').trim()
+    if (!title) errors.title = '수강권 제목을 입력해주세요.'
+
+    const totalParsed = parseRequiredMinOneIntField(form.totalCount)
+    if (!totalParsed.ok) {
+      errors.totalCount = '1 이상의 정수를 입력해주세요.'
+    } else if (Number.isFinite(usedCount) && totalParsed.value < usedCount) {
+      errors.totalCount = `총 횟수는 사용 횟수(${usedCount}) 이상이어야 합니다.`
+    }
+
+    let expiresAtTs = null
+    let expiresClear = false
+    const expStr = String(form.expiresAt || '').trim()
+    if (!expStr) {
+      expiresClear = true
+    } else {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(expStr)) {
+        errors.expiresAt = '날짜 형식이 올바르지 않습니다.'
+      } else {
+        const [y, mo, d] = expStr.split('-').map(Number)
+        const dt = new Date(y, mo - 1, d)
+        if (
+          dt.getFullYear() !== y ||
+          dt.getMonth() !== mo - 1 ||
+          dt.getDate() !== d
+        ) {
+          errors.expiresAt = '유효한 날짜를 선택해주세요.'
+        } else {
+          expiresAtTs = Timestamp.fromDate(new Date(y, mo - 1, d))
+        }
+      }
+    }
+
+    let amountPaid = 0
+    const amountRaw = String(form.amountPaid ?? '').trim()
+    if (amountRaw !== '') {
+      const n = Number(amountRaw)
+      if (!Number.isFinite(n) || n < 0) {
+        errors.amountPaid = '0 이상의 숫자를 입력해주세요.'
+      } else {
+        amountPaid = n
+      }
+    }
+
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      title,
+      totalCount: totalParsed.ok ? totalParsed.value : 0,
+      expiresAt: expiresAtTs,
+      expiresClear,
+      amountPaid,
+      memo: String(form.memo || '').trim(),
+    }
+  }
+
+  async function submitStudentPackageEditModal() {
+    const pkg = studentPackageEditModalPackage
+    if (!pkg?.id) return
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 수강권을 수정할 수 있습니다.')
+      return
+    }
+
+    const usedCount = Number(pkg.usedCount ?? 0)
+    const result = validateStudentPackageEditFormFields(studentPackageEditForm, usedCount)
+    setStudentPackageEditFormErrors(result.errors)
+    if (!result.valid) return
+
+    try {
+      setBusyStudentPackageActionId(pkg.id)
+      const pkgRef = doc(db, 'studentPackages', pkg.id)
+      const remainingCount = Math.max(0, result.totalCount - usedCount)
+      const updates = {
+        title: result.title,
+        totalCount: result.totalCount,
+        remainingCount,
+        amountPaid: result.amountPaid,
+        memo: result.memo,
+        updatedAt: serverTimestamp(),
+      }
+      if (result.expiresClear) {
+        updates.expiresAt = deleteField()
+      } else {
+        updates.expiresAt = result.expiresAt
+      }
+      await updateDoc(pkgRef, updates)
+      closeStudentPackageEditModal()
+    } catch (error) {
+      console.error('수강권 수정 실패:', error)
+      alert(`수강권 수정 실패: ${error.message}`)
+    } finally {
+      setBusyStudentPackageActionId(null)
+    }
+  }
+
+  async function endStudentPackage(pkg) {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 수강권을 종료할 수 있습니다.')
+      return
+    }
+    if (!pkg?.id) return
+
+    if (String(pkg.status || '').toLowerCase() === 'ended') {
+      alert('이미 종료된 수강권입니다.')
+      return
+    }
+
+    const label = String(pkg.title || '').trim() || pkg.id
+    if (!window.confirm(`이 수강권을 종료할까요?\n${label}`)) return
+
+    try {
+      setBusyStudentPackageActionId(pkg.id)
+      const pkgRef = doc(db, 'studentPackages', pkg.id)
+      const pt = pkg.packageType
+
+      if (pt === 'group' || pt === 'openGroup') {
+        const q = query(collection(db, 'groupStudents'), where('packageId', '==', pkg.id))
+        const snap = await getDocs(q)
+        const batch = writeBatch(db)
+        batch.update(pkgRef, { status: 'ended', updatedAt: serverTimestamp() })
+        snap.forEach((d) => {
+          const data = d.data()
+          if (String(data.status || 'active') !== 'active') return
+          batch.update(doc(db, 'groupStudents', d.id), {
+            status: 'ended',
+            updatedAt: serverTimestamp(),
+          })
+        })
+        await batch.commit()
+      } else {
+        await updateDoc(pkgRef, { status: 'ended', updatedAt: serverTimestamp() })
+      }
+    } catch (error) {
+      console.error('수강권 종료 실패:', error)
+      alert(`수강권 종료 실패: ${error.message}`)
+    } finally {
+      setBusyStudentPackageActionId(null)
     }
   }
 
@@ -3772,6 +3957,63 @@ export default function Dashboard() {
                             {formatStudentPackageDetailMemo(pkg.memo)}
                           </span>
                         </div>
+                        {isAdmin ? (
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: 8,
+                              marginTop: 12,
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openStudentPackageEditModal(pkg)}
+                              disabled={
+                                busyStudentPackageActionId != null || busyStudentPackageSubmit
+                              }
+                              style={{
+                                padding: '6px 12px',
+                                borderRadius: 8,
+                                border: '1px solid #555',
+                                background: '#1f2a44',
+                                color: 'white',
+                                cursor:
+                                  busyStudentPackageActionId != null || busyStudentPackageSubmit
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                                fontSize: 13,
+                              }}
+                            >
+                              수정
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => endStudentPackage(pkg)}
+                              disabled={
+                                String(pkg.status || '').toLowerCase() === 'ended' ||
+                                busyStudentPackageActionId != null ||
+                                busyStudentPackageSubmit
+                              }
+                              style={{
+                                padding: '6px 12px',
+                                borderRadius: 8,
+                                border: '1px solid #664422',
+                                background: '#3d2e1f',
+                                color: 'white',
+                                cursor:
+                                  String(pkg.status || '').toLowerCase() === 'ended' ||
+                                  busyStudentPackageActionId != null ||
+                                  busyStudentPackageSubmit
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                                fontSize: 13,
+                              }}
+                            >
+                              종료
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -5126,6 +5368,238 @@ export default function Dashboard() {
                 }}
               >
                 {isStudentPackageModalSubmitting ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'students' && isAdmin && studentPackageEditModalPackage ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="student-package-edit-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1002,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeStudentPackageEditModal()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 480,
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+              maxHeight: '90vh',
+              overflowY: 'auto',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="student-package-edit-modal-title"
+              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
+            >
+              수강권 수정
+            </h2>
+            <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.78, lineHeight: 1.5 }}>
+              studentId: {studentPackageEditModalPackage.studentId || '-'} · studentName:{' '}
+              {studentPackageEditModalPackage.studentName || '-'}
+              <br />
+              teacher: {studentPackageEditModalPackage.teacher || '-'} · packageType:{' '}
+              {String(studentPackageEditModalPackage.packageType || '-')}
+              <br />
+              groupClassId: {studentPackageEditModalPackage.groupClassId || '-'} ·
+              groupClassName: {studentPackageEditModalPackage.groupClassName || '-'}
+            </p>
+            <p style={{ margin: '0 0 12px 0', fontSize: 13, opacity: 0.85 }}>
+              사용 횟수(usedCount): {Number(studentPackageEditModalPackage.usedCount ?? 0)} (수정
+              불가)
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>제목</span>
+                <input
+                  type="text"
+                  value={studentPackageEditForm.title}
+                  onChange={(e) =>
+                    setStudentPackageEditForm((prev) => ({ ...prev, title: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageEditFormErrors.title ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageEditFormErrors.title}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>총 횟수 (totalCount)</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={studentPackageEditForm.totalCount}
+                  onChange={(e) =>
+                    setStudentPackageEditForm((prev) => ({
+                      ...prev,
+                      totalCount: e.target.value,
+                    }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageEditFormErrors.totalCount ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageEditFormErrors.totalCount}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>만료일 (선택)</span>
+                <input
+                  type="date"
+                  value={studentPackageEditForm.expiresAt}
+                  onChange={(e) =>
+                    setStudentPackageEditForm((prev) => ({
+                      ...prev,
+                      expiresAt: e.target.value,
+                    }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageEditFormErrors.expiresAt ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageEditFormErrors.expiresAt}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={studentPackageEditForm.amountPaid}
+                  onChange={(e) =>
+                    setStudentPackageEditForm((prev) => ({
+                      ...prev,
+                      amountPaid: e.target.value,
+                    }))
+                  }
+                  placeholder="0"
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                />
+                {studentPackageEditFormErrors.amountPaid ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {studentPackageEditFormErrors.amountPaid}
+                  </span>
+                ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>메모 (선택)</span>
+                <textarea
+                  value={studentPackageEditForm.memo}
+                  onChange={(e) =>
+                    setStudentPackageEditForm((prev) => ({ ...prev, memo: e.target.value }))
+                  }
+                  rows={3}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                    resize: 'vertical',
+                  }}
+                />
+              </label>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 8,
+                marginTop: 20,
+                flexWrap: 'wrap',
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeStudentPackageEditModal}
+                disabled={busyStudentPackageActionId === studentPackageEditModalPackage.id}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor:
+                    busyStudentPackageActionId === studentPackageEditModalPackage.id
+                      ? 'not-allowed'
+                      : 'pointer',
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={submitStudentPackageEditModal}
+                disabled={busyStudentPackageActionId === studentPackageEditModalPackage.id}
+                style={{
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #4a6fff55',
+                  background: '#1f2a44',
+                  color: 'white',
+                  cursor:
+                    busyStudentPackageActionId === studentPackageEditModalPackage.id
+                      ? 'not-allowed'
+                      : 'pointer',
+                }}
+              >
+                {busyStudentPackageActionId === studentPackageEditModalPackage.id
+                  ? '저장 중...'
+                  : '저장'}
               </button>
             </div>
           </div>
