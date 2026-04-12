@@ -115,6 +115,31 @@ function getLessonStorageDateString(lesson) {
   return `${year}-${month}-${day}`
 }
 
+function privateLessonNextSortKey(lesson) {
+  if (!lesson) return null
+  const d = getLessonStorageDateString(lesson)
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return null
+  const t = String(lesson.time || '').trim() || '00:00'
+  return `${d} ${t}`
+}
+
+function groupLessonNextSortKey(gl) {
+  if (!gl) return null
+  const dateStr = String(gl.date || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null
+  const t = String(gl.time || '').trim() || '00:00'
+  return `${dateStr} ${t}`
+}
+
+function earliestNextLessonSortKey(privateLesson, groupLesson) {
+  const a = privateLessonNextSortKey(privateLesson)
+  const b = groupLessonNextSortKey(groupLesson)
+  if (!a && !b) return null
+  if (!a) return b
+  if (!b) return a
+  return a < b ? a : b
+}
+
 function lessonDateInputValue(lesson) {
   const s = getLessonStorageDateString(lesson)
   if (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) return s
@@ -433,6 +458,16 @@ function formatLocalDateToYmd(date) {
   return `${y}-${m}-${d}`
 }
 
+function studentFirstRegisteredYmdForSort(value) {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string') return String(value).trim()
+  if (typeof value.toDate === 'function') {
+    const d = value.toDate()
+    return d ? formatLocalDateToYmd(d) : ''
+  }
+  return ''
+}
+
 function isGroupStudentRowActive(gs) {
   const raw = gs?.status
   const s =
@@ -718,6 +753,13 @@ export default function Dashboard() {
     useState(null)
   const [studentPackageHistoryRows, setStudentPackageHistoryRows] = useState([])
   const [studentPackageHistoryLoading, setStudentPackageHistoryLoading] = useState(false)
+  const [studentSearchQuery, setStudentSearchQuery] = useState('')
+  const [studentTeacherFilter, setStudentTeacherFilter] = useState('')
+  const [studentRegistrationFilter, setStudentRegistrationFilter] = useState('all')
+  const [studentPrivatePackageFilter, setStudentPrivatePackageFilter] = useState('all')
+  const [studentGroupPackageFilter, setStudentGroupPackageFilter] = useState('all')
+  const [studentNextLessonFilter, setStudentNextLessonFilter] = useState('all')
+  const [studentSortKey, setStudentSortKey] = useState('name')
 
   useEffect(() => {
     if (!user?.uid) return
@@ -1534,6 +1576,125 @@ export default function Dashboard() {
     }
     return out
   }, [studentSummaryGroupStudents, studentSummaryGroupLessons])
+
+  const studentListTeacherOptions = useMemo(() => {
+    const set = new Set()
+    for (const s of privateStudents) {
+      const t = String(s.teacher || '').trim()
+      if (t) set.add(t)
+    }
+    return [...set].sort((a, b) => a.localeCompare(b, 'ko'))
+  }, [privateStudents])
+
+  const filteredSortedPrivateStudents = useMemo(() => {
+    const admin = userProfile?.role === 'admin'
+    const q = normalizeText(studentSearchQuery)
+    const teacherF = String(studentTeacherFilter || '').trim()
+
+    const list = sortedPrivateStudents.filter((student) => {
+      if (q) {
+        const fields = [
+          student.name,
+          student.phone,
+          student.carNumber,
+          student.learningPurpose,
+          student.note,
+        ]
+        const match = fields.some((f) =>
+          normalizeText(String(f ?? '')).includes(q)
+        )
+        if (!match) return false
+      }
+
+      if (admin && teacherF) {
+        if (normalizeText(student.teacher || '') !== normalizeText(teacherF)) {
+          return false
+        }
+      }
+
+      const regs = activeGroupRegistrationsByStudentId.get(student.id) ?? []
+      if (studentRegistrationFilter === 'has' && regs.length === 0) return false
+      if (studentRegistrationFilter === 'none' && regs.length > 0) return false
+
+      const pkgSum = studentPackageTableSummaryByStudentId.get(student.id) ?? {
+        privateCount: 0,
+        privateRemainingTotal: 0,
+        groupCount: 0,
+        groupRemainingTotal: 0,
+      }
+      const privCount = Number(pkgSum.privateCount) || 0
+      const grpCount = Number(pkgSum.groupCount) || 0
+      if (studentPrivatePackageFilter === 'has' && privCount <= 0) return false
+      if (studentPrivatePackageFilter === 'none' && privCount > 0) return false
+      if (studentGroupPackageFilter === 'has' && grpCount <= 0) return false
+      if (studentGroupPackageFilter === 'none' && grpCount > 0) return false
+
+      const nextPriv = nextPrivateLessonByStudentId.get(student.id)
+      const nextGrp = nextGroupLessonByStudentId.get(student.id)
+      const hasNext = Boolean(nextPriv || nextGrp)
+      if (studentNextLessonFilter === 'has' && !hasNext) return false
+      if (studentNextLessonFilter === 'none' && hasNext) return false
+
+      return true
+    })
+
+    const sorted = [...list]
+    if (studentSortKey === 'firstRegisteredDesc') {
+      sorted.sort((a, b) => {
+        const ya = studentFirstRegisteredYmdForSort(a.firstRegisteredAt) || ''
+        const yb = studentFirstRegisteredYmdForSort(b.firstRegisteredAt) || ''
+        if (ya !== yb) return yb.localeCompare(ya)
+        const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
+        if (byName !== 0) return byName
+        return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
+      })
+    } else if (studentSortKey === 'nextLessonAsc') {
+      sorted.sort((a, b) => {
+        const ka = earliestNextLessonSortKey(
+          nextPrivateLessonByStudentId.get(a.id),
+          nextGroupLessonByStudentId.get(a.id)
+        )
+        const kb = earliestNextLessonSortKey(
+          nextPrivateLessonByStudentId.get(b.id),
+          nextGroupLessonByStudentId.get(b.id)
+        )
+        if (!ka && !kb) {
+          const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
+          if (byName !== 0) return byName
+          return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
+        }
+        if (!ka) return 1
+        if (!kb) return -1
+        const c = ka.localeCompare(kb)
+        if (c !== 0) return c
+        const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
+        if (byName !== 0) return byName
+        return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
+      })
+    } else {
+      sorted.sort((a, b) => {
+        const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
+        if (byName !== 0) return byName
+        return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
+      })
+    }
+
+    return sorted
+  }, [
+    sortedPrivateStudents,
+    studentSearchQuery,
+    studentTeacherFilter,
+    studentRegistrationFilter,
+    studentPrivatePackageFilter,
+    studentGroupPackageFilter,
+    studentNextLessonFilter,
+    studentSortKey,
+    userProfile?.role,
+    activeGroupRegistrationsByStudentId,
+    studentPackageTableSummaryByStudentId,
+    nextPrivateLessonByStudentId,
+    nextGroupLessonByStudentId,
+  ])
 
   const privateLessonEligiblePackages = useMemo(() => {
     const sid = String(privateLessonForm.studentId || '').trim()
@@ -4482,10 +4643,166 @@ export default function Dashboard() {
       ) : null}
     </div>
 
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 10,
+        alignItems: 'center',
+        marginBottom: 14,
+      }}
+    >
+      <input
+        type="search"
+        value={studentSearchQuery}
+        onChange={(e) => setStudentSearchQuery(e.target.value)}
+        placeholder="이름, 전화번호, 차번호, 수강 목적 검색"
+        disabled={loading}
+        style={{
+          flex: '1 1 220px',
+          minWidth: 180,
+          maxWidth: 420,
+          padding: '8px 10px',
+          borderRadius: 8,
+          border: '1px solid var(--border)',
+          background: 'var(--surface)',
+          color: 'inherit',
+          fontSize: 13,
+        }}
+      />
+      {isAdmin ? (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+          <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>선생님</span>
+          <select
+            value={studentTeacherFilter}
+            onChange={(e) => setStudentTeacherFilter(e.target.value)}
+            disabled={loading}
+            style={{
+              padding: '6px 8px',
+              borderRadius: 8,
+              border: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'inherit',
+              fontSize: 13,
+            }}
+          >
+            <option value="">전체</option>
+            {studentListTeacherOptions.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>등록</span>
+        <select
+          value={studentRegistrationFilter}
+          onChange={(e) => setStudentRegistrationFilter(e.target.value)}
+          disabled={loading}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            color: 'inherit',
+            fontSize: 13,
+          }}
+        >
+          <option value="all">전체</option>
+          <option value="has">등록 있음</option>
+          <option value="none">등록 없음</option>
+        </select>
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>개인권</span>
+        <select
+          value={studentPrivatePackageFilter}
+          onChange={(e) => setStudentPrivatePackageFilter(e.target.value)}
+          disabled={loading}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            color: 'inherit',
+            fontSize: 13,
+          }}
+        >
+          <option value="all">전체</option>
+          <option value="has">있음</option>
+          <option value="none">없음</option>
+        </select>
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>그룹권</span>
+        <select
+          value={studentGroupPackageFilter}
+          onChange={(e) => setStudentGroupPackageFilter(e.target.value)}
+          disabled={loading}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            color: 'inherit',
+            fontSize: 13,
+          }}
+        >
+          <option value="all">전체</option>
+          <option value="has">있음</option>
+          <option value="none">없음</option>
+        </select>
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>다음 수업</span>
+        <select
+          value={studentNextLessonFilter}
+          onChange={(e) => setStudentNextLessonFilter(e.target.value)}
+          disabled={loading}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            color: 'inherit',
+            fontSize: 13,
+          }}
+        >
+          <option value="all">전체</option>
+          <option value="has">예정 있음</option>
+          <option value="none">예정 없음</option>
+        </select>
+      </label>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+        <span style={{ opacity: 0.8, whiteSpace: 'nowrap' }}>정렬</span>
+        <select
+          value={studentSortKey}
+          onChange={(e) => setStudentSortKey(e.target.value)}
+          disabled={loading}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 8,
+            border: '1px solid var(--border)',
+            background: 'var(--surface)',
+            color: 'inherit',
+            fontSize: 13,
+          }}
+        >
+          <option value="name">이름순</option>
+          <option value="firstRegisteredDesc">첫 등록일 최신순</option>
+          <option value="nextLessonAsc">다음 수업 빠른순</option>
+        </select>
+      </label>
+    </div>
+
     {loading ? (
       <p>불러오는 중...</p>
-    ) : sortedPrivateStudents.length === 0 ? (
+    ) : privateStudents.length === 0 ? (
       <p style={{ opacity: 0.8 }}>등록된 학생이 없습니다.</p>
+    ) : filteredSortedPrivateStudents.length === 0 ? (
+      <p style={{ opacity: 0.8 }}>조건에 맞는 학생이 없습니다.</p>
     ) : (
       <div className="activity-table">
         <div
@@ -4504,7 +4821,7 @@ export default function Dashboard() {
           <span>작업</span>
         </div>
 
-        {sortedPrivateStudents.map((student) => {
+        {filteredSortedPrivateStudents.map((student) => {
           const rowBusy = busyStudentId === student.id
           const pkgSum = studentPackageTableSummaryByStudentId.get(student.id) ?? {
             privateCount: 0,
