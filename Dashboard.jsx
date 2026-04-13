@@ -27,15 +27,12 @@ import {
   addCalendarDaysToYmd,
   buildStudentPackageScopeKey,
   countUsedAsOfTodayForStudent,
-  countWeekdayHitsInRange,
   creditTransactionCreatedAtToMillis,
-  earliestNextLessonSortKey,
   formatCreditTransactionActionTypeLabel,
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
   formatDate,
   formatGroupStudentStartDate,
-  formatGroupWeekdaysDisplay,
   formatLocalDateToYmd,
   formatStudentPackageDetailAmountPaid,
   formatStudentPackageDetailMemo,
@@ -53,7 +50,6 @@ import {
   groupLessonNextSortKey,
   groupStudentStartDateToYmd,
   GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS,
-  GROUP_RECURRENCE_WEEKDAY_TOGGLES,
   GROUP_WEEKDAY_LABELS,
   isGroupStudentRowActive,
   isGroupStudentStartedByYmd,
@@ -72,9 +68,7 @@ import {
   parseYmdToLocalDate,
   privateLessonNextSortKey,
   sanitizePhoneForTel,
-  studentFirstRegisteredYmdForSort,
   studentPackageAttentionScope,
-  studentPackageExpiresAtToYmd,
   validateLessonDateTimeSubject,
 } from './src/features/dashboard/dashboardViewUtils.js'
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
@@ -85,6 +79,17 @@ import StudentModal from './src/features/dashboard/modals/StudentModal.jsx'
 import StudentPackageEditModal from './src/features/dashboard/modals/StudentPackageEditModal.jsx'
 import StudentPackageHistoryModal from './src/features/dashboard/modals/StudentPackageHistoryModal.jsx'
 import StudentPackageModal from './src/features/dashboard/modals/StudentPackageModal.jsx'
+import PostGroupReEnrollModal from './src/features/dashboard/modals/PostGroupReEnrollModal.jsx'
+import GroupModal from './src/features/dashboard/modals/GroupModal.jsx'
+import GroupStudentAddModal from './src/features/dashboard/modals/GroupStudentAddModal.jsx'
+import GroupLessonModal from './src/features/dashboard/modals/GroupLessonModal.jsx'
+import GroupLessonSeriesModal from './src/features/dashboard/modals/GroupLessonSeriesModal.jsx'
+import GroupLessonPurgeModal from './src/features/dashboard/modals/GroupLessonPurgeModal.jsx'
+import GroupLessonAttendanceModal from './src/features/dashboard/modals/GroupLessonAttendanceModal.jsx'
+import PrivateLessonModal from './src/features/dashboard/modals/PrivateLessonModal.jsx'
+import PrivateLessonEditModal from './src/features/dashboard/modals/PrivateLessonEditModal.jsx'
+import useStudentsSectionViewModel from './src/features/dashboard/hooks/useStudentsSectionViewModel.js'
+import useGroupsSectionViewModel from './src/features/dashboard/hooks/useGroupsSectionViewModel.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -255,13 +260,6 @@ export default function Dashboard() {
   const [groupStudentFormErrors, setGroupStudentFormErrors] = useState({})
   const [busyGroupStudentId, setBusyGroupStudentId] = useState(null)
   const [groupLessons, setGroupLessons] = useState([])
-  const sortedGroupLessonsForSelectedClass = useMemo(() => {
-    return [...groupLessons].sort((a, b) => {
-      const aKey = `${a.date || ''} ${a.time || ''}`
-      const bKey = `${b.date || ''} ${b.time || ''}`
-      return aKey.localeCompare(bKey)
-    })
-  }, [groupLessons])
 
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
@@ -287,25 +285,6 @@ export default function Dashboard() {
   const [busyGroupLessonPurge, setBusyGroupLessonPurge] = useState(false)
   const [groupLessonAttendanceModal, setGroupLessonAttendanceModal] = useState(null)
   const [busyGroupAttendanceStudentId, setBusyGroupAttendanceStudentId] = useState(null)
-
-  const groupLessonSeriesPlannedCount = useMemo(() => {
-    if (!groupLessonSeriesModalOpen || !selectedGroupClass) return null
-    const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(selectedGroupClass.weekdays))
-    if (weekdaySet.size === 0) return null
-    const s = String(groupLessonSeriesForm.startDate || '').trim()
-    const e = String(groupLessonSeriesForm.endDate || '').trim()
-    if (!s || !e) return null
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || !/^\d{4}-\d{2}-\d{2}$/.test(e)) return null
-    const ds = parseYmdToLocalDate(s)
-    const de = parseYmdToLocalDate(e)
-    if (!ds || !de || ds > de) return null
-    return countWeekdayHitsInRange(s, e, weekdaySet)
-  }, [
-    groupLessonSeriesModalOpen,
-    selectedGroupClass,
-    groupLessonSeriesForm.startDate,
-    groupLessonSeriesForm.endDate,
-  ])
 
   const [privateLessonModalOpen, setPrivateLessonModalOpen] = useState(false)
   const [privateLessonForm, setPrivateLessonForm] = useState({
@@ -356,33 +335,10 @@ export default function Dashboard() {
   const [postGroupReEnrollStartDate, setPostGroupReEnrollStartDate] = useState('')
   const [postGroupReEnrollErrors, setPostGroupReEnrollErrors] = useState({})
   const [busyPostGroupReEnroll, setBusyPostGroupReEnroll] = useState(false)
-  const [expandedStudentPackageStudentId, setExpandedStudentPackageStudentId] =
-    useState(null)
-  const [showAllStudentPackagesInDetail, setShowAllStudentPackagesInDetail] =
-    useState(false)
-  const [copiedStudentPhoneId, setCopiedStudentPhoneId] = useState(null)
-  const copiedStudentPhoneTimeoutRef = useRef(null)
   const [studentPackageHistoryModalPackage, setStudentPackageHistoryModalPackage] =
     useState(null)
   const [studentPackageHistoryRows, setStudentPackageHistoryRows] = useState([])
   const [studentPackageHistoryLoading, setStudentPackageHistoryLoading] = useState(false)
-  const [studentSearchQuery, setStudentSearchQuery] = useState('')
-  const [studentTeacherFilter, setStudentTeacherFilter] = useState('')
-  const [studentRegistrationFilter, setStudentRegistrationFilter] = useState('all')
-  const [studentPrivatePackageFilter, setStudentPrivatePackageFilter] = useState('all')
-  const [studentGroupPackageFilter, setStudentGroupPackageFilter] = useState('all')
-  const [studentNextLessonFilter, setStudentNextLessonFilter] = useState('all')
-  const [studentSortKey, setStudentSortKey] = useState('name')
-  const [studentAttentionFilter, setStudentAttentionFilter] = useState('all')
-  const [studentTodayLessonOnly, setStudentTodayLessonOnly] = useState(false)
-
-  useEffect(() => {
-    return () => {
-      if (copiedStudentPhoneTimeoutRef.current != null) {
-        clearTimeout(copiedStudentPhoneTimeoutRef.current)
-      }
-    }
-  }, [])
 
   useEffect(() => {
     if (!user?.uid) return
@@ -1005,297 +961,36 @@ export default function Dashboard() {
     return map
   }, [privateStudents])
 
-  const groupStudentEligiblePackages = useMemo(() => {
-    const gid = selectedGroupClass?.id
-    if (!gid) return []
-    return studentPackages
-      .filter((p) => {
-        if (p.packageType !== 'group') return false
-        if (String(p.groupClassId || '') !== String(gid)) return false
-        if (p.status !== 'active') return false
-        if (Number(p.remainingCount || 0) <= 0) return false
-        return true
-      })
-      .sort((a, b) => {
-        const byStudent = String(a.studentName || '').localeCompare(String(b.studentName || ''), 'ko')
-        if (byStudent !== 0) return byStudent
-        return String(a.title || '').localeCompare(String(b.title || ''), 'ko')
-      })
-  }, [studentPackages, selectedGroupClass?.id])
+  const {
+    sortedGroupClasses,
+    sortedGroupStudentsForSelectedClass,
+    sortedGroupLessonsForSelectedClass,
+    groupStudentEligiblePackages,
+    groupLessonSeriesPlannedCount,
+    groupLessonForAttendanceModal,
+    groupLessonAttendanceModalRows,
+    groupStudentSelectedPackagePreview,
+  } = useGroupsSectionViewModel({
+    groupClasses,
+    groupStudents,
+    groupLessons,
+    selectedGroupClass,
+    studentPackages,
+    groupStudentForm,
+    groupLessonSeriesForm,
+    groupLessonSeriesModalOpen,
+    groupLessonAttendanceModal,
+  })
 
-  const sortedPrivateStudents = useMemo(() => {
-    return [...privateStudents].sort((a, b) => {
-      const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
-      if (byName !== 0) return byName
-      return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
-    })
-  }, [privateStudents])
-
-  const studentPackageTableSummaryByStudentId = useMemo(() => {
-    const map = new Map()
-    for (const p of studentPackages) {
-      if (String(p.status || 'active') !== 'active') continue
-      const sid = String(p.studentId || '').trim()
-      if (!sid) continue
-      if (!map.has(sid)) {
-        map.set(sid, {
-          privateCount: 0,
-          privateRemainingTotal: 0,
-          groupCount: 0,
-          groupRemainingTotal: 0,
-        })
-      }
-      const agg = map.get(sid)
-      const rem = Number(p.remainingCount ?? 0)
-      const pt = p.packageType
-      if (pt === 'private') {
-        agg.privateCount += 1
-        agg.privateRemainingTotal += rem
-      } else if (pt === 'group' || pt === 'openGroup') {
-        agg.groupCount += 1
-        agg.groupRemainingTotal += rem
-      }
-    }
-    return map
-  }, [studentPackages])
-
-  const studentPackagesSortedByStudentId = useMemo(() => {
-    const statusOrder = (s) => {
-      const v = String(s == null || String(s).trim() === '' ? 'active' : s).toLowerCase()
-      return v === 'active' ? 0 : 1
-    }
-    const typeOrder = (pt) => {
-      if (pt === 'private') return 0
-      if (pt === 'group') return 1
-      if (pt === 'openGroup') return 2
-      return 3
-    }
-    const createdMs = (p) => {
-      const c = p?.createdAt
-      if (c && typeof c.toDate === 'function') return c.toDate().getTime()
-      if (c?.seconds != null) return Number(c.seconds) * 1000
-      return 0
-    }
-    const expiresMs = (p) => {
-      const raw = p?.expiresAt
-      if (raw == null || raw === '') return Number.POSITIVE_INFINITY
-      if (typeof raw.toDate === 'function') return raw.toDate().getTime()
-      if (raw?.seconds != null) return Number(raw.seconds) * 1000
-      if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(String(raw).trim())) {
-        const [y, mo, d] = String(raw).trim().split('-').map(Number)
-        return new Date(y, mo - 1, d).getTime()
-      }
-      return Number.POSITIVE_INFINITY
-    }
-
-    const map = new Map()
-    for (const p of studentPackages) {
-      const sid = String(p.studentId || '').trim()
-      if (!sid) continue
-      if (!map.has(sid)) map.set(sid, [])
-      map.get(sid).push(p)
-    }
-    for (const arr of map.values()) {
-      arr.sort((a, b) => {
-        const so = statusOrder(a.status) - statusOrder(b.status)
-        if (so !== 0) return so
-        const to = typeOrder(a.packageType) - typeOrder(b.packageType)
-        if (to !== 0) return to
-        const co = createdMs(b) - createdMs(a)
-        if (co !== 0) return co
-        return expiresMs(a) - expiresMs(b)
-      })
-    }
-    return map
-  }, [studentPackages])
-
-  const activeGroupRegistrationsByStudentId = useMemo(() => {
-    const today = getTodayStorageDateString()
-    const pkgById = new Map(studentPackages.map((p) => [p.id, p]))
-    const gcById = new Map(groupClasses.map((g) => [g.id, g]))
-    const map = new Map()
-    for (const gs of studentSummaryGroupStudents) {
-      if (!isGroupStudentRowActive(gs)) continue
-      if (!isGroupStudentStartedByYmd(gs, today)) continue
-      const sid = String(gs.studentId || '').trim()
-      if (!sid) continue
-      const gid = String(gs.groupClassId || '').trim()
-      const pkgId = String(gs.packageId || '').trim()
-      const gc = gid ? gcById.get(gid) : null
-      const className =
-        gc?.name != null && String(gc.name).trim() ? String(gc.name).trim() : '-'
-      const startDisplay = formatGroupStudentStartDate(gs.startDate)
-      const pkg = pkgId ? pkgById.get(pkgId) : null
-      const pkgTitle =
-        pkg?.title != null && String(pkg.title).trim() ? String(pkg.title).trim() : '-'
-      const remainingDisplay =
-        pkg && pkg.remainingCount != null && pkg.remainingCount !== ''
-          ? String(pkg.remainingCount)
-          : '-'
-      if (!map.has(sid)) map.set(sid, [])
-      map.get(sid).push({
-        key: gs.id,
-        className,
-        startDisplay,
-        packageTitle: pkgTitle,
-        remainingDisplay,
-      })
-    }
-    return map
-  }, [studentSummaryGroupStudents, groupClasses, studentPackages])
-
-  const nextPrivateLessonByStudentId = useMemo(() => {
-    const today = getTodayStorageDateString()
-    const best = new Map()
-    for (const lesson of lessons) {
-      const sid = String(lesson.studentId || '').trim()
-      if (!sid) continue
-      const dateStr = getLessonStorageDateString(lesson)
-      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
-      if (dateStr < today) continue
-      const timeStr = String(lesson.time || '').trim() || '00:00'
-      const sortKey = `${dateStr} ${timeStr}`
-      const prev = best.get(sid)
-      if (!prev || sortKey < prev.sortKey) {
-        best.set(sid, { lesson, sortKey })
-      }
-    }
-    const out = new Map()
-    for (const [sid, v] of best) {
-      out.set(sid, v.lesson)
-    }
-    return out
-  }, [lessons])
-
-  const nextGroupLessonByStudentId = useMemo(() => {
-    const today = getTodayStorageDateString()
-    const activeGsRows = []
-    for (const gs of studentSummaryGroupStudents) {
-      if (!isGroupStudentRowActive(gs)) continue
-      const sid = String(gs.studentId || '').trim()
-      const gid = String(gs.groupClassId || '').trim()
-      if (!sid || !gid) continue
-      activeGsRows.push({ sid, gid, gs })
-    }
-
-    const sidSet = new Set(activeGsRows.map((r) => r.sid))
-
-    const out = new Map()
-    for (const sid of sidSet) {
-      let bestLesson = null
-      let bestKey = null
-      for (const gl of studentSummaryGroupLessons) {
-        const gid = String(gl.groupClassId || '').trim()
-        const dateStr = String(gl.date || '').trim()
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
-        if (dateStr < today) continue
-
-        let eligible = false
-        for (const row of activeGsRows) {
-          if (row.sid !== sid || row.gid !== gid) continue
-          if (isGroupStudentStartedByYmd(row.gs, dateStr)) {
-            eligible = true
-            break
-          }
-        }
-        if (!eligible) continue
-
-        const timeStr = String(gl.time || '').trim() || '00:00'
-        const sortKey = `${dateStr} ${timeStr}`
-        if (bestKey === null || sortKey < bestKey) {
-          bestKey = sortKey
-          bestLesson = gl
-        }
-      }
-      if (bestLesson) out.set(sid, bestLesson)
-    }
-    return out
-  }, [studentSummaryGroupStudents, studentSummaryGroupLessons])
-
-  const studentListTeacherOptions = useMemo(() => {
-    const set = new Set()
-    for (const s of privateStudents) {
-      const t = String(s.teacher || '').trim()
-      if (t) set.add(t)
-    }
-    return [...set].sort((a, b) => a.localeCompare(b, 'ko'))
-  }, [privateStudents])
-
-  const studentAttentionFlagsByStudentId = useMemo(() => {
-    const today = getTodayStorageDateString()
-    const limitYmd = addCalendarDaysToYmd(today, 14) || today
-
-    /** sid -> scope -> { hasActive, activeLowRem, hasExhausted } */
-    const scopeAgg = new Map()
-    const expiringBySid = new Set()
-
-    for (const p of studentPackages) {
-      const sid = String(p.studentId || '').trim()
-      if (!sid) continue
-
-      const st = String(p.status == null || String(p.status).trim() === '' ? 'active' : p.status)
-        .trim()
-        .toLowerCase()
-
-      if (st === 'active') {
-        const scope = studentPackageAttentionScope(p)
-        if (!scopeAgg.has(sid)) scopeAgg.set(sid, new Map())
-        const byScope = scopeAgg.get(sid)
-        if (!byScope.has(scope)) {
-          byScope.set(scope, {
-            hasActive: false,
-            activeLowRem: false,
-            hasExhausted: false,
-          })
-        }
-        const cell = byScope.get(scope)
-        cell.hasActive = true
-        const rem = Number(p.remainingCount ?? 0)
-        if (Number.isFinite(rem) && rem <= 1) {
-          cell.activeLowRem = true
-        }
-        const expYmd = studentPackageExpiresAtToYmd(p.expiresAt)
-        if (expYmd && /^\d{4}-\d{2}-\d{2}$/.test(expYmd) && expYmd >= today && expYmd <= limitYmd) {
-          expiringBySid.add(sid)
-        }
-      } else if (st === 'exhausted') {
-        const scope = studentPackageAttentionScope(p)
-        if (!scopeAgg.has(sid)) scopeAgg.set(sid, new Map())
-        const byScope = scopeAgg.get(sid)
-        if (!byScope.has(scope)) {
-          byScope.set(scope, {
-            hasActive: false,
-            activeLowRem: false,
-            hasExhausted: false,
-          })
-        }
-        byScope.get(scope).hasExhausted = true
-      }
-    }
-
-    const map = new Map()
-    for (const [sid, byScope] of scopeAgg) {
-      let hasRenewalNeeded = false
-      for (const cell of byScope.values()) {
-        if (cell.hasActive) {
-          if (cell.activeLowRem) hasRenewalNeeded = true
-        } else if (cell.hasExhausted) {
-          hasRenewalNeeded = true
-        }
-      }
-      map.set(sid, {
-        hasRenewalNeeded,
-        hasExpiringSoon: expiringBySid.has(sid),
-      })
-    }
-
-    for (const sid of expiringBySid) {
-      if (map.has(sid)) continue
-      map.set(sid, { hasRenewalNeeded: false, hasExpiringSoon: true })
-    }
-
-    return map
-  }, [studentPackages])
+  const studentsSectionViewModel = useStudentsSectionViewModel({
+    privateStudents,
+    studentPackages,
+    lessons,
+    studentSummaryGroupStudents,
+    studentSummaryGroupLessons,
+    groupClasses,
+    userProfile,
+  })
 
   const studentPackageModalActiveSameScopeDuplicates = useMemo(() => {
     const st = studentPackageModalStudent
@@ -1328,190 +1023,6 @@ export default function Dashboard() {
     studentPackageForm.packageType,
     studentPackageForm.groupClassId,
     studentPackages,
-  ])
-
-  const studentIdsWithLessonTodaySet = useMemo(() => {
-    const today = getTodayStorageDateString()
-    const ids = new Set()
-
-    for (const lesson of lessons) {
-      const d = getLessonStorageDateString(lesson)
-      if (d !== today) continue
-      const sid = String(lesson.studentId || '').trim()
-      if (sid) ids.add(sid)
-    }
-
-    const todayGroupClassIds = new Set()
-    for (const gl of studentSummaryGroupLessons) {
-      const ds = String(gl.date || '').trim()
-      if (ds === today && /^\d{4}-\d{2}-\d{2}$/.test(ds)) {
-        const gid = String(gl.groupClassId || '').trim()
-        if (gid) todayGroupClassIds.add(gid)
-      }
-    }
-
-    for (const gs of studentSummaryGroupStudents) {
-      if (!isGroupStudentRowActive(gs)) continue
-      if (!isGroupStudentStartedByYmd(gs, today)) continue
-      const gid = String(gs.groupClassId || '').trim()
-      if (!todayGroupClassIds.has(gid)) continue
-      const sid = String(gs.studentId || '').trim()
-      if (sid) ids.add(sid)
-    }
-
-    return ids
-  }, [lessons, studentSummaryGroupLessons, studentSummaryGroupStudents])
-
-  const studentListKpis = useMemo(() => {
-    const totalStudents = privateStudents.length
-
-    let renewalNeededCount = 0
-    let expiringSoonCount = 0
-    for (const flags of studentAttentionFlagsByStudentId.values()) {
-      if (flags?.hasRenewalNeeded) renewalNeededCount += 1
-      if (flags?.hasExpiringSoon) expiringSoonCount += 1
-    }
-
-    const activeGroupRegistrationStudentCount = activeGroupRegistrationsByStudentId.size
-    const todayLessonStudentCount = studentIdsWithLessonTodaySet.size
-
-    return {
-      totalStudents,
-      renewalNeededCount,
-      expiringSoonCount,
-      activeGroupRegistrationStudentCount,
-      todayLessonStudentCount,
-    }
-  }, [
-    privateStudents,
-    studentAttentionFlagsByStudentId,
-    activeGroupRegistrationsByStudentId,
-    studentIdsWithLessonTodaySet,
-  ])
-
-  const filteredSortedPrivateStudents = useMemo(() => {
-    const admin = userProfile?.role === 'admin'
-    const q = normalizeText(studentSearchQuery)
-    const teacherF = String(studentTeacherFilter || '').trim()
-
-    const list = sortedPrivateStudents.filter((student) => {
-      if (q) {
-        const fields = [
-          student.name,
-          student.phone,
-          student.carNumber,
-          student.learningPurpose,
-          student.note,
-        ]
-        const match = fields.some((f) =>
-          normalizeText(String(f ?? '')).includes(q)
-        )
-        if (!match) return false
-      }
-
-      if (admin && teacherF) {
-        if (normalizeText(student.teacher || '') !== normalizeText(teacherF)) {
-          return false
-        }
-      }
-
-      const regs = activeGroupRegistrationsByStudentId.get(student.id) ?? []
-      if (studentRegistrationFilter === 'has' && regs.length === 0) return false
-      if (studentRegistrationFilter === 'none' && regs.length > 0) return false
-
-      const pkgSum = studentPackageTableSummaryByStudentId.get(student.id) ?? {
-        privateCount: 0,
-        privateRemainingTotal: 0,
-        groupCount: 0,
-        groupRemainingTotal: 0,
-      }
-      const privCount = Number(pkgSum.privateCount) || 0
-      const grpCount = Number(pkgSum.groupCount) || 0
-      if (studentPrivatePackageFilter === 'has' && privCount <= 0) return false
-      if (studentPrivatePackageFilter === 'none' && privCount > 0) return false
-      if (studentGroupPackageFilter === 'has' && grpCount <= 0) return false
-      if (studentGroupPackageFilter === 'none' && grpCount > 0) return false
-
-      const nextPriv = nextPrivateLessonByStudentId.get(student.id)
-      const nextGrp = nextGroupLessonByStudentId.get(student.id)
-      const hasNext = Boolean(nextPriv || nextGrp)
-      if (studentNextLessonFilter === 'has' && !hasNext) return false
-      if (studentNextLessonFilter === 'none' && hasNext) return false
-
-      const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
-        hasRenewalNeeded: false,
-        hasExpiringSoon: false,
-      }
-      if (studentAttentionFilter === 'renewal' && !att.hasRenewalNeeded) return false
-      if (studentAttentionFilter === 'expiring' && !att.hasExpiringSoon) return false
-
-      if (studentTodayLessonOnly && !studentIdsWithLessonTodaySet.has(student.id)) {
-        return false
-      }
-
-      return true
-    })
-
-    const sorted = [...list]
-    if (studentSortKey === 'firstRegisteredDesc') {
-      sorted.sort((a, b) => {
-        const ya = studentFirstRegisteredYmdForSort(a.firstRegisteredAt) || ''
-        const yb = studentFirstRegisteredYmdForSort(b.firstRegisteredAt) || ''
-        if (ya !== yb) return yb.localeCompare(ya)
-        const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
-        if (byName !== 0) return byName
-        return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
-      })
-    } else if (studentSortKey === 'nextLessonAsc') {
-      sorted.sort((a, b) => {
-        const ka = earliestNextLessonSortKey(
-          nextPrivateLessonByStudentId.get(a.id),
-          nextGroupLessonByStudentId.get(a.id)
-        )
-        const kb = earliestNextLessonSortKey(
-          nextPrivateLessonByStudentId.get(b.id),
-          nextGroupLessonByStudentId.get(b.id)
-        )
-        if (!ka && !kb) {
-          const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
-          if (byName !== 0) return byName
-          return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
-        }
-        if (!ka) return 1
-        if (!kb) return -1
-        const c = ka.localeCompare(kb)
-        if (c !== 0) return c
-        const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
-        if (byName !== 0) return byName
-        return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
-      })
-    } else {
-      sorted.sort((a, b) => {
-        const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
-        if (byName !== 0) return byName
-        return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
-      })
-    }
-
-    return sorted
-  }, [
-    sortedPrivateStudents,
-    studentSearchQuery,
-    studentTeacherFilter,
-    studentRegistrationFilter,
-    studentPrivatePackageFilter,
-    studentGroupPackageFilter,
-    studentNextLessonFilter,
-    studentSortKey,
-    studentAttentionFilter,
-    studentTodayLessonOnly,
-    userProfile?.role,
-    activeGroupRegistrationsByStudentId,
-    studentPackageTableSummaryByStudentId,
-    nextPrivateLessonByStudentId,
-    nextGroupLessonByStudentId,
-    studentAttentionFlagsByStudentId,
-    studentIdsWithLessonTodaySet,
   ])
 
   const privateLessonEligiblePackages = useMemo(() => {
@@ -1643,109 +1154,6 @@ export default function Dashboard() {
       }).format(calendarMonth),
     [calendarMonth]
   )
-
-  const sortedGroupClasses = useMemo(() => {
-    return [...groupClasses].sort((a, b) => {
-      const byName = String(a.name || '').localeCompare(String(b.name || ''), 'ko')
-      if (byName !== 0) return byName
-      return String(a.teacher || '').localeCompare(String(b.teacher || ''), 'ko')
-    })
-  }, [groupClasses])
-
-  const sortedGroupStudentsForSelectedClass = useMemo(() => {
-    return [...groupStudents].sort((a, b) =>
-      String(a.studentName || a.name || '').localeCompare(
-        String(b.studentName || b.name || ''),
-        'ko'
-      )
-    )
-  }, [groupStudents])
-
-  const groupLessonAttendanceModalRows = useMemo(() => {
-    const modalLesson = groupLessonAttendanceModal?.lesson
-    const gid = selectedGroupClass?.id
-    if (!modalLesson?.id || !gid) return []
-
-    const lesson =
-      groupLessons.find((l) => l.id === modalLesson.id) || modalLesson
-
-    const lessonDate = String(lesson.date || '').trim()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(lessonDate)) return []
-
-    const countedRaw = lesson.countedStudentIDs
-    const countedSet = new Set(
-      Array.isArray(countedRaw) ? countedRaw.map((id) => String(id || '').trim()) : []
-    )
-
-    const eligible = groupStudents.filter((gs) => {
-      if (String(gs.groupClassId || '') !== String(gid)) return false
-      if (String(gs.status || 'active') !== 'active') return false
-      const pkgId = String(gs.packageId || '').trim()
-      if (!pkgId) return false
-      const pkg = studentPackages.find((p) => p.id === pkgId)
-      if (
-        !pkg ||
-        pkg.packageType !== 'group' ||
-        String(pkg.groupClassId || '') !== String(gid)
-      ) {
-        return false
-      }
-      const startYmd = groupStudentStartDateToYmd(gs)
-      if (startYmd && lessonDate < startYmd) return false
-      return true
-    })
-
-    return [...eligible]
-      .sort((a, b) =>
-        String(a.studentName || a.name || '').localeCompare(
-          String(b.studentName || b.name || ''),
-          'ko'
-        )
-      )
-      .map((gs) => {
-        const studentId = String(gs.studentId || '').trim()
-        const pkg = studentPackages.find((p) => p.id === gs.packageId)
-        const pkgOk = Boolean(pkg)
-
-        const title = pkgOk ? String(pkg.title || '').trim() || '—' : '—'
-        const remaining = pkgOk ? Number(pkg.remainingCount ?? 0) : 0
-        const used = pkgOk ? Number(pkg.usedCount ?? 0) : 0
-
-        const isCounted = Boolean(studentId && countedSet.has(studentId))
-
-        let statusLabel = '미차감'
-        if (isCounted) {
-          statusLabel = '차감됨'
-        } else if (remaining <= 0) {
-          statusLabel = '남은 횟수 없음'
-        }
-
-        return {
-          groupStudent: gs,
-          studentId,
-          packageDoc: pkgOk ? pkg : null,
-          packageTitle: title,
-          remainingCount: remaining,
-          usedCount: used,
-          isCounted,
-          statusLabel,
-          canDeduct: pkgOk && !isCounted && remaining > 0,
-          canUndo: pkgOk && isCounted && used > 0,
-        }
-      })
-  }, [
-    groupLessonAttendanceModal,
-    groupLessons,
-    selectedGroupClass?.id,
-    groupStudents,
-    studentPackages,
-  ])
-
-  const groupLessonForAttendanceModal = useMemo(() => {
-    const m = groupLessonAttendanceModal?.lesson
-    if (!m?.id) return null
-    return groupLessons.find((l) => l.id === m.id) || m
-  }, [groupLessonAttendanceModal, groupLessons])
 
   function getMatchedStudentId(lesson) {
   if (lesson.studentId) return lesson.studentId
@@ -2102,26 +1510,6 @@ export default function Dashboard() {
     })
     setStudentFormErrors({})
     setStudentModal({ type: 'edit', student })
-  }
-
-  async function copyStudentPhone(student) {
-    const raw = student?.phone
-    if (raw == null) return
-    const text = String(raw).trim()
-    if (!text) return
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopiedStudentPhoneId(student.id)
-      if (copiedStudentPhoneTimeoutRef.current != null) {
-        clearTimeout(copiedStudentPhoneTimeoutRef.current)
-      }
-      copiedStudentPhoneTimeoutRef.current = setTimeout(() => {
-        setCopiedStudentPhoneId(null)
-        copiedStudentPhoneTimeoutRef.current = null
-      }, 1800)
-    } catch (_err) {
-      alert('전화번호를 복사하지 못했습니다.')
-    }
   }
 
   function validateStudentFormFields(form) {
@@ -4060,7 +3448,9 @@ export default function Dashboard() {
     setPrivateLessonFormErrors(result.errors)
     if (!result.valid) return
 
-    const student = sortedPrivateStudents.find((s) => s.id === result.studentId)
+    const student = studentsSectionViewModel.sortedPrivateStudents.find(
+      (s) => s.id === result.studentId
+    )
     if (!student) {
       setPrivateLessonFormErrors((prev) => ({
         ...prev,
@@ -4284,6 +3674,258 @@ export default function Dashboard() {
     }
   }
 
+  const calendarSectionProps = {
+    month: {
+      view: 'month',
+      setCalendarMonth,
+      calendarMonthLabel,
+      calendarDays,
+      lessonsCountByDate,
+      calendarMonth,
+      selectedDate,
+      setSelectedDate,
+      setShowOnlySelectedDate,
+    },
+    lessons: {
+      view: 'lessons',
+      activeSection,
+      showOnlySelectedDate,
+      selectedDateDisplayString,
+      setShowOnlySelectedDate,
+      showPrivateLessonAddInCalendar,
+      openPrivateLessonModal,
+      loading,
+      isPrivateLessonModalSubmitting,
+      sortedPrivateStudentsLength: studentsSectionViewModel.sortedPrivateStudents.length,
+      enableLegacyLessonMigrationButton: ENABLE_LEGACY_LESSON_MIGRATION_BUTTON,
+      isAdmin,
+      handleMigrateLessons,
+      migrating,
+      displayedLessons,
+      getMatchedStudent,
+      getMatchedStudentId,
+      studentPackages,
+      handleDeductionToggle,
+      canManageAttendance,
+      busyLessonId,
+      busyPrivateLessonCrudId,
+      busyPrivateLessonAdd,
+      openPrivateLessonEditModal,
+      handleDeletePrivateLesson,
+      canEditLesson,
+      canDeleteLesson,
+    },
+  }
+
+  const studentsSectionProps = {
+    ...studentsSectionViewModel,
+    loading,
+    privateStudents,
+    isAdmin,
+    groupClasses,
+    studentPackages,
+    busyStudentId,
+    busyStudentPackageSubmit,
+    busyStudentPackageActionId,
+    canAddStudent,
+    canEditStudent,
+    canDeleteStudent,
+    openStudentAddModal,
+    openStudentEditModal,
+    handleDeleteStudent,
+    openStudentPackageModal,
+    openStudentPackageEditModal,
+    endStudentPackage,
+    openStudentPackageHistoryModal,
+    openStudentPackageReRegisterModal,
+    formatStudentFirstRegisteredForTable,
+    formatStudentPackageCellSummary,
+  }
+
+  const groupsSectionProps = {
+    canManageGroupClasses,
+    busyGroupId,
+    groupClassesLoading,
+    openGroupAddModal,
+    sortedGroupClasses,
+    setSelectedGroupClass,
+    selectedGroupClass,
+    openGroupEditModal,
+    handleDeleteGroup,
+    canAddStudent,
+    openGroupStudentAddModal,
+    busyGroupStudentId,
+    groupStudentsLoading,
+    canUseDirectLessonCreation,
+    busyGroupLessonId,
+    busyGroupLessonSeries,
+    groupLessonsLoading,
+    openGroupLessonAddModal,
+    canCreateLessonDirectly,
+    openGroupLessonSeriesModal,
+    isAdmin,
+    openGroupLessonPurgeModal,
+    busyGroupLessonPurge,
+    sortedGroupStudentsForSelectedClass,
+    handleRemoveGroupStudent,
+    sortedGroupLessonsForSelectedClass,
+    busyGroupAttendanceStudentId,
+    canManageAttendance,
+    openGroupLessonAttendanceModal,
+    canEditLesson,
+    openGroupLessonEditModal,
+    canDeleteLesson,
+    handleDeleteGroupLesson,
+    getGroupStudentDisplayName,
+  }
+
+  const studentModalProps = {
+    studentModal,
+    studentForm,
+    setStudentForm,
+    studentFormErrors,
+    isAdmin,
+    isStudentModalSubmitting,
+    closeStudentModal,
+    submitStudentModal,
+  }
+
+  const postStudentCreateModalProps = {
+    postStudentCreateModalStudent,
+    closePostStudentCreateModal,
+    selectPostStudentCreatePrivatePackage,
+    selectPostStudentCreateGroupPackage,
+  }
+
+  const studentPackageModalProps = {
+    studentPackageModalStudent,
+    studentPackageForm,
+    setStudentPackageForm,
+    studentPackageFormErrors,
+    sortedGroupClasses,
+    studentPackageModalActiveSameScopeDuplicates,
+    isStudentPackageModalSubmitting,
+    closeStudentPackageModal,
+    submitStudentPackageModal,
+  }
+
+  const studentPackageEditModalProps = {
+    studentPackageEditModalPackage,
+    studentPackageEditForm,
+    setStudentPackageEditForm,
+    studentPackageEditFormErrors,
+    busyStudentPackageActionId,
+    closeStudentPackageEditModal,
+    submitStudentPackageEditModal,
+  }
+
+  const studentPackageHistoryModalProps = {
+    studentPackageHistoryModalPackage,
+    studentPackageHistoryLoading,
+    studentPackageHistoryRows,
+    closeStudentPackageHistoryModal,
+  }
+
+  const postGroupReEnrollModalProps = {
+    postGroupReEnrollModalData,
+    postGroupReEnrollStartDate,
+    setPostGroupReEnrollStartDate,
+    postGroupReEnrollErrors,
+    closePostGroupReEnrollModal,
+    busyPostGroupReEnroll,
+    submitPostGroupReEnroll,
+  }
+
+  const groupModalProps = {
+    groupModal,
+    groupForm,
+    setGroupForm,
+    groupFormErrors,
+    closeGroupModal,
+    submitGroupModal,
+    isGroupModalSubmitting,
+  }
+
+  const groupStudentAddModalProps = {
+    selectedGroupClass,
+    isAdmin,
+    groupStudentForm,
+    setGroupStudentForm,
+    groupStudentFormErrors,
+    groupStudentEligiblePackages,
+    groupStudentSelectedPackagePreview,
+    closeGroupStudentAddModal,
+    submitGroupStudentAdd,
+    isGroupStudentModalSubmitting,
+  }
+
+  const groupLessonModalProps = {
+    groupLessonModal,
+    selectedGroupClass,
+    groupLessonForm,
+    setGroupLessonForm,
+    groupLessonFormErrors,
+    closeGroupLessonModal,
+    submitGroupLessonModal,
+    isGroupLessonModalSubmitting,
+  }
+
+  const groupLessonSeriesModalProps = {
+    selectedGroupClass,
+    groupLessonSeriesForm,
+    setGroupLessonSeriesForm,
+    groupLessonSeriesFormErrors,
+    groupLessonSeriesPlannedCount,
+    closeGroupLessonSeriesModal,
+    submitGroupLessonSeriesModal,
+    isGroupLessonSeriesSubmitting,
+  }
+
+  const groupLessonPurgeModalProps = {
+    selectedGroupClass,
+    groupLessonPurgeFromDate,
+    setGroupLessonPurgeFromDate,
+    groupLessonPurgeFormErrors,
+    closeGroupLessonPurgeModal,
+    submitGroupLessonPurgeFromDate,
+    busyGroupLessonPurge,
+  }
+
+  const groupLessonAttendanceModalProps = {
+    selectedGroupClass,
+    groupLessonForAttendanceModal,
+    groupLessonAttendanceModalRows,
+    isAdmin,
+    busyGroupAttendanceStudentId,
+    applyGroupLessonAttendanceDeduction,
+    applyGroupLessonAttendanceUndo,
+    closeGroupLessonAttendanceModal,
+  }
+
+  const privateLessonModalProps = {
+    isAdmin,
+    privateLessonForm,
+    setPrivateLessonForm,
+    privateLessonFormErrors,
+    sortedPrivateStudents: studentsSectionViewModel.sortedPrivateStudents,
+    privateLessonEligiblePackages,
+    privateLessonSelectedPackagePreview,
+    closePrivateLessonModal,
+    submitPrivateLessonModal,
+    isPrivateLessonModalSubmitting,
+  }
+
+  const privateLessonEditModalProps = {
+    privateLessonEditModal,
+    privateLessonEditForm,
+    setPrivateLessonEditForm,
+    privateLessonEditFormErrors,
+    closePrivateLessonEditModal,
+    submitPrivateLessonEditModal,
+    isPrivateLessonEditSubmitting,
+  }
+
+
   return (
     <div className="dashboard">
       <aside className="sidebar">
@@ -4351,1861 +3993,77 @@ export default function Dashboard() {
           </header>
 
           {activeSection === 'calendar' && (
-            <CalendarSection
-              view="month"
-              setCalendarMonth={setCalendarMonth}
-              calendarMonthLabel={calendarMonthLabel}
-              calendarDays={calendarDays}
-              lessonsCountByDate={lessonsCountByDate}
-              calendarMonth={calendarMonth}
-              selectedDate={selectedDate}
-              setSelectedDate={setSelectedDate}
-              setShowOnlySelectedDate={setShowOnlySelectedDate}
-            />
+            <CalendarSection {...calendarSectionProps.month} />
           )}
           {activeSection === 'students' && (
-            <StudentsSection
-              loading={loading}
-              privateStudents={privateStudents}
-              filteredSortedPrivateStudents={filteredSortedPrivateStudents}
-              studentSearchQuery={studentSearchQuery}
-              setStudentSearchQuery={setStudentSearchQuery}
-              studentTeacherFilter={studentTeacherFilter}
-              setStudentTeacherFilter={setStudentTeacherFilter}
-              studentRegistrationFilter={studentRegistrationFilter}
-              setStudentRegistrationFilter={setStudentRegistrationFilter}
-              studentPrivatePackageFilter={studentPrivatePackageFilter}
-              setStudentPrivatePackageFilter={setStudentPrivatePackageFilter}
-              studentGroupPackageFilter={studentGroupPackageFilter}
-              setStudentGroupPackageFilter={setStudentGroupPackageFilter}
-              studentNextLessonFilter={studentNextLessonFilter}
-              setStudentNextLessonFilter={setStudentNextLessonFilter}
-              studentAttentionFilter={studentAttentionFilter}
-              setStudentAttentionFilter={setStudentAttentionFilter}
-              studentSortKey={studentSortKey}
-              setStudentSortKey={setStudentSortKey}
-              studentTodayLessonOnly={studentTodayLessonOnly}
-              setStudentTodayLessonOnly={setStudentTodayLessonOnly}
-              studentListKpis={studentListKpis}
-              studentListTeacherOptions={studentListTeacherOptions}
-              isAdmin={isAdmin}
-              studentPackageTableSummaryByStudentId={studentPackageTableSummaryByStudentId}
-              studentPackagesSortedByStudentId={studentPackagesSortedByStudentId}
-              expandedStudentPackageStudentId={expandedStudentPackageStudentId}
-              setExpandedStudentPackageStudentId={setExpandedStudentPackageStudentId}
-              showAllStudentPackagesInDetail={showAllStudentPackagesInDetail}
-              setShowAllStudentPackagesInDetail={setShowAllStudentPackagesInDetail}
-              studentAttentionFlagsByStudentId={studentAttentionFlagsByStudentId}
-              activeGroupRegistrationsByStudentId={activeGroupRegistrationsByStudentId}
-              nextPrivateLessonByStudentId={nextPrivateLessonByStudentId}
-              nextGroupLessonByStudentId={nextGroupLessonByStudentId}
-              groupClasses={groupClasses}
-              studentPackages={studentPackages}
-              busyStudentId={busyStudentId}
-              busyStudentPackageSubmit={busyStudentPackageSubmit}
-              busyStudentPackageActionId={busyStudentPackageActionId}
-              canAddStudent={canAddStudent}
-              canEditStudent={canEditStudent}
-              canDeleteStudent={canDeleteStudent}
-              copiedStudentPhoneId={copiedStudentPhoneId}
-              copyStudentPhone={copyStudentPhone}
-              openStudentAddModal={openStudentAddModal}
-              openStudentEditModal={openStudentEditModal}
-              handleDeleteStudent={handleDeleteStudent}
-              openStudentPackageModal={openStudentPackageModal}
-              openStudentPackageEditModal={openStudentPackageEditModal}
-              endStudentPackage={endStudentPackage}
-              openStudentPackageHistoryModal={openStudentPackageHistoryModal}
-              openStudentPackageReRegisterModal={openStudentPackageReRegisterModal}
-              formatStudentFirstRegisteredForTable={formatStudentFirstRegisteredForTable}
-              formatStudentPackageCellSummary={formatStudentPackageCellSummary}
-            />
+            <StudentsSection {...studentsSectionProps} />
           )}
           {activeSection === 'groups' && (
-            <GroupsSection
-              canManageGroupClasses={canManageGroupClasses}
-              busyGroupId={busyGroupId}
-              groupClassesLoading={groupClassesLoading}
-              openGroupAddModal={openGroupAddModal}
-              sortedGroupClasses={sortedGroupClasses}
-              setSelectedGroupClass={setSelectedGroupClass}
-              selectedGroupClass={selectedGroupClass}
-              openGroupEditModal={openGroupEditModal}
-              handleDeleteGroup={handleDeleteGroup}
-              canAddStudent={canAddStudent}
-              openGroupStudentAddModal={openGroupStudentAddModal}
-              busyGroupStudentId={busyGroupStudentId}
-              groupStudentsLoading={groupStudentsLoading}
-              canUseDirectLessonCreation={canUseDirectLessonCreation}
-              busyGroupLessonId={busyGroupLessonId}
-              busyGroupLessonSeries={busyGroupLessonSeries}
-              groupLessonsLoading={groupLessonsLoading}
-              openGroupLessonAddModal={openGroupLessonAddModal}
-              canCreateLessonDirectly={canCreateLessonDirectly}
-              openGroupLessonSeriesModal={openGroupLessonSeriesModal}
-              isAdmin={isAdmin}
-              openGroupLessonPurgeModal={openGroupLessonPurgeModal}
-              busyGroupLessonPurge={busyGroupLessonPurge}
-              sortedGroupStudentsForSelectedClass={sortedGroupStudentsForSelectedClass}
-              handleRemoveGroupStudent={handleRemoveGroupStudent}
-              sortedGroupLessonsForSelectedClass={sortedGroupLessonsForSelectedClass}
-              busyGroupAttendanceStudentId={busyGroupAttendanceStudentId}
-              canManageAttendance={canManageAttendance}
-              openGroupLessonAttendanceModal={openGroupLessonAttendanceModal}
-              canEditLesson={canEditLesson}
-              openGroupLessonEditModal={openGroupLessonEditModal}
-              canDeleteLesson={canDeleteLesson}
-              handleDeleteGroupLesson={handleDeleteGroupLesson}
-              getGroupStudentDisplayName={getGroupStudentDisplayName}
-            />
+            <GroupsSection {...groupsSectionProps} />
           )}
 
-        <CalendarSection
-          view="lessons"
-          activeSection={activeSection}
-          showOnlySelectedDate={showOnlySelectedDate}
-          selectedDateDisplayString={selectedDateDisplayString}
-          setShowOnlySelectedDate={setShowOnlySelectedDate}
-          showPrivateLessonAddInCalendar={showPrivateLessonAddInCalendar}
-          openPrivateLessonModal={openPrivateLessonModal}
-          loading={loading}
-          isPrivateLessonModalSubmitting={isPrivateLessonModalSubmitting}
-          sortedPrivateStudentsLength={sortedPrivateStudents.length}
-          enableLegacyLessonMigrationButton={ENABLE_LEGACY_LESSON_MIGRATION_BUTTON}
-          isAdmin={isAdmin}
-          handleMigrateLessons={handleMigrateLessons}
-          migrating={migrating}
-          displayedLessons={displayedLessons}
-          getMatchedStudent={getMatchedStudent}
-          getMatchedStudentId={getMatchedStudentId}
-          studentPackages={studentPackages}
-          handleDeductionToggle={handleDeductionToggle}
-          canManageAttendance={canManageAttendance}
-          busyLessonId={busyLessonId}
-          busyPrivateLessonCrudId={busyPrivateLessonCrudId}
-          busyPrivateLessonAdd={busyPrivateLessonAdd}
-          openPrivateLessonEditModal={openPrivateLessonEditModal}
-          handleDeletePrivateLesson={handleDeletePrivateLesson}
-          canEditLesson={canEditLesson}
-          canDeleteLesson={canDeleteLesson}
-        />
+        <CalendarSection {...calendarSectionProps.lessons} />
 
       </main>
 
       {activeSection === 'students' && studentModal ? (
-        <StudentModal
-          studentModal={studentModal}
-          studentForm={studentForm}
-          setStudentForm={setStudentForm}
-          studentFormErrors={studentFormErrors}
-          isAdmin={isAdmin}
-          isStudentModalSubmitting={isStudentModalSubmitting}
-          closeStudentModal={closeStudentModal}
-          submitStudentModal={submitStudentModal}
-        />
+        <StudentModal {...studentModalProps} />
       ) : null}
       {activeSection === 'students' && isAdmin && postStudentCreateModalStudent ? (
-        <PostStudentCreateModal
-          postStudentCreateModalStudent={postStudentCreateModalStudent}
-          closePostStudentCreateModal={closePostStudentCreateModal}
-          selectPostStudentCreatePrivatePackage={selectPostStudentCreatePrivatePackage}
-          selectPostStudentCreateGroupPackage={selectPostStudentCreateGroupPackage}
-        />
+        <PostStudentCreateModal {...postStudentCreateModalProps} />
       ) : null}
       {activeSection === 'students' && studentPackageModalStudent ? (
-        <StudentPackageModal
-          studentPackageModalStudent={studentPackageModalStudent}
-          studentPackageForm={studentPackageForm}
-          setStudentPackageForm={setStudentPackageForm}
-          studentPackageFormErrors={studentPackageFormErrors}
-          sortedGroupClasses={sortedGroupClasses}
-          studentPackageModalActiveSameScopeDuplicates={studentPackageModalActiveSameScopeDuplicates}
-          isStudentPackageModalSubmitting={isStudentPackageModalSubmitting}
-          closeStudentPackageModal={closeStudentPackageModal}
-          submitStudentPackageModal={submitStudentPackageModal}
-        />
+        <StudentPackageModal {...studentPackageModalProps} />
       ) : null}
       {activeSection === 'students' && isAdmin && studentPackageEditModalPackage ? (
-        <StudentPackageEditModal
-          studentPackageEditModalPackage={studentPackageEditModalPackage}
-          studentPackageEditForm={studentPackageEditForm}
-          setStudentPackageEditForm={setStudentPackageEditForm}
-          studentPackageEditFormErrors={studentPackageEditFormErrors}
-          busyStudentPackageActionId={busyStudentPackageActionId}
-          closeStudentPackageEditModal={closeStudentPackageEditModal}
-          submitStudentPackageEditModal={submitStudentPackageEditModal}
-        />
+        <StudentPackageEditModal {...studentPackageEditModalProps} />
       ) : null}
 
       {activeSection === 'students' && isAdmin && postGroupReEnrollModalData ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="post-group-re-enroll-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1003,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closePostGroupReEnrollModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 440,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="post-group-re-enroll-modal-title"
-              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              같은 반에 이어서 등록할까요?
-            </h2>
-            <p style={{ margin: '0 0 10px 0', fontSize: 14, opacity: 0.9, lineHeight: 1.5 }}>
-              새 그룹 수강권이 만들어졌습니다. 시작일만 확인하면 같은 반에 바로 이어서 등록할 수
-              있습니다.
-            </p>
-            <p
-              style={{
-                margin: `0 0 ${
-                  postGroupReEnrollModalData.showNextLessonAutoHint ? 10 : 16
-                }px 0`,
-                fontSize: 13,
-                opacity: 0.88,
-              }}
-            >
-              학생: <strong>{postGroupReEnrollModalData.studentName || '-'}</strong>
-              {' · '}
-              반: <strong>{postGroupReEnrollModalData.groupClassName || '-'}</strong>
-              {' · '}
-              총 횟수:{' '}
-              <strong>
-                {postGroupReEnrollModalData.totalCount != null
-                  ? String(postGroupReEnrollModalData.totalCount)
-                  : '-'}
-                회
-              </strong>
-            </p>
-            {postGroupReEnrollModalData.showNextLessonAutoHint ? (
-              <p style={{ margin: '0 0 16px 0', fontSize: 12, opacity: 0.75, lineHeight: 1.45 }}>
-                다음 수업일이 자동으로 선택되었습니다.
-              </p>
-            ) : null}
-
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-              <span style={{ opacity: 0.85 }}>시작일 (기본: 다음 수업일)</span>
-              <input
-                type="date"
-                value={postGroupReEnrollStartDate}
-                onChange={(e) => setPostGroupReEnrollStartDate(e.target.value)}
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px solid #444',
-                  background: '#1f1f1f',
-                  color: 'white',
-                }}
-              />
-              {postGroupReEnrollErrors.startDate ? (
-                <span style={{ color: '#f08080', fontSize: 12 }}>
-                  {postGroupReEnrollErrors.startDate}
-                </span>
-              ) : null}
-            </label>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closePostGroupReEnrollModal}
-                disabled={busyPostGroupReEnroll}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: busyPostGroupReEnroll ? 'not-allowed' : 'pointer',
-                }}
-              >
-                나중에 하기
-              </button>
-              <button
-                type="button"
-                onClick={submitPostGroupReEnroll}
-                disabled={busyPostGroupReEnroll}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #4a6fff55',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor: busyPostGroupReEnroll ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {busyPostGroupReEnroll ? '처리 중...' : '같은 반에 등록'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <PostGroupReEnrollModal {...postGroupReEnrollModalProps} />
       ) : null}
 
       {activeSection === 'students' && isAdmin && studentPackageHistoryModalPackage ? (
-        <StudentPackageHistoryModal
-          studentPackageHistoryModalPackage={studentPackageHistoryModalPackage}
-          studentPackageHistoryLoading={studentPackageHistoryLoading}
-          studentPackageHistoryRows={studentPackageHistoryRows}
-          closeStudentPackageHistoryModal={closeStudentPackageHistoryModal}
-        />
+        <StudentPackageHistoryModal {...studentPackageHistoryModalProps} />
       ) : null}
 
       {activeSection === 'groups' && groupModal ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="group-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeGroupModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 520,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="group-modal-title"
-              style={{ margin: '0 0 10px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              {groupModal.type === 'add' ? '정규반 만들기' : '반 수정'}
-            </h2>
-
-            {groupModal.type === 'add' ? (
-              <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.72, lineHeight: 1.45 }}>
-                반 정보·수업 시간·반복 요일을 저장하면, 시작일부터 약 1년간 수업 일정이 자동으로
-                만들어집니다.
-              </p>
-            ) : null}
-
-            <div
-              style={{
-                maxHeight: 'min(72vh, 560px)',
-                overflowY: 'auto',
-                paddingRight: 4,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 14,
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.92 }}>
-                  반 정보
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                    <span style={{ opacity: 0.85 }}>반 이름</span>
-                    <input
-                      type="text"
-                      value={groupForm.name}
-                      onChange={(e) =>
-                        setGroupForm((prev) => ({ ...prev, name: e.target.value }))
-                      }
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        border: '1px solid #444',
-                        background: '#1f1f1f',
-                        color: 'white',
-                      }}
-                    />
-                    {groupFormErrors.name ? (
-                      <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.name}</span>
-                    ) : null}
-                  </label>
-
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                    <span style={{ opacity: 0.85 }}>담당 선생님</span>
-                    <input
-                      type="text"
-                      value={groupForm.teacher}
-                      onChange={(e) =>
-                        setGroupForm((prev) => ({ ...prev, teacher: e.target.value }))
-                      }
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        border: '1px solid #444',
-                        background: '#1f1f1f',
-                        color: 'white',
-                      }}
-                    />
-                    {groupFormErrors.teacher ? (
-                      <span style={{ color: '#f08080', fontSize: 12 }}>
-                        {groupFormErrors.teacher}
-                      </span>
-                    ) : null}
-                  </label>
-
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                    <span style={{ opacity: 0.85 }}>정원 (명)</span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={groupForm.maxStudents}
-                      onChange={(e) =>
-                        setGroupForm((prev) => ({ ...prev, maxStudents: e.target.value }))
-                      }
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        border: '1px solid #444',
-                        background: '#1f1f1f',
-                        color: 'white',
-                      }}
-                    />
-                    {groupFormErrors.maxStudents ? (
-                      <span style={{ color: '#f08080', fontSize: 12 }}>
-                        {groupFormErrors.maxStudents}
-                      </span>
-                    ) : null}
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.92 }}>
-                  수업 정보
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  {groupModal.type === 'add' ? (
-                    <label
-                      style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
-                    >
-                      <span style={{ opacity: 0.85 }}>수업 시작일 (자동 일정 기준)</span>
-                      <input
-                        type="date"
-                        value={groupForm.startDate}
-                        onChange={(e) =>
-                          setGroupForm((prev) => ({ ...prev, startDate: e.target.value }))
-                        }
-                        style={{
-                          padding: '10px 12px',
-                          borderRadius: 8,
-                          border: '1px solid #444',
-                          background: '#1f1f1f',
-                          color: 'white',
-                        }}
-                      />
-                      {groupFormErrors.startDate ? (
-                        <span style={{ color: '#f08080', fontSize: 12 }}>
-                          {groupFormErrors.startDate}
-                        </span>
-                      ) : null}
-                    </label>
-                  ) : null}
-
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                    <span style={{ opacity: 0.85 }}>기본 시간 (HH:mm)</span>
-                    <input
-                      type="time"
-                      value={groupForm.time}
-                      onChange={(e) =>
-                        setGroupForm((prev) => ({ ...prev, time: e.target.value }))
-                      }
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        border: '1px solid #444',
-                        background: '#1f1f1f',
-                        color: 'white',
-                      }}
-                    />
-                    {groupFormErrors.time ? (
-                      <span style={{ color: '#f08080', fontSize: 12 }}>{groupFormErrors.time}</span>
-                    ) : null}
-                  </label>
-
-                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                    <span style={{ opacity: 0.85 }}>과목</span>
-                    <input
-                      type="text"
-                      value={groupForm.subject}
-                      onChange={(e) =>
-                        setGroupForm((prev) => ({ ...prev, subject: e.target.value }))
-                      }
-                      style={{
-                        padding: '10px 12px',
-                        borderRadius: 8,
-                        border: '1px solid #444',
-                        background: '#1f1f1f',
-                        color: 'white',
-                      }}
-                    />
-                    {groupFormErrors.subject ? (
-                      <span style={{ color: '#f08080', fontSize: 12 }}>
-                        {groupFormErrors.subject}
-                      </span>
-                    ) : null}
-                  </label>
-                </div>
-              </div>
-
-              <div>
-                <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8, opacity: 0.92 }}>
-                  반복 설정
-                </div>
-                <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 8 }}>
-                  recurrenceMode: <code style={{ fontSize: 11 }}>fixedWeekdays</code> (고정 요일,
-                  읽기 전용)
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: 13 }}>
-                  <span style={{ opacity: 0.85 }}>요일 (1=일 … 7=토)</span>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px 14px' }}>
-                    {GROUP_RECURRENCE_WEEKDAY_TOGGLES.map(({ value, label }) => {
-                      const checked =
-                        Array.isArray(groupForm.weekdays) && groupForm.weekdays.includes(value)
-                      return (
-                        <label
-                          key={value}
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            cursor: 'pointer',
-                            fontSize: 13,
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => {
-                              setGroupForm((prev) => {
-                                const prevWd = Array.isArray(prev.weekdays) ? prev.weekdays : []
-                                const set = new Set(prevWd)
-                                if (set.has(value)) set.delete(value)
-                                else set.add(value)
-                                return { ...prev, weekdays: [...set].sort((a, b) => a - b) }
-                              })
-                            }}
-                          />
-                          {label}
-                        </label>
-                      )
-                    })}
-                  </div>
-                  {groupFormErrors.weekdays ? (
-                    <span style={{ color: '#f08080', fontSize: 12 }}>
-                      {groupFormErrors.weekdays}
-                    </span>
-                  ) : null}
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closeGroupModal}
-                disabled={isGroupModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: isGroupModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={submitGroupModal}
-                disabled={isGroupModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #4a6fff55',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor: isGroupModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isGroupModalSubmitting ? '저장 중...' : '저장'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <GroupModal {...groupModalProps} />
       ) : null}
 
       {activeSection === 'groups' &&
       groupStudentAddModalOpen &&
       selectedGroupClass ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="group-student-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeGroupStudentAddModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 460,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="group-student-modal-title"
-              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              학생 등록
-            </h2>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
-              {selectedGroupClass.name || '-'}
-            </p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>
-                  {isAdmin ? '이 반에서 사용할 수강권을 선택' : '이 반에서 사용할 등록을 선택'}
-                </span>
-                <select
-                  value={groupStudentForm.packageId}
-                  onChange={(e) =>
-                    setGroupStudentForm((prev) => ({
-                      ...prev,
-                      packageId: e.target.value,
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                >
-                  <option value="">
-                    {isAdmin ? '사용할 수강권을 선택하세요' : '등록을 선택하세요'}
-                  </option>
-                  {groupStudentEligiblePackages.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.studentName || '-'} — {p.title || '(제목 없음)'}
-                    </option>
-                  ))}
-                </select>
-                {groupStudentEligiblePackages.length === 0 ? (
-                  <span style={{ fontSize: 12, opacity: 0.75 }}>
-                    {isAdmin
-                      ? '이 반에 연결된 활성 그룹 수강권이 없습니다.'
-                      : '이 반에서 사용할 수 있는 남은 횟수가 있는 그룹 등록이 없습니다.'}
-                  </span>
-                ) : null}
-                {groupStudentFormErrors.packageId ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupStudentFormErrors.packageId}
-                  </span>
-                ) : null}
-              </label>
-
-              {(() => {
-                const pkg = groupStudentForm.packageId
-                  ? studentPackages.find((p) => p.id === groupStudentForm.packageId)
-                  : null
-                if (!pkg) return null
-                return (
-                  <div
-                    style={{
-                      fontSize: 13,
-                      lineHeight: 1.5,
-                      padding: 12,
-                      borderRadius: 8,
-                      border: '1px solid #333',
-                      background: '#1a1d26',
-                      opacity: 0.95,
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>
-                      {isAdmin ? '수강권 정보 (읽기 전용)' : '수업 등록 정보 (읽기 전용)'}
-                    </div>
-                    <div>studentName: {pkg.studentName ?? '-'}</div>
-                    <div>teacher: {pkg.teacher ?? '-'}</div>
-                    <div>title: {pkg.title ?? '-'}</div>
-                    <div>totalCount: {pkg.totalCount ?? '-'}</div>
-                    <div>usedCount: {pkg.usedCount ?? '-'}</div>
-                    <div>남은 횟수: {pkg.remainingCount ?? '-'}</div>
-                    <div>expiresAt: {formatGroupStudentStartDate(pkg.expiresAt)}</div>
-                    <div>amountPaid: {pkg.amountPaid ?? 0}</div>
-                    <div style={{ whiteSpace: 'pre-wrap' }}>memo: {pkg.memo || '—'}</div>
-                  </div>
-                )
-              })()}
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>시작일</span>
-                <input
-                  type="date"
-                  value={groupStudentForm.startDate}
-                  onChange={(e) =>
-                    setGroupStudentForm((prev) => ({
-                      ...prev,
-                      startDate: e.target.value,
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupStudentFormErrors.startDate ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupStudentFormErrors.startDate}
-                  </span>
-                ) : null}
-              </label>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closeGroupStudentAddModal}
-                disabled={isGroupStudentModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: isGroupStudentModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={submitGroupStudentAdd}
-                disabled={isGroupStudentModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #4a6fff55',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor: isGroupStudentModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isGroupStudentModalSubmitting ? '저장 중...' : '저장'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <GroupStudentAddModal {...groupStudentAddModalProps} />
       ) : null}
 
       {activeSection === 'groups' && groupLessonModal && selectedGroupClass ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="group-lesson-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeGroupLessonModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 420,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="group-lesson-modal-title"
-              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              {groupLessonModal.type === 'add' ? '특별 수업 추가' : '수업 수정'}
-            </h2>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
-              {selectedGroupClass.name || '-'}
-            </p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>날짜</span>
-                <input
-                  type="date"
-                  value={groupLessonForm.date}
-                  onChange={(e) =>
-                    setGroupLessonForm((prev) => ({ ...prev, date: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupLessonFormErrors.date ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>{groupLessonFormErrors.date}</span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>시간</span>
-                <input
-                  type="time"
-                  value={groupLessonForm.time}
-                  onChange={(e) =>
-                    setGroupLessonForm((prev) => ({ ...prev, time: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupLessonFormErrors.time ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>{groupLessonFormErrors.time}</span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>과목</span>
-                <input
-                  type="text"
-                  value={groupLessonForm.subject}
-                  onChange={(e) =>
-                    setGroupLessonForm((prev) => ({ ...prev, subject: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupLessonFormErrors.subject ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupLessonFormErrors.subject}
-                  </span>
-                ) : null}
-              </label>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closeGroupLessonModal}
-                disabled={isGroupLessonModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: isGroupLessonModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={submitGroupLessonModal}
-                disabled={isGroupLessonModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #4a6fff55',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor: isGroupLessonModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isGroupLessonModalSubmitting ? '저장 중...' : '저장'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <GroupLessonModal {...groupLessonModalProps} />
       ) : null}
 
       {activeSection === 'groups' && groupLessonSeriesModalOpen && selectedGroupClass ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="group-lesson-series-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeGroupLessonSeriesModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 460,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="group-lesson-series-modal-title"
-              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              추가 일정 생성
-            </h2>
-            <p style={{ margin: '0 0 4px 0', fontSize: 12, opacity: 0.62, lineHeight: 1.4 }}>
-              관리자 보조: 기간을 지정해 같은 반 규칙으로 일정을 더 만듭니다.
-            </p>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
-              {selectedGroupClass.name || '-'}
-            </p>
-
-            <div
-              style={{
-                fontSize: 13,
-                lineHeight: 1.5,
-                padding: 12,
-                borderRadius: 8,
-                border: '1px solid #333',
-                background: '#1a1d26',
-                marginBottom: 12,
-                opacity: 0.95,
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>이 반의 수업 정보 (읽기 전용)</div>
-              <div>시간: {selectedGroupClass.time || '—'}</div>
-              <div>과목: {selectedGroupClass.subject || '—'}</div>
-              <div>
-                요일:{' '}
-                {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>시작일</span>
-                <input
-                  type="date"
-                  value={groupLessonSeriesForm.startDate}
-                  onChange={(e) =>
-                    setGroupLessonSeriesForm((prev) => ({
-                      ...prev,
-                      startDate: e.target.value,
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupLessonSeriesFormErrors.startDate ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupLessonSeriesFormErrors.startDate}
-                  </span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>종료일</span>
-                <input
-                  type="date"
-                  value={groupLessonSeriesForm.endDate}
-                  onChange={(e) =>
-                    setGroupLessonSeriesForm((prev) => ({
-                      ...prev,
-                      endDate: e.target.value,
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {groupLessonSeriesFormErrors.endDate ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {groupLessonSeriesFormErrors.endDate}
-                  </span>
-                ) : null}
-              </label>
-
-              {groupLessonSeriesPlannedCount != null ? (
-                <p style={{ margin: 0, fontSize: 12, opacity: 0.8 }}>
-                  이 기간·요일 기준 생성 후보: <strong>{groupLessonSeriesPlannedCount}</strong>건
-                  (이미 같은 날짜·시간 수업이 있으면 건너뜁니다)
-                </p>
-              ) : null}
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closeGroupLessonSeriesModal}
-                disabled={isGroupLessonSeriesSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: isGroupLessonSeriesSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={submitGroupLessonSeriesModal}
-                disabled={isGroupLessonSeriesSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #4a6fff55',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor: isGroupLessonSeriesSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isGroupLessonSeriesSubmitting ? '생성 중...' : '일정 생성'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <GroupLessonSeriesModal {...groupLessonSeriesModalProps} />
       ) : null}
 
       {activeSection === 'groups' && groupLessonPurgeModalOpen && selectedGroupClass ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="group-lesson-purge-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeGroupLessonPurgeModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 420,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="group-lesson-purge-modal-title"
-              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              이후 일정 삭제
-            </h2>
-            <p style={{ margin: '0 0 10px 0', fontSize: 13, opacity: 0.85 }}>
-              {selectedGroupClass.name || '-'}
-            </p>
-            <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.68, lineHeight: 1.45 }}>
-              기준일 이후(당일 포함)의 이 반 수업 일정만 삭제합니다. 기준일보다 이른 날짜 일정은
-              그대로 둡니다.
-            </p>
-            <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 13 }}>
-              <span style={{ opacity: 0.85 }}>삭제 기준일</span>
-              <input
-                type="date"
-                value={groupLessonPurgeFromDate}
-                onChange={(e) =>
-                  setGroupLessonPurgeFromDate(e.target.value)
-                }
-                disabled={busyGroupLessonPurge}
-                style={{
-                  padding: '10px 12px',
-                  borderRadius: 8,
-                  border: '1px solid #444',
-                  background: '#1f1f1f',
-                  color: 'white',
-                }}
-              />
-              {groupLessonPurgeFormErrors.purgeDate ? (
-                <span style={{ color: '#f08080', fontSize: 12 }}>
-                  {groupLessonPurgeFormErrors.purgeDate}
-                </span>
-              ) : null}
-            </label>
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closeGroupLessonPurgeModal}
-                disabled={busyGroupLessonPurge}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: busyGroupLessonPurge ? 'not-allowed' : 'pointer',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={submitGroupLessonPurgeFromDate}
-                disabled={busyGroupLessonPurge}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #664444',
-                  background: '#4a2a2a',
-                  color: 'white',
-                  cursor: busyGroupLessonPurge ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {busyGroupLessonPurge ? '삭제 중...' : '삭제 실행'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <GroupLessonPurgeModal {...groupLessonPurgeModalProps} />
       ) : null}
 
       {activeSection === 'groups' &&
       groupLessonAttendanceModal &&
       selectedGroupClass &&
       groupLessonForAttendanceModal ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="group-lesson-attendance-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closeGroupLessonAttendanceModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 640,
-              maxHeight: 'min(85vh, 720px)',
-              overflow: 'auto',
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="group-lesson-attendance-modal-title"
-              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              출결 / 차감
-            </h2>
-            <p style={{ margin: '0 0 6px 0', fontSize: 13, opacity: 0.88 }}>
-              {selectedGroupClass.name || '-'}
-            </p>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.78 }}>
-              {groupLessonForAttendanceModal.date || '-'} · {groupLessonForAttendanceModal.time || '-'} ·{' '}
-              {groupLessonForAttendanceModal.subject || '-'}
-            </p>
-
-            {groupLessonAttendanceModalRows.length === 0 ? (
-              <p style={{ margin: 0, fontSize: 13, opacity: 0.75 }}>
-                이 수업에 차감할 수 있는 학생이 없습니다. (
-                {isAdmin
-                  ? '반 시작일·상태·수강권을 확인하세요.'
-                  : '반 시작일·상태·남은 횟수를 확인하세요.'}
-                )
-              </p>
-            ) : (
-              <div className="activity-table">
-                <div
-                  className="table-head"
-                  style={{
-                    gridTemplateColumns: '1.1fr 1fr 0.55fr 0.9fr minmax(150px, auto)',
-                  }}
-                >
-                  <span>학생</span>
-                  <span>{isAdmin ? '수강권' : '등록명'}</span>
-                  <span>남은 횟수</span>
-                  <span>상태</span>
-                  <span>작업</span>
-                </div>
-                {groupLessonAttendanceModalRows.map((row) => {
-                  const gs = row.groupStudent
-                  const lessonRef = groupLessonForAttendanceModal
-                  const rowBusy =
-                    busyGroupAttendanceStudentId === `${lessonRef.id}__${gs.id}`
-                  return (
-                    <div
-                      key={gs.id}
-                      className="table-row"
-                      style={{
-                        gridTemplateColumns: '1.1fr 1fr 0.55fr 0.9fr minmax(150px, auto)',
-                      }}
-                    >
-                      <span>{row.groupStudent.studentName || row.groupStudent.name || '-'}</span>
-                      <span style={{ wordBreak: 'break-word' }}>{row.packageTitle}</span>
-                      <span>
-                        {row.remainingCount != null ? row.remainingCount : '—'}
-                      </span>
-                      <span>{row.statusLabel}</span>
-                      <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {!row.isCounted && row.canDeduct ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              applyGroupLessonAttendanceDeduction(gs, lessonRef)
-                            }
-                            disabled={rowBusy}
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 8,
-                              border: '1px solid #335533',
-                              background: !rowBusy ? '#2a3d2a' : '#2a2a2a',
-                              color: 'white',
-                              cursor: rowBusy ? 'not-allowed' : 'pointer',
-                              fontSize: 12,
-                            }}
-                          >
-                            {rowBusy ? '처리 중' : '차감'}
-                          </button>
-                        ) : null}
-                        {row.isCounted ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              applyGroupLessonAttendanceUndo(gs, lessonRef)
-                            }
-                            disabled={!row.canUndo || rowBusy}
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 8,
-                              border: '1px solid #554433',
-                              background: row.canUndo && !rowBusy ? '#3d352a' : '#2a2a2a',
-                              color: 'white',
-                              cursor: !row.canUndo || rowBusy ? 'not-allowed' : 'pointer',
-                              fontSize: 12,
-                            }}
-                          >
-                            {rowBusy ? '처리 중' : '차감복구'}
-                          </button>
-                        ) : null}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                marginTop: 18,
-              }}
-            >
-              <button
-                type="button"
-                onClick={closeGroupLessonAttendanceModal}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: 'pointer',
-                }}
-              >
-                닫기
-              </button>
-            </div>
-          </div>
-        </div>
+        <GroupLessonAttendanceModal {...groupLessonAttendanceModalProps} />
       ) : null}
 
       {activeSection === 'calendar' && privateLessonModalOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="private-lesson-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closePrivateLessonModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 420,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="private-lesson-modal-title"
-              style={{ margin: '0 0 16px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              개인 수업 추가
-            </h2>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>학생</span>
-                <select
-                  value={privateLessonForm.studentId}
-                  onChange={(e) =>
-                    setPrivateLessonForm((prev) => ({
-                      ...prev,
-                      studentId: e.target.value,
-                      packageId: '',
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                >
-                  <option value="">선택</option>
-                  {sortedPrivateStudents.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name || '-'}
-                      {isAdmin && s.teacher ? ` (${s.teacher})` : ''}
-                    </option>
-                  ))}
-                </select>
-                {privateLessonFormErrors.studentId ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {privateLessonFormErrors.studentId}
-                  </span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>
-                  {isAdmin ? '사용할 개인 수강권을 선택' : '사용할 수업을 선택'}
-                </span>
-                <select
-                  value={privateLessonForm.packageId}
-                  onChange={(e) =>
-                    setPrivateLessonForm((prev) => ({ ...prev, packageId: e.target.value }))
-                  }
-                  disabled={!String(privateLessonForm.studentId || '').trim()}
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                    opacity: String(privateLessonForm.studentId || '').trim() ? 1 : 0.5,
-                  }}
-                >
-                  <option value="">
-                    {String(privateLessonForm.studentId || '').trim()
-                      ? isAdmin
-                        ? '수강권 선택'
-                        : '수업 선택'
-                      : '먼저 학생을 선택하세요'}
-                  </option>
-                  {privateLessonEligiblePackages.map((pkg) => (
-                    <option key={pkg.id} value={pkg.id}>
-                      {String(pkg.title || '').trim() || '—'} (남은 횟수{' '}
-                      {Number(pkg.remainingCount ?? 0)})
-                    </option>
-                  ))}
-                </select>
-                {privateLessonFormErrors.packageId ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {privateLessonFormErrors.packageId}
-                  </span>
-                ) : null}
-              </label>
-
-              {privateLessonSelectedPackagePreview ? (
-                <div
-                  style={{
-                    padding: 12,
-                    borderRadius: 8,
-                    border: '1px solid #333',
-                    background: '#1a1d26',
-                    fontSize: 12,
-                    lineHeight: 1.5,
-                    opacity: 0.95,
-                  }}
-                >
-                  <div style={{ marginBottom: 6, fontWeight: 600, opacity: 0.9 }}>
-                    {isAdmin ? '선택 수강권' : '선택 정보'}
-                  </div>
-                  <div>
-                    <span style={{ opacity: 0.7 }}>title: </span>
-                    {String(privateLessonSelectedPackagePreview.title || '').trim() || '—'}
-                  </div>
-                  <div>
-                    <span style={{ opacity: 0.7 }}>totalCount: </span>
-                    {privateLessonSelectedPackagePreview.totalCount ?? '—'}
-                  </div>
-                  <div>
-                    <span style={{ opacity: 0.7 }}>usedCount: </span>
-                    {privateLessonSelectedPackagePreview.usedCount ?? '—'}
-                  </div>
-                  <div>
-                    <span style={{ opacity: 0.7 }}>남은 횟수: </span>
-                    {privateLessonSelectedPackagePreview.remainingCount ?? '—'}
-                  </div>
-                  <div>
-                    <span style={{ opacity: 0.7 }}>expiresAt: </span>
-                    {formatGroupStudentStartDate(privateLessonSelectedPackagePreview.expiresAt) ||
-                      '—'}
-                  </div>
-                  <div>
-                    <span style={{ opacity: 0.7 }}>amountPaid: </span>
-                    {privateLessonSelectedPackagePreview.amountPaid ?? '—'}
-                  </div>
-                  <div>
-                    <span style={{ opacity: 0.7 }}>memo: </span>
-                    {String(privateLessonSelectedPackagePreview.memo || '').trim() || '—'}
-                  </div>
-                </div>
-              ) : null}
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>날짜 (선택한 캘린더 날짜)</span>
-                <input
-                  type="date"
-                  value={privateLessonForm.date}
-                  readOnly
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#252525',
-                    color: 'white',
-                    cursor: 'default',
-                  }}
-                />
-                {privateLessonFormErrors.date ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>{privateLessonFormErrors.date}</span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>시간</span>
-                <input
-                  type="time"
-                  value={privateLessonForm.time}
-                  onChange={(e) =>
-                    setPrivateLessonForm((prev) => ({ ...prev, time: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {privateLessonFormErrors.time ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>{privateLessonFormErrors.time}</span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>과목</span>
-                <input
-                  type="text"
-                  value={privateLessonForm.subject}
-                  onChange={(e) =>
-                    setPrivateLessonForm((prev) => ({ ...prev, subject: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {privateLessonFormErrors.subject ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {privateLessonFormErrors.subject}
-                  </span>
-                ) : null}
-              </label>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closePrivateLessonModal}
-                disabled={isPrivateLessonModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: isPrivateLessonModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={submitPrivateLessonModal}
-                disabled={isPrivateLessonModalSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #4a6fff55',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor: isPrivateLessonModalSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isPrivateLessonModalSubmitting ? '저장 중...' : '저장'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <PrivateLessonModal {...privateLessonModalProps} />
       ) : null}
 
       {activeSection === 'calendar' && privateLessonEditModal ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="private-lesson-edit-modal-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0, 0, 0, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) closePrivateLessonEditModal()
-          }}
-        >
-          <div
-            style={{
-              width: '100%',
-              maxWidth: 420,
-              background: '#151922',
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              padding: 20,
-              color: 'white',
-              boxSizing: 'border-box',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2
-              id="private-lesson-edit-modal-title"
-              style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
-            >
-              개인 수업 수정
-            </h2>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
-              {getStudentName(privateLessonEditModal.lesson)} ·{' '}
-              {getTeacherName(privateLessonEditModal.lesson)}
-            </p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>날짜</span>
-                <input
-                  type="date"
-                  value={privateLessonEditForm.date}
-                  onChange={(e) =>
-                    setPrivateLessonEditForm((prev) => ({ ...prev, date: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {privateLessonEditFormErrors.date ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {privateLessonEditFormErrors.date}
-                  </span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>시간</span>
-                <input
-                  type="time"
-                  value={privateLessonEditForm.time}
-                  onChange={(e) =>
-                    setPrivateLessonEditForm((prev) => ({ ...prev, time: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {privateLessonEditFormErrors.time ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {privateLessonEditFormErrors.time}
-                  </span>
-                ) : null}
-              </label>
-
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>과목</span>
-                <input
-                  type="text"
-                  value={privateLessonEditForm.subject}
-                  onChange={(e) =>
-                    setPrivateLessonEditForm((prev) => ({ ...prev, subject: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {privateLessonEditFormErrors.subject ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {privateLessonEditFormErrors.subject}
-                  </span>
-                ) : null}
-              </label>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 8,
-                marginTop: 20,
-                flexWrap: 'wrap',
-              }}
-            >
-              <button
-                type="button"
-                onClick={closePrivateLessonEditModal}
-                disabled={isPrivateLessonEditSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #555',
-                  background: 'transparent',
-                  color: 'white',
-                  cursor: isPrivateLessonEditSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                onClick={submitPrivateLessonEditModal}
-                disabled={isPrivateLessonEditSubmitting}
-                style={{
-                  padding: '10px 16px',
-                  borderRadius: 8,
-                  border: '1px solid #4a6fff55',
-                  background: '#1f2a44',
-                  color: 'white',
-                  cursor: isPrivateLessonEditSubmitting ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isPrivateLessonEditSubmitting ? '저장 중...' : '저장'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <PrivateLessonEditModal {...privateLessonEditModalProps} />
       ) : null}
+
     </div>
   )
 }
