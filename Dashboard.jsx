@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import {
   addDoc,
@@ -25,8 +25,25 @@ import { useAuth } from './AuthContext'
 
 const SCHOOL_TIME_ZONE = 'Asia/Seoul'
 
+/** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
+const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
+
 function normalizeText(value = '') {
   return String(value).trim().toLowerCase()
+}
+
+/** tel: 링크용 — 숫자와 선행 +만 유지 */
+function sanitizePhoneForTel(phone) {
+  if (phone == null) return ''
+  const s = String(phone).trim()
+  if (!s) return ''
+  let out = ''
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch >= '0' && ch <= '9') out += ch
+    else if (ch === '+' && out.length === 0) out += ch
+  }
+  return out
 }
 
 function makeStudentKey(name = '', teacher = '') {
@@ -318,7 +335,7 @@ function formatStudentPackageDetailTypeLabel(packageType) {
   if (packageType === 'private') return '개인'
   if (packageType === 'group') return '그룹'
   if (packageType === 'openGroup') return '오픈 그룹'
-  return packageType != null && String(packageType) !== '' ? String(packageType) : '-'
+  return packageType != null && String(packageType).trim() !== '' ? '기타' : '-'
 }
 
 function formatStudentPackageDetailStatusLabel(status) {
@@ -807,6 +824,8 @@ export default function Dashboard() {
     useState(null)
   const [showAllStudentPackagesInDetail, setShowAllStudentPackagesInDetail] =
     useState(false)
+  const [copiedStudentPhoneId, setCopiedStudentPhoneId] = useState(null)
+  const copiedStudentPhoneTimeoutRef = useRef(null)
   const [studentPackageHistoryModalPackage, setStudentPackageHistoryModalPackage] =
     useState(null)
   const [studentPackageHistoryRows, setStudentPackageHistoryRows] = useState([])
@@ -820,6 +839,14 @@ export default function Dashboard() {
   const [studentSortKey, setStudentSortKey] = useState('name')
   const [studentAttentionFilter, setStudentAttentionFilter] = useState('all')
   const [studentTodayLessonOnly, setStudentTodayLessonOnly] = useState(false)
+
+  useEffect(() => {
+    return () => {
+      if (copiedStudentPhoneTimeoutRef.current != null) {
+        clearTimeout(copiedStudentPhoneTimeoutRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (!user?.uid) return
@@ -2208,7 +2235,7 @@ export default function Dashboard() {
 
   async function handleMigrateLessons() {
     if (!isAdmin) {
-      alert('관리자만 lesson migration을 실행할 수 있습니다.')
+      alert('관리자만 예전 수업 데이터 변환을 실행할 수 있습니다.')
       return
     }
 
@@ -2256,15 +2283,17 @@ export default function Dashboard() {
       })
 
       if (changedCount === 0) {
-        alert('변환할 lessons가 없습니다. 이미 startAt / studentId가 들어가 있을 가능성이 큽니다.')
+        alert(
+          '변환할 수업이 없습니다. 이미 날짜·시간과 학생 연결이 맞춰져 있을 수 있습니다.'
+        )
         return
       }
 
       await batch.commit()
-      alert(`lessons ${changedCount}개를 변환했습니다.`)
+      alert(`수업 ${changedCount}건의 정보를 보완했습니다.`)
     } catch (error) {
       console.error('lesson migration 실패:', error)
-      alert(`lesson migration 실패: ${error.message}`)
+      alert(`수업 데이터 변환에 실패했습니다: ${error.message}`)
     } finally {
       setMigrating(false)
     }
@@ -2283,7 +2312,9 @@ export default function Dashboard() {
     const resolvedStudentId = String(lesson.studentId || '').trim() || studentId || ''
 
     if (!usePackagePath && !studentId) {
-      alert('이 lesson은 studentId 연결이 없습니다. 먼저 "기존 lessons를 Timestamp + studentId로 변환"을 눌러주세요.')
+      alert(
+        '이 수업은 학생 정보와 연결되어 있지 않아 차감할 수 없습니다. 관리자에게 문의해 주세요.'
+      )
       return
     }
 
@@ -2324,7 +2355,9 @@ export default function Dashboard() {
           return
         }
         if (!resolvedStudentId) {
-          alert('이 lesson은 studentId 연결이 없습니다. 먼저 "기존 lessons를 Timestamp + studentId로 변환"을 눌러주세요.')
+          alert(
+            '이 수업은 학생 정보와 연결되어 있지 않아 차감할 수 없습니다. 관리자에게 문의해 주세요.'
+          )
           return
         }
         const pkgSid = String(selectedPackage.studentId || '').trim()
@@ -2535,6 +2568,26 @@ export default function Dashboard() {
     setStudentModal({ type: 'edit', student })
   }
 
+  async function copyStudentPhone(student) {
+    const raw = student?.phone
+    if (raw == null) return
+    const text = String(raw).trim()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedStudentPhoneId(student.id)
+      if (copiedStudentPhoneTimeoutRef.current != null) {
+        clearTimeout(copiedStudentPhoneTimeoutRef.current)
+      }
+      copiedStudentPhoneTimeoutRef.current = setTimeout(() => {
+        setCopiedStudentPhoneId(null)
+        copiedStudentPhoneTimeoutRef.current = null
+      }, 1800)
+    } catch (_err) {
+      alert('전화번호를 복사하지 못했습니다.')
+    }
+  }
+
   function validateStudentFormFields(form) {
     const errors = {}
     const name = form.name.trim()
@@ -2732,7 +2785,7 @@ export default function Dashboard() {
     if (!pkg?.id) return
     const sid = String(pkg.studentId || '').trim()
     if (!sid) {
-      alert('수강권에 연결된 학생 ID가 없습니다.')
+      alert('수강권에 연결된 학생 정보가 없습니다.')
       return
     }
     const pt = pkg.packageType
@@ -3680,9 +3733,7 @@ export default function Dashboard() {
     const studentId = String(selectedPackage.studentId || '').trim()
     if (!studentId) {
       alert(
-        adminUi
-          ? '수강권에 학생 연결(studentId)이 없습니다.'
-          : '등록에 학생 연결이 없습니다.'
+        adminUi ? '수강권에 연결된 학생이 없습니다.' : '등록에 학생 연결이 없습니다.'
       )
       return
     }
@@ -4107,7 +4158,7 @@ export default function Dashboard() {
 
     const studentId = String(groupStudentRow.studentId || '').trim()
     if (!studentId) {
-      alert('studentId가 없습니다.')
+      alert('반 등록에 학생 정보가 없습니다.')
       return
     }
 
@@ -4235,7 +4286,7 @@ export default function Dashboard() {
 
     const studentId = String(groupStudentRow.studentId || '').trim()
     if (!studentId) {
-      alert('studentId가 없습니다.')
+      alert('반 등록에 학생 정보가 없습니다.')
       return
     }
 
@@ -4707,8 +4758,8 @@ export default function Dashboard() {
 
         <nav className="sidebar-nav">
   {[
-    { key: 'calendar', label: 'Calendar' },
-    { key: 'students', label: 'Students' },
+    { key: 'calendar', label: '캘린더' },
+    { key: 'students', label: '학생 관리' },
     { key: 'groups', label: '반 관리' },
   ].map((item) => (
     <button
@@ -4740,7 +4791,7 @@ export default function Dashboard() {
           </div>
 
           <button className="btn-signout" onClick={handleSignOut}>
-            Sign Out
+            로그아웃
           </button>
         </div>
       </aside>
@@ -4750,15 +4801,15 @@ export default function Dashboard() {
           <div>
           <h1 className="page-title">
   {activeSection === 'calendar'
-    ? 'Calendar'
+    ? '캘린더'
     : activeSection === 'students'
-    ? 'Students'
+    ? '학생 관리'
     : '반 관리'}
 </h1>
             <p className="page-sub">
               {userProfile?.teacherName
                 ? `${userProfile.teacherName} 님 환영합니다`
-                : `Welcome back, ${user?.email || ''}`}
+                : `${user?.email || '사용자'} 님, 환영합니다`}
             </p>
           </div>
           </header>
@@ -4894,7 +4945,7 @@ export default function Dashboard() {
       }}
     >
       <h2 className="section-title" style={{ margin: 0 }}>
-        Student Management
+        학생 관리
       </h2>
       {canAddStudent ? (
         <button
@@ -5201,7 +5252,7 @@ export default function Dashboard() {
           className="table-head"
           style={{
             gridTemplateColumns:
-              'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(200px, auto)',
+              'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(240px, auto)',
           }}
         >
           <span>이름</span>
@@ -5215,6 +5266,11 @@ export default function Dashboard() {
 
         {filteredSortedPrivateStudents.map((student) => {
           const rowBusy = busyStudentId === student.id
+          const studentPhoneTrim =
+            student.phone != null && String(student.phone).trim()
+              ? String(student.phone).trim()
+              : ''
+          const phoneTel = sanitizePhoneForTel(student.phone)
           const pkgSum = studentPackageTableSummaryByStudentId.get(student.id) ?? {
             privateCount: 0,
             privateRemainingTotal: 0,
@@ -5234,7 +5290,7 @@ export default function Dashboard() {
               className="table-row"
               style={{
                 gridTemplateColumns:
-                  'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(200px, auto)',
+                  'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(240px, auto)',
               }}
             >
               <span style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
@@ -5277,7 +5333,9 @@ export default function Dashboard() {
                 ) : null}
               </span>
               <span>{student.teacher || '-'}</span>
-              <span>{student.phone != null && String(student.phone).trim() ? String(student.phone).trim() : '-'}</span>
+              <span>
+                {studentPhoneTrim ? studentPhoneTrim : '-'}
+              </span>
               <span>{formatStudentFirstRegisteredForTable(student.firstRegisteredAt)}</span>
               <span>
                 {formatStudentPackageCellSummary(
@@ -5291,7 +5349,48 @@ export default function Dashboard() {
                   pkgSum.groupRemainingTotal
                 )}
               </span>
-              <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                {studentPhoneTrim ? (
+                  <button
+                    type="button"
+                    onClick={() => copyStudentPhone(student)}
+                    disabled={rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #3a4a66',
+                      background:
+                        copiedStudentPhoneId === student.id ? 'rgba(90, 127, 208, 0.35)' : '#1a2338',
+                      color: 'white',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit
+                          ? 'not-allowed'
+                          : 'pointer',
+                      fontSize: 12,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {copiedStudentPhoneId === student.id ? '복사됨' : '복사'}
+                  </button>
+                ) : null}
+                {phoneTel ? (
+                  <a
+                    href={`tel:${phoneTel}`}
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #335544',
+                      background: '#243528',
+                      color: 'white',
+                      fontSize: 12,
+                      textDecoration: 'none',
+                      whiteSpace: 'nowrap',
+                      display: 'inline-block',
+                    }}
+                  >
+                    전화
+                  </a>
+                ) : null}
                 <button
                   type="button"
                   onClick={() =>
@@ -6446,10 +6545,12 @@ export default function Dashboard() {
       </button>
     ) : null}
 
-    {isAdmin ? (
+    {ENABLE_LEGACY_LESSON_MIGRATION_BUTTON && isAdmin ? (
       <button
+        type="button"
         onClick={handleMigrateLessons}
         disabled={migrating}
+        title="예전 수업 데이터 일괄 보정(관리자 전용). 상단 코드의 ENABLE_LEGACY_LESSON_MIGRATION_BUTTON 참고."
         style={{
           padding: '10px 14px',
           borderRadius: 10,
@@ -6459,7 +6560,7 @@ export default function Dashboard() {
           cursor: migrating ? 'not-allowed' : 'pointer',
         }}
       >
-        {migrating ? '변환 중...' : '기존 lessons를 Timestamp + studentId로 변환'}
+        {migrating ? '변환 중...' : '예전 수업 데이터 일괄 보정'}
       </button>
     ) : null}
   </div>
@@ -6641,7 +6742,7 @@ export default function Dashboard() {
               {studentModal.type === 'add' ? '학생 추가' : '학생 수정'}
             </h2>
             <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.78, lineHeight: 1.45 }}>
-              기본 정보를 입력해 주세요. 담당 선생님은 시스템 연동을 위해 함께 저장됩니다.
+              학생의 기본 정보를 입력해 주세요.
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -6668,7 +6769,7 @@ export default function Dashboard() {
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>선생님 (호환용)</span>
+                <span style={{ opacity: 0.85 }}>담당 선생님</span>
                 <input
                   type="text"
                   value={studentForm.teacher}
