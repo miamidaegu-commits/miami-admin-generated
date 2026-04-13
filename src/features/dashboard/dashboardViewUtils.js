@@ -1,0 +1,526 @@
+export const SCHOOL_TIME_ZONE = 'Asia/Seoul'
+export function normalizeText(value = '') {
+  return String(value).trim().toLowerCase()
+}
+
+/** tel: 링크용 — 숫자와 선행 +만 유지 */
+export function sanitizePhoneForTel(phone) {
+  if (phone == null) return ''
+  const s = String(phone).trim()
+  if (!s) return ''
+  let out = ''
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch >= '0' && ch <= '9') out += ch
+    else if (ch === '+' && out.length === 0) out += ch
+  }
+  return out
+}
+
+export function makeStudentKey(name = '', teacher = '') {
+  return `${normalizeText(name)}__${normalizeText(teacher)}`
+}
+
+export function parseLegacyLessonToDate(dateStr, timeStr = '00:00') {
+  if (!dateStr) return null
+
+  const [year, month, day] = String(dateStr).split('-').map(Number)
+  const [hour = 0, minute = 0] = String(timeStr || '00:00').split(':').map(Number)
+
+  if (!year || !month || !day) return null
+
+  // 현재 브라우저 로컬 시간을 기준으로 Date 생성
+  return new Date(year, month - 1, day, hour || 0, minute || 0, 0, 0)
+}
+
+export function getLessonDate(lesson) {
+  if (lesson?.startAt?.toDate) return lesson.startAt.toDate()
+  if (lesson?.startAt?.seconds != null) return new Date(lesson.startAt.seconds * 1000)
+  return parseLegacyLessonToDate(lesson?.date, lesson?.time)
+}
+
+export function formatDate(date) {
+  if (!date) return '-'
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+  }).format(date)
+}
+
+export function formatTime(date) {
+  if (!date) return '-'
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: SCHOOL_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
+}
+
+export function getStudentName(lesson) {
+  return lesson.studentName || lesson.student || '-'
+}
+
+export function getTeacherName(lesson) {
+  return lesson.teacherName || lesson.teacher || '-'
+}
+
+export function getTodayStorageDateString() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date())
+
+  const year = parts.find((p) => p.type === 'year')?.value
+  const month = parts.find((p) => p.type === 'month')?.value
+  const day = parts.find((p) => p.type === 'day')?.value
+
+  return `${year}-${month}-${day}`
+}
+
+export function getLessonStorageDateString(lesson) {
+  if (lesson?.date) return lesson.date
+
+  const d = getLessonDate(lesson)
+  if (!d) return ''
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d)
+
+  const year = parts.find((p) => p.type === 'year')?.value
+  const month = parts.find((p) => p.type === 'month')?.value
+  const day = parts.find((p) => p.type === 'day')?.value
+
+  return `${year}-${month}-${day}`
+}
+
+export function privateLessonNextSortKey(lesson) {
+  if (!lesson) return null
+  const d = getLessonStorageDateString(lesson)
+  if (!d || !/^\d{4}-\d{2}-\d{2}$/.test(d)) return null
+  const t = String(lesson.time || '').trim() || '00:00'
+  return `${d} ${t}`
+}
+
+export function groupLessonNextSortKey(gl) {
+  if (!gl) return null
+  const dateStr = String(gl.date || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null
+  const t = String(gl.time || '').trim() || '00:00'
+  return `${dateStr} ${t}`
+}
+
+export function earliestNextLessonSortKey(privateLesson, groupLesson) {
+  const a = privateLessonNextSortKey(privateLesson)
+  const b = groupLessonNextSortKey(groupLesson)
+  if (!a && !b) return null
+  if (!a) return b
+  if (!b) return a
+  return a < b ? a : b
+}
+
+export function lessonDateInputValue(lesson) {
+  const s = getLessonStorageDateString(lesson)
+  if (s && /^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  return ''
+}
+
+export function lessonTimeInputValue(lesson) {
+  const t = String(lesson?.time || '').trim()
+  if (/^\d{2}:\d{2}$/.test(t)) return t
+  const d = getLessonDate(lesson)
+  if (!d) return ''
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+export function validateLessonDateTimeSubject(form) {
+  const errors = {}
+  const date = String(form.date || '').trim()
+  const time = String(form.time || '').trim()
+  const subject = String(form.subject || '').trim()
+
+  if (!date) errors.date = '날짜를 선택해주세요.'
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.date = '날짜 형식이 올바르지 않습니다.'
+  if (!time) errors.time = '시간을 선택해주세요.'
+  if (time && !/^\d{2}:\d{2}$/.test(time)) errors.time = '시간 형식이 올바르지 않습니다.'
+  if (!subject) errors.subject = '과목을 입력해주세요.'
+
+  return {
+    valid: Object.keys(errors).length === 0,
+    errors,
+    date,
+    time,
+    subject,
+  }
+}
+
+export function countUsedAsOfTodayForStudent(allLessons, targetStudentName) {
+  const normStudent = normalizeText(targetStudentName)
+  const today = getTodayStorageDateString()
+
+  let usedCount = 0
+
+  for (const item of allLessons) {
+    const docName = normalizeText(getStudentName(item))
+    const date = getLessonStorageDateString(item)
+    const cancelled = Boolean(item.isDeductCancelled)
+
+    if (docName === normStudent && date && date <= today && !cancelled) {
+      usedCount += 1
+    }
+  }
+
+  return usedCount
+}
+
+/** remainingCount에 맞춰 status 동기화 (수동 종료 ended는 유지) */
+export function getNextStudentPackageStatus(currentStatus, remainingCount) {
+  if (String(currentStatus || '').toLowerCase() === 'ended') return 'ended'
+  const rem = Number(remainingCount ?? 0)
+  if (!Number.isFinite(rem) || rem <= 0) return 'exhausted'
+  return 'active'
+}
+
+/** 0 이상 정수 문자열만 허용 (앞뒤 공백 제거 후 검사) */
+export function parseRequiredNonNegativeIntField(raw) {
+  const t = String(raw ?? '').trim()
+  if (t === '') return { ok: false, value: null }
+  if (!/^(0|[1-9]\d*)$/.test(t)) return { ok: false, value: null }
+  const value = parseInt(t, 10)
+  if (!Number.isFinite(value) || value < 0) return { ok: false, value: null }
+  return { ok: true, value }
+}
+
+/** 1 이상 정수 (그룹 정원) */
+export function parseRequiredMinOneIntField(raw) {
+  const t = String(raw ?? '').trim()
+  if (t === '') return { ok: false, value: null }
+  if (!/^(0|[1-9]\d*)$/.test(t)) return { ok: false, value: null }
+  const value = parseInt(t, 10)
+  if (!Number.isFinite(value) || value < 1) return { ok: false, value: null }
+  return { ok: true, value }
+}
+
+export function getStorageDateStringFromDate(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+
+  const year = parts.find((p) => p.type === 'year')?.value
+  const month = parts.find((p) => p.type === 'month')?.value
+  const day = parts.find((p) => p.type === 'day')?.value
+
+  return `${year}-${month}-${day}`
+}
+
+export function getCalendarDays(baseDate) {
+  const firstDayOfMonth = new Date(baseDate.getFullYear(), baseDate.getMonth(), 1)
+  const start = new Date(firstDayOfMonth)
+  start.setDate(firstDayOfMonth.getDate() - firstDayOfMonth.getDay())
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const d = new Date(start)
+    d.setDate(start.getDate() + index)
+    return d
+  })
+}
+
+export function isSameStorageDate(a, b) {
+  return getStorageDateStringFromDate(a) === getStorageDateStringFromDate(b)
+}
+
+export function formatGroupStudentStartDate(raw) {
+  if (raw == null || raw === '') return '-'
+  if (typeof raw?.toDate === 'function') {
+    const d = raw.toDate()
+    return d ? formatDate(d) : '-'
+  }
+  if (raw?.seconds != null) {
+    return formatDate(new Date(raw.seconds * 1000))
+  }
+  if (typeof raw === 'string') {
+    const parsed = parseLegacyLessonToDate(raw, '00:00')
+    return parsed ? formatDate(parsed) : raw
+  }
+  return '-'
+}
+
+export function formatStudentPackageDetailTypeLabel(packageType) {
+  if (packageType === 'private') return '개인'
+  if (packageType === 'group') return '그룹'
+  if (packageType === 'openGroup') return '오픈 그룹'
+  return packageType != null && String(packageType).trim() !== '' ? '기타' : '-'
+}
+
+export function formatStudentPackageDetailStatusLabel(status) {
+  const raw =
+    status == null || String(status).trim() === ''
+      ? 'active'
+      : String(status).toLowerCase()
+  if (raw === 'active') return '사용 중'
+  if (raw === 'exhausted') return '소진'
+  if (raw === 'ended' || raw === 'inactive') return '종료'
+  return String(status)
+}
+
+export function formatStudentPackageDetailAmountPaid(raw) {
+  if (raw == null || raw === '') return '-'
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return '-'
+  return n === 0 ? '0' : String(n)
+}
+
+export function formatStudentPackageDetailMemo(raw) {
+  const s = String(raw ?? '').trim()
+  return s || '-'
+}
+
+export function creditTransactionCreatedAtToMillis(raw) {
+  if (!raw) return 0
+  if (typeof raw?.toMillis === 'function') return raw.toMillis()
+  if (typeof raw?.toDate === 'function') {
+    const d = raw.toDate()
+    return d && Number.isFinite(d.getTime()) ? d.getTime() : 0
+  }
+  if (raw?.seconds != null) {
+    return Number(raw.seconds) * 1000 + Math.floor(Number(raw.nanoseconds || 0) / 1e6)
+  }
+  return 0
+}
+
+export function formatCreditTransactionCreatedAtDisplay(raw) {
+  if (!raw) return '-'
+  let d = null
+  if (typeof raw?.toDate === 'function') d = raw.toDate()
+  else if (typeof raw?.toMillis === 'function') d = new Date(raw.toMillis())
+  else if (raw?.seconds != null) d = new Date(raw.seconds * 1000)
+  if (!d || !Number.isFinite(d.getTime())) return '-'
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(d)
+}
+
+export function formatCreditTransactionDeltaCountDisplay(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return '-'
+  if (v === 0) return '0'
+  if (v > 0) return `+${v}`
+  return String(v)
+}
+
+export function formatCreditTransactionActionTypeLabel(actionType) {
+  const key = String(actionType ?? '').trim()
+  if (!key) return '-'
+  const map = {
+    package_created: '수강권 발급',
+    package_adjusted: '총 횟수 조정',
+    package_updated: '수강권 정보 수정',
+    private_deduct_cancel: '개인 차감취소',
+    private_deduct_restore: '개인 차감복구',
+    group_deduct: '그룹 차감',
+    group_deduct_restore: '그룹 차감복구',
+    package_ended: '수강권 종료',
+    group_reenroll: '그룹 재등록',
+  }
+  return map[key] ?? key
+}
+
+export const GROUP_RECURRENCE_WEEKDAY_TOGGLES = [
+  { value: 2, label: '월' },
+  { value: 3, label: '화' },
+  { value: 4, label: '수' },
+  { value: 5, label: '목' },
+  { value: 6, label: '금' },
+  { value: 7, label: '토' },
+  { value: 1, label: '일' },
+]
+
+export const GROUP_WEEKDAY_LABELS = {
+  1: '일',
+  2: '월',
+  3: '화',
+  4: '수',
+  5: '목',
+  6: '금',
+  7: '토',
+}
+
+export function normalizeGroupWeekdaysFromDoc(raw) {
+  if (!Array.isArray(raw)) return []
+  const nums = raw
+    .map((v) => Number(v))
+    .filter((n) => Number.isInteger(n) && n >= 1 && n <= 7)
+  return [...new Set(nums)].sort((a, b) => a - b)
+}
+
+export function formatGroupWeekdaysDisplay(nums) {
+  const arr = normalizeGroupWeekdaysFromDoc(nums)
+  if (arr.length === 0) return ''
+  const order = [2, 3, 4, 5, 6, 7, 1]
+  const sorted = [...arr].sort((a, b) => order.indexOf(a) - order.indexOf(b))
+  return sorted.map((d) => GROUP_WEEKDAY_LABELS[d] || String(d)).join(', ')
+}
+
+/** JS Date.getDay() (0=일) → groupClasses.weekdays 코드 (1=일 … 7=토) */
+export function jsDateToGroupWeekdayCode(date) {
+  const day = date.getDay()
+  return day === 0 ? 1 : day + 1
+}
+
+export function parseYmdToLocalDate(ymd) {
+  const [y, mo, d] = String(ymd).split('-').map(Number)
+  if (!y || !mo || !d) return null
+  const dt = new Date(y, mo - 1, d)
+  if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null
+  return dt
+}
+
+export function formatLocalDateToYmd(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+export function studentFirstRegisteredYmdForSort(value) {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string') return String(value).trim()
+  if (typeof value.toDate === 'function') {
+    const d = value.toDate()
+    return d ? formatLocalDateToYmd(d) : ''
+  }
+  return ''
+}
+
+export function isGroupStudentRowActive(gs) {
+  const raw = gs?.status
+  const s =
+    raw == null || String(raw).trim() === ''
+      ? 'active'
+      : String(raw).trim().toLowerCase()
+  return s === 'active'
+}
+
+/** groupStudents.startDate → yyyy-mm-dd (없으면 null) */
+export function groupStudentStartDateToYmd(gs) {
+  const raw = gs?.startDate
+  if (raw == null || raw === '') return null
+  if (typeof raw?.toDate === 'function') {
+    const d = raw.toDate()
+    return d ? formatLocalDateToYmd(d) : null
+  }
+  if (raw?.seconds != null) {
+    return formatLocalDateToYmd(new Date(raw.seconds * 1000))
+  }
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+  return null
+}
+
+export function isGroupStudentStartedByYmd(gs, ymd) {
+  const startYmd = groupStudentStartDateToYmd(gs)
+  if (!startYmd) return true
+  const y = String(ymd || '').trim()
+  if (!y || !/^\d{4}-\d{2}-\d{2}$/.test(y)) return true
+  return startYmd <= y
+}
+
+export function* iterateYmdRangeInclusive(startYmd, endYmd) {
+  const start = parseYmdToLocalDate(startYmd)
+  const end = parseYmdToLocalDate(endYmd)
+  if (!start || !end || start > end) return
+  let cur = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+  const endTime = new Date(end.getFullYear(), end.getMonth(), end.getDate()).getTime()
+  while (cur.getTime() <= endTime) {
+    yield formatLocalDateToYmd(cur)
+    cur = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() + 1)
+  }
+}
+
+export function countWeekdayHitsInRange(startYmd, endYmd, weekdaySet) {
+  if (!weekdaySet || weekdaySet.size === 0) return 0
+  let n = 0
+  for (const ymd of iterateYmdRangeInclusive(startYmd, endYmd)) {
+    const dt = parseYmdToLocalDate(ymd)
+    if (!dt) continue
+    if (weekdaySet.has(jsDateToGroupWeekdayCode(dt))) n += 1
+  }
+  return n
+}
+
+/** yyyy-mm-dd 기준으로 달력일을 더한 yyyy-mm-dd (로컬) */
+export function addCalendarDaysToYmd(startYmd, deltaDays) {
+  const d = parseYmdToLocalDate(startYmd)
+  if (!d || !Number.isFinite(deltaDays)) return null
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + Math.trunc(deltaDays))
+  return formatLocalDateToYmd(next)
+}
+
+export function studentPackageExpiresAtToYmd(raw) {
+  if (raw == null || raw === '') return ''
+  if (typeof raw === 'string') {
+    const t = String(raw).trim()
+    return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : ''
+  }
+  if (typeof raw?.toDate === 'function') {
+    const d = raw.toDate()
+    return d ? formatLocalDateToYmd(d) : ''
+  }
+  if (raw?.seconds != null) {
+    return formatLocalDateToYmd(new Date(raw.seconds * 1000))
+  }
+  return ''
+}
+
+/** Students 주의 배지용: 같은 범위의 수강권을 묶어 재등록 필요 여부를 판정 */
+export function studentPackageAttentionScope(pkg) {
+  const pt = String(pkg?.packageType || '').trim()
+  if (pt === 'private') {
+    return `private:${normalizeText(pkg.teacher || '')}`
+  }
+  if (pt === 'group') {
+    return `group:${String(pkg.groupClassId ?? '').trim()}`
+  }
+  if (pt === 'openGroup') {
+    return `openGroup:${String(pkg.groupClassId ?? '').trim()}`
+  }
+  return `other:${pt || 'na'}:${String(pkg?.id || '')}`
+}
+
+export function isStudentPackageRowActive(pkg) {
+  const raw = pkg?.status
+  const s =
+    raw == null || String(raw).trim() === ''
+      ? 'active'
+      : String(raw).trim().toLowerCase()
+  return s === 'active'
+}
+
+export function buildStudentPackageScopeKey({ packageType, teacher, groupClassId }) {
+  return studentPackageAttentionScope({
+    packageType,
+    teacher,
+    groupClassId,
+  })
+}
+
+/** 신규 정규반 저장 직후 자동 일정 등에 쓰는 기본 기간(시작일 포함 약 1년, 365일) */
+export const GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS = 365 - 1
