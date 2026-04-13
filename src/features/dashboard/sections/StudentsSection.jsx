@@ -739,6 +739,23 @@ export default function StudentsSection({
                                   <span style={{ opacity: 0.72 }}>남은 횟수</span>{' '}
                                   {row.remainingDisplay}
                                 </div>
+                                {row.operationalLabel ? (
+                                  <div style={{ marginTop: 6 }}>
+                                    <span
+                                      style={{
+                                        fontSize: 11,
+                                        fontWeight: 600,
+                                        padding: '3px 8px',
+                                        borderRadius: 6,
+                                        border: '1px solid #4a4a6a',
+                                        background: 'rgba(80, 90, 140, 0.25)',
+                                        color: 'rgba(230, 235, 255, 0.95)',
+                                      }}
+                                    >
+                                      {row.operationalLabel}
+                                    </span>
+                                  </div>
+                                ) : null}
                               </div>
                             ))}
                           </div>

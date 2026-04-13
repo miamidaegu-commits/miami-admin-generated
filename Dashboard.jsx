@@ -82,6 +82,7 @@ import StudentPackageModal from './src/features/dashboard/modals/StudentPackageM
 import PostGroupReEnrollModal from './src/features/dashboard/modals/PostGroupReEnrollModal.jsx'
 import GroupModal from './src/features/dashboard/modals/GroupModal.jsx'
 import GroupStudentAddModal from './src/features/dashboard/modals/GroupStudentAddModal.jsx'
+import GroupStudentManageModal from './src/features/dashboard/modals/GroupStudentManageModal.jsx'
 import GroupLessonModal from './src/features/dashboard/modals/GroupLessonModal.jsx'
 import GroupLessonSeriesModal from './src/features/dashboard/modals/GroupLessonSeriesModal.jsx'
 import GroupLessonPurgeModal from './src/features/dashboard/modals/GroupLessonPurgeModal.jsx'
@@ -207,6 +208,50 @@ async function createGroupLessonsInDateRange({
   return { created, skippedDup }
 }
 
+function addWeeksToYmd(ymd, weeks) {
+  const d = parseYmdToLocalDate(ymd)
+  if (!d || !Number.isFinite(weeks)) return null
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + Math.trunc(weeks) * 7)
+  return formatLocalDateToYmd(next)
+}
+
+function buildPrivateLessonDates({
+  startDateYmd,
+  repeatWeekly,
+  repeatWeeks,
+  repeatStartMode,
+}) {
+  const base = String(startDateYmd || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base) || !parseYmdToLocalDate(base)) return []
+  if (!repeatWeekly) return [base]
+
+  const weeksNum = Number(repeatWeeks)
+  const weeks = Number.isInteger(weeksNum) ? weeksNum : parseInt(String(repeatWeeks || ''), 10)
+  const safeWeeks = Number.isInteger(weeks) && weeks > 0 ? weeks : 1
+  const mode = repeatStartMode === 'afterFirst' ? 'afterFirst' : 'includeStart'
+
+  const out = []
+  const seen = new Set()
+  const pushUnique = (d) => {
+    if (!d || seen.has(d)) return
+    seen.add(d)
+    out.push(d)
+  }
+
+  pushUnique(base)
+  if (mode === 'includeStart') {
+    for (let i = 1; i < safeWeeks; i += 1) {
+      pushUnique(addWeeksToYmd(base, i))
+    }
+  } else {
+    for (let i = 1; i <= safeWeeks; i += 1) {
+      pushUnique(addWeeksToYmd(base, i))
+    }
+  }
+
+  return out
+}
+
 export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
@@ -259,6 +304,8 @@ export default function Dashboard() {
   })
   const [groupStudentFormErrors, setGroupStudentFormErrors] = useState({})
   const [busyGroupStudentId, setBusyGroupStudentId] = useState(null)
+  const [groupStudentManageModal, setGroupStudentManageModal] = useState(null)
+  const [busyGroupStudentManageId, setBusyGroupStudentManageId] = useState(null)
   const [groupLessons, setGroupLessons] = useState([])
 
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
@@ -293,6 +340,9 @@ export default function Dashboard() {
     date: '',
     time: '',
     subject: '',
+    repeatWeekly: false,
+    repeatWeeks: '4',
+    repeatStartMode: 'includeStart',
   })
   const [privateLessonFormErrors, setPrivateLessonFormErrors] = useState({})
   const [busyPrivateLessonAdd, setBusyPrivateLessonAdd] = useState(false)
@@ -1986,6 +2036,10 @@ export default function Dashboard() {
         attendanceCount: 0,
         startDate: startTimestamp,
         status: 'active',
+        studentStatus: 'active',
+        excludedDates: [],
+        breakStartDate: '',
+        breakEndDate: '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
@@ -2694,6 +2748,10 @@ export default function Dashboard() {
         attendanceCount: Number(selectedPackage.usedCount || 0),
         startDate: result.startDate,
         status: 'active',
+        studentStatus: 'active',
+        excludedDates: [],
+        breakStartDate: '',
+        breakEndDate: '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
@@ -2723,6 +2781,56 @@ export default function Dashboard() {
       alert(`그룹 학생 제거 실패: ${error.message}`)
     } finally {
       setBusyGroupStudentId(null)
+    }
+  }
+
+  function openGroupStudentManageModal(gs) {
+    if (userProfile?.role !== 'admin') return
+    setGroupStudentManageModal(gs)
+  }
+
+  function closeGroupStudentManageModal() {
+    if (busyGroupStudentManageId) return
+    setGroupStudentManageModal(null)
+  }
+
+  async function submitGroupStudentManageModalSave(payload) {
+    const gs = groupStudentManageModal
+    if (!gs?.id) return
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 수정할 수 있습니다.')
+      return
+    }
+
+    const dateStr = String(payload?.startDateStr || '').trim()
+    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !parseYmdToLocalDate(dateStr)) {
+      alert('시작일이 올바르지 않습니다.')
+      return
+    }
+    const [y, mo, d] = dateStr.split('-').map(Number)
+    const startTimestamp = Timestamp.fromDate(new Date(y, mo - 1, d))
+
+    const st = payload?.studentStatus === 'onBreak' ? 'onBreak' : 'active'
+    const breakStartDate = st === 'onBreak' ? String(payload.breakStartDate || '').trim() : ''
+    const breakEndDate = st === 'onBreak' ? String(payload.breakEndDate || '').trim() : ''
+    const excludedDates = Array.isArray(payload.excludedDates) ? payload.excludedDates : []
+
+    try {
+      setBusyGroupStudentManageId(gs.id)
+      await updateDoc(doc(db, 'groupStudents', gs.id), {
+        startDate: startTimestamp,
+        studentStatus: st,
+        breakStartDate,
+        breakEndDate,
+        excludedDates,
+        updatedAt: serverTimestamp(),
+      })
+      setGroupStudentManageModal(null)
+    } catch (error) {
+      console.error('그룹 학생 운영 정보 저장 실패:', error)
+      alert(`저장 실패: ${error.message}`)
+    } finally {
+      setBusyGroupStudentManageId(null)
     }
   }
 
@@ -3407,6 +3515,9 @@ export default function Dashboard() {
       date: getStorageDateStringFromDate(selectedDate),
       time: '',
       subject: '',
+      repeatWeekly: false,
+      repeatWeeks: '4',
+      repeatStartMode: 'includeStart',
     })
     setPrivateLessonFormErrors({})
     setPrivateLessonModalOpen(true)
@@ -3419,6 +3530,12 @@ export default function Dashboard() {
     const date = String(form.date || '').trim()
     const time = String(form.time || '').trim()
     const subject = String(form.subject || '').trim()
+    const repeatWeekly = form.repeatWeekly === true
+    const repeatWeeksRaw = String(form.repeatWeeks ?? '').trim()
+    const repeatStartModeRaw = String(form.repeatStartMode || '').trim()
+    const repeatStartMode =
+      repeatStartModeRaw === 'afterFirst' ? 'afterFirst' : 'includeStart'
+    let repeatWeeks = 4
 
     if (!studentId) errors.studentId = '학생을 선택해주세요.'
     if (!packageId) {
@@ -3431,6 +3548,17 @@ export default function Dashboard() {
     if (!time) errors.time = '시간을 선택해주세요.'
     if (time && !/^\d{2}:\d{2}$/.test(time)) errors.time = '시간 형식이 올바르지 않습니다.'
     if (!subject) errors.subject = '과목을 입력해주세요.'
+    if (repeatWeekly) {
+      const parsed = Number.parseInt(repeatWeeksRaw, 10)
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        errors.repeatWeeks = '반복 주수는 1 이상의 정수여야 합니다.'
+      } else {
+        repeatWeeks = parsed
+      }
+      if (repeatStartModeRaw !== 'includeStart' && repeatStartModeRaw !== 'afterFirst') {
+        errors.repeatStartMode = '반복 시작 방식이 올바르지 않습니다.'
+      }
+    }
 
     return {
       valid: Object.keys(errors).length === 0,
@@ -3440,6 +3568,9 @@ export default function Dashboard() {
       date,
       time,
       subject,
+      repeatWeekly,
+      repeatWeeks,
+      repeatStartMode,
     }
   }
 
@@ -3554,29 +3685,70 @@ export default function Dashboard() {
       return
     }
 
+    const lessonDates = buildPrivateLessonDates({
+      startDateYmd: result.date,
+      repeatWeekly: result.repeatWeekly,
+      repeatWeeks: result.repeatWeeks,
+      repeatStartMode: result.repeatStartMode,
+    })
+    if (lessonDates.length === 0) {
+      setPrivateLessonFormErrors((prev) => ({
+        ...prev,
+        date: '날짜를 확인해주세요.',
+      }))
+      return
+    }
+
+    const existingScheduledCount = lessons.filter(
+      (lesson) =>
+        String(lesson.packageId || '').trim() === String(selectedPackage.id) &&
+        lesson.isDeductCancelled !== true
+    ).length
+    const newCount = lessonDates.length
+    const totalCount = Number(selectedPackage.totalCount ?? 0)
+    if (
+      Number.isFinite(totalCount) &&
+      totalCount >= 0 &&
+      existingScheduledCount + newCount > totalCount
+    ) {
+      setPrivateLessonFormErrors((prev) => ({
+        ...prev,
+        packageId: `이 수강권으로 예약 가능한 수업 수를 초과했습니다. (현재 예약 ${existingScheduledCount} / 총 ${totalCount})`,
+      }))
+      return
+    }
+
     try {
       setBusyPrivateLessonAdd(true)
-      await addDoc(collection(db, 'lessons'), {
-        studentId: student.id,
-        studentName,
-        teacherName: teacherKey,
-        student: studentName,
-        teacher: teacherKey,
-        date: result.date,
-        time: result.time,
-        startAt: Timestamp.fromDate(startDate),
-        subject: result.subject,
-        packageId: selectedPackage.id,
-        packageType: selectedPackage.packageType,
-        packageTitle: String(selectedPackage.title || ''),
-        billingType: 'private',
-        completed: false,
-        completedAt: null,
-        isDeductCancelled: false,
-        deductMemo: '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      })
+      const seriesId = result.repeatWeekly
+        ? `private-series-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+        : null
+      for (const dateYmd of lessonDates) {
+        const start = parseLegacyLessonToDate(dateYmd, result.time)
+        if (!start) continue
+        await addDoc(collection(db, 'lessons'), {
+          studentId: student.id,
+          studentName,
+          teacherName: teacherKey,
+          student: studentName,
+          teacher: teacherKey,
+          date: dateYmd,
+          time: result.time,
+          startAt: Timestamp.fromDate(start),
+          subject: result.subject,
+          packageId: selectedPackage.id,
+          packageType: selectedPackage.packageType,
+          packageTitle: String(selectedPackage.title || ''),
+          billingType: 'private',
+          completed: false,
+          completedAt: null,
+          isDeductCancelled: false,
+          deductMemo: '',
+          ...(seriesId ? { seriesId } : {}),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      }
       await recomputePrivatePackageUsage(selectedPackage.id)
       closePrivateLessonModal()
     } catch (error) {
@@ -3777,6 +3949,8 @@ export default function Dashboard() {
     canDeleteLesson,
     handleDeleteGroupLesson,
     getGroupStudentDisplayName,
+    openGroupStudentManageModal,
+    busyGroupStudentManageId,
   }
 
   const studentModalProps = {
@@ -4035,6 +4209,16 @@ export default function Dashboard() {
       groupStudentAddModalOpen &&
       selectedGroupClass ? (
         <GroupStudentAddModal {...groupStudentAddModalProps} />
+      ) : null}
+
+      {activeSection === 'groups' && isAdmin && groupStudentManageModal ? (
+        <GroupStudentManageModal
+          groupStudent={groupStudentManageModal}
+          studentPackages={studentPackages}
+          onClose={closeGroupStudentManageModal}
+          onSave={submitGroupStudentManageModalSave}
+          isSubmitting={busyGroupStudentManageId === groupStudentManageModal.id}
+        />
       ) : null}
 
       {activeSection === 'groups' && groupLessonModal && selectedGroupClass ? (

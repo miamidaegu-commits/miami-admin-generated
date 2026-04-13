@@ -420,9 +420,8 @@ export function isGroupStudentRowActive(gs) {
   return s === 'active'
 }
 
-/** groupStudents.startDate → yyyy-mm-dd (없으면 null) */
-export function groupStudentStartDateToYmd(gs) {
-  const raw = gs?.startDate
+/** groupStudents 등 날짜 필드 원시값 → yyyy-mm-dd (없으면 null) */
+export function groupStudentDateValueToYmd(raw) {
   if (raw == null || raw === '') return null
   if (typeof raw?.toDate === 'function') {
     const d = raw.toDate()
@@ -433,6 +432,72 @@ export function groupStudentStartDateToYmd(gs) {
   }
   if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
   return null
+}
+
+/** groupStudents.startDate → yyyy-mm-dd (없으면 null) */
+export function groupStudentStartDateToYmd(gs) {
+  return groupStudentDateValueToYmd(gs?.startDate)
+}
+
+/** studentStatus: 없거나 빈 값이면 'active' */
+export function normalizeGroupStudentOperationalStatus(gs) {
+  const s = String(gs?.studentStatus ?? '').trim().toLowerCase()
+  if (s === 'onbreak') return 'onBreak'
+  return 'active'
+}
+
+export function getGroupStudentExcludedDatesArray(gs) {
+  const raw = gs?.excludedDates
+  if (!Array.isArray(raw)) return []
+  const out = []
+  const seen = new Set()
+  for (const x of raw) {
+    const t = String(x ?? '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) continue
+    if (seen.has(t)) continue
+    seen.add(t)
+    out.push(t)
+  }
+  out.sort()
+  return out
+}
+
+export function isGroupStudentOnBreakOnYmd(gs, ymd) {
+  if (normalizeGroupStudentOperationalStatus(gs) !== 'onBreak') return false
+  const bs = groupStudentDateValueToYmd(gs?.breakStartDate)
+  const be = groupStudentDateValueToYmd(gs?.breakEndDate)
+  const y = String(ymd || '').trim()
+  if (!bs || !be || !y || !/^\d{4}-\d{2}-\d{2}$/.test(y)) return false
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(bs) || !/^\d{4}-\d{2}-\d{2}$/.test(be)) return false
+  return bs <= y && y <= be
+}
+
+export function isGroupStudentExcludedOnYmd(gs, ymd) {
+  const y = String(ymd || '').trim()
+  if (!y || !/^\d{4}-\d{2}-\d{2}$/.test(y)) return false
+  return getGroupStudentExcludedDatesArray(gs).includes(y)
+}
+
+/** 기존 status(active)·startDate 규칙 + 휴원 기간·제외일 반영 */
+export function isGroupStudentOperationallyEligibleOnYmd(gs, ymd) {
+  if (!isGroupStudentRowActive(gs)) return false
+  if (!isGroupStudentStartedByYmd(gs, ymd)) return false
+  if (isGroupStudentOnBreakOnYmd(gs, ymd)) return false
+  if (isGroupStudentExcludedOnYmd(gs, ymd)) return false
+  return true
+}
+
+/** Students 현재 등록 행용: 오늘 기준 짧은 상태 문구 */
+export function getGroupStudentRegistrationOperationalLabelForToday(gs) {
+  const today = getTodayStorageDateString()
+  if (isGroupStudentExcludedOnYmd(gs, today)) return '오늘 제외'
+  if (
+    normalizeGroupStudentOperationalStatus(gs) === 'onBreak' &&
+    isGroupStudentOnBreakOnYmd(gs, today)
+  ) {
+    return '휴원중'
+  }
+  return ''
 }
 
 export function isGroupStudentStartedByYmd(gs, ymd) {

@@ -12,6 +12,34 @@ export default function PrivateLessonModal({
   submitPrivateLessonModal,
   isPrivateLessonModalSubmitting,
 }) {
+  const repeatWeekly = privateLessonForm.repeatWeekly === true
+  const repeatWeeks = Number.parseInt(String(privateLessonForm.repeatWeeks ?? '4'), 10)
+  const safeRepeatWeeks = Number.isInteger(repeatWeeks) && repeatWeeks > 0 ? repeatWeeks : 1
+  const repeatStartMode =
+    privateLessonForm.repeatStartMode === 'afterFirst' ? 'afterFirst' : 'includeStart'
+  const plannedCount = repeatWeekly
+    ? repeatStartMode === 'afterFirst'
+      ? safeRepeatWeeks + 1
+      : safeRepeatWeeks
+    : 1
+  const previewRange =
+    repeatWeekly && /^\d{4}-\d{2}-\d{2}$/.test(String(privateLessonForm.date || '').trim())
+      ? (() => {
+          const [y, mo, d] = String(privateLessonForm.date).split('-').map(Number)
+          const first = new Date(y, mo - 1, d)
+          const lastOffsetWeeks =
+            repeatStartMode === 'afterFirst' ? safeRepeatWeeks : Math.max(0, safeRepeatWeeks - 1)
+          const last = new Date(y, mo - 1, d + lastOffsetWeeks * 7)
+          const fmt = (dt) => {
+            const yy = dt.getFullYear()
+            const mm = String(dt.getMonth() + 1).padStart(2, '0')
+            const dd = String(dt.getDate()).padStart(2, '0')
+            return `${yy}-${mm}-${dd}`
+          }
+          return `${fmt(first)} ~ ${fmt(last)}`
+        })()
+      : ''
+
   return (
     <div
       role="dialog"
@@ -236,6 +264,84 @@ export default function PrivateLessonModal({
               </span>
             ) : null}
           </label>
+
+          <div style={{ padding: 12, borderRadius: 8, border: '1px solid #333', background: '#1a1d26' }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 13,
+                marginBottom: repeatWeekly ? 10 : 0,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={repeatWeekly}
+                onChange={(e) =>
+                  setPrivateLessonForm((prev) => ({ ...prev, repeatWeekly: e.target.checked }))
+                }
+              />
+              <span style={{ opacity: 0.9 }}>매주 반복</span>
+            </label>
+
+            {repeatWeekly ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>반복 주수</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={privateLessonForm.repeatWeeks ?? '4'}
+                    onChange={(e) =>
+                      setPrivateLessonForm((prev) => ({ ...prev, repeatWeeks: e.target.value }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  {privateLessonFormErrors.repeatWeeks ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {privateLessonFormErrors.repeatWeeks}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>시작 방식</span>
+                  <select
+                    value={repeatStartMode}
+                    onChange={(e) =>
+                      setPrivateLessonForm((prev) => ({ ...prev, repeatStartMode: e.target.value }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="includeStart">시작일 포함</option>
+                    <option value="afterFirst">첫 수업 먼저 + 다음 주부터 반복</option>
+                  </select>
+                  {privateLessonFormErrors.repeatStartMode ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {privateLessonFormErrors.repeatStartMode}
+                    </span>
+                  ) : null}
+                </label>
+              </div>
+            ) : null}
+
+            <p style={{ margin: '10px 0 0 0', fontSize: 12, opacity: 0.78 }}>
+              총 {plannedCount}건 생성{previewRange ? ` · ${previewRange}` : ''}
+            </p>
+          </div>
         </div>
 
         <div

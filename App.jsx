@@ -8,6 +8,9 @@ import Unauthorized from "./Unauthorized";
 import ProtectedRoute from "./ProtectedRoute";
 import { auth, functions } from "./firebase";
 
+/** 운영에서는 false 유지. 개발 중에만 선생님 생성 툴바(uid / teacherName / Create Teacher)를 표시합니다. */
+const ENABLE_DEV_TEACHER_TOOLBAR = false
+
 function AdminTeacherCreationPanel() {
   const { role, loading } = useAuth()
   const [teacherUid, setTeacherUid] = useState("")
@@ -86,7 +89,7 @@ export default function App() {
   return (
     <AuthProvider>
       <BrowserRouter>
-        <AdminTeacherCreationPanel />
+        {ENABLE_DEV_TEACHER_TOOLBAR ? <AdminTeacherCreationPanel /> : null}
         <Routes>
           <Route path="/" element={<Login />} />
           <Route path="/login" element={<Login />} />

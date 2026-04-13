@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import {
   countWeekdayHitsInRange,
-  groupStudentStartDateToYmd,
+  isGroupStudentOperationallyEligibleOnYmd,
   normalizeGroupWeekdaysFromDoc,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
@@ -101,7 +101,6 @@ export default function useGroupsSectionViewModel({
 
     const eligible = groupStudents.filter((gs) => {
       if (String(gs.groupClassId || '') !== String(gid)) return false
-      if (String(gs.status || 'active') !== 'active') return false
       const pkgId = String(gs.packageId || '').trim()
       if (!pkgId) return false
       const pkg = studentPackages.find((p) => p.id === pkgId)
@@ -112,8 +111,7 @@ export default function useGroupsSectionViewModel({
       ) {
         return false
       }
-      const startYmd = groupStudentStartDateToYmd(gs)
-      if (startYmd && lessonDate < startYmd) return false
+      if (!isGroupStudentOperationallyEligibleOnYmd(gs, lessonDate)) return false
       return true
     })
 

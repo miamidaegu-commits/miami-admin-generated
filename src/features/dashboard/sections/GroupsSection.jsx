@@ -35,6 +35,8 @@ export default function GroupsSection({
   canDeleteLesson,
   handleDeleteGroupLesson,
   getGroupStudentDisplayName,
+  openGroupStudentManageModal,
+  busyGroupStudentManageId,
 }) {
   return (
   <section className="activity-section">
@@ -354,7 +356,7 @@ export default function GroupsSection({
                   className="table-head"
                   style={{
                     gridTemplateColumns:
-                      '1.1fr 0.75fr 0.75fr 1fr minmax(100px, auto)',
+                      '1.1fr 0.75fr 0.75fr 1fr minmax(200px, auto)',
                   }}
                 >
                   <span>학생 이름</span>
@@ -366,8 +368,15 @@ export default function GroupsSection({
 
                 {sortedGroupStudentsForSelectedClass.map((gs) => {
                   const gsBusy = busyGroupStudentId === gs.id
+                  const manageBusy = busyGroupStudentManageId === gs.id
                   const paid = Number(gs.paidLessons ?? 0)
                   const attended = Number(gs.attendanceCount ?? 0)
+                  const rowActionDisabled =
+                    gsBusy ||
+                    manageBusy ||
+                    busyGroupStudentId === '__add__' ||
+                    busyGroupId === '__add__' ||
+                    busyGroupId === selectedGroupClass.id
 
                   return (
                     <div
@@ -375,36 +384,42 @@ export default function GroupsSection({
                       className="table-row"
                       style={{
                         gridTemplateColumns:
-                          '1.1fr 0.75fr 0.75fr 1fr minmax(100px, auto)',
+                          '1.1fr 0.75fr 0.75fr 1fr minmax(200px, auto)',
                       }}
                     >
                       <span>{getGroupStudentDisplayName(gs)}</span>
                       <span>{attended}</span>
                       <span>{paid}</span>
                       <span>{formatGroupStudentStartDate(gs.startDate)}</span>
-                      <span>
+                      <span style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            onClick={() => openGroupStudentManageModal(gs)}
+                            disabled={rowActionDisabled}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #335566',
+                              background: '#2a3548',
+                              color: 'white',
+                              cursor: rowActionDisabled ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            {manageBusy ? '저장 중...' : '관리'}
+                          </button>
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => handleRemoveGroupStudent(gs)}
-                          disabled={
-                            gsBusy ||
-                            busyGroupStudentId === '__add__' ||
-                            busyGroupId === '__add__' ||
-                            busyGroupId === selectedGroupClass.id
-                          }
+                          disabled={rowActionDisabled}
                           style={{
                             padding: '6px 10px',
                             borderRadius: 8,
                             border: '1px solid #553333',
                             background: '#4a2a2a',
                             color: 'white',
-                            cursor:
-                              gsBusy ||
-                              busyGroupStudentId === '__add__' ||
-                              busyGroupId === '__add__' ||
-                              busyGroupId === selectedGroupClass.id
-                                ? 'not-allowed'
-                                : 'pointer',
+                            cursor: rowActionDisabled ? 'not-allowed' : 'pointer',
                           }}
                         >
                           {gsBusy ? '처리 중...' : '제거'}

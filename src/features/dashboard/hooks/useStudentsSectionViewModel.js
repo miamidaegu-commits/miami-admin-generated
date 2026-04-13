@@ -4,7 +4,9 @@ import {
   earliestNextLessonSortKey,
   formatGroupStudentStartDate,
   getLessonStorageDateString,
+  getGroupStudentRegistrationOperationalLabelForToday,
   getTodayStorageDateString,
+  isGroupStudentOperationallyEligibleOnYmd,
   isGroupStudentRowActive,
   isGroupStudentStartedByYmd,
   normalizeText,
@@ -167,6 +169,7 @@ export default function useStudentsSectionViewModel({
         startDisplay,
         packageTitle: pkgTitle,
         remainingDisplay,
+        operationalLabel: getGroupStudentRegistrationOperationalLabelForToday(gs),
       })
     }
     return map
@@ -221,7 +224,7 @@ export default function useStudentsSectionViewModel({
         let eligible = false
         for (const row of activeGsRows) {
           if (row.sid !== sid || row.gid !== gid) continue
-          if (isGroupStudentStartedByYmd(row.gs, dateStr)) {
+          if (isGroupStudentOperationallyEligibleOnYmd(row.gs, dateStr)) {
             eligible = true
             break
           }
@@ -348,6 +351,7 @@ export default function useStudentsSectionViewModel({
     for (const gs of studentSummaryGroupStudents) {
       if (!isGroupStudentRowActive(gs)) continue
       if (!isGroupStudentStartedByYmd(gs, today)) continue
+      if (!isGroupStudentOperationallyEligibleOnYmd(gs, today)) continue
       const gid = String(gs.groupClassId || '').trim()
       if (!todayGroupClassIds.has(gid)) continue
       const sid = String(gs.studentId || '').trim()
