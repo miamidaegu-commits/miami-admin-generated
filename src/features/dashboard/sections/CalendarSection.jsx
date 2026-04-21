@@ -362,12 +362,19 @@ export default function CalendarSection(props) {
             const nameLabel = isGroupRow
               ? lesson.groupClassDisplayName || '-'
               : getStudentName(lesson)
+            const rowGroupName = isGroupRow
+              ? String(lesson.groupClassDisplayName || '').trim()
+              : undefined
             const canOpenGroupAttendance =
               isGroupRow && (isAdmin || canManageAttendance)
             return (
               <div
                 key={lesson.id}
                 className="table-row"
+                data-testid="calendar-lesson-row"
+                data-row-kind={isGroupRow ? 'group' : 'private'}
+                data-lesson-kind={isGroupRow ? 'group' : 'private'}
+                data-group-name={rowGroupName || undefined}
                 onClick={
                   canOpenGroupAttendance
                     ? () => onOpenCalendarGroupLessonAttendance?.(lesson)
