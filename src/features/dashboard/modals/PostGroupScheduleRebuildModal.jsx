@@ -3,6 +3,7 @@ import { formatGroupWeekdaysDisplay } from '../dashboardViewUtils.js'
 export default function PostGroupScheduleRebuildModal({
   postGroupScheduleRebuildModalData,
   postGroupScheduleRebuildFromDate,
+  postGroupScheduleRebuildEffectiveFromYmd,
   setPostGroupScheduleRebuildFromDate,
   postGroupScheduleRebuildErrors,
   closePostGroupScheduleRebuildModal,
@@ -24,12 +25,7 @@ export default function PostGroupScheduleRebuildModal({
   ]
     .filter(Boolean)
     .join(' ')
-  const today = new Date()
-  const todayYmd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
-    today.getDate()
-  ).padStart(2, '0')}`
   const enteredFromYmd = String(postGroupScheduleRebuildFromDate || '').trim()
-  const effectiveFromYmd = enteredFromYmd ? (enteredFromYmd >= todayYmd ? enteredFromYmd : todayYmd) : todayYmd
 
   return (
     <div
@@ -150,7 +146,7 @@ export default function PostGroupScheduleRebuildModal({
             입력한 기준 날짜: <strong>{enteredFromYmd || '-'}</strong>
           </div>
           <div>
-            실제 적용 기준일: <strong>{effectiveFromYmd}</strong>
+            실제 적용 기준일: <strong>{postGroupScheduleRebuildEffectiveFromYmd}</strong>
           </div>
         </div>
         <div
