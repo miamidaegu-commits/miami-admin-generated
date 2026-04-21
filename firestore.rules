@@ -65,16 +65,64 @@ service cloud.firestore {
         currentUserDoc().canManageAttendance == true;
     }
 
+    function canAddStudent() {
+      return signedIn() &&
+        currentUserDoc().role == "teacher" &&
+        currentUserDoc().canAddStudent == true;
+    }
+
+    function canEditStudent() {
+      return signedIn() &&
+        currentUserDoc().role == "teacher" &&
+        currentUserDoc().canEditStudent == true;
+    }
+
+    function canDeleteStudent() {
+      return signedIn() &&
+        currentUserDoc().role == "teacher" &&
+        currentUserDoc().canDeleteStudent == true;
+    }
+
+    function canEditLesson() {
+      return signedIn() &&
+        currentUserDoc().role == "teacher" &&
+        currentUserDoc().canEditLesson == true;
+    }
+
+    function canDeleteLesson() {
+      return signedIn() &&
+        currentUserDoc().role == "teacher" &&
+        currentUserDoc().canDeleteLesson == true;
+    }
+
+    function canCreateLessonDirectly() {
+      return signedIn() &&
+        currentUserDoc().role == "teacher" &&
+        currentUserDoc().canCreateLessonDirectly == true &&
+        currentUserDoc().requiresLessonApproval != true;
+    }
+
     function canTeacherUpdateStudentPackageUsage() {
       return canManageAttendance() ||
-        currentUserDoc().canCreateLessonDirectly == true ||
-        currentUserDoc().canEditLesson == true ||
-        currentUserDoc().canDeleteLesson == true;
+        canCreateLessonDirectly() ||
+        canEditLesson() ||
+        canDeleteLesson();
     }
 
     function parentGroupClassBelongsToTeacher(groupClassId) {
       return isTeacher() &&
         get(/databases/$(database)/documents/groupClasses/$(groupClassId)).data.teacher == myTeacherName();
+    }
+
+    /** canonical groupClassId 우선, 없으면 iOS legacy groupClassID, 없으면 classID */
+    function effectiveGroupClassIdFromData(data) {
+      return data.groupClassId is string ? data.groupClassId
+        : (data.groupClassID is string ? data.groupClassID
+          : (data.classID is string ? data.classID : ""));
+    }
+
+    function changedOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
     }
 
     match /users/{uid} {
@@ -86,90 +134,140 @@ service cloud.firestore {
 
     match /lessons/{lessonId} {
       allow read: if isAdmin() || lessonBelongsToTeacher(resource.data);
-      allow create: if isAdmin() || lessonBelongsToTeacher(request.resource.data);
-      allow update: if isAdmin() || lessonBelongsToTeacher(resource.data) || (
-        canManageAttendance() &&
-        lessonBelongsToTeacher(resource.data) &&
+      allow create: if isAdmin() || (
+        canCreateLessonDirectly() &&
         lessonBelongsToTeacher(request.resource.data)
       );
-      allow delete: if isAdmin() || lessonBelongsToTeacher(resource.data);
+      allow update: if isAdmin() || (
+        canEditLesson() &&
+        lessonBelongsToTeacher(resource.data) &&
+        lessonBelongsToTeacher(request.resource.data) &&
+        changedOnly(["date", "time", "subject", "startAt", "updatedAt"])
+      ) || (
+        canManageAttendance() &&
+        lessonBelongsToTeacher(resource.data) &&
+        lessonBelongsToTeacher(request.resource.data) &&
+        changedOnly([
+          "isDeductCancelled",
+          "deductMemo",
+          "updatedAt",
+          "studentId",
+          "studentName",
+          "teacherName"
+        ])
+      );
+      allow delete: if isAdmin() || (
+        canDeleteLesson() &&
+        lessonBelongsToTeacher(resource.data)
+      );
     }
 
     match /privateStudents/{studentId} {
       allow read: if isAdmin() || privateStudentBelongsToTeacher(resource.data);
-      allow create: if isAdmin() || privateStudentBelongsToTeacher(request.resource.data);
-      allow update: if isAdmin() || privateStudentBelongsToTeacher(resource.data);
-      allow delete: if isAdmin() || privateStudentBelongsToTeacher(resource.data);
+      allow create: if isAdmin() || (
+        canAddStudent() &&
+        privateStudentBelongsToTeacher(request.resource.data)
+      );
+      allow update: if isAdmin() || (
+        canEditStudent() &&
+        privateStudentBelongsToTeacher(resource.data) &&
+        privateStudentBelongsToTeacher(request.resource.data) &&
+        changedOnly([
+          "name",
+          "teacher",
+          "phone",
+          "carNumber",
+          "learningPurpose",
+          "firstRegisteredAt",
+          "note",
+          "updatedAt"
+        ])
+      ) || (
+        canManageAttendance() &&
+        privateStudentBelongsToTeacher(resource.data) &&
+        changedOnly(["attendanceCount", "updatedAt"])
+      );
+      allow delete: if isAdmin() || (
+        canDeleteStudent() &&
+        privateStudentBelongsToTeacher(resource.data)
+      );
     }
 
     match /groupClasses/{groupClassId} {
       allow read: if isAdmin() || groupClassBelongsToTeacher(resource.data);
-      allow create: if isAdmin() || groupClassBelongsToTeacher(request.resource.data);
-      allow update: if isAdmin() || groupClassBelongsToTeacher(resource.data);
-      allow delete: if isAdmin() || groupClassBelongsToTeacher(resource.data);
+      allow create, update, delete: if isAdmin();
     }
 
     match /groupStudents/{groupStudentId} {
       allow read: if isAdmin() || (
         isTeacher() &&
-        resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+        effectiveGroupClassIdFromData(resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
       );
 
       allow create: if isAdmin() || (
-        isTeacher() &&
-        request.resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(request.resource.data.groupClassId)
+        canAddStudent() &&
+        effectiveGroupClassIdFromData(request.resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data))
       );
 
       allow update: if isAdmin() || (
-        isTeacher() &&
-        resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
-      ) || (
         canManageAttendance() &&
-        resource.data.groupClassId is string &&
-        request.resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId) &&
-        parentGroupClassBelongsToTeacher(request.resource.data.groupClassId)
+        effectiveGroupClassIdFromData(resource.data) != "" &&
+        effectiveGroupClassIdFromData(request.resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data)) &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data)) &&
+        changedOnly(["attendanceCount", "updatedAt"])
       );
 
       allow delete: if isAdmin() || (
-        isTeacher() &&
-        resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+        canDeleteStudent() &&
+        effectiveGroupClassIdFromData(resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
       );
     }
 
     match /groupLessons/{groupLessonId} {
       allow read: if isAdmin() || (
         isTeacher() &&
-        resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+        effectiveGroupClassIdFromData(resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
       );
 
       allow create: if isAdmin() || (
-        isTeacher() &&
-        request.resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(request.resource.data.groupClassId)
+        canCreateLessonDirectly() &&
+        effectiveGroupClassIdFromData(request.resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data))
       );
 
       allow update: if isAdmin() || (
-        isTeacher() &&
-        resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+        canEditLesson() &&
+        effectiveGroupClassIdFromData(resource.data) != "" &&
+        effectiveGroupClassIdFromData(request.resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data)) &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data)) &&
+        changedOnly([
+          "groupClassId",
+          "groupClassName",
+          "teacher",
+          "date",
+          "time",
+          "subject",
+          "updatedAt"
+        ])
       ) || (
         canManageAttendance() &&
-        resource.data.groupClassId is string &&
-        request.resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId) &&
-        parentGroupClassBelongsToTeacher(request.resource.data.groupClassId)
+        effectiveGroupClassIdFromData(resource.data) != "" &&
+        effectiveGroupClassIdFromData(request.resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data)) &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data)) &&
+        changedOnly(["countedStudentIDs", "attendanceAppliedAt", "updatedAt"])
       );
 
       allow delete: if isAdmin() || (
-        isTeacher() &&
-        resource.data.groupClassId is string &&
-        parentGroupClassBelongsToTeacher(resource.data.groupClassId)
+        canDeleteLesson() &&
+        effectiveGroupClassIdFromData(resource.data) != "" &&
+        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
       );
     }
 
@@ -179,7 +277,8 @@ service cloud.firestore {
       allow update: if isAdmin() || (
         canTeacherUpdateStudentPackageUsage() &&
         studentPackageBelongsToTeacher(resource.data) &&
-        studentPackageBelongsToTeacher(request.resource.data)
+        studentPackageBelongsToTeacher(request.resource.data) &&
+        changedOnly(["usedCount", "remainingCount", "status", "updatedAt"])
       );
       allow delete: if isAdmin();
     }

@@ -8,15 +8,20 @@ import {
   deleteDoc,
   deleteField,
   doc,
+  documentId,
   getDoc,
   getDocs,
+  limit,
   onSnapshot,
+  orderBy,
   query,
+  startAfter,
   runTransaction,
   serverTimestamp,
   Timestamp,
   updateDoc,
   where,
+  or,
   writeBatch,
 } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
@@ -25,6 +30,10 @@ import { useAuth } from './AuthContext'
 import {
   SCHOOL_TIME_ZONE,
   addCalendarDaysToYmd,
+  buildPrivateLessonScheduleEntries,
+  buildAutoGroupStudentPackageTitle,
+  buildAutoPrivateStudentPackageTitle,
+  computePrivateRegularTotalCount,
   buildStudentPackageScopeKey,
   countUsedAsOfTodayForStudent,
   creditTransactionCreatedAtToMillis,
@@ -32,6 +41,7 @@ import {
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
   formatDate,
+  formatGroupWeekdaysDisplay,
   formatGroupStudentStartDate,
   formatLocalDateToYmd,
   formatStudentPackageDetailAmountPaid,
@@ -40,18 +50,20 @@ import {
   formatStudentPackageDetailTypeLabel,
   formatTime,
   getCalendarDays,
-  getLessonDate,
   getLessonStorageDateString,
   getNextStudentPackageStatus,
   getStorageDateStringFromDate,
   getStudentName,
   getTeacherName,
+  getEarliestFutureGroupLessonYmdFromLessons,
+  getGroupLessonGroupId,
+  getGroupWeeklyClassCountFromWeekdaysDoc,
   getTodayStorageDateString,
   groupLessonNextSortKey,
   groupStudentStartDateToYmd,
   GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS,
-  GROUP_WEEKDAY_LABELS,
   isGroupStudentRowActive,
+  isGroupStudentOperationallyEligibleOnYmd,
   isGroupStudentStartedByYmd,
   isSameStorageDate,
   isStudentPackageRowActive,
@@ -80,6 +92,8 @@ import StudentPackageEditModal from './src/features/dashboard/modals/StudentPack
 import StudentPackageHistoryModal from './src/features/dashboard/modals/StudentPackageHistoryModal.jsx'
 import StudentPackageModal from './src/features/dashboard/modals/StudentPackageModal.jsx'
 import PostGroupReEnrollModal from './src/features/dashboard/modals/PostGroupReEnrollModal.jsx'
+import PostGroupScheduleRebuildModal from './src/features/dashboard/modals/PostGroupScheduleRebuildModal.jsx'
+import PostPrivateLessonScheduleModal from './src/features/dashboard/modals/PostPrivateLessonScheduleModal.jsx'
 import GroupModal from './src/features/dashboard/modals/GroupModal.jsx'
 import GroupStudentAddModal from './src/features/dashboard/modals/GroupStudentAddModal.jsx'
 import GroupStudentManageModal from './src/features/dashboard/modals/GroupStudentManageModal.jsx'
@@ -91,9 +105,33 @@ import PrivateLessonModal from './src/features/dashboard/modals/PrivateLessonMod
 import PrivateLessonEditModal from './src/features/dashboard/modals/PrivateLessonEditModal.jsx'
 import useStudentsSectionViewModel from './src/features/dashboard/hooks/useStudentsSectionViewModel.js'
 import useGroupsSectionViewModel from './src/features/dashboard/hooks/useGroupsSectionViewModel.js'
+import useCalendarSectionViewModel from './src/features/dashboard/hooks/useCalendarSectionViewModel.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
+
+/** 운영에서는 false. groupClassId 백필 도구 버튼을 켤 때만 true. */
+const ENABLE_GROUP_LEGACY_BACKFILL_TOOL = false
+
+const GROUP_BACKFILL_BATCH_SIZE = 400
+
+async function fetchAllDocumentsInCollection(dbInstance, collectionName) {
+  const col = collection(dbInstance, collectionName)
+  const pageSize = 500
+  const out = []
+  let lastDoc = null
+  while (true) {
+    const q = lastDoc
+      ? query(col, orderBy(documentId()), startAfter(lastDoc), limit(pageSize))
+      : query(col, orderBy(documentId()), limit(pageSize))
+    const snap = await getDocs(q)
+    if (snap.empty) break
+    snap.docs.forEach((d) => out.push(d))
+    if (snap.docs.length < pageSize) break
+    lastDoc = snap.docs[snap.docs.length - 1]
+  }
+  return out
+}
 
 /** Firestore 기준으로 private 패키지의 usedCount / remainingCount 재계산 */
 async function recomputePrivatePackageUsage(packageId) {
@@ -176,7 +214,7 @@ async function createGroupLessonsInDateRange({
 
     const dup = prior.some(
       (gl) =>
-        String(gl.groupClassId || '') === String(groupClassId) &&
+        getGroupLessonGroupId(gl) === String(groupClassId) &&
         String(gl.date || '') === dateStr &&
         String(gl.time || '').trim() === timeStr
     )
@@ -199,6 +237,7 @@ async function createGroupLessonsInDateRange({
       capacity: cap,
       bookedCount: 0,
       isBookable: false,
+      generationKind: 'recurring',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     })
@@ -208,58 +247,154 @@ async function createGroupLessonsInDateRange({
   return { created, skippedDup }
 }
 
-function addWeeksToYmd(ymd, weeks) {
-  const d = parseYmdToLocalDate(ymd)
-  if (!d || !Number.isFinite(weeks)) return null
-  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + Math.trunc(weeks) * 7)
-  return formatLocalDateToYmd(next)
+function areNormalizedGroupWeekdaysEqual(rawA, rawB) {
+  const a = normalizeGroupWeekdaysFromDoc(rawA)
+  const b = normalizeGroupWeekdaysFromDoc(rawB)
+  if (a.length !== b.length) return false
+  return a.every((v, i) => v === b[i])
 }
 
-function buildPrivateLessonDates({
-  startDateYmd,
-  repeatWeekly,
-  repeatWeeks,
-  repeatStartMode,
+function isGroupEditScheduleAffected(group, validated) {
+  const g = group || {}
+  if (String(g.time || '').trim() !== validated.time) return true
+  if (String(g.subject || '').trim() !== validated.subject) return true
+  if (!areNormalizedGroupWeekdaysEqual(g.weekdays, validated.weekdays)) return true
+  return false
+}
+
+function getNowSchoolDateTimeParts() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: SCHOOL_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const year = parts.find((p) => p.type === 'year')?.value || ''
+  const month = parts.find((p) => p.type === 'month')?.value || ''
+  const day = parts.find((p) => p.type === 'day')?.value || ''
+  const hour = parts.find((p) => p.type === 'hour')?.value || '00'
+  const minute = parts.find((p) => p.type === 'minute')?.value || '00'
+  return {
+    ymd: `${year}-${month}-${day}`,
+    hm: `${hour}:${minute}`,
+  }
+}
+
+function maxLexYmd(a, b) {
+  if (!a) return b
+  if (!b) return a
+  return a > b ? a : b
+}
+
+function hasGroupLessonAttendanceAppliedField(v) {
+  if (v == null || v === '') return false
+  if (typeof v?.toDate === 'function') return true
+  if (v?.seconds != null) return true
+  return Boolean(v)
+}
+
+function isGroupLessonInScheduleRebuildWindow(gl, groupId, effectiveFromYmd) {
+  if (getGroupLessonGroupId(gl) !== String(groupId)) return false
+  const ds = String(gl.date || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ds)) return false
+  return ds >= effectiveFromYmd
+}
+
+function isGroupLessonEligibleScheduleRebuildDelete(gl, groupId, effectiveFromYmd) {
+  if (!gl?.id) return false
+  if (getGroupLessonGroupId(gl) !== String(groupId)) return false
+  const ds = String(gl.date || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ds)) return false
+  if (ds < effectiveFromYmd) return false
+  if (gl.completed === true) return false
+  const counted = Array.isArray(gl.countedStudentIDs) ? gl.countedStudentIDs : []
+  if (counted.some((x) => String(x || '').trim())) return false
+  if (hasGroupLessonAttendanceAppliedField(gl.attendanceAppliedAt)) return false
+  if (gl.generationKind === 'manual') return false
+  return true
+}
+
+function buildGroupPackageCoverageLessons({
+  groupClassId,
+  registrationStartDate,
+  registrationWeeks,
+  groupLessons,
+  groupClasses,
 }) {
-  const base = String(startDateYmd || '').trim()
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(base) || !parseYmdToLocalDate(base)) return []
-  if (!repeatWeekly) return [base]
-
-  const weeksNum = Number(repeatWeeks)
-  const weeks = Number.isInteger(weeksNum) ? weeksNum : parseInt(String(repeatWeeks || ''), 10)
-  const safeWeeks = Number.isInteger(weeks) && weeks > 0 ? weeks : 1
-  const mode = repeatStartMode === 'afterFirst' ? 'afterFirst' : 'includeStart'
-
-  const out = []
-  const seen = new Set()
-  const pushUnique = (d) => {
-    if (!d || seen.has(d)) return
-    seen.add(d)
-    out.push(d)
-  }
-
-  pushUnique(base)
-  if (mode === 'includeStart') {
-    for (let i = 1; i < safeWeeks; i += 1) {
-      pushUnique(addWeeksToYmd(base, i))
-    }
-  } else {
-    for (let i = 1; i <= safeWeeks; i += 1) {
-      pushUnique(addWeeksToYmd(base, i))
+  const gid = String(groupClassId || '').trim()
+  const start = String(registrationStartDate || '').trim()
+  const weeks = Number.parseInt(String(registrationWeeks ?? ''), 10)
+  if (!gid || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !parseYmdToLocalDate(start)) {
+    return {
+      selectedLessons: [],
+      computedTotalCount: 0,
+      coverageStartDate: '',
+      coverageEndDate: '',
+      weeklyClassCount: 1,
+      targetCount: 0,
     }
   }
 
-  return out
+  const groupClass = groupClasses.find((g) => String(g.id || '') === gid) || null
+  const weeklyClassCount = getGroupWeeklyClassCountFromWeekdaysDoc(groupClass?.weekdays)
+  const safeWeeks = Number.isInteger(weeks) && weeks > 0 ? weeks : 0
+  const targetCount = weeklyClassCount * safeWeeks
+  if (targetCount <= 0) {
+    return {
+      selectedLessons: [],
+      computedTotalCount: 0,
+      coverageStartDate: '',
+      coverageEndDate: '',
+      weeklyClassCount,
+      targetCount,
+    }
+  }
+
+  const sorted = [...groupLessons]
+    .filter((gl) => {
+      if (getGroupLessonGroupId(gl) !== gid) return false
+      const dateStr = String(gl.date || '').trim()
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false
+      return dateStr >= start
+    })
+    .sort((a, b) => {
+      const ad = String(a.date || '').trim()
+      const bd = String(b.date || '').trim()
+      if (ad !== bd) return ad.localeCompare(bd)
+      return String(a.time || '').trim().localeCompare(String(b.time || '').trim())
+    })
+
+  const selectedLessons = sorted.slice(0, targetCount)
+  const coverageStartDate =
+    selectedLessons.length > 0 ? String(selectedLessons[0].date || '').trim() : ''
+  const coverageEndDate =
+    selectedLessons.length > 0
+      ? String(selectedLessons[selectedLessons.length - 1].date || '').trim()
+      : ''
+
+  return {
+    selectedLessons,
+    computedTotalCount: selectedLessons.length,
+    coverageStartDate,
+    coverageEndDate,
+    weeklyClassCount,
+    targetCount,
+  }
 }
 
 export default function Dashboard() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [userProfile, setUserProfile] = useState(null)
+  const [teacherDirectoryUsers, setTeacherDirectoryUsers] = useState([])
   const [lessons, setLessons] = useState([])
   const [privateStudents, setPrivateStudents] = useState([])
   const [loading, setLoading] = useState(true)
   const [migrating, setMigrating] = useState(false)
+  const [busyGroupLegacyBackfill, setBusyGroupLegacyBackfill] = useState(false)
   const [busyLessonId, setBusyLessonId] = useState(null)
   const [busyStudentId, setBusyStudentId] = useState(null)
   const [studentModal, setStudentModal] = useState(null)
@@ -292,6 +427,8 @@ export default function Dashboard() {
     subject: '',
     weekdays: [],
     recurrenceMode: 'fixedWeekdays',
+    rebuildFutureLessons: false,
+    rebuildFromDate: '',
   })
   const [groupFormErrors, setGroupFormErrors] = useState({})
   const [selectedGroupClass, setSelectedGroupClass] = useState(null)
@@ -343,6 +480,12 @@ export default function Dashboard() {
     repeatWeekly: false,
     repeatWeeks: '4',
     repeatStartMode: 'includeStart',
+    repeatAnchorDate: '',
+    weeklyFrequency: '1',
+    weeklySlot2Date: '',
+    weeklySlot2Time: '',
+    weeklySlot3Date: '',
+    weeklySlot3Time: '',
   })
   const [privateLessonFormErrors, setPrivateLessonFormErrors] = useState({})
   const [busyPrivateLessonAdd, setBusyPrivateLessonAdd] = useState(false)
@@ -362,6 +505,10 @@ export default function Dashboard() {
     title: '',
     totalCount: '1',
     groupClassId: '',
+    registrationStartDate: '',
+    registrationWeeks: '4',
+    weeklyFrequency: '1',
+    privatePackageMode: 'regular',
     expiresAt: '',
     amountPaid: '',
     memo: '',
@@ -385,6 +532,29 @@ export default function Dashboard() {
   const [postGroupReEnrollStartDate, setPostGroupReEnrollStartDate] = useState('')
   const [postGroupReEnrollErrors, setPostGroupReEnrollErrors] = useState({})
   const [busyPostGroupReEnroll, setBusyPostGroupReEnroll] = useState(false)
+  const [postPrivateLessonScheduleModalData, setPostPrivateLessonScheduleModalData] =
+    useState(null)
+  const [postPrivateLessonScheduleForm, setPostPrivateLessonScheduleForm] = useState({
+    date: '',
+    time: '',
+    subject: '',
+    repeatWeekly: false,
+    repeatWeeks: '4',
+    repeatStartMode: 'includeStart',
+    repeatAnchorDate: '',
+    weeklyFrequency: '1',
+    weeklySlot2Date: '',
+    weeklySlot2Time: '',
+    weeklySlot3Date: '',
+    weeklySlot3Time: '',
+  })
+  const [postPrivateLessonScheduleErrors, setPostPrivateLessonScheduleErrors] = useState({})
+  const [busyPostPrivateLessonSchedule, setBusyPostPrivateLessonSchedule] = useState(false)
+  const [postGroupScheduleRebuildModalData, setPostGroupScheduleRebuildModalData] =
+    useState(null)
+  const [postGroupScheduleRebuildFromDate, setPostGroupScheduleRebuildFromDate] = useState('')
+  const [postGroupScheduleRebuildErrors, setPostGroupScheduleRebuildErrors] = useState({})
+  const [busyPostGroupScheduleRebuild, setBusyPostGroupScheduleRebuild] = useState(false)
   const [studentPackageHistoryModalPackage, setStudentPackageHistoryModalPackage] =
     useState(null)
   const [studentPackageHistoryRows, setStudentPackageHistoryRows] = useState([])
@@ -405,6 +575,39 @@ export default function Dashboard() {
 
     return () => unsubscribeUser()
   }, [user])
+
+  useEffect(() => {
+    if (userProfile?.role !== 'admin') {
+      setTeacherDirectoryUsers([])
+      return
+    }
+    const unsubscribeUsers = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+        setTeacherDirectoryUsers(rows)
+      },
+      (error) => {
+        console.error('users 목록 불러오기 실패:', error)
+        setTeacherDirectoryUsers([])
+      }
+    )
+    return () => unsubscribeUsers()
+  }, [userProfile?.role])
+
+  const teacherSelectOptions = useMemo(() => {
+    const map = new Map()
+    for (const u of teacherDirectoryUsers) {
+      const rawName = String(u?.teacherName || '').trim()
+      if (!rawName) continue
+      const role = String(u?.role || '').trim().toLowerCase()
+      if (!(role === 'teacher' || role === 'admin')) continue
+      const value = normalizeText(rawName)
+      if (!value) continue
+      if (!map.has(value)) map.set(value, { value, label: rawName })
+    }
+    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ko'))
+  }, [teacherDirectoryUsers])
 
   useEffect(() => {
     if (!user?.uid) {
@@ -799,7 +1002,7 @@ export default function Dashboard() {
     const groupClassId = selectedGroupClass.id
     const q = query(
       collection(db, 'groupLessons'),
-      where('groupClassId', '==', groupClassId)
+      or(where('groupClassId', '==', groupClassId), where('groupClassID', '==', groupClassId))
     )
 
     const unsubscribe = onSnapshot(
@@ -940,7 +1143,7 @@ export default function Dashboard() {
 
         const qGl = query(
           collection(db, 'groupLessons'),
-          where('groupClassId', 'in', chunk)
+          or(where('groupClassId', 'in', chunk), where('groupClassID', 'in', chunk))
         )
         unsubs.push(
           onSnapshot(
@@ -1042,6 +1245,61 @@ export default function Dashboard() {
     userProfile,
   })
 
+  const allGroupLessonsForPackaging = studentSummaryGroupLessons
+
+  const nextGroupLessonDateByGroupId = useMemo(() => {
+    const today = getTodayStorageDateString()
+    const map = new Map()
+    for (const gl of allGroupLessonsForPackaging) {
+      const gid = getGroupLessonGroupId(gl)
+      const ds = String(gl.date || '').trim()
+      if (!gid || !/^\d{4}-\d{2}-\d{2}$/.test(ds) || ds < today) continue
+      const prev = map.get(gid)
+      if (!prev || ds < prev) map.set(gid, ds)
+    }
+    return map
+  }, [allGroupLessonsForPackaging])
+
+  const studentPackageGroupAutoSummary = useMemo(() => {
+    const pt = studentPackageForm.packageType
+    if (pt !== 'group' && pt !== 'openGroup') return null
+    const gid = String(studentPackageForm.groupClassId || '').trim()
+    if (!gid) return null
+    const g = groupClasses.find((gc) => String(gc.id || '') === gid) || null
+    const startDate =
+      String(studentPackageForm.registrationStartDate || '').trim() ||
+      nextGroupLessonDateByGroupId.get(gid) ||
+      getTodayStorageDateString()
+    const weeks = Number.parseInt(String(studentPackageForm.registrationWeeks ?? '4'), 10)
+    const safeWeeks = Number.isInteger(weeks) && weeks > 0 ? weeks : 0
+    const coverage = buildGroupPackageCoverageLessons({
+      groupClassId: gid,
+      registrationStartDate: startDate,
+      registrationWeeks: safeWeeks,
+      groupLessons: allGroupLessonsForPackaging,
+      groupClasses,
+    })
+    return {
+      weeklyClassCount: coverage.weeklyClassCount,
+      registrationWeeks: safeWeeks,
+      targetCount: coverage.targetCount,
+      computedTotalCount: coverage.computedTotalCount,
+      coverageStartDate: coverage.coverageStartDate,
+      coverageEndDate: coverage.coverageEndDate,
+      defaultStartDate: nextGroupLessonDateByGroupId.get(gid) || getTodayStorageDateString(),
+      groupName: g?.name || '',
+      weekdayLabels: formatGroupWeekdaysDisplay(g?.weekdays),
+    }
+  }, [
+    studentPackageForm.packageType,
+    studentPackageForm.groupClassId,
+    studentPackageForm.registrationStartDate,
+    studentPackageForm.registrationWeeks,
+    allGroupLessonsForPackaging,
+    groupClasses,
+    nextGroupLessonDateByGroupId,
+  ])
+
   const studentPackageModalActiveSameScopeDuplicates = useMemo(() => {
     const st = studentPackageModalStudent
     if (!st?.id) return []
@@ -1126,30 +1384,6 @@ export default function Dashboard() {
     return privateLessonEligiblePackages.find((p) => p.id === id) || null
   }, [privateLessonForm.packageId, privateLessonEligiblePackages])
 
-  const sortedLessons = useMemo(() => {
-    return [...lessons].sort((a, b) => {
-      const aDate = getLessonDate(a)
-      const bDate = getLessonDate(b)
-
-      if (!aDate && !bDate) return 0
-      if (!aDate) return 1
-      if (!bDate) return -1
-
-      return aDate.getTime() - bDate.getTime()
-    })
-  }, [lessons])
-
-  const visibleLessons = useMemo(() => {
-    if (userProfile?.role === 'teacher' && userProfile?.teacherName) {
-      const myTeacherName = normalizeText(userProfile.teacherName)
-      return sortedLessons.filter(
-        (lesson) => normalizeText(getTeacherName(lesson)) === myTeacherName
-      )
-    }
-
-    return sortedLessons
-  }, [sortedLessons, userProfile])
-
   const selectedDateString = useMemo(
     () => getStorageDateStringFromDate(selectedDate),
     [selectedDate]
@@ -1167,27 +1401,32 @@ export default function Dashboard() {
     [selectedDate]
   )
 
-  const displayedLessons = useMemo(() => {
-    if (showOnlySelectedDate) {
-      return visibleLessons.filter(
-        (lesson) => getLessonStorageDateString(lesson) === selectedDateString
-      )
-    }
+  const { lessonsCountByDate, displayedLessons } = useCalendarSectionViewModel({
+    lessons,
+    studentSummaryGroupLessons,
+    groupClasses,
+    selectedDateString,
+    showOnlySelectedDate,
+    userProfile,
+  })
 
-    return visibleLessons
-  }, [showOnlySelectedDate, visibleLessons, selectedDateString])
-
-  const lessonsCountByDate = useMemo(() => {
-    const map = new Map()
-
-    visibleLessons.forEach((lesson) => {
-      const dateKey = getLessonStorageDateString(lesson)
-      if (!dateKey) return
-      map.set(dateKey, (map.get(dateKey) || 0) + 1)
+  const postGroupReEnrollMinStartYmd = useMemo(() => {
+    if (!postGroupReEnrollModalData?.groupClassId) return ''
+    const pkgReg = String(
+      postGroupReEnrollModalData.packageRegistrationStartDate || ''
+    ).trim()
+    const earliest = getEarliestFutureGroupLessonYmdFromLessons({
+      groupClassId: postGroupReEnrollModalData.groupClassId,
+      groupLessons: studentSummaryGroupLessons,
+      todayYmd: getTodayStorageDateString(),
     })
-
-    return map
-  }, [visibleLessons])
+    const pkgOk = /^\d{4}-\d{2}-\d{2}$/.test(pkgReg)
+    const eOk = /^\d{4}-\d{2}-\d{2}$/.test(earliest)
+    if (pkgOk && eOk) return pkgReg > earliest ? pkgReg : earliest
+    if (pkgOk) return pkgReg
+    if (eOk) return earliest
+    return ''
+  }, [postGroupReEnrollModalData, studentSummaryGroupLessons])
 
   const calendarDays = useMemo(
     () => getCalendarDays(calendarMonth),
@@ -1290,6 +1529,113 @@ export default function Dashboard() {
       alert(`수업 데이터 변환에 실패했습니다: ${error.message}`)
     } finally {
       setMigrating(false)
+    }
+  }
+
+  async function handleGroupLegacyBackfill() {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 실행할 수 있습니다.')
+      return
+    }
+    if (
+      !window.confirm(
+        '그룹 레거시 데이터 보정을 실행할까요?\n\n' +
+          '· groupLessons: groupClassId 보강, generationKind(seriesID 기준)\n' +
+          '· groupStudents: groupClassId(classID 기준), 기본 운영 필드\n\n' +
+          '한 번 실행하면 대부분의 문서가 갱신됩니다. 계속할까요?'
+      )
+    ) {
+      return
+    }
+
+    try {
+      setBusyGroupLegacyBackfill(true)
+
+      const glDocs = await fetchAllDocumentsInCollection(db, 'groupLessons')
+      const gsDocs = await fetchAllDocumentsInCollection(db, 'groupStudents')
+
+      const glOps = []
+      for (const docSnap of glDocs) {
+        const data = docSnap.data()
+        const patch = {}
+        const hasCanonicalGid =
+          data.groupClassId != null && String(data.groupClassId).trim() !== ''
+        const hasLegacyGid =
+          data.groupClassID != null && String(data.groupClassID).trim() !== ''
+        if (!hasCanonicalGid && hasLegacyGid) {
+          patch.groupClassId = String(data.groupClassID).trim()
+        }
+        const genMissing =
+          data.generationKind == null || String(data.generationKind).trim() === ''
+        if (genMissing && data.seriesID != null && String(data.seriesID).trim() !== '') {
+          patch.generationKind = 'recurring'
+        }
+        if (Object.keys(patch).length > 0) {
+          patch.updatedAt = serverTimestamp()
+          glOps.push({ ref: docSnap.ref, patch })
+        }
+      }
+
+      const gsOps = []
+      for (const docSnap of gsDocs) {
+        const data = docSnap.data()
+        const patch = {}
+        const hasCanonicalGid =
+          data.groupClassId != null && String(data.groupClassId).trim() !== ''
+        const hasClassId = data.classID != null && String(data.classID).trim() !== ''
+        if (!hasCanonicalGid && hasClassId) {
+          patch.groupClassId = String(data.classID).trim()
+        }
+        if (data.studentStatus == null || String(data.studentStatus).trim() === '') {
+          patch.studentStatus = 'active'
+        }
+        if (data.excludedDates == null) {
+          patch.excludedDates = []
+        }
+        if (data.breakStartDate == null) {
+          patch.breakStartDate = ''
+        }
+        if (data.breakEndDate == null) {
+          patch.breakEndDate = ''
+        }
+        if (Object.keys(patch).length > 0) {
+          patch.updatedAt = serverTimestamp()
+          gsOps.push({ ref: docSnap.ref, patch })
+        }
+      }
+
+      let glCommitted = 0
+      for (let i = 0; i < glOps.length; i += GROUP_BACKFILL_BATCH_SIZE) {
+        const batch = writeBatch(db)
+        const chunk = glOps.slice(i, i + GROUP_BACKFILL_BATCH_SIZE)
+        for (const { ref, patch } of chunk) {
+          batch.update(ref, patch)
+        }
+        await batch.commit()
+        glCommitted += chunk.length
+      }
+
+      let gsCommitted = 0
+      for (let i = 0; i < gsOps.length; i += GROUP_BACKFILL_BATCH_SIZE) {
+        const batch = writeBatch(db)
+        const chunk = gsOps.slice(i, i + GROUP_BACKFILL_BATCH_SIZE)
+        for (const { ref, patch } of chunk) {
+          batch.update(ref, patch)
+        }
+        await batch.commit()
+        gsCommitted += chunk.length
+      }
+
+      alert(
+        `그룹 레거시 보정 완료.\n\n` +
+          `groupLessons: 스캔 ${glDocs.length}건 · 업데이트 ${glCommitted}건\n` +
+          `groupStudents: 스캔 ${gsDocs.length}건 · 업데이트 ${gsCommitted}건`
+      )
+    } catch (error) {
+      console.error('그룹 레거시 보정 실패:', error)
+      alert(`그룹 레거시 보정 실패: ${error.message}`)
+    } finally {
+      setBusyGroupLegacyBackfill(false)
     }
   }
 
@@ -1468,6 +1814,22 @@ export default function Dashboard() {
     return `${c}개 / 남은 ${rem}회`
   }
 
+  async function fetchGroupLessonsForClassIdMerge(gid) {
+    const id = String(gid || '').trim()
+    if (!id) return []
+    const [a, b] = await Promise.all([
+      getDocs(query(collection(db, 'groupLessons'), where('groupClassId', '==', id))),
+      getDocs(query(collection(db, 'groupLessons'), where('groupClassID', '==', id))),
+    ])
+    const byId = new Map()
+    for (const snap of [a, b]) {
+      snap.docs.forEach((docItem) => {
+        byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
+      })
+    }
+    return Array.from(byId.values())
+  }
+
   async function getNextGroupLessonDateYmd(groupClassId) {
     const gid = String(groupClassId || '').trim()
     if (!gid) return formatLocalYmd(new Date())
@@ -1475,17 +1837,15 @@ export default function Dashboard() {
     const today = getTodayStorageDateString()
 
     try {
-      const snap = await getDocs(
-        query(collection(db, 'groupLessons'), where('groupClassId', '==', gid))
-      )
+      const rows = await fetchGroupLessonsForClassIdMerge(gid)
       let best = null
-      snap.docs.forEach((docItem) => {
-        const data = docItem.data()
-        const dateStr = String(data.date || '').trim()
-        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return
-        if (dateStr < today) return
+      for (const gl of rows) {
+        if (getGroupLessonGroupId(gl) !== gid) continue
+        const dateStr = String(gl.date || '').trim()
+        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
+        if (dateStr < today) continue
         if (best === null || dateStr < best) best = dateStr
-      })
+      }
       if (best) return best
     } catch (error) {
       console.error('다음 수업일 조회 실패:', error)
@@ -1687,6 +2047,25 @@ export default function Dashboard() {
     setPostGroupReEnrollErrors({})
   }
 
+  function closePostPrivateLessonScheduleModal() {
+    setPostPrivateLessonScheduleModalData(null)
+    setPostPrivateLessonScheduleForm({
+      date: '',
+      time: '',
+      subject: '',
+      repeatWeekly: false,
+      repeatWeeks: '4',
+      repeatStartMode: 'includeStart',
+      repeatAnchorDate: '',
+      weeklyFrequency: '1',
+      weeklySlot2Date: '',
+      weeklySlot2Time: '',
+      weeklySlot3Date: '',
+      weeklySlot3Time: '',
+    })
+    setPostPrivateLessonScheduleErrors({})
+  }
+
   function closePostStudentCreateModal() {
     setPostStudentCreateModalStudent(null)
   }
@@ -1716,6 +2095,21 @@ export default function Dashboard() {
 
     setStudentPackageModalStudent(student)
 
+    const getDefaultRegistrationStartDate = (gid) => {
+      const targetGid = String(gid || '').trim()
+      if (!targetGid) return ''
+      const today = getTodayStorageDateString()
+      let best = ''
+      for (const gl of allGroupLessonsForPackaging) {
+        if (getGroupLessonGroupId(gl) !== targetGid) continue
+        const ds = String(gl.date || '').trim()
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(ds)) continue
+        if (ds < today) continue
+        if (!best || ds < best) best = ds
+      }
+      return best || today
+    }
+
     if (reRegisterSourcePackage) {
       const src = reRegisterSourcePackage
       const srcPt = src.packageType
@@ -1730,21 +2124,49 @@ export default function Dashboard() {
         src.totalCount != null && String(src.totalCount).trim() !== ''
           ? String(src.totalCount)
           : '1'
+      const srcWeeksRaw = String(src.registrationWeeks ?? '').trim()
+      const registrationWeeks =
+        srcWeeksRaw && /^[1-9]\d*$/.test(srcWeeksRaw) ? srcWeeksRaw : '4'
+      const registrationStartDate =
+        packageType === 'group' || packageType === 'openGroup'
+          ? getDefaultRegistrationStartDate(groupClassId)
+          : String(src.registrationStartDate || '').trim()
+      const weeklyFrequencyRaw = String(src.weeklyFrequency ?? '1').trim()
+      const weeklyFrequency =
+        weeklyFrequencyRaw === '2' || weeklyFrequencyRaw === '3' ? weeklyFrequencyRaw : '1'
+      const privatePackageMode =
+        packageType === 'private' && String(src.privatePackageMode || '').trim() === 'countBased'
+          ? 'countBased'
+          : packageType === 'private'
+            ? 'regular'
+            : 'regular'
       setStudentPackageForm({
         packageType,
         title: String(src.title || '').trim(),
         totalCount,
         groupClassId,
+        registrationStartDate,
+        registrationWeeks,
+        weeklyFrequency,
+        privatePackageMode,
         expiresAt: '',
         amountPaid: '',
         memo: '',
       })
     } else {
+      const registrationStartDate =
+        packageType === 'group' || packageType === 'openGroup'
+          ? getDefaultRegistrationStartDate('')
+          : ''
       setStudentPackageForm({
         packageType,
         title: '',
         totalCount: '1',
         groupClassId: '',
+        registrationStartDate,
+        registrationWeeks: '4',
+        weeklyFrequency: '1',
+        privatePackageMode: 'regular',
         expiresAt: '',
         amountPaid: '',
         memo: '',
@@ -1783,17 +2205,86 @@ export default function Dashboard() {
   function validateStudentPackageFormFields(form) {
     const errors = {}
     const title = String(form.title || '').trim()
-    if (!title) errors.title = '수강권 제목을 입력해주세요.'
+    const packageTypeEarly = form.packageType
+    const privatePackageMode =
+      packageTypeEarly === 'private' &&
+      String(form.privatePackageMode || '').trim() === 'countBased'
+        ? 'countBased'
+        : packageTypeEarly === 'private'
+          ? 'regular'
+          : null
+    const isPrivateRegular = packageTypeEarly === 'private' && privatePackageMode === 'regular'
+
+    if (packageTypeEarly === 'private' && privatePackageMode === 'countBased' && !title) {
+      errors.title = '수강권 제목을 입력해주세요.'
+    }
 
     const totalParsed = parseRequiredMinOneIntField(form.totalCount)
-    if (!totalParsed.ok) errors.totalCount = '1 이상의 정수를 입력해주세요.'
+    if (!isPrivateRegular && !totalParsed.ok) {
+      errors.totalCount = '1 이상의 정수를 입력해주세요.'
+    }
 
     const packageType = form.packageType
     let groupClassId = String(form.groupClassId || '').trim()
+    let registrationStartDate = ''
+    let registrationWeeks = null
+    let weeklyFrequency = '1'
+    let outgoingTotalCount = totalParsed.ok ? totalParsed.value : 1
+
     if (packageType === 'group' || packageType === 'openGroup') {
       if (!groupClassId) errors.groupClassId = '그룹을 선택해주세요.'
+      registrationStartDate = String(form.registrationStartDate || '').trim()
+      if (!registrationStartDate) {
+        errors.registrationStartDate = '시작일을 선택해주세요.'
+      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(registrationStartDate)) {
+        errors.registrationStartDate = '시작일 형식이 올바르지 않습니다.'
+      } else if (!parseYmdToLocalDate(registrationStartDate)) {
+        errors.registrationStartDate = '유효한 날짜를 선택해주세요.'
+      }
+      const weeksParsed = parseRequiredMinOneIntField(form.registrationWeeks)
+      if (!weeksParsed.ok) {
+        errors.registrationWeeks = '등록 주수는 1 이상의 정수여야 합니다.'
+      } else {
+        registrationWeeks = weeksParsed.value
+      }
+    } else if (packageType === 'private' && privatePackageMode === 'regular') {
+      groupClassId = ''
+      registrationStartDate = String(form.registrationStartDate || '').trim()
+      if (!registrationStartDate) {
+        errors.registrationStartDate = '시작일을 선택해주세요.'
+      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(registrationStartDate)) {
+        errors.registrationStartDate = '시작일 형식이 올바르지 않습니다.'
+      } else if (!parseYmdToLocalDate(registrationStartDate)) {
+        errors.registrationStartDate = '유효한 날짜를 선택해주세요.'
+      }
+      const weeksParsed = parseRequiredMinOneIntField(form.registrationWeeks)
+      if (!weeksParsed.ok) {
+        errors.registrationWeeks = '등록 주수는 1 이상의 정수여야 합니다.'
+      } else {
+        registrationWeeks = weeksParsed.value
+      }
+      const wfRaw = String(form.weeklyFrequency ?? '1').trim()
+      if (wfRaw !== '1' && wfRaw !== '2' && wfRaw !== '3') {
+        errors.weeklyFrequency = '주당 횟수는 1, 2, 3 중에서 선택해주세요.'
+      }
+      weeklyFrequency = wfRaw === '1' || wfRaw === '2' || wfRaw === '3' ? wfRaw : '1'
+      const computed = computePrivateRegularTotalCount({
+        registrationWeeks: weeksParsed.ok ? weeksParsed.value : 0,
+        weeklyFrequency: Number(weeklyFrequency),
+      })
+      if (computed <= 0) {
+        errors.registrationWeeks =
+          errors.registrationWeeks ||
+          '등록 주수와 주당 횟수를 확인해주세요. (총 횟수를 계산할 수 없습니다.)'
+      }
+      outgoingTotalCount = computed
     } else {
       groupClassId = ''
+      registrationStartDate = ''
+      registrationWeeks = null
+      if (packageType === 'private' && privatePackageMode === 'countBased') {
+        outgoingTotalCount = totalParsed.ok ? totalParsed.value : 1
+      }
     }
 
     let expiresAtTs = null
@@ -1830,10 +2321,14 @@ export default function Dashboard() {
     return {
       valid: Object.keys(errors).length === 0,
       errors,
-      title,
-      totalCount: totalParsed.ok ? totalParsed.value : 1,
+      title: title || '',
+      totalCount: outgoingTotalCount,
       packageType,
       groupClassId,
+      registrationStartDate,
+      registrationWeeks,
+      weeklyFrequency,
+      privatePackageMode,
       expiresAt: expiresAtTs,
       amountPaid,
       memo: String(form.memo || '').trim(),
@@ -1858,9 +2353,17 @@ export default function Dashboard() {
     let teacher = ''
     let groupClassId = null
     let groupClassName = null
+    let computedTotalCount = result.totalCount
+    let coverageEndDate = ''
+    let registrationStartDateForSave = ''
+    let registrationWeeksForSave = null
 
     if (result.packageType === 'private') {
       teacher = normalizeText(st.teacher || '')
+      if (result.privatePackageMode === 'regular') {
+        registrationStartDateForSave = String(result.registrationStartDate || '').trim()
+        registrationWeeksForSave = Number(result.registrationWeeks || 0)
+      }
     } else if (result.packageType === 'group' || result.packageType === 'openGroup') {
       const g = groupClasses.find((gc) => gc.id === result.groupClassId)
       if (!g) {
@@ -1873,6 +2376,25 @@ export default function Dashboard() {
       teacher = normalizeText(g.teacher || '')
       groupClassId = g.id
       groupClassName = g.name || null
+      const coverage = buildGroupPackageCoverageLessons({
+        groupClassId: g.id,
+        registrationStartDate: result.registrationStartDate,
+        registrationWeeks: result.registrationWeeks,
+        groupLessons: allGroupLessonsForPackaging,
+        groupClasses,
+      })
+      computedTotalCount = Number(coverage.computedTotalCount || 0)
+      coverageEndDate = String(coverage.coverageEndDate || '').trim()
+      registrationStartDateForSave = String(result.registrationStartDate || '').trim()
+      registrationWeeksForSave = Number(result.registrationWeeks || 0)
+      if (computedTotalCount <= 0) {
+        setStudentPackageFormErrors((prev) => ({
+          ...prev,
+          registrationStartDate:
+            '선택한 시작일 이후의 그룹 수업 일정이 없어 수강권을 만들 수 없습니다.',
+        }))
+        return
+      }
     }
 
     const scopeKey = buildStudentPackageScopeKey({
@@ -1893,42 +2415,80 @@ export default function Dashboard() {
       if (!ok) return
     }
 
-    const sourcePkg = studentPackageReRegisterSourcePackage
+    let saveTitle = String(result.title || '').trim()
+    if (
+      (result.packageType === 'group' || result.packageType === 'openGroup') &&
+      !saveTitle
+    ) {
+      saveTitle = buildAutoGroupStudentPackageTitle({
+        groupClassName: groupClassName ? String(groupClassName).trim() : '',
+        registrationStartDate:
+          registrationStartDateForSave || result.registrationStartDate,
+        registrationWeeks:
+          registrationWeeksForSave != null && registrationWeeksForSave > 0
+            ? registrationWeeksForSave
+            : result.registrationWeeks,
+      })
+    } else if (
+      result.packageType === 'private' &&
+      result.privatePackageMode === 'regular' &&
+      !saveTitle
+    ) {
+      saveTitle = buildAutoPrivateStudentPackageTitle({
+        studentName,
+        registrationStartDate: result.registrationStartDate,
+        registrationWeeks: result.registrationWeeks,
+        weeklyFrequency: result.weeklyFrequency,
+      })
+    }
 
     try {
       setBusyStudentPackageSubmit(true)
-      const docRef = await addDoc(collection(db, 'studentPackages'), {
+      const newStudentPackagePayload = {
         studentId,
         studentName,
         teacher,
         packageType: result.packageType,
         groupClassId,
         groupClassName,
-        title: result.title,
-        totalCount: result.totalCount,
+        title: saveTitle,
+        totalCount: computedTotalCount,
         usedCount: 0,
-        remainingCount: result.totalCount,
+        remainingCount: computedTotalCount,
         status: 'active',
+        registrationStartDate: registrationStartDateForSave || '',
+        registrationWeeks:
+          registrationWeeksForSave != null && registrationWeeksForSave > 0
+            ? registrationWeeksForSave
+            : null,
+        coverageEndDate: coverageEndDate || '',
         expiresAt: result.expiresAt,
         amountPaid: result.amountPaid,
         memo: result.memo,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      })
+      }
+      if (result.packageType === 'private' && result.privatePackageMode === 'regular') {
+        newStudentPackagePayload.privatePackageMode = 'regular'
+        newStudentPackagePayload.weeklyFrequency = String(result.weeklyFrequency || '1')
+      } else if (result.packageType === 'private') {
+        newStudentPackagePayload.privatePackageMode = 'countBased'
+      }
+      const docRef = await addDoc(collection(db, 'studentPackages'), newStudentPackagePayload)
       await addCreditTransaction({
         studentId,
         studentName,
         teacher,
         packageId: docRef.id,
         packageType: result.packageType,
-        packageTitle: String(result.title || '').trim(),
+        packageTitle: String(saveTitle || '').trim(),
         groupClassName: groupClassName ? String(groupClassName).trim() : '',
         sourceType: 'studentPackage',
         sourceId: docRef.id,
         actionType: 'package_created',
-        deltaCount: Number(result.totalCount || 0),
+        deltaCount: Number(computedTotalCount || 0),
         memo: [
-          String(result.title || '').trim(),
+          String(saveTitle || '').trim(),
           groupClassName ? String(groupClassName).trim() : '',
           '신규 수강권 발급',
         ]
@@ -1937,8 +2497,52 @@ export default function Dashboard() {
       })
       closeStudentPackageModal()
 
+      if (result.packageType === 'private') {
+        setPostPrivateLessonScheduleModalData({
+          packageId: docRef.id,
+          studentId,
+          studentName,
+          teacher,
+          packageTitle: String(saveTitle || '').trim(),
+          totalCount: computedTotalCount,
+          remainingCount: computedTotalCount,
+          openedFromPrivateRegular: result.privatePackageMode === 'regular',
+        })
+        if (result.privatePackageMode === 'regular') {
+          setPostPrivateLessonScheduleForm({
+            date: String(result.registrationStartDate || '').trim(),
+            time: '',
+            subject: '',
+            repeatWeekly: true,
+            repeatWeeks: String(result.registrationWeeks ?? '4'),
+            repeatStartMode: 'includeStart',
+            repeatAnchorDate: '',
+            weeklyFrequency: String(result.weeklyFrequency ?? '1'),
+            weeklySlot2Date: '',
+            weeklySlot2Time: '',
+            weeklySlot3Date: '',
+            weeklySlot3Time: '',
+          })
+        } else {
+          setPostPrivateLessonScheduleForm({
+            date: getTodayStorageDateString(),
+            time: '',
+            subject: '',
+            repeatWeekly: false,
+            repeatWeeks: '4',
+            repeatStartMode: 'includeStart',
+            repeatAnchorDate: '',
+            weeklyFrequency: '1',
+            weeklySlot2Date: '',
+            weeklySlot2Time: '',
+            weeklySlot3Date: '',
+            weeklySlot3Time: '',
+          })
+        }
+        setPostPrivateLessonScheduleErrors({})
+      }
+
       if (
-        sourcePkg &&
         (result.packageType === 'group' || result.packageType === 'openGroup') &&
         groupClassId
       ) {
@@ -1947,16 +2551,18 @@ export default function Dashboard() {
         setPostGroupReEnrollModalData({
           newPackageId: docRef.id,
           newPackageType: result.packageType,
+          isReenrollFlow: false,
           studentId,
           studentName,
           teacher,
           groupClassId,
           groupClassName,
-          totalCount: result.totalCount,
+          totalCount: computedTotalCount,
           usedCount: 0,
           showNextLessonAutoHint: nextStartYmd !== todayYmd,
+          packageRegistrationStartDate: registrationStartDateForSave,
         })
-        setPostGroupReEnrollStartDate(nextStartYmd)
+        setPostGroupReEnrollStartDate(registrationStartDateForSave)
         setPostGroupReEnrollErrors({})
       }
     } catch (error) {
@@ -1978,6 +2584,7 @@ export default function Dashboard() {
       return
     }
 
+    const gid = String(data.groupClassId || '').trim()
     const errors = {}
     const dateStr = String(postGroupReEnrollStartDate || '').trim()
     if (!dateStr) {
@@ -1995,6 +2602,23 @@ export default function Dashboard() {
         errors.startDate = '유효한 날짜를 선택해주세요.'
       }
     }
+    if (Object.keys(errors).length === 0) {
+      const pkgReg = String(data.packageRegistrationStartDate || '').trim()
+      if (/^\d{4}-\d{2}-\d{2}$/.test(pkgReg) && dateStr < pkgReg) {
+        errors.startDate = '등록 시작일은 수강권 시작일보다 이를 수 없습니다.'
+      }
+      if (!errors.startDate) {
+        const earliest = getEarliestFutureGroupLessonYmdFromLessons({
+          groupClassId: gid,
+          groupLessons: studentSummaryGroupLessons,
+          todayYmd: getTodayStorageDateString(),
+        })
+        if (/^\d{4}-\d{2}-\d{2}$/.test(earliest) && dateStr < earliest) {
+          errors.startDate =
+            '등록 시작일은 반의 첫 예정 수업일보다 이를 수 없습니다.'
+        }
+      }
+    }
     setPostGroupReEnrollErrors(errors)
     if (Object.keys(errors).length > 0) return
 
@@ -2002,7 +2626,6 @@ export default function Dashboard() {
     const startTimestamp = Timestamp.fromDate(new Date(y, mo - 1, d))
 
     const enrollStudentId = String(data.studentId || '').trim()
-    const gid = String(data.groupClassId || '').trim()
     const teacherNorm = normalizeText(data.teacher || '')
 
     try {
@@ -2381,6 +3004,13 @@ export default function Dashboard() {
     setGroupFormErrors({})
   }
 
+  function closePostGroupScheduleRebuildModal(options = {}) {
+    if (!options.force && busyPostGroupScheduleRebuild) return
+    setPostGroupScheduleRebuildModalData(null)
+    setPostGroupScheduleRebuildFromDate('')
+    setPostGroupScheduleRebuildErrors({})
+  }
+
   function groupMaxStudentsToFormString(value) {
     const n = Number(value)
     if (!Number.isFinite(n)) return '1'
@@ -2403,6 +3033,8 @@ export default function Dashboard() {
       subject: '',
       weekdays: [],
       recurrenceMode: 'fixedWeekdays',
+      rebuildFutureLessons: false,
+      rebuildFromDate: '',
     })
     setGroupFormErrors({})
     setGroupModal({ type: 'add' })
@@ -2414,6 +3046,15 @@ export default function Dashboard() {
       return
     }
 
+    const todayYmd = getTodayStorageDateString()
+    const sel = selectedDateString
+    const defaultRebuildFrom =
+      sel &&
+      /^\d{4}-\d{2}-\d{2}$/.test(sel) &&
+      parseYmdToLocalDate(sel) &&
+      sel >= todayYmd
+        ? sel
+        : todayYmd
     setGroupForm({
       name: group.name || '',
       teacher: group.teacher || '',
@@ -2423,13 +3064,15 @@ export default function Dashboard() {
       subject: String(group.subject || '').trim(),
       weekdays: normalizeGroupWeekdaysFromDoc(group.weekdays),
       recurrenceMode: 'fixedWeekdays',
+      rebuildFutureLessons: false,
+      rebuildFromDate: defaultRebuildFrom,
     })
     setGroupFormErrors({})
     setGroupModal({ type: 'edit', group })
   }
 
   function validateGroupFormFields(form, options = {}) {
-    const { forNewClass } = options
+    const { forNewClass, forEdit } = options
     const errors = {}
     const name = form.name.trim()
     const teacher = form.teacher.trim()
@@ -2476,6 +3119,22 @@ export default function Dashboard() {
     const recurrenceMode =
       form.recurrenceMode === 'fixedWeekdays' ? 'fixedWeekdays' : 'fixedWeekdays'
 
+    let rebuildFutureLessons = false
+    let rebuildFromDate = ''
+    if (forEdit) {
+      rebuildFutureLessons = Boolean(form.rebuildFutureLessons)
+      if (rebuildFutureLessons) {
+        rebuildFromDate = String(form.rebuildFromDate || '').trim()
+        if (!rebuildFromDate) {
+          errors.rebuildFromDate = '변경 적용 시작일을 선택해주세요.'
+        } else if (!/^\d{4}-\d{2}-\d{2}$/.test(rebuildFromDate)) {
+          errors.rebuildFromDate = '날짜 형식이 올바르지 않습니다.'
+        } else if (!parseYmdToLocalDate(rebuildFromDate)) {
+          errors.rebuildFromDate = '유효한 날짜를 선택해주세요.'
+        }
+      }
+    }
+
     return {
       valid: Object.keys(errors).length === 0,
       errors,
@@ -2487,6 +3146,8 @@ export default function Dashboard() {
       subject,
       weekdays,
       recurrenceMode,
+      rebuildFutureLessons,
+      rebuildFromDate,
     }
   }
 
@@ -2495,6 +3156,7 @@ export default function Dashboard() {
 
     const result = validateGroupFormFields(groupForm, {
       forNewClass: groupModal.type === 'add',
+      forEdit: groupModal.type === 'edit',
     })
     setGroupFormErrors(result.errors)
     if (!result.valid) return
@@ -2562,6 +3224,7 @@ export default function Dashboard() {
     }
 
     const { group } = groupModal
+    const scheduleAffected = isGroupEditScheduleAffected(group, result)
     try {
       setBusyGroupId(group.id)
       await updateDoc(doc(db, 'groupClasses', group.id), {
@@ -2575,11 +3238,138 @@ export default function Dashboard() {
         updatedAt: serverTimestamp(),
       })
       closeGroupModal()
+      if (
+        scheduleAffected &&
+        userProfile?.role === 'admin' &&
+        result.rebuildFutureLessons
+      ) {
+        const fromYmd = String(result.rebuildFromDate || '').trim()
+        setPostGroupScheduleRebuildFromDate(fromYmd)
+        setPostGroupScheduleRebuildErrors({})
+        setPostGroupScheduleRebuildModalData({
+          groupId: group.id,
+          groupName: result.name,
+          oldTime: String(group.time || '').trim(),
+          oldSubject: String(group.subject || '').trim(),
+          oldWeekdays: normalizeGroupWeekdaysFromDoc(group.weekdays),
+          newTime: result.time,
+          newSubject: result.subject,
+          newWeekdays: result.weekdays,
+          maxStudents: result.maxStudents,
+          teacher: teacherKey,
+          requestedFromDate: fromYmd,
+        })
+      }
     } catch (error) {
       console.error('그룹 수정 실패:', error)
       alert(`그룹 수정 실패: ${error.message}`)
     } finally {
       setBusyGroupId(null)
+    }
+  }
+
+  async function submitPostGroupScheduleRebuild() {
+    const data = postGroupScheduleRebuildModalData
+    if (!data?.groupId) return
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 사용할 수 있습니다.')
+      return
+    }
+
+    const fromD = String(postGroupScheduleRebuildFromDate || '').trim()
+    if (!fromD) {
+      setPostGroupScheduleRebuildErrors({ fromDate: '기준일을 선택해주세요.' })
+      return
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(fromD) || !parseYmdToLocalDate(fromD)) {
+      setPostGroupScheduleRebuildErrors({ fromDate: '유효한 기준일을 선택해주세요.' })
+      return
+    }
+    setPostGroupScheduleRebuildErrors({})
+
+    const todayYmd = getTodayStorageDateString()
+    const effectiveFromYmd = maxLexYmd(fromD, todayYmd)
+    const gid = String(data.groupId)
+
+    let sourceGroupLessons
+    try {
+      sourceGroupLessons = await fetchGroupLessonsForClassIdMerge(gid)
+    } catch (error) {
+      console.error('그룹 수업 목록 불러오기 실패:', error)
+      alert(`그룹 수업 목록을 불러오지 못했습니다: ${error.message}`)
+      return
+    }
+
+    const windowLessons = sourceGroupLessons.filter((gl) =>
+      isGroupLessonInScheduleRebuildWindow(gl, gid, effectiveFromYmd)
+    )
+    const toDelete = windowLessons.filter((gl) =>
+      isGroupLessonEligibleScheduleRebuildDelete(gl, gid, effectiveFromYmd)
+    )
+    const skippedProtected = windowLessons.filter(
+      (gl) => !isGroupLessonEligibleScheduleRebuildDelete(gl, gid, effectiveFromYmd)
+    )
+
+    if (skippedProtected.length > 0) {
+      const proceed = window.confirm(
+        `기준일(${effectiveFromYmd}) 이후 일정 중, 삭제·재생성에서 제외되는 수업(출석 반영·완료·특별 수업 등)이 ${skippedProtected.length}건 있습니다. 계속할까요?`
+      )
+      if (!proceed) return
+    }
+
+    const deletedLessonIds = new Set(toDelete.map((gl) => gl.id))
+    let maxDelDate = null
+    for (const gl of toDelete) {
+      const ds = String(gl.date || '').trim()
+      if (!maxDelDate || ds > maxDelDate) maxDelDate = ds
+    }
+
+    const endYmd =
+      maxDelDate ||
+      addCalendarDaysToYmd(effectiveFromYmd, GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS)
+
+    try {
+      setBusyPostGroupScheduleRebuild(true)
+      const chunkSize = 400
+      for (let i = 0; i < toDelete.length; i += chunkSize) {
+        const batch = writeBatch(db)
+        const chunk = toDelete.slice(i, i + chunkSize)
+        for (const gl of chunk) {
+          batch.delete(doc(db, 'groupLessons', gl.id))
+        }
+        await batch.commit()
+      }
+
+      const groupSnap = await getDoc(doc(db, 'groupClasses', gid))
+      if (!groupSnap.exists()) throw new Error('반 정보를 찾을 수 없습니다.')
+      const g = { id: groupSnap.id, ...groupSnap.data() }
+
+      const existingAfterDelete = sourceGroupLessons.filter((gl) => !deletedLessonIds.has(gl.id))
+
+      const { created, skippedDup } = await createGroupLessonsInDateRange({
+        groupClassId: gid,
+        groupClassName: g.name || data.groupName || '',
+        teacher: normalizeText(g.teacher || ''),
+        time: String(g.time || '').trim(),
+        subject: String(g.subject || '').trim(),
+        weekdays: g.weekdays,
+        maxStudents: g.maxStudents,
+        startYmd: effectiveFromYmd,
+        endYmd,
+        existingLessons: existingAfterDelete,
+      })
+
+      closePostGroupScheduleRebuildModal({ force: true })
+      let msg = `처리했습니다. 적용 기준일: ${effectiveFromYmd}\n삭제 ${toDelete.length}건, 새로 생성 ${created}건 (중복 건너뜀 ${skippedDup}건).`
+      if (skippedProtected.length > 0) {
+        msg += `\n제외된 일정 ${skippedProtected.length}건은 그대로 두었습니다.`
+      }
+      alert(msg)
+    } catch (error) {
+      console.error('그룹 일정 재생성 실패:', error)
+      alert(`처리 실패: ${error.message}`)
+    } finally {
+      setBusyPostGroupScheduleRebuild(false)
     }
   }
 
@@ -2725,6 +3515,29 @@ export default function Dashboard() {
       )
     ) {
       alert('이미 이 그룹에 등록된 학생입니다.')
+      return
+    }
+
+    const dateStrYmd = String(groupStudentForm.startDate || '').trim()
+    const pkgRegYmd = String(selectedPackage.registrationStartDate || '').trim()
+    const extraStartErrors = {}
+    if (/^\d{4}-\d{2}-\d{2}$/.test(pkgRegYmd) && dateStrYmd < pkgRegYmd) {
+      extraStartErrors.startDate =
+        '등록 시작일은 수강권 시작일보다 이를 수 없습니다.'
+    }
+    if (!extraStartErrors.startDate) {
+      const earliestGl = getEarliestFutureGroupLessonYmdFromLessons({
+        groupClassId: selectedGroupClass.id,
+        groupLessons,
+        todayYmd: getTodayStorageDateString(),
+      })
+      if (/^\d{4}-\d{2}-\d{2}$/.test(earliestGl) && dateStrYmd < earliestGl) {
+        extraStartErrors.startDate =
+          '등록 시작일은 반의 첫 예정 수업일보다 이를 수 없습니다.'
+      }
+    }
+    if (Object.keys(extraStartErrors).length > 0) {
+      setGroupStudentFormErrors(extraStartErrors)
       return
     }
 
@@ -2896,6 +3709,16 @@ export default function Dashboard() {
     if (!selectedGroupClass?.id) return
     if (!groupLessonModal) return
 
+    if (groupLessonModal.type === 'add') {
+      const canCreateDirectly =
+        userProfile?.role === 'admin' || userProfile?.canCreateLessonDirectly === true
+      const requiresApproval = userProfile?.requiresLessonApproval === true
+      if (!canCreateDirectly || requiresApproval) {
+        alert('직접 수업 생성 권한이 없거나 승인 절차가 필요합니다.')
+        return
+      }
+    }
+
     const result = validateGroupLessonFormFields(groupLessonForm)
     setGroupLessonFormErrors(result.errors)
     if (!result.valid) return
@@ -2917,6 +3740,7 @@ export default function Dashboard() {
           capacity: Number(selectedGroupClass.maxStudents || 0),
           bookedCount: 0,
           isBookable: false,
+          generationKind: 'manual',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         })
@@ -3125,7 +3949,7 @@ export default function Dashboard() {
     const toDelete = groupLessons.filter(
       (gl) =>
         Boolean(gl?.id) &&
-        String(gl.groupClassId || '') === gid &&
+        getGroupLessonGroupId(gl) === gid &&
         String(gl.date || '').trim() >= fromD
     )
 
@@ -3171,17 +3995,105 @@ export default function Dashboard() {
     setGroupLessonAttendanceModal(null)
   }
 
-  function openGroupLessonAttendanceModal(lesson) {
+  function isPastGroupLesson(lesson) {
+    const lessonDate = String(lesson?.date || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lessonDate)) return false
+
+    const now = getNowSchoolDateTimeParts()
+    if (lessonDate < now.ymd) return true
+    if (lessonDate > now.ymd) return false
+
+    const lessonTime = String(lesson?.time || '').trim()
+    if (!lessonTime) return false
+    const lessonTimeHm = lessonTime.slice(0, 5)
+    if (!/^\d{2}:\d{2}$/.test(lessonTimeHm)) return false
+    return lessonTimeHm < now.hm
+  }
+
+  async function syncPastGroupLessonAttendance(lesson) {
+    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+      return
+    }
+    if (!lesson?.id) return
+    if (!isPastGroupLesson(lesson)) return
+
+    const gid = getGroupLessonGroupId(lesson)
+    if (!gid) return
+
+    const lessonLatest = groupLessons.find((l) => l.id === lesson.id) || lesson
+    const countedRaw = Array.isArray(lessonLatest.countedStudentIDs)
+      ? lessonLatest.countedStudentIDs
+      : []
+    const countedSet = new Set(countedRaw.map((id) => String(id || '').trim()))
+    const hasAttendanceAppliedAt = Boolean(lessonLatest.attendanceAppliedAt)
+    if (hasAttendanceAppliedAt && countedSet.size > 0) return
+
+    const lessonDate = String(lessonLatest.date || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(lessonDate)) return
+
+    const rows = [...studentSummaryGroupStudents]
+      .filter((gs) => {
+        const gsGid = String(gs.groupClassId || gs.classID || '').trim()
+        if (gsGid !== String(gid)) return false
+        const pkgId = String(gs.packageId || '').trim()
+        if (!pkgId) return false
+        const pkg = studentPackages.find((p) => p.id === pkgId)
+        if (!pkg || pkg.packageType !== 'group' || String(pkg.groupClassId || '') !== String(gid)) {
+          return false
+        }
+        if (!isGroupStudentOperationallyEligibleOnYmd(gs, lessonDate)) return false
+        return true
+      })
+      .sort((a, b) =>
+        String(a.studentName || a.name || '').localeCompare(
+          String(b.studentName || b.name || ''),
+          'ko'
+        )
+      )
+      .map((gs) => {
+        const studentId = String(gs.studentId || '').trim()
+        const pkg = studentPackages.find((p) => p.id === gs.packageId)
+        const remaining = pkg ? Number(pkg.remainingCount ?? 0) : 0
+        const isCounted = Boolean(studentId && countedSet.has(studentId))
+        return {
+          groupStudent: gs,
+          isCounted,
+          canDeduct: Boolean(pkg) && !isCounted && remaining > 0,
+        }
+      })
+
+    for (const row of rows) {
+      if (row.isCounted || !row.canDeduct) continue
+      // 기존 트랜잭션 로직을 재사용해 자동 차감을 동기화한다.
+      await applyGroupLessonAttendanceDeduction(row.groupStudent, lessonLatest, gid)
+    }
+  }
+
+  async function openGroupLessonAttendanceModal(lesson) {
     if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
       alert('출석 관리 권한이 없습니다.')
       return
     }
     if (!lesson?.id) return
+    await syncPastGroupLessonAttendance(lesson)
     setGroupLessonAttendanceModal({ lesson })
   }
 
-  async function applyGroupLessonAttendanceDeduction(groupStudentRow, lesson) {
-    const gid = selectedGroupClass?.id
+  async function openCalendarGroupLessonAttendance(lesson) {
+    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+      return
+    }
+    const gid = getGroupLessonGroupId(lesson)
+    if (!gid) return
+    const matchedGroupClass =
+      groupClasses.find((g) => String(g.id) === String(gid)) || null
+    if (!matchedGroupClass) return
+    setSelectedGroupClass(matchedGroupClass)
+    await openGroupLessonAttendanceModal(lesson)
+  }
+
+  async function applyGroupLessonAttendanceDeduction(groupStudentRow, lesson, explicitGroupClassId) {
+    const gid = String(explicitGroupClassId || getGroupLessonGroupId(lesson) || '').trim()
     if (!gid || !lesson?.id) return
     if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
       alert('출석 관리 권한이 없습니다.')
@@ -3233,7 +4145,7 @@ export default function Dashboard() {
         if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
-        if (String(lData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수업입니다.')
+        if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
 
         const pData = pkgSnap.data()
         if (pData.packageType !== 'group') {
@@ -3354,7 +4266,7 @@ export default function Dashboard() {
         if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
-        if (String(lData.groupClassId || '') !== String(gid)) throw new Error('다른 반 수업입니다.')
+        if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
 
         const pData = pkgSnap.data()
         if (pData.packageType !== 'group') {
@@ -3518,6 +4430,12 @@ export default function Dashboard() {
       repeatWeekly: false,
       repeatWeeks: '4',
       repeatStartMode: 'includeStart',
+      repeatAnchorDate: '',
+      weeklyFrequency: '1',
+      weeklySlot2Date: '',
+      weeklySlot2Time: '',
+      weeklySlot3Date: '',
+      weeklySlot3Time: '',
     })
     setPrivateLessonFormErrors({})
     setPrivateLessonModalOpen(true)
@@ -3533,9 +4451,17 @@ export default function Dashboard() {
     const repeatWeekly = form.repeatWeekly === true
     const repeatWeeksRaw = String(form.repeatWeeks ?? '').trim()
     const repeatStartModeRaw = String(form.repeatStartMode || '').trim()
+    const repeatAnchorDate = String(form.repeatAnchorDate || '').trim()
     const repeatStartMode =
       repeatStartModeRaw === 'afterFirst' ? 'afterFirst' : 'includeStart'
     let repeatWeeks = 4
+
+    const wfRaw = String(form.weeklyFrequency ?? '1').trim()
+    const weeklyFrequency = wfRaw === '2' || wfRaw === '3' ? wfRaw : '1'
+    const weeklySlot2Date = String(form.weeklySlot2Date || '').trim()
+    const weeklySlot2Time = String(form.weeklySlot2Time || '').trim()
+    const weeklySlot3Date = String(form.weeklySlot3Date || '').trim()
+    const weeklySlot3Time = String(form.weeklySlot3Time || '').trim()
 
     if (!studentId) errors.studentId = '학생을 선택해주세요.'
     if (!packageId) {
@@ -3548,7 +4474,16 @@ export default function Dashboard() {
     if (!time) errors.time = '시간을 선택해주세요.'
     if (time && !/^\d{2}:\d{2}$/.test(time)) errors.time = '시간 형식이 올바르지 않습니다.'
     if (!subject) errors.subject = '과목을 입력해주세요.'
+
     if (repeatWeekly) {
+      if (
+        wfRaw !== '' &&
+        wfRaw !== '1' &&
+        wfRaw !== '2' &&
+        wfRaw !== '3'
+      ) {
+        errors.weeklyFrequency = '주당 횟수는 1, 2, 3 중 하나여야 합니다.'
+      }
       const parsed = Number.parseInt(repeatWeeksRaw, 10)
       if (!Number.isInteger(parsed) || parsed < 1) {
         errors.repeatWeeks = '반복 주수는 1 이상의 정수여야 합니다.'
@@ -3557,6 +4492,80 @@ export default function Dashboard() {
       }
       if (repeatStartModeRaw !== 'includeStart' && repeatStartModeRaw !== 'afterFirst') {
         errors.repeatStartMode = '반복 시작 방식이 올바르지 않습니다.'
+      }
+      if (repeatStartMode === 'afterFirst') {
+        if (!repeatAnchorDate) {
+          errors.repeatAnchorDate = '반복 시작일을 선택해주세요.'
+        } else if (
+          !/^\d{4}-\d{2}-\d{2}$/.test(repeatAnchorDate) ||
+          !parseYmdToLocalDate(repeatAnchorDate)
+        ) {
+          errors.repeatAnchorDate = '반복 시작일 형식이 올바르지 않습니다.'
+        } else if (repeatAnchorDate === date) {
+          errors.repeatAnchorDate = '반복 시작일은 첫 수업 날짜와 달라야 합니다.'
+        } else if (date && repeatAnchorDate < date) {
+          errors.repeatAnchorDate = '반복 시작일은 첫 수업 날짜 이후여야 합니다.'
+        }
+      }
+
+      if (weeklyFrequency === '2' || weeklyFrequency === '3') {
+        if (!weeklySlot2Date) {
+          errors.weeklySlot2Date = '두 번째 수업 날짜를 선택해주세요.'
+        } else if (!/^\d{4}-\d{2}-\d{2}$/.test(weeklySlot2Date) || !parseYmdToLocalDate(weeklySlot2Date)) {
+          errors.weeklySlot2Date = '두 번째 수업 날짜 형식이 올바르지 않습니다.'
+        }
+        if (!weeklySlot2Time) {
+          errors.weeklySlot2Time = '두 번째 수업 시간을 선택해주세요.'
+        } else if (!/^\d{2}:\d{2}$/.test(weeklySlot2Time)) {
+          errors.weeklySlot2Time = '두 번째 수업 시간 형식이 올바르지 않습니다.'
+        }
+      }
+      if (weeklyFrequency === '3') {
+        if (!weeklySlot3Date) {
+          errors.weeklySlot3Date = '세 번째 수업 날짜를 선택해주세요.'
+        } else if (!/^\d{4}-\d{2}-\d{2}$/.test(weeklySlot3Date) || !parseYmdToLocalDate(weeklySlot3Date)) {
+          errors.weeklySlot3Date = '세 번째 수업 날짜 형식이 올바르지 않습니다.'
+        }
+        if (!weeklySlot3Time) {
+          errors.weeklySlot3Time = '세 번째 수업 시간을 선택해주세요.'
+        } else if (!/^\d{2}:\d{2}$/.test(weeklySlot3Time)) {
+          errors.weeklySlot3Time = '세 번째 수업 시간 형식이 올바르지 않습니다.'
+        }
+      }
+
+      const slotKeys = []
+      if (
+        date &&
+        time &&
+        /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+        /^\d{2}:\d{2}$/.test(time)
+      ) {
+        slotKeys.push(`${date} ${time}`)
+      }
+      if (
+        (weeklyFrequency === '2' || weeklyFrequency === '3') &&
+        !errors.weeklySlot2Date &&
+        !errors.weeklySlot2Time &&
+        weeklySlot2Date &&
+        weeklySlot2Time &&
+        /^\d{4}-\d{2}-\d{2}$/.test(weeklySlot2Date) &&
+        /^\d{2}:\d{2}$/.test(weeklySlot2Time)
+      ) {
+        slotKeys.push(`${weeklySlot2Date} ${weeklySlot2Time}`)
+      }
+      if (
+        weeklyFrequency === '3' &&
+        !errors.weeklySlot3Date &&
+        !errors.weeklySlot3Time &&
+        weeklySlot3Date &&
+        weeklySlot3Time &&
+        /^\d{4}-\d{2}-\d{2}$/.test(weeklySlot3Date) &&
+        /^\d{2}:\d{2}$/.test(weeklySlot3Time)
+      ) {
+        slotKeys.push(`${weeklySlot3Date} ${weeklySlot3Time}`)
+      }
+      if (slotKeys.length >= 2 && new Set(slotKeys).size !== slotKeys.length) {
+        errors.scheduleSlots = '각 슬롯의 날짜·시간은 서로 달라야 합니다.'
       }
     }
 
@@ -3571,10 +4580,128 @@ export default function Dashboard() {
       repeatWeekly,
       repeatWeeks,
       repeatStartMode,
+      repeatAnchorDate,
+      weeklyFrequency,
+      weeklySlot2Date,
+      weeklySlot2Time,
+      weeklySlot3Date,
+      weeklySlot3Time,
     }
   }
 
+  /**
+   * 개인 수업 일괄 생성(배치 저장 + 사용량 재계산). 폼 검증·학생/수강권 검증은 호출부에서 수행.
+   * @returns {{ ok: true } | { ok: false, errors: Record<string, string> }}
+   */
+  async function createPrivateLessonsForPackage({ result, student, selectedPackage, teacherKey }) {
+    const studentName = String(student.name || '').trim()
+    const scheduleEntries = buildPrivateLessonScheduleEntries({
+      date: result.date,
+      time: result.time,
+      repeatWeekly: result.repeatWeekly,
+      repeatWeeks: result.repeatWeeks,
+      repeatStartMode: result.repeatStartMode,
+      repeatAnchorDate: result.repeatAnchorDate,
+      weeklyFrequency: result.weeklyFrequency,
+      weeklySlot2Date: result.weeklySlot2Date,
+      weeklySlot2Time: result.weeklySlot2Time,
+      weeklySlot3Date: result.weeklySlot3Date,
+      weeklySlot3Time: result.weeklySlot3Time,
+    })
+    if (scheduleEntries.length === 0) {
+      return { ok: false, errors: { date: '날짜·시간·반복 설정을 확인해주세요.' } }
+    }
+
+    const internalDupKeys = scheduleEntries.map((e) => `${e.date} ${e.time}`)
+    if (new Set(internalDupKeys).size !== internalDupKeys.length) {
+      return {
+        ok: false,
+        errors: { date: '반복 일정에 중복된 날짜·시간이 포함되어 있습니다.' },
+      }
+    }
+
+    const existingDupKeys = []
+    for (const e of scheduleEntries) {
+      const hasDup = lessons.some(
+        (lesson) =>
+          String(lesson.packageId || '').trim() === String(selectedPackage.id) &&
+          String(lesson.date || '').trim() === e.date &&
+          String(lesson.time || '').trim() === e.time
+      )
+      if (hasDup) existingDupKeys.push(`${e.date} ${e.time}`)
+    }
+    if (existingDupKeys.length > 0) {
+      const dupText = Array.from(new Set(existingDupKeys)).sort().join(', ')
+      return {
+        ok: false,
+        errors: {
+          date: `같은 수강권에 이미 같은 날짜·시간의 수업이 있습니다. (${dupText})`,
+        },
+      }
+    }
+
+    const existingScheduledCount = lessons.filter(
+      (lesson) =>
+        String(lesson.packageId || '').trim() === String(selectedPackage.id) &&
+        lesson.isDeductCancelled !== true
+    ).length
+    const newCount = scheduleEntries.length
+    const totalCount = Number(selectedPackage.totalCount ?? 0)
+    if (
+      Number.isFinite(totalCount) &&
+      totalCount >= 0 &&
+      existingScheduledCount + newCount > totalCount
+    ) {
+      return {
+        ok: false,
+        errors: {
+          packageId: `이 수강권으로 예약 가능한 수업 수를 초과했습니다. (현재 예약 ${existingScheduledCount} / 총 ${totalCount})`,
+        },
+      }
+    }
+
+    const seriesId = result.repeatWeekly
+      ? `private-series-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      : null
+    const batch = writeBatch(db)
+    for (const entry of scheduleEntries) {
+      const start = parseLegacyLessonToDate(entry.date, entry.time)
+      if (!start) continue
+      const lessonRef = doc(collection(db, 'lessons'))
+      batch.set(lessonRef, {
+        studentId: student.id,
+        studentName,
+        teacherName: teacherKey,
+        student: studentName,
+        teacher: teacherKey,
+        date: entry.date,
+        time: entry.time,
+        startAt: Timestamp.fromDate(start),
+        subject: result.subject,
+        packageId: selectedPackage.id,
+        packageType: selectedPackage.packageType,
+        packageTitle: String(selectedPackage.title || ''),
+        billingType: 'private',
+        completed: false,
+        completedAt: null,
+        isDeductCancelled: false,
+        deductMemo: '',
+        ...(seriesId ? { seriesId } : {}),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+    }
+    await batch.commit()
+    await recomputePrivatePackageUsage(selectedPackage.id)
+    return { ok: true }
+  }
+
   async function submitPrivateLessonModal() {
+    if (!showPrivateLessonAddInCalendar) {
+      alert('직접 수업 생성 권한이 없거나 승인 절차가 필요합니다.')
+      return
+    }
+
     const result = validatePrivateLessonFormFields(privateLessonForm)
     setPrivateLessonFormErrors(result.errors)
     if (!result.valid) return
@@ -3685,77 +4812,158 @@ export default function Dashboard() {
       return
     }
 
-    const lessonDates = buildPrivateLessonDates({
-      startDateYmd: result.date,
-      repeatWeekly: result.repeatWeekly,
-      repeatWeeks: result.repeatWeeks,
-      repeatStartMode: result.repeatStartMode,
-    })
-    if (lessonDates.length === 0) {
-      setPrivateLessonFormErrors((prev) => ({
-        ...prev,
-        date: '날짜를 확인해주세요.',
-      }))
-      return
-    }
-
-    const existingScheduledCount = lessons.filter(
-      (lesson) =>
-        String(lesson.packageId || '').trim() === String(selectedPackage.id) &&
-        lesson.isDeductCancelled !== true
-    ).length
-    const newCount = lessonDates.length
-    const totalCount = Number(selectedPackage.totalCount ?? 0)
-    if (
-      Number.isFinite(totalCount) &&
-      totalCount >= 0 &&
-      existingScheduledCount + newCount > totalCount
-    ) {
-      setPrivateLessonFormErrors((prev) => ({
-        ...prev,
-        packageId: `이 수강권으로 예약 가능한 수업 수를 초과했습니다. (현재 예약 ${existingScheduledCount} / 총 ${totalCount})`,
-      }))
-      return
-    }
-
     try {
       setBusyPrivateLessonAdd(true)
-      const seriesId = result.repeatWeekly
-        ? `private-series-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-        : null
-      for (const dateYmd of lessonDates) {
-        const start = parseLegacyLessonToDate(dateYmd, result.time)
-        if (!start) continue
-        await addDoc(collection(db, 'lessons'), {
-          studentId: student.id,
-          studentName,
-          teacherName: teacherKey,
-          student: studentName,
-          teacher: teacherKey,
-          date: dateYmd,
-          time: result.time,
-          startAt: Timestamp.fromDate(start),
-          subject: result.subject,
-          packageId: selectedPackage.id,
-          packageType: selectedPackage.packageType,
-          packageTitle: String(selectedPackage.title || ''),
-          billingType: 'private',
-          completed: false,
-          completedAt: null,
-          isDeductCancelled: false,
-          deductMemo: '',
-          ...(seriesId ? { seriesId } : {}),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
+      const created = await createPrivateLessonsForPackage({
+        result,
+        student,
+        selectedPackage,
+        teacherKey,
+      })
+      if (!created.ok) {
+        setPrivateLessonFormErrors((prev) => ({ ...prev, ...created.errors }))
+        return
       }
-      await recomputePrivatePackageUsage(selectedPackage.id)
       closePrivateLessonModal()
     } catch (error) {
       console.error('개인 수업 추가 실패:', error)
       alert(`개인 수업 추가 실패: ${error.message}`)
     } finally {
       setBusyPrivateLessonAdd(false)
+    }
+  }
+
+  async function submitPostPrivateLessonSchedule() {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 수업을 예약할 수 있습니다.')
+      return
+    }
+    const data = postPrivateLessonScheduleModalData
+    if (!data?.packageId || !data?.studentId) {
+      alert('예약 정보가 올바르지 않습니다.')
+      return
+    }
+
+    const syntheticForm = {
+      studentId: data.studentId,
+      packageId: data.packageId,
+      date: postPrivateLessonScheduleForm.date,
+      time: postPrivateLessonScheduleForm.time,
+      subject: postPrivateLessonScheduleForm.subject,
+      repeatWeekly: postPrivateLessonScheduleForm.repeatWeekly === true,
+      repeatWeeks: postPrivateLessonScheduleForm.repeatWeeks,
+      repeatStartMode: postPrivateLessonScheduleForm.repeatStartMode,
+      repeatAnchorDate: postPrivateLessonScheduleForm.repeatAnchorDate ?? '',
+      weeklyFrequency: postPrivateLessonScheduleForm.weeklyFrequency ?? '1',
+      weeklySlot2Date: postPrivateLessonScheduleForm.weeklySlot2Date ?? '',
+      weeklySlot2Time: postPrivateLessonScheduleForm.weeklySlot2Time ?? '',
+      weeklySlot3Date: postPrivateLessonScheduleForm.weeklySlot3Date ?? '',
+      weeklySlot3Time: postPrivateLessonScheduleForm.weeklySlot3Time ?? '',
+    }
+    const result = validatePrivateLessonFormFields(syntheticForm)
+    setPostPrivateLessonScheduleErrors(result.errors)
+    if (!result.valid) return
+
+    const student = studentsSectionViewModel.sortedPrivateStudents.find(
+      (s) => s.id === result.studentId
+    )
+    if (!student) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        studentId: '선택한 학생을 찾을 수 없습니다.',
+      }))
+      return
+    }
+
+    const pkgSnap = await getDoc(doc(db, 'studentPackages', result.packageId))
+    if (!pkgSnap.exists()) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        packageId: '등록된 수강권을 찾을 수 없습니다.',
+      }))
+      return
+    }
+    const selectedPackage = { id: pkgSnap.id, ...pkgSnap.data() }
+
+    if (selectedPackage.packageType !== 'private') {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        packageId: '개인 수강권이 아닙니다.',
+      }))
+      return
+    }
+    if (String(selectedPackage.studentId || '').trim() !== student.id) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        packageId: '선택한 학생과 수강권이 일치하지 않습니다.',
+      }))
+      return
+    }
+    if (selectedPackage.status !== 'active') {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        packageId: '활성 수강권만 사용할 수 있습니다.',
+      }))
+      return
+    }
+    if (Number(selectedPackage.remainingCount ?? 0) <= 0) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        packageId: '남은 횟수가 있는 수강권을 선택해주세요.',
+      }))
+      return
+    }
+    const pkgTeacher = normalizeText(selectedPackage.teacher || '')
+    const stTeacher = normalizeText(student.teacher || '')
+    if (!stTeacher || pkgTeacher !== stTeacher) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        packageId: '학생 담당 선생님과 수강권의 담당 선생님이 일치하지 않습니다.',
+      }))
+      return
+    }
+
+    const teacherKey = normalizeText(student.teacher)
+    if (!teacherKey) {
+      alert('이 학생의 담당 선생님(teacher)이 비어 있어 수업을 만들 수 없습니다.')
+      return
+    }
+
+    if (!parseLegacyLessonToDate(result.date, result.time)) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        date: '날짜·시간을 확인해주세요.',
+      }))
+      return
+    }
+
+    const studentName = String(student.name || '').trim()
+    if (!studentName) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        studentId: '학생 이름이 비어 있습니다.',
+      }))
+      return
+    }
+
+    try {
+      setBusyPostPrivateLessonSchedule(true)
+      const created = await createPrivateLessonsForPackage({
+        result,
+        student,
+        selectedPackage,
+        teacherKey,
+      })
+      if (!created.ok) {
+        setPostPrivateLessonScheduleErrors((prev) => ({ ...prev, ...created.errors }))
+        return
+      }
+      closePostPrivateLessonScheduleModal()
+    } catch (error) {
+      console.error('첫 수업 예약 실패:', error)
+      alert(`첫 수업 예약 실패: ${error.message}`)
+    } finally {
+      setBusyPostPrivateLessonSchedule(false)
     }
   }
 
@@ -3870,9 +5078,12 @@ export default function Dashboard() {
       isPrivateLessonModalSubmitting,
       sortedPrivateStudentsLength: studentsSectionViewModel.sortedPrivateStudents.length,
       enableLegacyLessonMigrationButton: ENABLE_LEGACY_LESSON_MIGRATION_BUTTON,
+      enableGroupLegacyBackfillTool: ENABLE_GROUP_LEGACY_BACKFILL_TOOL,
       isAdmin,
       handleMigrateLessons,
       migrating,
+      handleGroupLegacyBackfill,
+      busyGroupLegacyBackfill,
       displayedLessons,
       getMatchedStudent,
       getMatchedStudentId,
@@ -3886,6 +5097,7 @@ export default function Dashboard() {
       handleDeletePrivateLesson,
       canEditLesson,
       canDeleteLesson,
+      onOpenCalendarGroupLessonAttendance: openCalendarGroupLessonAttendance,
     },
   }
 
@@ -3951,6 +5163,7 @@ export default function Dashboard() {
     getGroupStudentDisplayName,
     openGroupStudentManageModal,
     busyGroupStudentManageId,
+    requiresLessonApproval: userProfile?.requiresLessonApproval === true,
   }
 
   const studentModalProps = {
@@ -3959,6 +5172,7 @@ export default function Dashboard() {
     setStudentForm,
     studentFormErrors,
     isAdmin,
+    teacherSelectOptions,
     isStudentModalSubmitting,
     closeStudentModal,
     submitStudentModal,
@@ -3977,6 +5191,8 @@ export default function Dashboard() {
     setStudentPackageForm,
     studentPackageFormErrors,
     sortedGroupClasses,
+    nextGroupLessonDateByGroupId,
+    studentPackageGroupAutoSummary,
     studentPackageModalActiveSameScopeDuplicates,
     isStudentPackageModalSubmitting,
     closeStudentPackageModal,
@@ -4004,10 +5220,21 @@ export default function Dashboard() {
     postGroupReEnrollModalData,
     postGroupReEnrollStartDate,
     setPostGroupReEnrollStartDate,
+    postGroupReEnrollMinStartYmd,
     postGroupReEnrollErrors,
     closePostGroupReEnrollModal,
     busyPostGroupReEnroll,
     submitPostGroupReEnroll,
+  }
+
+  const postPrivateLessonScheduleModalProps = {
+    postPrivateLessonScheduleModalData,
+    postPrivateLessonScheduleForm,
+    setPostPrivateLessonScheduleForm,
+    postPrivateLessonScheduleErrors,
+    closePostPrivateLessonScheduleModal,
+    submitPostPrivateLessonSchedule,
+    busyPostPrivateLessonSchedule,
   }
 
   const groupModalProps = {
@@ -4015,9 +5242,21 @@ export default function Dashboard() {
     groupForm,
     setGroupForm,
     groupFormErrors,
+    setGroupFormErrors,
+    teacherSelectOptions,
     closeGroupModal,
     submitGroupModal,
     isGroupModalSubmitting,
+  }
+
+  const postGroupScheduleRebuildModalProps = {
+    postGroupScheduleRebuildModalData,
+    postGroupScheduleRebuildFromDate,
+    setPostGroupScheduleRebuildFromDate,
+    postGroupScheduleRebuildErrors,
+    closePostGroupScheduleRebuildModal,
+    busyPostGroupScheduleRebuild,
+    submitPostGroupScheduleRebuild,
   }
 
   const groupStudentAddModalProps = {
@@ -4069,6 +5308,7 @@ export default function Dashboard() {
     selectedGroupClass,
     groupLessonForAttendanceModal,
     groupLessonAttendanceModalRows,
+    isPastLesson: isPastGroupLesson(groupLessonForAttendanceModal),
     isAdmin,
     busyGroupAttendanceStudentId,
     applyGroupLessonAttendanceDeduction,
@@ -4197,12 +5437,20 @@ export default function Dashboard() {
         <PostGroupReEnrollModal {...postGroupReEnrollModalProps} />
       ) : null}
 
+      {activeSection === 'students' && isAdmin && postPrivateLessonScheduleModalData ? (
+        <PostPrivateLessonScheduleModal {...postPrivateLessonScheduleModalProps} />
+      ) : null}
+
       {activeSection === 'students' && isAdmin && studentPackageHistoryModalPackage ? (
         <StudentPackageHistoryModal {...studentPackageHistoryModalProps} />
       ) : null}
 
       {activeSection === 'groups' && groupModal ? (
         <GroupModal {...groupModalProps} />
+      ) : null}
+
+      {activeSection === 'groups' && isAdmin && postGroupScheduleRebuildModalData ? (
+        <PostGroupScheduleRebuildModal {...postGroupScheduleRebuildModalProps} />
       ) : null}
 
       {activeSection === 'groups' &&
@@ -4233,8 +5481,7 @@ export default function Dashboard() {
         <GroupLessonPurgeModal {...groupLessonPurgeModalProps} />
       ) : null}
 
-      {activeSection === 'groups' &&
-      groupLessonAttendanceModal &&
+      {groupLessonAttendanceModal &&
       selectedGroupClass &&
       groupLessonForAttendanceModal ? (
         <GroupLessonAttendanceModal {...groupLessonAttendanceModalProps} />

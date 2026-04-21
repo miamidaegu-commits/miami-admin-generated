@@ -4,6 +4,28 @@ A clean React + Vite admin dashboard with Firebase Auth and Firestore role-based
 
 ## Setup
 
+## Node Version
+
+Recommended Node version for this project: `v20.20.2`
+
+If you use `nvm`:
+
+```bash
+nvm use
+```
+
+Before running Playwright, confirm the active Node version:
+
+```bash
+node -v
+```
+
+It should print:
+
+```bash
+v20.20.2
+```
+
 ### 1. Install dependencies
 ```bash
 npm install
@@ -60,6 +82,13 @@ service cloud.firestore {
 ### 6. Run the app
 ```bash
 npm run dev
+```
+
+### 7. Run Playwright
+```bash
+nvm use
+node -v
+npx playwright test --project=chromium
 ```
 
 ## Project Structure

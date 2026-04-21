@@ -1,4 +1,9 @@
-import { formatGroupStudentStartDate } from '../dashboardViewUtils.js'
+import {
+  buildAutoGroupStudentPackageTitle,
+  buildAutoPrivateStudentPackageTitle,
+  computePrivateRegularTotalCount,
+  formatGroupStudentStartDate,
+} from '../dashboardViewUtils.js'
 
 export default function StudentPackageModal({
   studentPackageModalStudent,
@@ -6,11 +11,58 @@ export default function StudentPackageModal({
   setStudentPackageForm,
   studentPackageFormErrors,
   sortedGroupClasses,
+  nextGroupLessonDateByGroupId,
+  studentPackageGroupAutoSummary,
   studentPackageModalActiveSameScopeDuplicates,
   isStudentPackageModalSubmitting,
   closeStudentPackageModal,
   submitStudentPackageModal,
 }) {
+  const isGroupPackage =
+    studentPackageForm.packageType === 'group' || studentPackageForm.packageType === 'openGroup'
+  const isPrivatePackage = studentPackageForm.packageType === 'private'
+  const isPrivateRegular =
+    isPrivatePackage && studentPackageForm.privatePackageMode !== 'countBased'
+  const selectedGroupClassName = (() => {
+    const gid = String(studentPackageForm.groupClassId || '').trim()
+    if (!gid) return ''
+    const g = sortedGroupClasses.find((x) => x.id === gid)
+    return g?.name != null && String(g.name).trim() ? String(g.name).trim() : ''
+  })()
+  const groupPackageTitlePlaceholder =
+    isGroupPackage &&
+    selectedGroupClassName &&
+    String(studentPackageForm.registrationStartDate || '').trim() &&
+    String(studentPackageForm.registrationWeeks || '').trim()
+      ? buildAutoGroupStudentPackageTitle({
+          groupClassName: selectedGroupClassName,
+          registrationStartDate: studentPackageForm.registrationStartDate,
+          registrationWeeks: studentPackageForm.registrationWeeks,
+        })
+      : isGroupPackage
+        ? '반·시작일·주수를 선택하면 제목이 자동 제안됩니다'
+        : ''
+  const privateRegularComputed = isPrivateRegular
+    ? computePrivateRegularTotalCount({
+        registrationWeeks: studentPackageForm.registrationWeeks,
+        weeklyFrequency: studentPackageForm.weeklyFrequency,
+      })
+    : 0
+  const privateRegularTitlePlaceholder =
+    isPrivateRegular && !String(studentPackageForm.title || '').trim()
+      ? buildAutoPrivateStudentPackageTitle({
+          studentName: studentPackageModalStudent?.name,
+          registrationStartDate: studentPackageForm.registrationStartDate,
+          registrationWeeks: studentPackageForm.registrationWeeks,
+          weeklyFrequency: studentPackageForm.weeklyFrequency,
+        })
+      : ''
+  const autoTotalCount = isGroupPackage
+    ? String(studentPackageGroupAutoSummary?.computedTotalCount ?? 0)
+    : isPrivateRegular
+      ? String(privateRegularComputed || 0)
+      : String(studentPackageForm.totalCount || '')
+
   return (
         <div
           role="dialog"
@@ -51,8 +103,12 @@ export default function StudentPackageModal({
             >
               학생 수강권 추가
             </h2>
-            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.85 }}>
+            <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.85, lineHeight: 1.5 }}>
               {studentPackageModalStudent.name || '-'} · {studentPackageModalStudent.teacher || '-'}
+              <br />
+              <span style={{ fontSize: 12, opacity: 0.78 }}>
+                저장 후 첫 수업 예약 또는 반 등록을 이어서 할 수 있습니다.
+              </span>
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -67,6 +123,16 @@ export default function StudentPackageModal({
                       packageType,
                       groupClassId:
                         packageType === 'private' ? '' : prev.groupClassId,
+                      registrationStartDate:
+                        packageType === 'private'
+                          ? ''
+                          : prev.registrationStartDate,
+                      registrationWeeks:
+                        packageType === 'private' ? '4' : prev.registrationWeeks,
+                      weeklyFrequency: packageType === 'private' ? '1' : prev.weeklyFrequency,
+                      privatePackageMode:
+                        packageType === 'private' ? 'regular' : prev.privatePackageMode,
+                      totalCount: packageType === 'private' ? '1' : prev.totalCount,
                     }))
                   }}
                   style={{
@@ -83,6 +149,183 @@ export default function StudentPackageModal({
                 </select>
               </label>
 
+              {isPrivatePackage ? (
+                <div
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #333',
+                    background: '#1a1d26',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                  }}
+                >
+                  <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.9 }}>수강권 모드</span>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          privatePackageMode: 'regular',
+                          registrationWeeks: prev.registrationWeeks || '4',
+                          weeklyFrequency: prev.weeklyFrequency || '1',
+                        }))
+                      }
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border:
+                          studentPackageForm.privatePackageMode !== 'countBased'
+                            ? '1px solid #5f7dff'
+                            : '1px solid #444',
+                        background:
+                          studentPackageForm.privatePackageMode !== 'countBased'
+                            ? '#273a7a'
+                            : '#1b1f29',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: 13,
+                      }}
+                    >
+                      정기등록
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          privatePackageMode: 'countBased',
+                          totalCount: prev.totalCount || '1',
+                        }))
+                      }
+                      style={{
+                        padding: '8px 14px',
+                        borderRadius: 8,
+                        border:
+                          studentPackageForm.privatePackageMode === 'countBased'
+                            ? '1px solid #5f7dff'
+                            : '1px solid #444',
+                        background:
+                          studentPackageForm.privatePackageMode === 'countBased'
+                            ? '#273a7a'
+                            : '#1b1f29',
+                        color: 'white',
+                        cursor: 'pointer',
+                        fontSize: 13,
+                      }}
+                    >
+                      횟수권
+                    </button>
+                  </div>
+
+                  {isPrivateRegular ? (
+                    <>
+                      <label
+                        style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
+                      >
+                        <span style={{ opacity: 0.85 }}>시작일</span>
+                        <input
+                          type="date"
+                          value={studentPackageForm.registrationStartDate}
+                          onChange={(e) =>
+                            setStudentPackageForm((prev) => ({
+                              ...prev,
+                              registrationStartDate: e.target.value,
+                            }))
+                          }
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 8,
+                            border: '1px solid #444',
+                            background: '#1f1f1f',
+                            color: 'white',
+                          }}
+                        />
+                        {studentPackageFormErrors.registrationStartDate ? (
+                          <span style={{ color: '#f08080', fontSize: 12 }}>
+                            {studentPackageFormErrors.registrationStartDate}
+                          </span>
+                        ) : null}
+                      </label>
+                      <label
+                        style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
+                      >
+                        <span style={{ opacity: 0.85 }}>주당 횟수</span>
+                        <select
+                          value={String(studentPackageForm.weeklyFrequency ?? '1')}
+                          onChange={(e) =>
+                            setStudentPackageForm((prev) => ({
+                              ...prev,
+                              weeklyFrequency: e.target.value,
+                            }))
+                          }
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 8,
+                            border: '1px solid #444',
+                            background: '#1f1f1f',
+                            color: 'white',
+                          }}
+                        >
+                          <option value="1">주 1회</option>
+                          <option value="2">주 2회</option>
+                          <option value="3">주 3회</option>
+                        </select>
+                        {studentPackageFormErrors.weeklyFrequency ? (
+                          <span style={{ color: '#f08080', fontSize: 12 }}>
+                            {studentPackageFormErrors.weeklyFrequency}
+                          </span>
+                        ) : null}
+                      </label>
+                      <label
+                        style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
+                      >
+                        <span style={{ opacity: 0.85 }}>등록 주수</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={studentPackageForm.registrationWeeks}
+                          onChange={(e) =>
+                            setStudentPackageForm((prev) => ({
+                              ...prev,
+                              registrationWeeks: e.target.value,
+                            }))
+                          }
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 8,
+                            border: '1px solid #444',
+                            background: '#1f1f1f',
+                            color: 'white',
+                          }}
+                        />
+                        {studentPackageFormErrors.registrationWeeks ? (
+                          <span style={{ color: '#f08080', fontSize: 12 }}>
+                            {studentPackageFormErrors.registrationWeeks}
+                          </span>
+                        ) : null}
+                      </label>
+                      <div
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #2e3240',
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                          opacity: 0.92,
+                        }}
+                      >
+                        주 {String(studentPackageForm.weeklyFrequency ?? '1')}회 ×{' '}
+                        {String(studentPackageForm.registrationWeeks || '').trim() || '—'}주 ={' '}
+                        {privateRegularComputed || 0}회
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>제목</span>
                 <input
@@ -90,6 +333,13 @@ export default function StudentPackageModal({
                   value={studentPackageForm.title}
                   onChange={(e) =>
                     setStudentPackageForm((prev) => ({ ...prev, title: e.target.value }))
+                  }
+                  placeholder={
+                    isGroupPackage
+                      ? groupPackageTitlePlaceholder
+                      : isPrivateRegular
+                        ? privateRegularTitlePlaceholder
+                        : ''
                   }
                   style={{
                     padding: '10px 12px',
@@ -107,20 +357,25 @@ export default function StudentPackageModal({
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>총 횟수 (totalCount)</span>
+                <span style={{ opacity: 0.85 }}>
+                  총 횟수 (totalCount)
+                  {isPrivateRegular ? <span style={{ opacity: 0.65 }}> — 자동 계산</span> : null}
+                </span>
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={studentPackageForm.totalCount}
+                  value={isGroupPackage || isPrivateRegular ? autoTotalCount : studentPackageForm.totalCount}
                   onChange={(e) =>
                     setStudentPackageForm((prev) => ({ ...prev, totalCount: e.target.value }))
                   }
+                  readOnly={isGroupPackage || isPrivateRegular}
                   style={{
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
-                    background: '#1f1f1f',
+                    background: isGroupPackage || isPrivateRegular ? '#252525' : '#1f1f1f',
                     color: 'white',
+                    cursor: isGroupPackage || isPrivateRegular ? 'default' : 'text',
                   }}
                 />
                 {studentPackageFormErrors.totalCount ? (
@@ -136,12 +391,17 @@ export default function StudentPackageModal({
                   <span style={{ opacity: 0.85 }}>그룹 수업</span>
                   <select
                     value={studentPackageForm.groupClassId}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const nextGid = String(e.target.value || '').trim()
+                      const nextStartDate =
+                        nextGroupLessonDateByGroupId?.get(nextGid) || studentPackageForm.registrationStartDate
                       setStudentPackageForm((prev) => ({
                         ...prev,
-                        groupClassId: e.target.value,
+                        groupClassId: nextGid,
+                        registrationStartDate: nextGid ? nextStartDate || '' : '',
+                        registrationWeeks: prev.registrationWeeks || '4',
                       }))
-                    }
+                    }}
                     style={{
                       padding: '10px 12px',
                       borderRadius: 8,
@@ -163,6 +423,102 @@ export default function StudentPackageModal({
                     </span>
                   ) : null}
                 </label>
+              ) : null}
+
+              {isGroupPackage ? (
+                <>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>시작일</span>
+                    <input
+                      type="date"
+                      value={studentPackageForm.registrationStartDate}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          registrationStartDate: e.target.value,
+                        }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {studentPackageFormErrors.registrationStartDate ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.registrationStartDate}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>등록 주수</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={studentPackageForm.registrationWeeks}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          registrationWeeks: e.target.value,
+                        }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {studentPackageFormErrors.registrationWeeks ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.registrationWeeks}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <div
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #333',
+                      background: '#1a1d26',
+                      fontSize: 12,
+                      lineHeight: 1.55,
+                      opacity: 0.95,
+                    }}
+                  >
+                    <div style={{ marginBottom: 6, fontWeight: 600 }}>
+                      이 반은 주당 {studentPackageGroupAutoSummary?.weeklyClassCount ?? 1}회 수업입니다
+                      {studentPackageGroupAutoSummary?.weekdayLabels
+                        ? ` (${studentPackageGroupAutoSummary.weekdayLabels})`
+                        : ''}
+                    </div>
+                    <div>
+                      주당 {studentPackageGroupAutoSummary?.weeklyClassCount ?? 1}회 ×{' '}
+                      {studentPackageGroupAutoSummary?.registrationWeeks ?? 0}주 ={' '}
+                      {studentPackageGroupAutoSummary?.targetCount ?? 0}회
+                    </div>
+                    <div>
+                      실제 일정:{' '}
+                      {studentPackageGroupAutoSummary?.coverageStartDate
+                        ? `${studentPackageGroupAutoSummary.coverageStartDate} ~ ${studentPackageGroupAutoSummary.coverageEndDate || studentPackageGroupAutoSummary.coverageStartDate}`
+                        : '선택된 일정 없음'}
+                    </div>
+                    <div>
+                      생성 예정 수업 {studentPackageGroupAutoSummary?.computedTotalCount ?? 0}건
+                    </div>
+                    {(studentPackageGroupAutoSummary?.computedTotalCount ?? 0) <
+                    (studentPackageGroupAutoSummary?.targetCount ?? 0) ? (
+                      <div style={{ marginTop: 4, color: '#f2c27a' }}>
+                        실제 일정이 부족해 예상 횟수보다 적게 계산되었습니다.
+                      </div>
+                    ) : null}
+                  </div>
+                </>
               ) : null}
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>

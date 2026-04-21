@@ -3,11 +3,14 @@ export default function PostGroupReEnrollModal({
   postGroupReEnrollModalData,
   postGroupReEnrollStartDate,
   setPostGroupReEnrollStartDate,
+  postGroupReEnrollMinStartYmd,
   postGroupReEnrollErrors,
   closePostGroupReEnrollModal,
   busyPostGroupReEnroll,
   submitPostGroupReEnroll,
 }) {
+  const isReenrollFlow = postGroupReEnrollModalData?.isReenrollFlow !== false
+
   return (
     <div
       role="dialog"
@@ -44,11 +47,12 @@ export default function PostGroupReEnrollModal({
           id="post-group-re-enroll-modal-title"
           style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
         >
-          같은 반에 이어서 등록할까요?
+          {isReenrollFlow ? '같은 반에 다시 등록할까요?' : '이 반에 바로 등록할까요?'}
         </h2>
         <p style={{ margin: '0 0 10px 0', fontSize: 14, opacity: 0.9, lineHeight: 1.5 }}>
-          새 그룹 수강권이 만들어졌습니다. 시작일만 확인하면 같은 반에 바로 이어서 등록할 수
-          있습니다.
+          {isReenrollFlow
+            ? '새 수강권이 만들어졌습니다. 시작일을 확인하면 이전과 같은 반에 다시 등록합니다.'
+            : '새 그룹 수강권이 만들어졌습니다. 시작일을 확인하면 이 학생을 반 수강생으로 등록합니다.'}
         </p>
         <p
           style={{
@@ -78,10 +82,18 @@ export default function PostGroupReEnrollModal({
         ) : null}
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-          <span style={{ opacity: 0.85 }}>시작일 (기본: 다음 수업일)</span>
+          <span style={{ opacity: 0.85 }}>
+            {isReenrollFlow ? '시작일 (기본: 다음 수업일)' : '반 등록 시작일'}
+          </span>
           <input
             type="date"
             value={postGroupReEnrollStartDate}
+            min={
+              postGroupReEnrollMinStartYmd &&
+              /^\d{4}-\d{2}-\d{2}$/.test(postGroupReEnrollMinStartYmd)
+                ? postGroupReEnrollMinStartYmd
+                : undefined
+            }
             onChange={(e) => setPostGroupReEnrollStartDate(e.target.value)}
             style={{
               padding: '10px 12px',
@@ -120,7 +132,7 @@ export default function PostGroupReEnrollModal({
               cursor: busyPostGroupReEnroll ? 'not-allowed' : 'pointer',
             }}
           >
-            나중에 하기
+            {isReenrollFlow ? '나중에 하기' : '나중에 등록'}
           </button>
           <button
             type="button"
@@ -135,7 +147,7 @@ export default function PostGroupReEnrollModal({
               cursor: busyPostGroupReEnroll ? 'not-allowed' : 'pointer',
             }}
           >
-            {busyPostGroupReEnroll ? '처리 중...' : '같은 반에 등록'}
+            {busyPostGroupReEnroll ? '처리 중...' : isReenrollFlow ? '다시 등록' : '지금 등록'}
           </button>
         </div>
       </div>

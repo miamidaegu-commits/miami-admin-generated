@@ -3,12 +3,20 @@ export default function GroupLessonAttendanceModal({
   selectedGroupClass,
   groupLessonForAttendanceModal,
   groupLessonAttendanceModalRows,
+  isPastLesson,
   isAdmin,
   busyGroupAttendanceStudentId,
   applyGroupLessonAttendanceDeduction,
   applyGroupLessonAttendanceUndo,
   closeGroupLessonAttendanceModal,
 }) {
+  function getStatusLabel(row) {
+    if (row.isCounted) return '차감됨'
+    if (!isPastLesson) return '예정'
+    if ((row.remainingCount ?? 0) <= 0) return '수강권 소진'
+    return '차감취소됨'
+  }
+
   return (
     <div
       role="dialog"
@@ -97,9 +105,9 @@ export default function GroupLessonAttendanceModal({
                   <span>
                     {row.remainingCount != null ? row.remainingCount : '—'}
                   </span>
-                  <span>{row.statusLabel}</span>
+                  <span>{getStatusLabel(row)}</span>
                   <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {!row.isCounted && row.canDeduct ? (
+                    {isPastLesson && !row.isCounted && row.canDeduct ? (
                       <button
                         type="button"
                         onClick={() =>
@@ -138,6 +146,10 @@ export default function GroupLessonAttendanceModal({
                       >
                         {rowBusy ? '처리 중' : '차감복구'}
                       </button>
+                    ) : !(
+                      isPastLesson && !row.isCounted && row.canDeduct
+                    ) ? (
+                      <span style={{ fontSize: 12, opacity: 0.6 }}>-</span>
                     ) : null}
                   </span>
                 </div>

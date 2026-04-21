@@ -5,10 +5,18 @@ export default function StudentModal({
   setStudentForm,
   studentFormErrors,
   isAdmin,
+  teacherSelectOptions,
   isStudentModalSubmitting,
   closeStudentModal,
   submitStudentModal,
 }) {
+  const normalizedTeacher = String(studentForm.teacher || '').trim()
+  const hasTeacherOption = teacherSelectOptions.some((opt) => opt.value === normalizedTeacher)
+  const mergedTeacherOptions =
+    isAdmin && normalizedTeacher && !hasTeacherOption
+      ? [{ value: normalizedTeacher, label: `기존 값: ${normalizedTeacher}` }, ...teacherSelectOptions]
+      : teacherSelectOptions
+
   return (
         <div
           role="dialog"
@@ -76,24 +84,41 @@ export default function StudentModal({
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>담당 선생님</span>
-                <input
-                  type="text"
-                  value={studentForm.teacher}
-                  readOnly={!isAdmin}
-                  onChange={
-                    isAdmin
-                      ? (e) =>
-                          setStudentForm((prev) => ({ ...prev, teacher: e.target.value }))
-                      : undefined
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
+                {isAdmin ? (
+                  <select
+                    value={studentForm.teacher}
+                    onChange={(e) =>
+                      setStudentForm((prev) => ({ ...prev, teacher: e.target.value }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="">선생님 선택</option>
+                    {mergedTeacherOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={studentForm.teacher}
+                    readOnly
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                )}
                 {studentFormErrors.teacher ? (
                   <span style={{ color: '#f08080', fontSize: 12 }}>{studentFormErrors.teacher}</span>
                 ) : null}

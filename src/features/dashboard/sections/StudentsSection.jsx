@@ -12,6 +12,7 @@ import {
   formatTime,
   isStudentPackageRowActive,
   sanitizePhoneForTel,
+  parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
 
 export default function StudentsSection({
@@ -536,7 +537,7 @@ export default function StudentsSection({
                       cur === student.id ? null : student.id
                     )
                   }
-                  disabled={rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit}
+                  disabled={rowBusy || busyStudentId === '__add__'}
                   style={{
                     padding: '6px 10px',
                     borderRadius: 8,
@@ -544,7 +545,7 @@ export default function StudentsSection({
                     background: '#1a2238',
                     color: 'white',
                     cursor:
-                      rowBusy || busyStudentId === '__add__' || busyStudentPackageSubmit
+                      rowBusy || busyStudentId === '__add__'
                         ? 'not-allowed'
                         : 'pointer',
                   }}

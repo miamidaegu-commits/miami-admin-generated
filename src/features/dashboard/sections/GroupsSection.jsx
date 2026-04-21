@@ -37,6 +37,7 @@ export default function GroupsSection({
   getGroupStudentDisplayName,
   openGroupStudentManageModal,
   busyGroupStudentManageId,
+  requiresLessonApproval,
 }) {
   return (
   <section className="activity-section">

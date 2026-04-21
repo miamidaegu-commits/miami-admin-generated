@@ -3,6 +3,7 @@ import {
   addCalendarDaysToYmd,
   earliestNextLessonSortKey,
   formatGroupStudentStartDate,
+  getGroupLessonGroupId,
   getLessonStorageDateString,
   getGroupStudentRegistrationOperationalLabelForToday,
   getTodayStorageDateString,
@@ -216,7 +217,7 @@ export default function useStudentsSectionViewModel({
       let bestLesson = null
       let bestKey = null
       for (const gl of studentSummaryGroupLessons) {
-        const gid = String(gl.groupClassId || '').trim()
+        const gid = getGroupLessonGroupId(gl)
         const dateStr = String(gl.date || '').trim()
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
         if (dateStr < today) continue
@@ -343,7 +344,7 @@ export default function useStudentsSectionViewModel({
     for (const gl of studentSummaryGroupLessons) {
       const ds = String(gl.date || '').trim()
       if (ds === today && /^\d{4}-\d{2}-\d{2}$/.test(ds)) {
-        const gid = String(gl.groupClassId || '').trim()
+        const gid = getGroupLessonGroupId(gl)
         if (gid) todayGroupClassIds.add(gid)
       }
     }

@@ -1,25 +1,22 @@
-import {
-  buildPrivateLessonScheduleEntries,
-  formatGroupStudentStartDate,
-} from '../dashboardViewUtils.js'
+import { buildPrivateLessonScheduleEntries } from '../dashboardViewUtils.js'
 
-export default function PrivateLessonModal({
-  isAdmin,
-  privateLessonForm,
-  setPrivateLessonForm,
-  privateLessonFormErrors,
-  sortedPrivateStudents,
-  privateLessonEligiblePackages,
-  privateLessonSelectedPackagePreview,
-  closePrivateLessonModal,
-  submitPrivateLessonModal,
-  isPrivateLessonModalSubmitting,
+export default function PostPrivateLessonScheduleModal({
+  postPrivateLessonScheduleModalData,
+  postPrivateLessonScheduleForm,
+  setPostPrivateLessonScheduleForm,
+  postPrivateLessonScheduleErrors,
+  closePostPrivateLessonScheduleModal,
+  submitPostPrivateLessonSchedule,
+  busyPostPrivateLessonSchedule,
 }) {
-  const repeatWeekly = privateLessonForm.repeatWeekly === true
+  const data = postPrivateLessonScheduleModalData
+  const openedFromPrivateRegular = data?.openedFromPrivateRegular === true
+  const weeklyFrequencyStr = String(postPrivateLessonScheduleForm.weeklyFrequency ?? '1')
+  const repeatWeekly = postPrivateLessonScheduleForm.repeatWeekly === true
   const repeatStartMode =
-    privateLessonForm.repeatStartMode === 'afterFirst' ? 'afterFirst' : 'includeStart'
+    postPrivateLessonScheduleForm.repeatStartMode === 'afterFirst' ? 'afterFirst' : 'includeStart'
   const previewEntries = buildPrivateLessonScheduleEntries({
-    ...privateLessonForm,
+    ...postPrivateLessonScheduleForm,
     repeatWeekly,
   })
   const plannedCount = previewEntries.length
@@ -32,7 +29,7 @@ export default function PrivateLessonModal({
     <div
       role="dialog"
       aria-modal="true"
-      aria-labelledby="private-lesson-modal-title"
+      aria-labelledby="post-private-lesson-schedule-title"
       style={{
         position: 'fixed',
         inset: 0,
@@ -40,172 +37,111 @@ export default function PrivateLessonModal({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        zIndex: 1000,
+        zIndex: 1004,
         padding: 16,
       }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) closePrivateLessonModal()
+        if (e.target === e.currentTarget) closePostPrivateLessonScheduleModal()
       }}
     >
       <div
         style={{
           width: '100%',
-          maxWidth: 420,
+          maxWidth: 440,
           background: '#151922',
           border: '1px solid #2e3240',
           borderRadius: 12,
           padding: 20,
           color: 'white',
           boxSizing: 'border-box',
+          maxHeight: '90vh',
+          overflowY: 'auto',
         }}
         onClick={(e) => e.stopPropagation()}
       >
         <h2
-          id="private-lesson-modal-title"
-          style={{ margin: '0 0 16px 0', fontSize: '1.1rem', fontWeight: 600 }}
+          id="post-private-lesson-schedule-title"
+          style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
         >
-          개인 수업 추가
+          첫 수업을 바로 예약할까요?
         </h2>
+        <p style={{ margin: '0 0 12px 0', fontSize: 13, opacity: 0.88, lineHeight: 1.5 }}>
+          새 개인 수강권이 발급되었습니다. 아래에서 첫 수업 일정을 입력하면 바로 예약됩니다.
+        </p>
+        {openedFromPrivateRegular ? (
+          <p
+            style={{
+              margin: '0 0 12px 0',
+              fontSize: 12,
+              opacity: 0.88,
+              lineHeight: 1.55,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid #3d4a7a',
+              background: 'rgba(40, 55, 110, 0.25)',
+            }}
+          >
+            정기등록 기준으로 첫 수업과 반복 슬롯을 확인해주세요.
+            {weeklyFrequencyStr === '2' || weeklyFrequencyStr === '3' ? (
+              <>
+                {' '}
+                주 2회·3회인 경우 두 번째
+                {weeklyFrequencyStr === '3' ? '·세 번째' : ''} 슬롯의 첫 날짜와 시간을 입력해야
+                전체 일정이 맞게 채워집니다.
+              </>
+            ) : null}
+          </p>
+        ) : null}
+
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 8,
+            border: '1px solid #333',
+            background: '#1a1d26',
+            fontSize: 12,
+            lineHeight: 1.55,
+            marginBottom: 14,
+          }}
+        >
+          <div>
+            <span style={{ opacity: 0.75 }}>학생</span>{' '}
+            <strong>{data?.studentName || '-'}</strong>
+          </div>
+          <div>
+            <span style={{ opacity: 0.75 }}>수강권</span>{' '}
+            <strong>{String(data?.packageTitle || '').trim() || '—'}</strong>
+          </div>
+          <div>
+            <span style={{ opacity: 0.75 }}>남은 / 총</span>{' '}
+            <strong>
+              {data?.remainingCount != null ? String(data.remainingCount) : '-'} /{' '}
+              {data?.totalCount != null ? String(data.totalCount) : '-'}
+            </strong>
+          </div>
+        </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-            <span style={{ opacity: 0.85 }}>학생</span>
-            <select
-              value={privateLessonForm.studentId}
-              onChange={(e) =>
-                setPrivateLessonForm((prev) => ({
-                  ...prev,
-                  studentId: e.target.value,
-                  packageId: '',
-                }))
-              }
-              style={{
-                padding: '10px 12px',
-                borderRadius: 8,
-                border: '1px solid #444',
-                background: '#1f1f1f',
-                color: 'white',
-              }}
-            >
-              <option value="">선택</option>
-              {sortedPrivateStudents.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name || '-'}
-                  {isAdmin && s.teacher ? ` (${s.teacher})` : ''}
-                </option>
-              ))}
-            </select>
-            {privateLessonFormErrors.studentId ? (
-              <span style={{ color: '#f08080', fontSize: 12 }}>
-                {privateLessonFormErrors.studentId}
-              </span>
-            ) : null}
-          </label>
-
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-            <span style={{ opacity: 0.85 }}>
-              {isAdmin ? '사용할 개인 수강권을 선택' : '사용할 수업을 선택'}
-            </span>
-            <select
-              value={privateLessonForm.packageId}
-              onChange={(e) =>
-                setPrivateLessonForm((prev) => ({ ...prev, packageId: e.target.value }))
-              }
-              disabled={!String(privateLessonForm.studentId || '').trim()}
-              style={{
-                padding: '10px 12px',
-                borderRadius: 8,
-                border: '1px solid #444',
-                background: '#1f1f1f',
-                color: 'white',
-                opacity: String(privateLessonForm.studentId || '').trim() ? 1 : 0.5,
-              }}
-            >
-              <option value="">
-                {String(privateLessonForm.studentId || '').trim()
-                  ? isAdmin
-                    ? '수강권 선택'
-                    : '수업 선택'
-                  : '먼저 학생을 선택하세요'}
-              </option>
-              {privateLessonEligiblePackages.map((pkg) => (
-                <option key={pkg.id} value={pkg.id}>
-                  {String(pkg.title || '').trim() || '—'} (남은 횟수{' '}
-                  {Number(pkg.remainingCount ?? 0)})
-                </option>
-              ))}
-            </select>
-            {privateLessonFormErrors.packageId ? (
-              <span style={{ color: '#f08080', fontSize: 12 }}>
-                {privateLessonFormErrors.packageId}
-              </span>
-            ) : null}
-          </label>
-
-          {privateLessonSelectedPackagePreview ? (
-            <div
-              style={{
-                padding: 12,
-                borderRadius: 8,
-                border: '1px solid #333',
-                background: '#1a1d26',
-                fontSize: 12,
-                lineHeight: 1.5,
-                opacity: 0.95,
-              }}
-            >
-              <div style={{ marginBottom: 6, fontWeight: 600, opacity: 0.9 }}>
-                {isAdmin ? '선택 수강권' : '선택 정보'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>title: </span>
-                {String(privateLessonSelectedPackagePreview.title || '').trim() || '—'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>totalCount: </span>
-                {privateLessonSelectedPackagePreview.totalCount ?? '—'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>usedCount: </span>
-                {privateLessonSelectedPackagePreview.usedCount ?? '—'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>남은 횟수: </span>
-                {privateLessonSelectedPackagePreview.remainingCount ?? '—'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>expiresAt: </span>
-                {formatGroupStudentStartDate(privateLessonSelectedPackagePreview.expiresAt) ||
-                  '—'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>amountPaid: </span>
-                {privateLessonSelectedPackagePreview.amountPaid ?? '—'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>memo: </span>
-                {String(privateLessonSelectedPackagePreview.memo || '').trim() || '—'}
-              </div>
-            </div>
-          ) : null}
-
-          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-            <span style={{ opacity: 0.85 }}>날짜 (선택한 캘린더 날짜)</span>
+            <span style={{ opacity: 0.85 }}>첫 수업 날짜</span>
             <input
               type="date"
-              value={privateLessonForm.date}
-              readOnly
+              value={postPrivateLessonScheduleForm.date}
+              onChange={(e) =>
+                setPostPrivateLessonScheduleForm((prev) => ({ ...prev, date: e.target.value }))
+              }
               style={{
                 padding: '10px 12px',
                 borderRadius: 8,
                 border: '1px solid #444',
-                background: '#252525',
+                background: '#1f1f1f',
                 color: 'white',
-                cursor: 'default',
               }}
             />
-            {privateLessonFormErrors.date ? (
-              <span style={{ color: '#f08080', fontSize: 12 }}>{privateLessonFormErrors.date}</span>
+            {postPrivateLessonScheduleErrors.date ? (
+              <span style={{ color: '#f08080', fontSize: 12 }}>
+                {postPrivateLessonScheduleErrors.date}
+              </span>
             ) : null}
           </label>
 
@@ -213,9 +149,9 @@ export default function PrivateLessonModal({
             <span style={{ opacity: 0.85 }}>시간</span>
             <input
               type="time"
-              value={privateLessonForm.time}
+              value={postPrivateLessonScheduleForm.time}
               onChange={(e) =>
-                setPrivateLessonForm((prev) => ({ ...prev, time: e.target.value }))
+                setPostPrivateLessonScheduleForm((prev) => ({ ...prev, time: e.target.value }))
               }
               style={{
                 padding: '10px 12px',
@@ -225,8 +161,10 @@ export default function PrivateLessonModal({
                 color: 'white',
               }}
             />
-            {privateLessonFormErrors.time ? (
-              <span style={{ color: '#f08080', fontSize: 12 }}>{privateLessonFormErrors.time}</span>
+            {postPrivateLessonScheduleErrors.time ? (
+              <span style={{ color: '#f08080', fontSize: 12 }}>
+                {postPrivateLessonScheduleErrors.time}
+              </span>
             ) : null}
           </label>
 
@@ -234,9 +172,9 @@ export default function PrivateLessonModal({
             <span style={{ opacity: 0.85 }}>과목</span>
             <input
               type="text"
-              value={privateLessonForm.subject}
+              value={postPrivateLessonScheduleForm.subject}
               onChange={(e) =>
-                setPrivateLessonForm((prev) => ({ ...prev, subject: e.target.value }))
+                setPostPrivateLessonScheduleForm((prev) => ({ ...prev, subject: e.target.value }))
               }
               style={{
                 padding: '10px 12px',
@@ -246,9 +184,9 @@ export default function PrivateLessonModal({
                 color: 'white',
               }}
             />
-            {privateLessonFormErrors.subject ? (
+            {postPrivateLessonScheduleErrors.subject ? (
               <span style={{ color: '#f08080', fontSize: 12 }}>
-                {privateLessonFormErrors.subject}
+                {postPrivateLessonScheduleErrors.subject}
               </span>
             ) : null}
           </label>
@@ -267,7 +205,10 @@ export default function PrivateLessonModal({
                 type="checkbox"
                 checked={repeatWeekly}
                 onChange={(e) =>
-                  setPrivateLessonForm((prev) => ({ ...prev, repeatWeekly: e.target.checked }))
+                  setPostPrivateLessonScheduleForm((prev) => ({
+                    ...prev,
+                    repeatWeekly: e.target.checked,
+                  }))
                 }
               />
               <span style={{ opacity: 0.9 }}>매주 반복</span>
@@ -280,9 +221,12 @@ export default function PrivateLessonModal({
                   <input
                     type="number"
                     min="1"
-                    value={privateLessonForm.repeatWeeks ?? '4'}
+                    value={postPrivateLessonScheduleForm.repeatWeeks ?? '4'}
                     onChange={(e) =>
-                      setPrivateLessonForm((prev) => ({ ...prev, repeatWeeks: e.target.value }))
+                      setPostPrivateLessonScheduleForm((prev) => ({
+                        ...prev,
+                        repeatWeeks: e.target.value,
+                      }))
                     }
                     style={{
                       padding: '10px 12px',
@@ -292,9 +236,9 @@ export default function PrivateLessonModal({
                       color: 'white',
                     }}
                   />
-                  {privateLessonFormErrors.repeatWeeks ? (
+                  {postPrivateLessonScheduleErrors.repeatWeeks ? (
                     <span style={{ color: '#f08080', fontSize: 12 }}>
-                      {privateLessonFormErrors.repeatWeeks}
+                      {postPrivateLessonScheduleErrors.repeatWeeks}
                     </span>
                   ) : null}
                 </label>
@@ -304,7 +248,10 @@ export default function PrivateLessonModal({
                   <select
                     value={repeatStartMode}
                     onChange={(e) =>
-                      setPrivateLessonForm((prev) => ({ ...prev, repeatStartMode: e.target.value }))
+                      setPostPrivateLessonScheduleForm((prev) => ({
+                        ...prev,
+                        repeatStartMode: e.target.value,
+                      }))
                     }
                     style={{
                       padding: '10px 12px',
@@ -317,9 +264,9 @@ export default function PrivateLessonModal({
                     <option value="includeStart">시작일 포함</option>
                     <option value="afterFirst">첫 수업 먼저 + 반복 시작일 이후 반복</option>
                   </select>
-                  {privateLessonFormErrors.repeatStartMode ? (
+                  {postPrivateLessonScheduleErrors.repeatStartMode ? (
                     <span style={{ color: '#f08080', fontSize: 12 }}>
-                      {privateLessonFormErrors.repeatStartMode}
+                      {postPrivateLessonScheduleErrors.repeatStartMode}
                     </span>
                   ) : null}
                 </label>
@@ -327,9 +274,9 @@ export default function PrivateLessonModal({
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                   <span style={{ opacity: 0.85 }}>주당 횟수 (반복 슬롯)</span>
                   <select
-                    value={String(privateLessonForm.weeklyFrequency ?? '1')}
+                    value={String(postPrivateLessonScheduleForm.weeklyFrequency ?? '1')}
                     onChange={(e) =>
-                      setPrivateLessonForm((prev) => ({
+                      setPostPrivateLessonScheduleForm((prev) => ({
                         ...prev,
                         weeklyFrequency: e.target.value,
                       }))
@@ -346,23 +293,23 @@ export default function PrivateLessonModal({
                     <option value="2">주 2회</option>
                     <option value="3">주 3회</option>
                   </select>
-                  {privateLessonFormErrors.weeklyFrequency ? (
+                  {postPrivateLessonScheduleErrors.weeklyFrequency ? (
                     <span style={{ color: '#f08080', fontSize: 12 }}>
-                      {privateLessonFormErrors.weeklyFrequency}
+                      {postPrivateLessonScheduleErrors.weeklyFrequency}
                     </span>
                   ) : null}
                 </label>
 
-                {(privateLessonForm.weeklyFrequency === '2' ||
-                  privateLessonForm.weeklyFrequency === '3') && (
+                {(postPrivateLessonScheduleForm.weeklyFrequency === '2' ||
+                  postPrivateLessonScheduleForm.weeklyFrequency === '3') && (
                   <>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                       <span style={{ opacity: 0.85 }}>두 번째 수업 첫 날짜</span>
                       <input
                         type="date"
-                        value={privateLessonForm.weeklySlot2Date || ''}
+                        value={postPrivateLessonScheduleForm.weeklySlot2Date || ''}
                         onChange={(e) =>
-                          setPrivateLessonForm((prev) => ({
+                          setPostPrivateLessonScheduleForm((prev) => ({
                             ...prev,
                             weeklySlot2Date: e.target.value,
                           }))
@@ -375,9 +322,9 @@ export default function PrivateLessonModal({
                           color: 'white',
                         }}
                       />
-                      {privateLessonFormErrors.weeklySlot2Date ? (
+                      {postPrivateLessonScheduleErrors.weeklySlot2Date ? (
                         <span style={{ color: '#f08080', fontSize: 12 }}>
-                          {privateLessonFormErrors.weeklySlot2Date}
+                          {postPrivateLessonScheduleErrors.weeklySlot2Date}
                         </span>
                       ) : null}
                     </label>
@@ -385,9 +332,9 @@ export default function PrivateLessonModal({
                       <span style={{ opacity: 0.85 }}>두 번째 수업 시간</span>
                       <input
                         type="time"
-                        value={privateLessonForm.weeklySlot2Time || ''}
+                        value={postPrivateLessonScheduleForm.weeklySlot2Time || ''}
                         onChange={(e) =>
-                          setPrivateLessonForm((prev) => ({
+                          setPostPrivateLessonScheduleForm((prev) => ({
                             ...prev,
                             weeklySlot2Time: e.target.value,
                           }))
@@ -400,24 +347,24 @@ export default function PrivateLessonModal({
                           color: 'white',
                         }}
                       />
-                      {privateLessonFormErrors.weeklySlot2Time ? (
+                      {postPrivateLessonScheduleErrors.weeklySlot2Time ? (
                         <span style={{ color: '#f08080', fontSize: 12 }}>
-                          {privateLessonFormErrors.weeklySlot2Time}
+                          {postPrivateLessonScheduleErrors.weeklySlot2Time}
                         </span>
                       ) : null}
                     </label>
                   </>
                 )}
 
-                {privateLessonForm.weeklyFrequency === '3' && (
+                {postPrivateLessonScheduleForm.weeklyFrequency === '3' && (
                   <>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                       <span style={{ opacity: 0.85 }}>세 번째 수업 첫 날짜</span>
                       <input
                         type="date"
-                        value={privateLessonForm.weeklySlot3Date || ''}
+                        value={postPrivateLessonScheduleForm.weeklySlot3Date || ''}
                         onChange={(e) =>
-                          setPrivateLessonForm((prev) => ({
+                          setPostPrivateLessonScheduleForm((prev) => ({
                             ...prev,
                             weeklySlot3Date: e.target.value,
                           }))
@@ -430,9 +377,9 @@ export default function PrivateLessonModal({
                           color: 'white',
                         }}
                       />
-                      {privateLessonFormErrors.weeklySlot3Date ? (
+                      {postPrivateLessonScheduleErrors.weeklySlot3Date ? (
                         <span style={{ color: '#f08080', fontSize: 12 }}>
-                          {privateLessonFormErrors.weeklySlot3Date}
+                          {postPrivateLessonScheduleErrors.weeklySlot3Date}
                         </span>
                       ) : null}
                     </label>
@@ -440,9 +387,9 @@ export default function PrivateLessonModal({
                       <span style={{ opacity: 0.85 }}>세 번째 수업 시간</span>
                       <input
                         type="time"
-                        value={privateLessonForm.weeklySlot3Time || ''}
+                        value={postPrivateLessonScheduleForm.weeklySlot3Time || ''}
                         onChange={(e) =>
-                          setPrivateLessonForm((prev) => ({
+                          setPostPrivateLessonScheduleForm((prev) => ({
                             ...prev,
                             weeklySlot3Time: e.target.value,
                           }))
@@ -455,9 +402,9 @@ export default function PrivateLessonModal({
                           color: 'white',
                         }}
                       />
-                      {privateLessonFormErrors.weeklySlot3Time ? (
+                      {postPrivateLessonScheduleErrors.weeklySlot3Time ? (
                         <span style={{ color: '#f08080', fontSize: 12 }}>
-                          {privateLessonFormErrors.weeklySlot3Time}
+                          {postPrivateLessonScheduleErrors.weeklySlot3Time}
                         </span>
                       ) : null}
                     </label>
@@ -469,9 +416,9 @@ export default function PrivateLessonModal({
                     <span style={{ opacity: 0.85 }}>반복 시작일</span>
                     <input
                       type="date"
-                      value={privateLessonForm.repeatAnchorDate || ''}
+                      value={postPrivateLessonScheduleForm.repeatAnchorDate || ''}
                       onChange={(e) =>
-                        setPrivateLessonForm((prev) => ({
+                        setPostPrivateLessonScheduleForm((prev) => ({
                           ...prev,
                           repeatAnchorDate: e.target.value,
                         }))
@@ -484,19 +431,19 @@ export default function PrivateLessonModal({
                         color: 'white',
                       }}
                     />
-                    {privateLessonFormErrors.repeatAnchorDate ? (
+                    {postPrivateLessonScheduleErrors.repeatAnchorDate ? (
                       <span style={{ color: '#f08080', fontSize: 12 }}>
-                        {privateLessonFormErrors.repeatAnchorDate}
+                        {postPrivateLessonScheduleErrors.repeatAnchorDate}
                       </span>
                     ) : null}
                     <span style={{ fontSize: 12, opacity: 0.7 }}>
-                      첫 수업은 선택한 날짜에 생성되고, 반복 시작일 이후부터 매주 반복됩니다.
+                      첫 수업은 위에서 선택한 날짜에 생성되고, 반복 시작일 이후부터 매주 반복됩니다.
                     </span>
                   </label>
                 ) : null}
-                {privateLessonFormErrors.scheduleSlots ? (
+                {postPrivateLessonScheduleErrors.scheduleSlots ? (
                   <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {privateLessonFormErrors.scheduleSlots}
+                    {postPrivateLessonScheduleErrors.scheduleSlots}
                   </span>
                 ) : null}
               </div>
@@ -506,6 +453,17 @@ export default function PrivateLessonModal({
               총 {plannedCount}건 생성{previewRange ? ` · ${previewRange}` : ''}
             </p>
           </div>
+
+          {postPrivateLessonScheduleErrors.packageId ? (
+            <span style={{ color: '#f08080', fontSize: 12 }}>
+              {postPrivateLessonScheduleErrors.packageId}
+            </span>
+          ) : null}
+          {postPrivateLessonScheduleErrors.studentId ? (
+            <span style={{ color: '#f08080', fontSize: 12 }}>
+              {postPrivateLessonScheduleErrors.studentId}
+            </span>
+          ) : null}
         </div>
 
         <div
@@ -519,33 +477,33 @@ export default function PrivateLessonModal({
         >
           <button
             type="button"
-            onClick={closePrivateLessonModal}
-            disabled={isPrivateLessonModalSubmitting}
+            onClick={closePostPrivateLessonScheduleModal}
+            disabled={busyPostPrivateLessonSchedule}
             style={{
               padding: '10px 16px',
               borderRadius: 8,
               border: '1px solid #555',
               background: 'transparent',
               color: 'white',
-              cursor: isPrivateLessonModalSubmitting ? 'not-allowed' : 'pointer',
+              cursor: busyPostPrivateLessonSchedule ? 'not-allowed' : 'pointer',
             }}
           >
-            취소
+            나중에 하기
           </button>
           <button
             type="button"
-            onClick={submitPrivateLessonModal}
-            disabled={isPrivateLessonModalSubmitting}
+            onClick={submitPostPrivateLessonSchedule}
+            disabled={busyPostPrivateLessonSchedule}
             style={{
               padding: '10px 16px',
               borderRadius: 8,
               border: '1px solid #4a6fff55',
               background: '#1f2a44',
               color: 'white',
-              cursor: isPrivateLessonModalSubmitting ? 'not-allowed' : 'pointer',
+              cursor: busyPostPrivateLessonSchedule ? 'not-allowed' : 'pointer',
             }}
           >
-            {isPrivateLessonModalSubmitting ? '저장 중...' : '저장'}
+            {busyPostPrivateLessonSchedule ? '처리 중...' : '첫 수업 예약'}
           </button>
         </div>
       </div>

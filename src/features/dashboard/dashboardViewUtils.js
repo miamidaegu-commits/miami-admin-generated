@@ -589,3 +589,230 @@ export function buildStudentPackageScopeKey({ packageType, teacher, groupClassId
 
 /** 신규 정규반 저장 직후 자동 일정 등에 쓰는 기본 기간(시작일 포함 약 1년, 365일) */
 export const GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS = 365 - 1
+
+/** iOS 등 레거시 groupLessons 문서의 groupClassID 필드와 정규 groupClassId 모두 지원 */
+export function getGroupLessonGroupId(gl) {
+  return String(gl?.groupClassId ?? gl?.groupClassID ?? '').trim()
+}
+
+/** 그룹 수강권 제목 미입력 시 저장·표시용 기본 제목 */
+export function buildAutoGroupStudentPackageTitle({
+  groupClassName,
+  registrationStartDate,
+  registrationWeeks,
+}) {
+  const name = String(groupClassName || '').trim() || '그룹'
+  const d = String(registrationStartDate || '').trim() || '-'
+  const wNum = Number(registrationWeeks)
+  const w =
+    Number.isFinite(wNum) && wNum > 0
+      ? String(Math.trunc(wNum))
+      : String(registrationWeeks ?? '').trim() || '?'
+  return `${name} · ${d} 시작 · ${w}주`
+}
+
+/** 정기등록 개인 수강권: 등록 주수 × 주당 횟수 (둘 다 1 이상 정수일 때만 유효, 아니면 0) */
+export function computePrivateRegularTotalCount({ registrationWeeks, weeklyFrequency }) {
+  const w =
+    typeof registrationWeeks === 'number'
+      ? registrationWeeks
+      : Number.parseInt(String(registrationWeeks ?? '').trim(), 10)
+  const f =
+    typeof weeklyFrequency === 'number'
+      ? weeklyFrequency
+      : Number.parseInt(String(weeklyFrequency ?? '').trim(), 10)
+  if (!Number.isInteger(w) || w < 1) return 0
+  if (!Number.isInteger(f) || f < 1 || f > 3) return 0
+  return w * f
+}
+
+/** 개인 정기등록 수강권 제목 미입력 시 저장·표시용 기본 제목 */
+export function buildAutoPrivateStudentPackageTitle({
+  studentName,
+  registrationStartDate,
+  registrationWeeks,
+  weeklyFrequency,
+}) {
+  const name = String(studentName || '').trim() || '학생'
+  const d = String(registrationStartDate || '').trim()
+  const wNum = Number(registrationWeeks)
+  const w =
+    Number.isFinite(wNum) && wNum > 0
+      ? String(Math.trunc(wNum))
+      : String(registrationWeeks ?? '').trim() || '?'
+  const fNum = Number(weeklyFrequency)
+  const f =
+    Number.isFinite(fNum) && fNum > 0
+      ? String(Math.trunc(fNum))
+      : String(weeklyFrequency ?? '').trim() || '?'
+  if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    return `${d} 시작 · 주${f}회 · ${w}주`
+  }
+  return `${name} · 주${f}회 · ${w}주`
+}
+
+/** 오늘(포함) 이후 해당 반의 그룹 수업 중 가장 이른 date(yyyy-mm-dd), 없으면 '' */
+export function getEarliestFutureGroupLessonYmdFromLessons({
+  groupClassId,
+  groupLessons,
+  todayYmd,
+}) {
+  const gid = String(groupClassId || '').trim()
+  if (!gid || !Array.isArray(groupLessons)) return ''
+  const today =
+    todayYmd && String(todayYmd).trim()
+      ? String(todayYmd).trim()
+      : getTodayStorageDateString()
+  let best = ''
+  for (const gl of groupLessons) {
+    if (getGroupLessonGroupId(gl) !== gid) continue
+    const dateStr = String(gl.date || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
+    if (dateStr < today) continue
+    if (!best || dateStr < best) best = dateStr
+  }
+  return best
+}
+
+function addWeeksToYmdPrivate(ymd, weeks) {
+  const d = parseYmdToLocalDate(ymd)
+  if (!d || !Number.isFinite(weeks)) return null
+  const next = new Date(d.getFullYear(), d.getMonth(), d.getDate() + Math.trunc(weeks) * 7)
+  return formatLocalDateToYmd(next)
+}
+
+/** 매주 반복 시 날짜(ymd) 목록만 — 첫 슬롯 규칙(includeStart / afterFirst) */
+function buildPrivateLessonDateChainYmds({
+  startDateYmd,
+  repeatWeekly,
+  repeatWeeks,
+  repeatStartMode,
+  repeatAnchorDate,
+}) {
+  const base = String(startDateYmd || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(base) || !parseYmdToLocalDate(base)) return []
+  if (!repeatWeekly) return [base]
+
+  const weeksNum = Number(repeatWeeks)
+  const weeksParsed = Number.isInteger(weeksNum) ? weeksNum : parseInt(String(repeatWeeks || ''), 10)
+  const safeWeeks = Number.isInteger(weeksParsed) && weeksParsed > 0 ? weeksParsed : 1
+  const mode = repeatStartMode === 'afterFirst' ? 'afterFirst' : 'includeStart'
+  const anchor = String(repeatAnchorDate || '').trim()
+
+  const out = []
+  const seen = new Set()
+  const pushUnique = (d) => {
+    if (!d || seen.has(d)) return
+    seen.add(d)
+    out.push(d)
+  }
+
+  pushUnique(base)
+  if (mode === 'includeStart') {
+    for (let i = 1; i < safeWeeks; i += 1) {
+      pushUnique(addWeeksToYmdPrivate(base, i))
+    }
+  } else {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(anchor) || !parseYmdToLocalDate(anchor)) return []
+    if (anchor === base) return []
+    if (anchor < base) return []
+    pushUnique(anchor)
+    for (let i = 1; i < safeWeeks; i += 1) {
+      pushUnique(addWeeksToYmdPrivate(anchor, i))
+    }
+  }
+
+  return out
+}
+
+/**
+ * 개인 수업 예약: 반복·주당 횟수(1~3 슬롯)에 따라 생성할 { date, time }[].
+ * 검증은 호출부(validatePrivateLessonFormFields)에서 수행하는 것을 전제로, 형식 불가 시 [].
+ */
+export function buildPrivateLessonScheduleEntries(form) {
+  const date = String(form?.date || '').trim()
+  const timeRaw = String(form?.time || '').trim()
+  const repeatWeekly = form?.repeatWeekly === true
+
+  if (!repeatWeekly) {
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !parseYmdToLocalDate(date)) return []
+    if (!timeRaw || !/^\d{2}:\d{2}$/.test(timeRaw)) return []
+    return [{ date, time: timeRaw }]
+  }
+
+  if (!timeRaw || !/^\d{2}:\d{2}$/.test(timeRaw)) return []
+
+  const wfRaw = String(form?.weeklyFrequency ?? '1').trim()
+  const weeklyFrequency = wfRaw === '2' || wfRaw === '3' ? wfRaw : '1'
+  const repeatStartMode = form?.repeatStartMode === 'afterFirst' ? 'afterFirst' : 'includeStart'
+  const repeatAnchorDate = String(form?.repeatAnchorDate || '').trim()
+
+  const weeksNum = Number(form?.repeatWeeks)
+  const weeksParsed = Number.isInteger(weeksNum)
+    ? weeksNum
+    : parseInt(String(form?.repeatWeeks ?? ''), 10)
+  const safeWeeks = Number.isInteger(weeksParsed) && weeksParsed > 0 ? weeksParsed : 1
+
+  const chainParams = {
+    startDateYmd: date,
+    repeatWeekly: true,
+    repeatWeeks: form?.repeatWeeks,
+    repeatStartMode,
+    repeatAnchorDate,
+  }
+
+  if (weeklyFrequency === '1') {
+    const ymds = buildPrivateLessonDateChainYmds(chainParams)
+    return ymds
+      .filter((d) => d && /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .map((d) => ({ date: d, time: timeRaw }))
+  }
+
+  const slot1Ymds = buildPrivateLessonDateChainYmds(chainParams)
+  const entries = []
+  for (const d of slot1Ymds) {
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) entries.push({ date: d, time: timeRaw })
+  }
+
+  const slot2Date = String(form?.weeklySlot2Date || '').trim()
+  const slot2Time = String(form?.weeklySlot2Time || '').trim()
+  if (weeklyFrequency === '2' || weeklyFrequency === '3') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(slot2Date) || !parseYmdToLocalDate(slot2Date)) return []
+    if (!slot2Time || !/^\d{2}:\d{2}$/.test(slot2Time)) return []
+    for (let i = 0; i < safeWeeks; i += 1) {
+      const ymd = addWeeksToYmdPrivate(slot2Date, i)
+      if (ymd) entries.push({ date: ymd, time: slot2Time })
+    }
+  }
+
+  if (weeklyFrequency === '3') {
+    const slot3Date = String(form?.weeklySlot3Date || '').trim()
+    const slot3Time = String(form?.weeklySlot3Time || '').trim()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(slot3Date) || !parseYmdToLocalDate(slot3Date)) return []
+    if (!slot3Time || !/^\d{2}:\d{2}$/.test(slot3Time)) return []
+    for (let i = 0; i < safeWeeks; i += 1) {
+      const ymd = addWeeksToYmdPrivate(slot3Date, i)
+      if (ymd) entries.push({ date: ymd, time: slot3Time })
+    }
+  }
+
+  entries.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date)
+    return a.time.localeCompare(b.time)
+  })
+  const out = []
+  const seen = new Set()
+  for (const e of entries) {
+    const k = `${e.date} ${e.time}`
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(e)
+  }
+  return out
+}
+
+/** 반 weekdays 배열 길이로 주당 수업 횟수 (없으면 1) */
+export function getGroupWeeklyClassCountFromWeekdaysDoc(weekdays) {
+  const wds = Array.isArray(weekdays) ? normalizeGroupWeekdaysFromDoc(weekdays) : []
+  return wds.length > 0 ? wds.length : 1
+}

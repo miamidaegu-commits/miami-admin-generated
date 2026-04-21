@@ -158,9 +158,12 @@ export default function CalendarSection(props) {
     isPrivateLessonModalSubmitting,
     sortedPrivateStudentsLength,
     enableLegacyLessonMigrationButton,
+    enableGroupLegacyBackfillTool,
     isAdmin,
     handleMigrateLessons,
     migrating,
+    handleGroupLegacyBackfill,
+    busyGroupLegacyBackfill,
     displayedLessons,
     getMatchedStudent,
     getMatchedStudentId,
@@ -174,6 +177,7 @@ export default function CalendarSection(props) {
     handleDeletePrivateLesson,
     canEditLesson,
     canDeleteLesson,
+    onOpenCalendarGroupLessonAttendance,
   } = props
 
   return (
@@ -260,6 +264,26 @@ export default function CalendarSection(props) {
               {migrating ? '변환 중...' : '예전 수업 데이터 일괄 보정'}
             </button>
           ) : null}
+
+          {enableGroupLegacyBackfillTool && isAdmin ? (
+            <button
+              type="button"
+              onClick={handleGroupLegacyBackfill}
+              disabled={busyGroupLegacyBackfill || migrating}
+              title="그룹 레거시 필드 보정(관리자 전용). Dashboard.jsx의 ENABLE_GROUP_LEGACY_BACKFILL_TOOL 참고."
+              style={{
+                padding: '10px 14px',
+                borderRadius: 10,
+                border: '1px solid #444',
+                background: '#1f1f1f',
+                color: 'white',
+                cursor:
+                  busyGroupLegacyBackfill || migrating ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {busyGroupLegacyBackfill ? '보정 중...' : '그룹 레거시 데이터 보정'}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -269,10 +293,16 @@ export default function CalendarSection(props) {
         <p>등록된 수업이 없습니다.</p>
       ) : (
         <div className="activity-table">
-          <div className="table-head">
+          <div
+            className="table-head"
+            style={{
+              gridTemplateColumns:
+                'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
+            }}
+          >
             <span>날짜</span>
             <span>시간</span>
-            <span>학생</span>
+            <span>학생 / 반</span>
             <span>선생님</span>
             <span>과목</span>
             <span>남은 횟수</span>
@@ -281,44 +311,87 @@ export default function CalendarSection(props) {
           </div>
 
           {displayedLessons.map((lesson) => {
+            const isGroupRow = lesson._calendarRowKind === 'group'
             const lessonDate = getLessonDate(lesson)
             const matchedStudent = getMatchedStudent(lesson)
             const pkgForRemaining = lesson.packageId
               ? studentPackages.find((p) => p.id === lesson.packageId)
               : null
-            const remainingLessons =
-              lesson.packageId && pkgForRemaining
+            const remainingLessons = isGroupRow
+              ? '—'
+              : lesson.packageId && pkgForRemaining
                 ? Number(pkgForRemaining.remainingCount ?? 0)
                 : matchedStudent
                   ? Number(matchedStudent.paidLessons || 0) -
                     Number(matchedStudent.attendanceCount || 0)
                   : '-'
             const canDeductionAction =
+              !isGroupRow &&
               canManageAttendance &&
               (lesson.packageId
                 ? Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private')
                 : Boolean(getMatchedStudentId(lesson)))
             const todayString = getTodayStorageDateString()
             const lessonDateStr = getLessonStorageDateString(lesson)
-            const statusLabel = lesson.isDeductCancelled
-              ? '차감취소'
-              : lessonDateStr && lessonDateStr <= todayString
-                ? '정상 차감'
-                : '예정'
+            const statusLabel = isGroupRow
+              ? '예정'
+              : lesson.isDeductCancelled
+                ? '차감취소'
+                : lessonDateStr && lessonDateStr <= todayString
+                  ? '정상 차감'
+                  : '예정'
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
             const rowLessonActionBusy =
               busyLessonId === lesson.id || rowPrivateCrudBusy || busyPrivateLessonAdd
+            const badgeStyle = {
+              display: 'inline-block',
+              fontSize: 10,
+              fontWeight: 600,
+              lineHeight: 1.3,
+              padding: '2px 6px',
+              borderRadius: 4,
+              marginRight: 6,
+              verticalAlign: 'middle',
+              border: '1px solid rgba(120, 140, 200, 0.45)',
+              background: isGroupRow
+                ? 'rgba(80, 100, 160, 0.35)'
+                : 'rgba(60, 120, 90, 0.35)',
+              color: 'inherit',
+              whiteSpace: 'nowrap',
+            }
+            const nameLabel = isGroupRow
+              ? lesson.groupClassDisplayName || '-'
+              : getStudentName(lesson)
+            const canOpenGroupAttendance =
+              isGroupRow && (isAdmin || canManageAttendance)
             return (
-              <div key={lesson.id} className="table-row">
+              <div
+                key={lesson.id}
+                className="table-row"
+                onClick={
+                  canOpenGroupAttendance
+                    ? () => onOpenCalendarGroupLessonAttendance?.(lesson)
+                    : undefined
+                }
+                style={{
+                  gridTemplateColumns:
+                    'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
+                  cursor: canOpenGroupAttendance ? 'pointer' : 'default',
+                  background: canOpenGroupAttendance ? 'rgba(90, 127, 208, 0.08)' : undefined,
+                }}
+              >
                 <span>{formatDate(lessonDate)}</span>
                 <span>{formatTime(lessonDate)}</span>
-                <span>{getStudentName(lesson)}</span>
+                <span style={{ lineHeight: 1.45 }}>
+                  <span style={badgeStyle}>{isGroupRow ? '그룹' : '개인'}</span>
+                  {nameLabel}
+                </span>
                 <span>{getTeacherName(lesson)}</span>
                 <span>{lesson.subject || '-'}</span>
                 <span>{remainingLessons}</span>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span>{statusLabel}</span>
-                  {lesson.deductMemo ? (
+                  {!isGroupRow && lesson.deductMemo ? (
                     <span style={{ fontSize: 12, opacity: 0.8 }}>
                       메모: {lesson.deductMemo}
                     </span>
@@ -332,7 +405,7 @@ export default function CalendarSection(props) {
                     alignItems: 'flex-start',
                   }}
                 >
-                  {canManageAttendance ? (
+                  {canManageAttendance && !isGroupRow ? (
                     <button
                       onClick={() => handleDeductionToggle(lesson)}
                       disabled={busyLessonId === lesson.id || !canDeductionAction}
@@ -355,7 +428,7 @@ export default function CalendarSection(props) {
                           : '차감취소'}
                     </button>
                   ) : null}
-                  {activeSection === 'calendar' && canEditLesson ? (
+                  {activeSection === 'calendar' && canEditLesson && !isGroupRow ? (
                     <button
                       type="button"
                       onClick={() => openPrivateLessonEditModal(lesson)}
@@ -372,7 +445,7 @@ export default function CalendarSection(props) {
                       {rowPrivateCrudBusy ? '처리 중...' : '수정'}
                     </button>
                   ) : null}
-                  {activeSection === 'calendar' && canDeleteLesson ? (
+                  {activeSection === 'calendar' && canDeleteLesson && !isGroupRow ? (
                     <button
                       type="button"
                       onClick={() => handleDeletePrivateLesson(lesson)}
@@ -388,6 +461,12 @@ export default function CalendarSection(props) {
                     >
                       {rowPrivateCrudBusy ? '처리 중...' : '삭제'}
                     </button>
+                  ) : null}
+                  {isGroupRow ? (
+                    <span style={{ fontSize: 12, opacity: 0.65 }}>
+                      읽기 전용
+                      {canOpenGroupAttendance ? ' · 클릭해 출결 열기' : ''}
+                    </span>
                   ) : null}
                 </span>
               </div>
