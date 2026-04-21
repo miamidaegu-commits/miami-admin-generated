@@ -5,10 +5,11 @@ import {
   loginAsAdmin,
   openDashboardSection,
 } from './e2e-helpers.js';
-
-const ADMIN_EMAIL = 'test-admin@miami.com';
-const ADMIN_PASSWORD = '12345678';
-const TEST_GROUP_NAME = '고급영어회화';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  TEST_GROUP_NAME,
+} from './fixtures/test-data.js';
 
 test('관리자가 특정 그룹의 출결/차감 모달을 열 수 있다', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');

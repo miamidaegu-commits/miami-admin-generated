@@ -1,8 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
-
-const ADMIN_EMAIL = 'test-admin@miami.com';
-const ADMIN_PASSWORD = '12345678';
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
 test('학생 추가 모달 열기 테스트', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');

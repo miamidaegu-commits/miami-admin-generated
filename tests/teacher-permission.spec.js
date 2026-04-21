@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { BASE_URL, openDashboardSection } from './e2e-helpers.js';
-
-const TEST_TEACHER_EMAIL = 'test-teacher@miami.com';
-const TEST_TEACHER_PASSWORD = '12345678';
+import {
+  TEST_TEACHER_EMAIL,
+  TEST_TEACHER_PASSWORD,
+} from './fixtures/test-data.js';
 
 async function loginAsTeacher(page) {
   await page.goto(BASE_URL);

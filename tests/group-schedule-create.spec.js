@@ -5,10 +5,11 @@ import {
   loginAsAdmin,
   openDashboardSection,
 } from './e2e-helpers.js';
-
-const ADMIN_EMAIL = 'test-admin@miami.com';
-const ADMIN_PASSWORD = '12345678';
-const TEST_GROUP_NAME = '고급영어회화';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  TEST_GROUP_NAME,
+} from './fixtures/test-data.js';
 const YMD_REGEX_SOURCE = '\\b\\d{4}-\\d{2}-\\d{2}\\b';
 
 function formatYmd(date) {

@@ -7,11 +7,12 @@ import {
   loginAsAdmin,
   openDashboardSection,
 } from './e2e-helpers.js';
-
-const ADMIN_EMAIL = 'test-admin@miami.com';
-const ADMIN_PASSWORD = '12345678';
-const TEST_STUDENT_NAME = '이나규미';
-const TEST_GROUP_NAME = '고급영어회화';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  TEST_GROUP_NAME,
+  TEST_STUDENT_NAME,
+} from './fixtures/test-data.js';
 
 function formatYmd(date) {
   const year = date.getFullYear();

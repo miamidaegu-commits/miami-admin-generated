@@ -1,6 +1,10 @@
 // @ts-check
 import { test, expect } from '@playwright/test';
 
+// Default Playwright example tests are unrelated to this app's e2e coverage
+// and depend on an external site, so keep them out of the default run.
+test.skip(true, '운영 앱 테스트와 무관한 Playwright 기본 예제입니다.');
+
 test('has title', async ({ page }) => {
   await page.goto('https://playwright.dev/');
 

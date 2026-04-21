@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
-
-const ADMIN_EMAIL = 'test-admin@miami.com';
-const ADMIN_PASSWORD = '12345678';
-const TEST_GROUP_NAME = '고급영어회화';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  TEST_GROUP_NAME,
+} from './fixtures/test-data.js';
 
 test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 열린다', async ({
   page,

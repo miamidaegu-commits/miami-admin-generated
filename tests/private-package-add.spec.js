@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { getStudentRow, getStudentSearchInput, loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
-
-const ADMIN_EMAIL = 'test-admin@miami.com';
-const ADMIN_PASSWORD = '12345678';
-const TEST_STUDENT_NAME = '이나규미';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  TEST_STUDENT_NAME,
+} from './fixtures/test-data.js';
 
 test('관리자가 기존 학생에게 개인 수강권을 추가한다', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');

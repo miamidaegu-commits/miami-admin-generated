@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
 import { getStudentRow, getStudentSearchInput, loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
-
-const ADMIN_EMAIL = 'test-admin@miami.com';
-const ADMIN_PASSWORD = '12345678';
-const TEST_STUDENT_NAME = '이나규미';
-const TEST_GROUP_NAME = '고급영어회화';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  TEST_GROUP_NAME,
+  TEST_STUDENT_NAME,
+} from './fixtures/test-data.js';
 
 test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 등록 모달을 확인한다', async ({
   page,
