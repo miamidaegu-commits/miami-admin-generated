@@ -5398,7 +5398,7 @@ export default function Dashboard() {
     ? '학생 관리'
     : '반 관리'}
 </h1>
-            <p className="page-sub">
+            <p className="page-sub" data-testid="dashboard-welcome-subtitle">
               {userProfile?.teacherName
                 ? `${userProfile.teacherName} 님 환영합니다`
                 : `${user?.email || '사용자'} 님, 환영합니다`}

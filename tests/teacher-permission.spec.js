@@ -13,7 +13,7 @@ async function loginAsTeacher(page) {
 
   const invalidCredentials = page.getByText('Invalid email or password.');
   const inactiveAccount = page.getByText('비활성 계정입니다');
-  const welcomeMessage = page.locator('.page-sub');
+  const welcomeMessage = page.getByTestId('dashboard-welcome-subtitle');
   const studentManagementButton = page.getByRole('button', { name: '학생 관리', exact: true });
   const classManagementButton = page.getByRole('button', { name: '반 관리', exact: true });
 
@@ -70,9 +70,7 @@ async function loginAsTeacher(page) {
 }
 
 async function getTeacherNameFromWelcome(page) {
-  // 취약한 selector: 환영 문구 class에 직접 의존합니다.
-  // 가능하면 `data-testid="dashboard-welcome-subtitle"`를 추가하세요.
-  const welcomeText = (await page.locator('.page-sub').textContent()) || '';
+  const welcomeText = (await page.getByTestId('dashboard-welcome-subtitle').textContent()) || '';
   const match = welcomeText.match(/(.*)\s님,?\s환영합니다/);
   return match?.[1]?.trim() || '';
 }
@@ -108,10 +106,8 @@ test('teacher 계정은 관리자와 다른 UI 제한을 보고 본인 데이터
   await openDashboardSection(page, '반 관리');
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toHaveCount(0);
 
-  // 취약한 selector: 그룹 목록 row가 class/span 순서에 의존합니다.
-  // 가능하면 `data-testid="group-row"`와 `data-testid="group-teacher-cell"`를 추가하세요.
   const groupTable = page.locator('.activity-table').first();
-  const groupRows = groupTable.locator('.table-row[role="button"]');
+  const groupRows = groupTable.getByTestId('group-row');
   await expectTeacherOnlyRows(groupTable, groupRows, teacherName);
 
   if ((await groupRows.count()) > 0) {
@@ -137,11 +133,7 @@ test('teacher 계정은 관리자와 다른 UI 제한을 보고 본인 데이터
 
   await expect(page.getByRole('button', { name: '수강권 추가', exact: true })).toHaveCount(0);
 
-  // 취약한 selector: 학생 목록 row도 class/span 순서에 의존합니다.
-  // 가능하면 `data-testid="student-row"`와 `data-testid="student-teacher-cell"`를 추가하세요.
   const studentTable = page.locator('.activity-table').first();
-  const studentRows = studentTable.locator('.table-row').filter({
-    has: page.getByRole('button', { name: '수정', exact: true }),
-  });
+  const studentRows = studentTable.getByTestId('student-row');
   await expectTeacherOnlyRows(studentTable, studentRows, teacherName);
 });

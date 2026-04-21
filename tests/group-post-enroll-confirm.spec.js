@@ -23,13 +23,9 @@ function formatYmd(date) {
 async function openStudentRow(page) {
   await openDashboardSection(page, '학생 관리');
 
-  // 취약한 selector: placeholder 문구 변경에 민감합니다.
-  // 가능하면 `data-testid="student-search-input"`를 추가하세요.
   const studentSearchInput = getStudentSearchInput(page);
   await studentSearchInput.fill(TEST_STUDENT_NAME);
 
-  // 취약한 selector: 학생 row에 안정적인 식별자가 없어 class+버튼명+텍스트 조합을 사용합니다.
-  // 가능하면 `data-testid="student-row"`와 `data-student-name`로 바꾸세요.
   const studentRow = getStudentRow(page, TEST_STUDENT_NAME);
   await expect(studentRow).toBeVisible();
 
@@ -39,8 +35,6 @@ async function openStudentRow(page) {
 async function openGroupDetail(page) {
   await openDashboardSection(page, '반 관리');
 
-  // 취약한 selector: 그룹 row에 고유 test id가 없어 class+텍스트에 의존합니다.
-  // 가능하면 `data-testid="group-row"`와 `data-group-name`을 추가하세요.
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();
   await groupRow.click();
@@ -95,10 +89,7 @@ test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록
 
   await openGroupDetail(page);
 
-  // 취약한 selector: 등록 학생 섹션을 heading 부모 체인으로 찾고, row는 class에 의존합니다.
-  // 가능하면 `data-testid="group-students-section"`와 `data-testid="group-student-row"`를 추가하세요.
-  const registeredStudentsHeading = getRegisteredStudentsHeading(page, TEST_GROUP_NAME);
-  const enrolledStudentsSection = registeredStudentsHeading.locator('..').locator('..');
+  const enrolledStudentsSection = page.getByTestId('group-students-section');
   const enrolledStudentRow = enrolledStudentsSection.locator('.table-row').filter({
     hasText: TEST_STUDENT_NAME,
   });

@@ -34,8 +34,6 @@ test('관리자가 특정 그룹의 미래 일정을 실제로 생성한다', as
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '반 관리');
 
-  // 취약한 selector: 그룹 row에 안정적인 식별자가 없어 class+텍스트 조합을 사용합니다.
-  // 가능하면 `data-testid="group-row"`를 추가하세요.
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();
   await groupRow.click();
@@ -68,12 +66,7 @@ test('관리자가 특정 그룹의 미래 일정을 실제로 생성한다', as
   expect(dialogMessage).toContain('추가 일정 생성 완료');
   await expect(seriesDialog).toBeHidden();
 
-  // 취약한 selector: heading 부모를 타고 lesson section을 찾습니다.
-  // 가능하면 `data-testid="group-lessons-section"`로 치환하세요.
-  const lessonSection = page
-    .getByRole('heading', { name: '수업 일정' })
-    .locator('..')
-    .locator('..');
+  const lessonSection = page.getByTestId('group-lessons-section').locator('..');
 
   // 취약한 selector: 일정 row는 현재 class 기반입니다.
   // 가능하면 `data-testid="group-lesson-row"`를 추가하세요.

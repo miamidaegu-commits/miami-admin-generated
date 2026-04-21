@@ -16,20 +16,13 @@ test('관리자가 특정 그룹의 출결/차감 모달을 열 수 있다', asy
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '반 관리');
 
-  // 취약한 selector: 그룹 목록 row에 고유 role/test id가 없어 class+텍스트에 의존합니다.
-  // 가능하면 `data-testid="group-row"`와 `data-group-name` 같은 속성으로 전환하세요.
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();
   await groupRow.click();
 
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
 
-  // 취약한 selector: heading의 부모를 타고 올라가 section card를 찾습니다.
-  // 가능하면 `data-testid="group-lessons-section"`를 추가해 직접 선택하세요.
-  const lessonSection = page
-    .getByRole('heading', { name: '수업 일정' })
-    .locator('..')
-    .locator('..');
+  const lessonSection = page.getByTestId('group-lessons-section').locator('..');
 
   await expect(lessonSection).toBeVisible();
 

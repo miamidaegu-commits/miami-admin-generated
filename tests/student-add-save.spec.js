@@ -35,13 +35,9 @@ test('관리자가 학생을 실제로 추가하고 목록에서 확인한다', 
   await postCreateDialog.getByRole('button', { name: '나중에 하기' }).click();
   await expect(postCreateDialog).toBeHidden();
 
-  // 취약한 selector: placeholder 문구 변경에 민감합니다.
-  // 가능하면 `data-testid="student-search-input"`를 추가하세요.
   const studentSearchInput = getStudentSearchInput(page);
   await studentSearchInput.fill(studentName);
 
-  // 취약한 selector: 학생 row에 고유 test id가 없어 class+버튼명+텍스트 조합을 사용합니다.
-  // 가능하면 `data-testid="student-row"`와 `data-student-name`을 추가하세요.
   const studentRow = getStudentRow(page, studentName);
   await expect(studentRow).toBeVisible();
 });

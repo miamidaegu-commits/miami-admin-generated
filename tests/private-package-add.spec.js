@@ -17,13 +17,9 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '학생 관리');
 
-  // 취약한 selector: placeholder 문구 변경에 민감합니다.
-  // 가능하면 `data-testid="student-search-input"`를 추가하세요.
   const studentSearchInput = getStudentSearchInput(page);
   await studentSearchInput.fill(TEST_STUDENT_NAME);
 
-  // 취약한 selector: 학생 row에 안정적인 식별자가 없어 class+버튼명+텍스트 조합을 사용합니다.
-  // 가능하면 `data-testid="student-row"`와 `data-student-name`을 추가하세요.
   const studentRow = getStudentRow(page, TEST_STUDENT_NAME);
   await expect(studentRow).toBeVisible();
 

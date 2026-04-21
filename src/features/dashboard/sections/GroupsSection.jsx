@@ -103,6 +103,8 @@ export default function GroupsSection({
                 role="button"
                 tabIndex={0}
                 className="table-row"
+                data-testid="group-row"
+                data-group-name={group.name || ''}
                 onClick={() => setSelectedGroupClass(group)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -172,6 +174,7 @@ export default function GroupsSection({
 
         {selectedGroupClass ? (
           <div
+            data-testid="group-students-section"
             style={{
               marginTop: 24,
               padding: 20,
@@ -434,7 +437,7 @@ export default function GroupsSection({
 
             <div style={{ height: 20 }} />
 
-            <div style={{ marginBottom: 12 }}>
+            <div data-testid="group-lessons-section" style={{ marginBottom: 12 }}>
               <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>수업 일정</h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
                 이 반에서 실제로 진행되는 날짜별 수업입니다.

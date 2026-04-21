@@ -23,27 +23,15 @@ export async function openDashboardSection(page, sectionName) {
 }
 
 export function getStudentSearchInput(page) {
-  // 취약한 selector 공통화: placeholder 문구 변경 시 이 함수만 data-testid로 교체하면 됩니다.
-  return page.getByPlaceholder('이름, 전화번호, 차번호, 수강 목적 검색');
+  return page.getByTestId('student-search-input');
 }
 
 export function getStudentRow(page, studentName) {
-  // 취약한 selector 공통화: 현재 학생 row는 안정적인 role/test id가 없어 class+버튼명+텍스트를 함께 씁니다.
-  return page
-    .locator('.table-row')
-    .filter({
-      has: page.getByRole('button', { name: '수강권 추가', exact: true }),
-      hasText: studentName,
-    })
-    .first();
+  return page.locator(`[data-testid="student-row"][data-student-name="${studentName}"]`).first();
 }
 
 export function getGroupRow(page, groupName) {
-  // 취약한 selector 공통화: 현재 그룹 row는 role="button" + class + 텍스트 조합에 의존합니다.
-  return page
-    .locator('.table-row[role="button"]')
-    .filter({ hasText: groupName })
-    .first();
+  return page.locator(`[data-testid="group-row"][data-group-name="${groupName}"]`).first();
 }
 
 export function getRegisteredStudentsHeading(page, groupName) {

@@ -216,6 +216,7 @@ export default function StudentsSection({
     >
       <input
         type="search"
+        data-testid="student-search-input"
         value={studentSearchQuery}
         onChange={(e) => setStudentSearchQuery(e.target.value)}
         placeholder="이름, 전화번호, 차번호, 수강 목적 검색"
@@ -427,6 +428,8 @@ export default function StudentsSection({
             <Fragment key={student.id}>
             <div
               className="table-row"
+              data-testid="student-row"
+              data-student-name={student.name || ''}
               style={{
                 gridTemplateColumns:
                   'minmax(72px, 0.95fr) minmax(72px, 0.95fr) minmax(100px, 1.05fr) minmax(96px, 0.85fr) minmax(120px, 1.15fr) minmax(120px, 1.15fr) minmax(240px, auto)',
