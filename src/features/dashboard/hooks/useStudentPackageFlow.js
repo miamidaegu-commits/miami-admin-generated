@@ -715,6 +715,11 @@ export default function useStudentPackageFlow({
       ) {
         const nextStartYmd = await getNextGroupLessonDateYmd(groupClassId)
         const todayYmd = getTodayStorageDateString()
+        const defaultPostGroupReEnrollStartDate =
+          /^\d{4}-\d{2}-\d{2}$/.test(nextStartYmd) &&
+          nextStartYmd > registrationStartDateForSave
+            ? nextStartYmd
+            : registrationStartDateForSave
         setPostGroupReEnrollModalData({
           newPackageId: docRef.id,
           newPackageType: result.packageType,
@@ -726,10 +731,12 @@ export default function useStudentPackageFlow({
           groupClassName,
           totalCount: computedTotalCount,
           usedCount: 0,
-          showNextLessonAutoHint: nextStartYmd !== todayYmd,
+          showNextLessonAutoHint:
+            defaultPostGroupReEnrollStartDate === nextStartYmd &&
+            nextStartYmd !== todayYmd,
           packageRegistrationStartDate: registrationStartDateForSave,
         })
-        setPostGroupReEnrollStartDate(registrationStartDateForSave)
+        setPostGroupReEnrollStartDate(defaultPostGroupReEnrollStartDate)
         setPostGroupReEnrollErrors({})
       }
     } catch (error) {

@@ -631,6 +631,8 @@ export default function StudentsSection({
             </div>
             {isPkgDetailExpanded ? (
               <div
+                data-testid="student-detail-panel"
+                data-student-name={student.name || ''}
                 style={{
                   padding: '14px 1.25rem',
                   borderBottom: '1px solid var(--border)',
@@ -903,6 +905,7 @@ export default function StudentsSection({
                         <button
                           type="button"
                           onClick={() => setShowAllStudentPackagesInDetail(true)}
+                          data-testid="student-package-show-all-button"
                           style={{
                             padding: '6px 12px',
                             border: 'none',
@@ -944,6 +947,7 @@ export default function StudentsSection({
                     {displayedPkgList.map((pkg) => (
                       <div
                         key={pkg.id}
+                        data-testid="student-package-card"
                         style={{
                           padding: 12,
                           borderRadius: 10,
@@ -1011,6 +1015,7 @@ export default function StudentsSection({
                             <button
                               type="button"
                               onClick={() => openStudentPackageEditModal(pkg)}
+                              data-testid="student-package-edit-button"
                               disabled={
                                 busyStudentPackageActionId != null || busyStudentPackageSubmit
                               }
@@ -1032,6 +1037,7 @@ export default function StudentsSection({
                             <button
                               type="button"
                               onClick={() => openStudentPackageHistoryModal(pkg)}
+                              data-testid="student-package-history-button"
                               disabled={
                                 busyStudentPackageActionId != null || busyStudentPackageSubmit
                               }
