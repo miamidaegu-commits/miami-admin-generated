@@ -365,6 +365,9 @@ export default function CalendarSection(props) {
             const rowGroupName = isGroupRow
               ? String(lesson.groupClassDisplayName || '').trim()
               : undefined
+            const rowStudentName = !isGroupRow
+              ? String(getStudentName(lesson) || '').trim()
+              : undefined
             const canOpenGroupAttendance =
               isGroupRow && (isAdmin || canManageAttendance)
             return (
@@ -375,6 +378,7 @@ export default function CalendarSection(props) {
                 data-row-kind={isGroupRow ? 'group' : 'private'}
                 data-lesson-kind={isGroupRow ? 'group' : 'private'}
                 data-group-name={rowGroupName || undefined}
+                data-student-name={rowStudentName || undefined}
                 onClick={
                   canOpenGroupAttendance
                     ? () => onOpenCalendarGroupLessonAttendance?.(lesson)

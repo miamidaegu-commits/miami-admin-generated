@@ -1,10 +1,10 @@
 import { expect, test } from '@playwright/test';
-import { loginAsAdmin, openDashboardSection } from './e2e-helpers';
+import { loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
-  TEST_STUDENT_NAME,
-} from './fixtures/test-data';
+  TEST_PRIVATE_LESSON_STUDENT_NAME,
+} from './fixtures/test-data.js';
 
 test('admin can open an existing private lesson edit modal', async ({
   page,
@@ -20,10 +20,9 @@ test('admin can open an existing private lesson edit modal', async ({
     await showAllButton.click();
   }
 
-  const privateLessonRow = page
-    .locator('[data-testid="calendar-lesson-row"][data-row-kind="private"]')
-    .filter({ hasText: TEST_STUDENT_NAME })
-    .first();
+  const privateLessonRow = page.locator(
+    `[data-testid="calendar-lesson-row"][data-row-kind="private"][data-student-name="${TEST_PRIVATE_LESSON_STUDENT_NAME}"]`
+  ).first();
 
   await expect(privateLessonRow).toBeVisible();
   await privateLessonRow.getByRole('button', { name: '수정', exact: true }).click();
