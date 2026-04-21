@@ -10,13 +10,6 @@ import {
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
 
-function formatLocalTodayYmd() {
-  const today = new Date()
-  return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(
-    today.getDate()
-  ).padStart(2, '0')}`
-}
-
 function maxLexYmd(a, b) {
   if (!a) return b
   if (!b) return a
@@ -64,8 +57,8 @@ export default function useGroupScheduleRebuildFlow({
 
   const postGroupScheduleRebuildEffectiveFromYmd = useMemo(() => {
     const enteredFromYmd = String(postGroupScheduleRebuildFromDate || '').trim()
-    const todayYmd = formatLocalTodayYmd()
-    return enteredFromYmd ? (enteredFromYmd >= todayYmd ? enteredFromYmd : todayYmd) : todayYmd
+    const todayYmd = getTodayStorageDateString()
+    return enteredFromYmd ? maxLexYmd(enteredFromYmd, todayYmd) : todayYmd
   }, [postGroupScheduleRebuildFromDate])
 
   function openPostGroupScheduleRebuildModal(data, fromYmd) {
