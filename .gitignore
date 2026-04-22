@@ -66,6 +66,9 @@ node_modules/
 
 # dotenv environment variables file
 .env
+.env.e2e
+.env.local
+.env.*.local
 
 # dataconnect generated files
 .dataconnect
@@ -76,3 +79,4 @@ node_modules/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/
+serviceAccountKey*.json

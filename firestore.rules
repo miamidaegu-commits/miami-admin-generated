@@ -18,6 +18,10 @@ service cloud.firestore {
       return signedIn() && currentUserDoc().role == "admin";
     }
 
+    function hasAdminClaim() {
+      return signedIn() && request.auth.token.role == "admin";
+    }
+
     function isTeacher() {
       return signedIn() && currentUserDoc().role == "teacher";
     }
@@ -126,10 +130,13 @@ service cloud.firestore {
     }
 
     match /users/{uid} {
-      allow read: if isMe(uid) || isAdmin();
-      allow create: if isMe(uid) || isAdmin();
-      allow update: if isMe(uid) || isAdmin();
-      allow delete: if isAdmin();
+      // Bootstrapping AuthContext must not depend on reading users/{currentUid}
+      // through another users/{currentUid} lookup.
+      allow get: if isMe(uid) || hasAdminClaim();
+      allow list: if hasAdminClaim();
+      allow create: if isMe(uid) || hasAdminClaim();
+      allow update: if isMe(uid) || hasAdminClaim();
+      allow delete: if hasAdminClaim();
     }
 
     match /lessons/{lessonId} {

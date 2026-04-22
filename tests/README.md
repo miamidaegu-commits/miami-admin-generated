@@ -37,11 +37,31 @@ nvm use
 npm run test:e2e:chromium
 ```
 
-GitHub Actions에서는 `push`와 `pull_request`마다 `.github/workflows/e2e.yml`이 `npm run build` 후 `npm run test:e2e:chromium`을 자동 실행합니다.
+로컬 E2E는 `vite --mode e2e`를 사용하므로 `.env.e2e` 또는 `.env.e2e.local`에 E2E Firebase의 `VITE_FIREBASE_*` 값을 넣어야 합니다.
+`npm run dev:e2e`, `npm run build:e2e`, `npm run test:e2e:chromium`은 모두 `VITE_FIREBASE_PROJECT_ID=miami-e2e`인지도 함께 검사합니다.
+
+```bash
+cp .env.e2e.example .env.e2e.local
+```
+
+운영 앱 로컬 실행은 별도로 `.env.local`에 운영 Firebase 값을 두고 `npm run dev`를 사용하면 됩니다.
+
+GitHub Actions에서는 `push`와 `pull_request`마다 `.github/workflows/e2e.yml`이 아래 E2E 전용 secrets를 `VITE_FIREBASE_*`로 매핑한 뒤 `npm run build:e2e`와 `npm run test:e2e:chromium`을 실행합니다.
+
+```bash
+E2E_FIREBASE_API_KEY
+E2E_FIREBASE_AUTH_DOMAIN
+E2E_FIREBASE_PROJECT_ID
+E2E_FIREBASE_STORAGE_BUCKET
+E2E_FIREBASE_MESSAGING_SENDER_ID
+E2E_FIREBASE_APP_ID
+```
 
 필요에 따라 아래 명령도 사용할 수 있습니다.
 
 ```bash
+npm run dev:e2e
+npm run build:e2e
 npm run test:e2e
 npm run test:e2e:ui
 npm run test:e2e:report

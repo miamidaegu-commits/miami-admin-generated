@@ -1,13 +1,39 @@
-const FIREBASE_CONFIG = {
-  apiKey: 'AIzaSyDgF4BT9KnyRpApMY23ScZgbBMSmu-ExuU',
-  authDomain: 'miamiacademyschedule.firebaseapp.com',
-  projectId: 'miamiacademyschedule',
-  storageBucket: 'miamiacademyschedule.firebasestorage.app',
-  messagingSenderId: '1086077006833',
-  appId: '1:1086077006833:web:344e89ad2f30b5c0b44a50',
-};
+const FIREBASE_ENV_KEYS = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_STORAGE_BUCKET',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_APP_ID',
+]
+const E2E_FIREBASE_PROJECT_ID = 'miami-e2e'
 
-const FIREBASE_VERSION = '10.12.2';
+function getFirebaseConfigFromEnv(env) {
+  const missingKeys = FIREBASE_ENV_KEYS.filter((key) => !String(env[key] || '').trim())
+
+  if (missingKeys.length > 0) {
+    throw new Error(
+      `Missing Firebase environment variables for E2E helpers: ${missingKeys.join(', ')}`
+    )
+  }
+
+  if (env.VITE_FIREBASE_PROJECT_ID !== E2E_FIREBASE_PROJECT_ID) {
+    throw new Error(
+      `E2E helpers require VITE_FIREBASE_PROJECT_ID=${E2E_FIREBASE_PROJECT_ID}, received ${String(env.VITE_FIREBASE_PROJECT_ID || '')}.`
+    )
+  }
+
+  return {
+    apiKey: env.VITE_FIREBASE_API_KEY,
+    authDomain: env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: env.VITE_FIREBASE_APP_ID,
+  }
+}
+
+const FIREBASE_VERSION = '10.12.2'
 
 export async function createTempGroupStudentAddPackage(page, params) {
   return runFirebaseTask(page, 'createTempGroupStudentAddPackage', params);
@@ -50,6 +76,8 @@ export async function getGroupPackageStartDate(page, params) {
 }
 
 async function runFirebaseTask(page, taskName, params) {
+  const firebaseConfig = getFirebaseConfigFromEnv(process.env)
+
   return page.evaluate(
     async ({ firebaseConfig, firebaseVersion, taskName, params }) => {
       const [{ getApp, getApps, initializeApp }, { getAuth, onAuthStateChanged }, firestore] =
@@ -513,7 +541,7 @@ async function runFirebaseTask(page, taskName, params) {
       }
     },
     {
-      firebaseConfig: FIREBASE_CONFIG,
+      firebaseConfig,
       firebaseVersion: FIREBASE_VERSION,
       taskName,
       params,

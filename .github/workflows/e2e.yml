@@ -8,6 +8,14 @@ jobs:
   build-and-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      VITE_FIREBASE_API_KEY: ${{ secrets.E2E_FIREBASE_API_KEY }}
+      VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.E2E_FIREBASE_AUTH_DOMAIN }}
+      VITE_FIREBASE_PROJECT_ID: ${{ secrets.E2E_FIREBASE_PROJECT_ID }}
+      VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.E2E_FIREBASE_STORAGE_BUCKET }}
+      VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.E2E_FIREBASE_MESSAGING_SENDER_ID }}
+      VITE_FIREBASE_APP_ID: ${{ secrets.E2E_FIREBASE_APP_ID }}
+      PW_FIREBASE_ENV_MODE: e2e
 
     steps:
       - name: Check out repository
@@ -26,7 +34,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Build app
-        run: npm run build
+        run: npm run build:e2e
 
       - name: Run Chromium e2e tests
         env:

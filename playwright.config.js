@@ -1,5 +1,45 @@
 // @ts-check
 import { defineConfig, devices } from '@playwright/test';
+import { loadEnv } from 'vite';
+
+const FIREBASE_ENV_KEYS = [
+  'VITE_FIREBASE_API_KEY',
+  'VITE_FIREBASE_AUTH_DOMAIN',
+  'VITE_FIREBASE_PROJECT_ID',
+  'VITE_FIREBASE_STORAGE_BUCKET',
+  'VITE_FIREBASE_MESSAGING_SENDER_ID',
+  'VITE_FIREBASE_APP_ID',
+];
+const E2E_FIREBASE_PROJECT_ID = 'miami-e2e';
+const playwrightFirebaseMode = process.env.PW_FIREBASE_ENV_MODE || 'e2e';
+const loadedEnv = loadEnv(playwrightFirebaseMode, process.cwd(), '');
+
+for (const [key, value] of Object.entries(loadedEnv)) {
+  if (process.env[key] == null) {
+    process.env[key] = value;
+  }
+}
+
+function getMissingFirebaseEnvKeys(env) {
+  return FIREBASE_ENV_KEYS.filter((key) => !String(env[key] || '').trim());
+}
+
+const missingFirebaseEnvKeys = getMissingFirebaseEnvKeys(process.env);
+
+if (missingFirebaseEnvKeys.length > 0) {
+  throw new Error(
+    `Missing Firebase environment variables for Playwright (${playwrightFirebaseMode} mode): ${missingFirebaseEnvKeys.join(', ')}`
+  );
+}
+
+if (
+  playwrightFirebaseMode === 'e2e' &&
+  process.env.VITE_FIREBASE_PROJECT_ID !== E2E_FIREBASE_PROJECT_ID
+) {
+  throw new Error(
+    `Playwright e2e mode requires VITE_FIREBASE_PROJECT_ID=${E2E_FIREBASE_PROJECT_ID}, received ${String(process.env.VITE_FIREBASE_PROJECT_ID || '')}.`
+  );
+}
 
 /**
  * Read environment variables from file.
@@ -73,8 +113,11 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
+    command: 'npm run dev:e2e',
+    url: 'http://127.0.0.1:5173',
+    env: {
+      ...process.env,
+    },
     reuseExistingServer: true,
   },
 });
