@@ -6,6 +6,10 @@ import {
   openDashboardSection,
 } from './e2e-helpers.js';
 import {
+  cleanupTempGroupAttendanceSetup,
+  createTempGroupAttendanceSetup,
+} from './e2e-firebase-helpers.js';
+import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   TEST_GROUP_NAME,
@@ -45,163 +49,6 @@ async function acceptNextDialog(page) {
   });
 
   return dialogHandled;
-}
-
-async function createTempGroupAttendanceSetup(page, {
-  groupName,
-  studentName,
-  lessonDate,
-  tempPackageTitle,
-}) {
-  return page.evaluate(async ({ groupName, studentName, lessonDate, tempPackageTitle }) => {
-    const firebaseConfig = {
-      apiKey: 'AIzaSyDgF4BT9KnyRpApMY23ScZgbBMSmu-ExuU',
-      authDomain: 'miamiacademyschedule.firebaseapp.com',
-      projectId: 'miamiacademyschedule',
-      storageBucket: 'miamiacademyschedule.firebasestorage.app',
-      messagingSenderId: '1086077006833',
-      appId: '1:1086077006833:web:344e89ad2f30b5c0b44a50',
-    };
-
-    const [{ getApp, getApps, initializeApp }, { getAuth, onAuthStateChanged }, firestore] = await Promise.all([
-      import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
-      import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
-      import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'),
-    ]);
-
-    const {
-      getFirestore,
-      collection,
-      doc,
-      getDocs,
-      query,
-      setDoc,
-      Timestamp,
-      where,
-    } = firestore;
-
-    const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    if (!auth.currentUser) {
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Auth user not ready in browser context.')), 30000);
-        const unsub = onAuthStateChanged(auth, (user) => {
-          if (!user) return;
-          clearTimeout(timeout);
-          unsub();
-          resolve();
-        });
-      });
-    }
-
-    const db = getFirestore(app);
-    const groupClassSnap = await getDocs(
-      query(collection(db, 'groupClasses'), where('name', '==', groupName))
-    );
-    if (groupClassSnap.empty) throw new Error(`Group class not found: ${groupName}`);
-    const groupClassDoc = groupClassSnap.docs[0];
-    const groupClassData = groupClassDoc.data() || {};
-
-    const studentSnap = await getDocs(
-      query(collection(db, 'privateStudents'), where('name', '==', studentName))
-    );
-    if (studentSnap.empty) throw new Error(`Student not found: ${studentName}`);
-    const studentDoc = studentSnap.docs[0];
-    const studentData = studentDoc.data() || {};
-
-    const packageRef = doc(collection(db, 'studentPackages'));
-    const groupStudentRef = doc(collection(db, 'groupStudents'));
-    const nowTs = Timestamp.now();
-    const startDateTs = Timestamp.fromDate(new Date(`${lessonDate}T00:00:00`));
-    const teacher = String(groupClassData.teacher || '').trim().toLowerCase();
-
-    await setDoc(packageRef, {
-      studentId: studentDoc.id,
-      studentName: String(studentData.name || studentName).trim(),
-      teacher,
-      packageType: 'group',
-      groupClassId: groupClassDoc.id,
-      groupClassName: String(groupClassData.name || groupName).trim(),
-      title: tempPackageTitle,
-      totalCount: 4,
-      usedCount: 0,
-      remainingCount: 4,
-      status: 'active',
-      registrationStartDate: lessonDate,
-      registrationWeeks: 1,
-      coverageEndDate: '',
-      expiresAt: '',
-      amountPaid: 0,
-      memo: 'E2E temporary package for group attendance test',
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    });
-
-    await setDoc(groupStudentRef, {
-      groupClassId: groupClassDoc.id,
-      classID: groupClassDoc.id,
-      studentId: studentDoc.id,
-      studentName: String(studentData.name || studentName).trim(),
-      name: String(studentData.name || studentName).trim(),
-      teacher,
-      packageId: packageRef.id,
-      packageType: 'group',
-      paidLessons: 4,
-      attendanceCount: 0,
-      startDate: startDateTs,
-      status: 'active',
-      studentStatus: 'active',
-      excludedDates: [],
-      breakStartDate: '',
-      breakEndDate: '',
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    });
-
-    return {
-      packageId: packageRef.id,
-      groupStudentId: groupStudentRef.id,
-    };
-  }, { groupName, studentName, lessonDate, tempPackageTitle });
-}
-
-async function cleanupTempGroupAttendanceSetup(page, { packageId, groupStudentId }) {
-  return page.evaluate(async ({ packageId, groupStudentId }) => {
-    const firebaseConfig = {
-      apiKey: 'AIzaSyDgF4BT9KnyRpApMY23ScZgbBMSmu-ExuU',
-      authDomain: 'miamiacademyschedule.firebaseapp.com',
-      projectId: 'miamiacademyschedule',
-      storageBucket: 'miamiacademyschedule.firebasestorage.app',
-      messagingSenderId: '1086077006833',
-      appId: '1:1086077006833:web:344e89ad2f30b5c0b44a50',
-    };
-
-    const [{ getApp, getApps, initializeApp }, { getAuth, onAuthStateChanged }, firestore] = await Promise.all([
-      import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
-      import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
-      import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'),
-    ]);
-
-    const { deleteDoc, doc, getFirestore } = firestore;
-
-    const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    if (!auth.currentUser) {
-      await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Auth user not ready in browser cleanup context.')), 30000);
-        const unsub = onAuthStateChanged(auth, (user) => {
-          if (!user) return;
-          clearTimeout(timeout);
-          unsub();
-          resolve();
-        });
-      });
-    }
-
-    const db = getFirestore(app);
-    await deleteDoc(doc(db, 'groupStudents', groupStudentId)).catch(() => {});
-    await deleteDoc(doc(db, 'studentPackages', packageId)).catch(() => {});
-  }, { packageId, groupStudentId });
 }
 
 test('관리자가 그룹 출결 모달에서 실제 차감 후 다시 복구할 수 있다', async ({

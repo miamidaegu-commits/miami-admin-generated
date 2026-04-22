@@ -37,6 +37,8 @@ nvm use
 npm run test:e2e:chromium
 ```
 
+GitHub Actions에서는 `push`와 `pull_request`마다 `.github/workflows/e2e.yml`이 `npm run build` 후 `npm run test:e2e:chromium`을 자동 실행합니다.
+
 필요에 따라 아래 명령도 사용할 수 있습니다.
 
 ```bash

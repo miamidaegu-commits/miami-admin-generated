@@ -7,8 +7,8 @@ import {
 } from '../dashboardViewUtils.js'
 
 /**
- * Groups 탭 전용: 반/수업/출석 모달에 쓰이는 파생 데이터만 담당.
- * Firestore 쓰기·submit·handler는 Dashboard에 둔다.
+ * Groups 탭 전용: 반 목록/학생 목록/출석 모달에 쓰이는 파생 데이터만 담당.
+ * 학생 등록 add 흐름의 상태/제출/파생값은 별도 hook으로 분리한다.
  */
 export default function useGroupsSectionViewModel({
   groupClasses,
@@ -16,7 +16,6 @@ export default function useGroupsSectionViewModel({
   groupLessons,
   selectedGroupClass,
   studentPackages,
-  groupStudentForm,
   groupLessonSeriesForm,
   groupLessonSeriesModalOpen,
   groupLessonAttendanceModal,
@@ -47,24 +46,6 @@ export default function useGroupsSectionViewModel({
     groupLessonSeriesForm.startDate,
     groupLessonSeriesForm.endDate,
   ])
-
-  const groupStudentEligiblePackages = useMemo(() => {
-    const gid = selectedGroupClass?.id
-    if (!gid) return []
-    return studentPackages
-      .filter((p) => {
-        if (p.packageType !== 'group') return false
-        if (String(p.groupClassId || '') !== String(gid)) return false
-        if (p.status !== 'active') return false
-        if (Number(p.remainingCount || 0) <= 0) return false
-        return true
-      })
-      .sort((a, b) => {
-        const byStudent = String(a.studentName || '').localeCompare(String(b.studentName || ''), 'ko')
-        if (byStudent !== 0) return byStudent
-        return String(a.title || '').localeCompare(String(b.title || ''), 'ko')
-      })
-  }, [studentPackages, selectedGroupClass?.id])
 
   const sortedGroupClasses = useMemo(() => {
     return [...groupClasses].sort((a, b) => {
@@ -167,20 +148,12 @@ export default function useGroupsSectionViewModel({
     return groupLessons.find((l) => l.id === m.id) || m
   }, [groupLessonAttendanceModal, groupLessons])
 
-  const groupStudentSelectedPackagePreview = useMemo(() => {
-    return groupStudentForm.packageId
-      ? studentPackages.find((p) => p.id === groupStudentForm.packageId)
-      : null
-  }, [groupStudentForm.packageId, studentPackages])
-
   return {
     sortedGroupLessonsForSelectedClass,
     groupLessonSeriesPlannedCount,
-    groupStudentEligiblePackages,
     sortedGroupClasses,
     sortedGroupStudentsForSelectedClass,
     groupLessonAttendanceModalRows,
     groupLessonForAttendanceModal,
-    groupStudentSelectedPackagePreview,
   }
 }

@@ -42,7 +42,6 @@ import {
   getStorageDateStringFromDate,
   getStudentName,
   getTeacherName,
-  getEarliestFutureGroupLessonYmdFromLessons,
   getGroupLessonGroupId,
   getGroupWeeklyClassCountFromWeekdaysDoc,
   getTodayStorageDateString,
@@ -89,6 +88,7 @@ import useGroupScheduleRebuildFlow from './src/features/dashboard/hooks/useGroup
 import useGroupLessonManagementFlow from './src/features/dashboard/hooks/useGroupLessonManagementFlow.js'
 import useGroupAttendanceFlow from './src/features/dashboard/hooks/useGroupAttendanceFlow.js'
 import useGroupManagementFlow from './src/features/dashboard/hooks/useGroupManagementFlow.js'
+import useGroupStudentAddFlow from './src/features/dashboard/hooks/useGroupStudentAddFlow.js'
 import useGroupStudentManagementFlow from './src/features/dashboard/hooks/useGroupStudentManagementFlow.js'
 import usePrivateLessonFlow, {
   validatePrivateLessonFormFields as validatePrivateLessonFormFieldsShared,
@@ -329,13 +329,7 @@ export default function Dashboard() {
   const [selectedGroupClass, setSelectedGroupClass] = useState(null)
   const [groupStudents, setGroupStudents] = useState([])
   const [groupStudentsLoading, setGroupStudentsLoading] = useState(false)
-  const [groupStudentAddModalOpen, setGroupStudentAddModalOpen] = useState(false)
-  const [groupStudentForm, setGroupStudentForm] = useState({
-    packageId: '',
-    startDate: '',
-  })
-  const [groupStudentFormErrors, setGroupStudentFormErrors] = useState({})
-  const [busyGroupStudentId, setBusyGroupStudentId] = useState(null)
+  const [busyRemovingGroupStudentId, setBusyRemovingGroupStudentId] = useState(null)
   const [groupLessons, setGroupLessons] = useState([])
 
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
@@ -644,8 +638,6 @@ export default function Dashboard() {
   useEffect(() => {
     if (activeSection !== 'groups') {
       setSelectedGroupClass(null)
-      setGroupStudentAddModalOpen(false)
-      setGroupStudentFormErrors({})
     }
   }, [activeSection])
 
@@ -688,18 +680,6 @@ export default function Dashboard() {
     const stillThere = groupClasses.some((g) => g.id === selectedGroupClass.id)
     if (!stillThere) setSelectedGroupClass(null)
   }, [groupClasses, selectedGroupClass?.id])
-
-  useEffect(() => {
-    if (!groupStudentAddModalOpen) return
-    function onKeyDown(e) {
-      if (e.key === 'Escape') {
-        setGroupStudentAddModalOpen(false)
-        setGroupStudentFormErrors({})
-      }
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [groupStudentAddModalOpen])
 
   useEffect(() => {
     if (!selectedGroupClass?.id) {
@@ -950,6 +930,27 @@ export default function Dashboard() {
   })
 
   const {
+    groupStudentAddModalOpen,
+    groupStudentForm,
+    setGroupStudentForm,
+    groupStudentFormErrors,
+    busyGroupStudentId: busyAddingGroupStudentId,
+    groupStudentEligiblePackages,
+    groupStudentSelectedPackagePreview,
+    openGroupStudentAddModal,
+    closeGroupStudentAddModal,
+    submitGroupStudentAdd,
+    isGroupStudentModalSubmitting,
+  } = useGroupStudentAddFlow({
+    activeSection,
+    userProfile,
+    selectedGroupClass,
+    studentPackages,
+    groupStudents,
+    groupLessons,
+  })
+
+  const {
     groupStudentManageModal,
     groupStudentManageForm,
     groupStudentManageFormErrors,
@@ -990,18 +991,15 @@ export default function Dashboard() {
     sortedGroupClasses,
     sortedGroupStudentsForSelectedClass,
     sortedGroupLessonsForSelectedClass,
-    groupStudentEligiblePackages,
     groupLessonSeriesPlannedCount,
     groupLessonForAttendanceModal,
     groupLessonAttendanceModalRows,
-    groupStudentSelectedPackagePreview,
   } = useGroupsSectionViewModel({
     groupClasses,
     groupStudents,
     groupLessons,
     selectedGroupClass,
     studentPackages,
-    groupStudentForm,
     groupLessonSeriesForm,
     groupLessonSeriesModalOpen,
     groupLessonAttendanceModal,
@@ -1032,6 +1030,7 @@ export default function Dashboard() {
     isAdmin ||
     (userProfile?.canCreateLessonDirectly === true &&
       userProfile?.requiresLessonApproval === false)
+  const busyGroupStudentId = busyRemovingGroupStudentId || busyAddingGroupStudentId
 
   const {
     studentPackageModalStudent,
@@ -1736,185 +1735,6 @@ export default function Dashboard() {
     return row.studentName || row.name || '-'
   }
 
-  function closeGroupStudentAddModal() {
-    setGroupStudentAddModalOpen(false)
-    setGroupStudentFormErrors({})
-  }
-
-  function openGroupStudentAddModal() {
-    if (!canAddStudent) {
-      alert('학생 추가 권한이 없습니다.')
-      return
-    }
-
-    setGroupStudentForm({
-      packageId: '',
-      startDate: '',
-    })
-    setGroupStudentFormErrors({})
-    setGroupStudentAddModalOpen(true)
-  }
-
-  function validateGroupStudentFormFields(form) {
-    const errors = {}
-    const packageId = String(form.packageId || '').trim()
-    const adminUi = userProfile?.role === 'admin'
-    if (!packageId) {
-      errors.packageId = adminUi
-        ? '사용할 그룹 수강권을 선택해주세요.'
-        : '사용할 등록을 선택해주세요.'
-    }
-
-    const dateStr = String(form.startDate || '').trim()
-    if (!dateStr) {
-      errors.startDate = '시작일을 선택해주세요.'
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-      errors.startDate = '시작일 형식이 올바르지 않습니다.'
-    } else {
-      const [y, mo, d] = dateStr.split('-').map(Number)
-      const dt = new Date(y, mo - 1, d)
-      if (
-        dt.getFullYear() !== y ||
-        dt.getMonth() !== mo - 1 ||
-        dt.getDate() !== d
-      ) {
-        errors.startDate = '유효한 날짜를 선택해주세요.'
-      }
-    }
-
-    let startTimestamp = null
-    if (!errors.startDate && dateStr) {
-      const [y, mo, d] = dateStr.split('-').map(Number)
-      startTimestamp = Timestamp.fromDate(new Date(y, mo - 1, d))
-    }
-
-    return {
-      valid: Object.keys(errors).length === 0,
-      errors,
-      packageId,
-      startDate: startTimestamp,
-    }
-  }
-
-  async function submitGroupStudentAdd() {
-    if (!selectedGroupClass?.id) return
-
-    if (!canAddStudent) {
-      alert('학생 추가 권한이 없습니다.')
-      return
-    }
-
-    const result = validateGroupStudentFormFields(groupStudentForm)
-    setGroupStudentFormErrors(result.errors)
-    if (!result.valid || !result.startDate) return
-
-    const adminUi = userProfile?.role === 'admin'
-    const selectedPackage = studentPackages.find((p) => p.id === result.packageId)
-    if (!selectedPackage) {
-      alert(
-        adminUi
-          ? '등록된 수강권을 찾을 수 없습니다.'
-          : '선택한 수업 등록을 찾을 수 없습니다.'
-      )
-      return
-    }
-    if (
-      selectedPackage.packageType !== 'group' ||
-      String(selectedPackage.groupClassId || '') !== String(selectedGroupClass.id) ||
-      selectedPackage.status !== 'active'
-    ) {
-      alert(
-        adminUi
-          ? '이 그룹에서 사용할 수 없는 수강권입니다.'
-          : '이 그룹에서 사용할 수 없는 등록입니다.'
-      )
-      return
-    }
-
-    if (Number(selectedPackage.remainingCount || 0) <= 0) {
-      alert(adminUi ? '남은 횟수가 없는 수강권입니다.' : '남은 횟수가 없습니다.')
-      return
-    }
-
-    const studentId = String(selectedPackage.studentId || '').trim()
-    if (!studentId) {
-      alert(
-        adminUi ? '수강권에 연결된 학생이 없습니다.' : '등록에 학생 연결이 없습니다.'
-      )
-      return
-    }
-
-    if (
-      groupStudents.some(
-        (gs) =>
-          String(gs.studentId || '').trim() === studentId &&
-          String(gs.groupClassId || '') === String(selectedGroupClass.id) &&
-          String(gs.status || 'active') === 'active'
-      )
-    ) {
-      alert('이미 이 그룹에 등록된 학생입니다.')
-      return
-    }
-
-    const dateStrYmd = String(groupStudentForm.startDate || '').trim()
-    const pkgRegYmd = String(selectedPackage.registrationStartDate || '').trim()
-    const extraStartErrors = {}
-    if (/^\d{4}-\d{2}-\d{2}$/.test(pkgRegYmd) && dateStrYmd < pkgRegYmd) {
-      extraStartErrors.startDate =
-        '등록 시작일은 수강권 시작일보다 이를 수 없습니다.'
-    }
-    if (!extraStartErrors.startDate) {
-      const earliestGl = getEarliestFutureGroupLessonYmdFromLessons({
-        groupClassId: selectedGroupClass.id,
-        groupLessons,
-        todayYmd: getTodayStorageDateString(),
-      })
-      if (/^\d{4}-\d{2}-\d{2}$/.test(earliestGl) && dateStrYmd < earliestGl) {
-        extraStartErrors.startDate =
-          '등록 시작일은 반의 첫 예정 수업일보다 이를 수 없습니다.'
-      }
-    }
-    if (Object.keys(extraStartErrors).length > 0) {
-      setGroupStudentFormErrors(extraStartErrors)
-      return
-    }
-
-    const studentName = String(selectedPackage.studentName || '').trim() || '-'
-    const teacher = normalizeText(
-      selectedGroupClass.teacher || selectedPackage.teacher || ''
-    )
-
-    try {
-      setBusyGroupStudentId('__add__')
-      await addDoc(collection(db, 'groupStudents'), {
-        groupClassId: selectedGroupClass.id,
-        classID: selectedGroupClass.id,
-        studentId,
-        studentName,
-        name: studentName,
-        teacher,
-        packageId: selectedPackage.id,
-        packageType: selectedPackage.packageType,
-        paidLessons: Number(selectedPackage.totalCount || 0),
-        attendanceCount: Number(selectedPackage.usedCount || 0),
-        startDate: result.startDate,
-        status: 'active',
-        studentStatus: 'active',
-        excludedDates: [],
-        breakStartDate: '',
-        breakEndDate: '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      })
-      closeGroupStudentAddModal()
-    } catch (error) {
-      console.error('그룹 학생 추가 실패:', error)
-      alert(`그룹 학생 추가 실패: ${error.message}`)
-    } finally {
-      setBusyGroupStudentId(null)
-    }
-  }
-
   async function handleRemoveGroupStudent(row) {
     if (!canDeleteStudent) {
       alert('학생 삭제 권한이 없습니다.')
@@ -1925,13 +1745,13 @@ export default function Dashboard() {
     if (!window.confirm(`이 학생을 이 반에서 제거할까요?\n${label}`)) return
 
     try {
-      setBusyGroupStudentId(row.id)
+      setBusyRemovingGroupStudentId(row.id)
       await deleteDoc(doc(db, 'groupStudents', row.id))
     } catch (error) {
       console.error('그룹 학생 제거 실패:', error)
       alert(`그룹 학생 제거 실패: ${error.message}`)
     } finally {
-      setBusyGroupStudentId(null)
+      setBusyRemovingGroupStudentId(null)
     }
   }
 
@@ -1956,8 +1776,6 @@ export default function Dashboard() {
   }
 
   const busyStudentId = busyDeletingStudentId || busyStudentFlowId
-
-  const isGroupStudentModalSubmitting = busyGroupStudentId === '__add__'
 
   const isStudentPackageModalSubmitting = busyStudentPackageSubmit
 
