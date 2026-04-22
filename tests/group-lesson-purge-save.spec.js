@@ -64,20 +64,16 @@ test('관리자가 그룹의 이후 일정 삭제 흐름으로 생성한 미래 
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
   await expect(page.getByRole('heading', { name: '수업 일정' })).toBeVisible();
 
-  const lessonTable = page
-    .getByTestId('group-lessons-section')
-    .locator('..')
-    .locator('.activity-table')
-    .last();
+  const lessonTable = page.getByTestId('group-lessons-section').locator('.activity-table').last();
 
   await expect(lessonTable).toBeVisible();
 
-  const lessonRows = lessonTable.locator('.table-row');
+  const lessonRows = lessonTable.getByTestId('group-lesson-row');
 
   async function countLessonsInRange() {
     return lessonRows.evaluateAll((rows, { start, end }) => {
       return rows.filter((row) => {
-        const dateText = row.querySelector('span')?.textContent?.trim() || '';
+        const dateText = row.getAttribute('data-lesson-date') || '';
         return dateText >= start && dateText <= end;
       }).length;
     }, { start: rangeStart, end: rangeEnd });

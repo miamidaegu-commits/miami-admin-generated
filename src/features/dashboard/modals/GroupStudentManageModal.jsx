@@ -176,6 +176,7 @@ export default function GroupStudentManageModal({
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
               <input
                 type="date"
+                data-testid="group-student-exclude-date-input"
                 value={excludeAddInput}
                 onChange={(e) => onFieldChange('excludeAddInput', e.target.value)}
                 disabled={isSubmitting}
@@ -211,7 +212,12 @@ export default function GroupStudentManageModal({
             ) : (
               <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.6 }}>
                 {excludedDates.map((d) => (
-                  <li key={d} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <li
+                    key={d}
+                    data-testid="group-student-excluded-date-item"
+                    data-date={d}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                  >
                     <span>{d}</span>
                     <button
                       type="button"

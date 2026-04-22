@@ -51,14 +51,12 @@ test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 
 
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
 
-  const lessonSection = page.getByTestId('group-lessons-section').locator('..');
+  const lessonSection = page.getByTestId('group-lessons-section');
   await expect(lessonSection).toBeVisible();
 
-  const targetLessonRow = lessonSection
-    .locator('.table-row')
-    .filter({ hasText: lessonDate })
-    .filter({ hasText: lessonTime })
-    .filter({ hasText: lessonSubject });
+  const targetLessonRow = lessonSection.locator(
+    `[data-testid="group-lesson-row"][data-lesson-date="${lessonDate}"][data-lesson-time="${lessonTime}"][data-lesson-subject="${lessonSubject}"]`
+  );
 
   await expect(targetLessonRow).toHaveCount(0);
 

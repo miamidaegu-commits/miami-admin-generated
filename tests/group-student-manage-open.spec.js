@@ -27,7 +27,9 @@ test('관리자가 그룹 학생 관리 모달을 열 수 있다', async ({ page
   const groupStudentsSection = page.getByTestId('group-students-section');
   await expect(groupStudentsSection).toBeVisible();
 
-  const studentRow = groupStudentsSection.locator('.table-row').filter({ hasText: TEST_STUDENT_NAME }).first();
+  const studentRow = groupStudentsSection.locator(
+    `[data-testid="group-student-row"][data-student-name="${TEST_STUDENT_NAME}"]`
+  ).first();
   await expect(studentRow).toBeVisible();
 
   const manageButton = studentRow.getByRole('button', { name: '관리', exact: true });

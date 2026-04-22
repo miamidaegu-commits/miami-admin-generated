@@ -386,6 +386,8 @@ export default function GroupsSection({
                     <div
                       key={gs.id}
                       className="table-row"
+                      data-testid="group-student-row"
+                      data-student-name={getGroupStudentDisplayName(gs)}
                       style={{
                         gridTemplateColumns:
                           '1.1fr 0.75fr 0.75fr 1fr minmax(200px, auto)',
@@ -437,140 +439,146 @@ export default function GroupsSection({
 
             <div style={{ height: 20 }} />
 
-            <div data-testid="group-lessons-section" style={{ marginBottom: 12 }}>
-              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>수업 일정</h3>
-              <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
-                이 반에서 실제로 진행되는 날짜별 수업입니다.
-              </p>
-            </div>
+            <div data-testid="group-lessons-section">
+              <div style={{ marginBottom: 12 }}>
+                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>수업 일정</h3>
+                <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
+                  이 반에서 실제로 진행되는 날짜별 수업입니다.
+                </p>
+              </div>
 
-            {groupLessonsLoading ? (
-              <p style={{ opacity: 0.85 }}>수업 일정을 불러오는 중...</p>
-            ) : sortedGroupLessonsForSelectedClass.length === 0 ? (
-              <p style={{ opacity: 0.8 }}>등록된 수업 일정이 없습니다.</p>
-            ) : (
-              <div className="activity-table">
-                <div
-                  className="table-head"
-                  style={{
-                    gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
-                  }}
-                >
-                  <span>날짜</span>
-                  <span>시간</span>
-                  <span>과목</span>
-                  <span>작업</span>
-                </div>
+              {groupLessonsLoading ? (
+                <p style={{ opacity: 0.85 }}>수업 일정을 불러오는 중...</p>
+              ) : sortedGroupLessonsForSelectedClass.length === 0 ? (
+                <p style={{ opacity: 0.8 }}>등록된 수업 일정이 없습니다.</p>
+              ) : (
+                <div className="activity-table">
+                  <div
+                    className="table-head"
+                    style={{
+                      gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
+                    }}
+                  >
+                    <span>날짜</span>
+                    <span>시간</span>
+                    <span>과목</span>
+                    <span>작업</span>
+                  </div>
 
-                {sortedGroupLessonsForSelectedClass.map((gl) => {
-                  const rowBusy = busyGroupLessonId === gl.id
-                  const attendanceBusyThisLesson =
-                    Boolean(busyGroupAttendanceStudentId) &&
-                    busyGroupAttendanceStudentId.startsWith(`${gl.id}__`)
-                  return (
-                    <div
-                      key={gl.id}
-                      className="table-row"
-                      style={{
-                        gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
-                      }}
-                    >
-                      <span>{gl.date || '-'}</span>
-                      <span>{gl.time || '-'}</span>
-                      <span>{gl.subject || '-'}</span>
-                      <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        {canManageAttendance ? (
-                          <button
-                            type="button"
-                            onClick={() => openGroupLessonAttendanceModal(gl)}
-                            disabled={
-                              rowBusy ||
-                              attendanceBusyThisLesson ||
-                              busyGroupLessonId === '__add__' ||
-                              busyGroupId === '__add__' ||
-                              busyGroupId === selectedGroupClass.id
-                            }
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 8,
-                              border: '1px solid #335555',
-                              background: '#1a3338',
-                              color: 'white',
-                              cursor:
+                  {sortedGroupLessonsForSelectedClass.map((gl) => {
+                    const rowBusy = busyGroupLessonId === gl.id
+                    const attendanceBusyThisLesson =
+                      Boolean(busyGroupAttendanceStudentId) &&
+                      busyGroupAttendanceStudentId.startsWith(`${gl.id}__`)
+                    return (
+                      <div
+                        key={gl.id}
+                        className="table-row"
+                        data-testid="group-lesson-row"
+                        data-lesson-date={gl.date || ''}
+                        data-lesson-time={gl.time || ''}
+                        data-lesson-subject={gl.subject || ''}
+                        style={{
+                          gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
+                        }}
+                      >
+                        <span>{gl.date || '-'}</span>
+                        <span>{gl.time || '-'}</span>
+                        <span>{gl.subject || '-'}</span>
+                        <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {canManageAttendance ? (
+                            <button
+                              type="button"
+                              onClick={() => openGroupLessonAttendanceModal(gl)}
+                              disabled={
                                 rowBusy ||
                                 attendanceBusyThisLesson ||
                                 busyGroupLessonId === '__add__' ||
                                 busyGroupId === '__add__' ||
                                 busyGroupId === selectedGroupClass.id
-                                  ? 'not-allowed'
-                                  : 'pointer',
-                            }}
-                          >
-                            {attendanceBusyThisLesson ? '처리 중' : '출결/차감'}
-                          </button>
-                        ) : null}
-                        {canEditLesson ? (
-                          <button
-                            type="button"
-                            onClick={() => openGroupLessonEditModal(gl)}
-                            disabled={
-                              rowBusy ||
-                              busyGroupLessonId === '__add__' ||
-                              busyGroupId === '__add__' ||
-                              busyGroupId === selectedGroupClass.id
-                            }
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 8,
-                              border: '1px solid #555',
-                              background: '#1f2a44',
-                              color: 'white',
-                              cursor:
+                              }
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #335555',
+                                background: '#1a3338',
+                                color: 'white',
+                                cursor:
+                                  rowBusy ||
+                                  attendanceBusyThisLesson ||
+                                  busyGroupLessonId === '__add__' ||
+                                  busyGroupId === '__add__' ||
+                                  busyGroupId === selectedGroupClass.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                              }}
+                            >
+                              {attendanceBusyThisLesson ? '처리 중' : '출결/차감'}
+                            </button>
+                          ) : null}
+                          {canEditLesson ? (
+                            <button
+                              type="button"
+                              onClick={() => openGroupLessonEditModal(gl)}
+                              disabled={
                                 rowBusy ||
                                 busyGroupLessonId === '__add__' ||
                                 busyGroupId === '__add__' ||
                                 busyGroupId === selectedGroupClass.id
-                                  ? 'not-allowed'
-                                  : 'pointer',
-                            }}
-                          >
-                            {rowBusy ? '처리 중...' : '수정'}
-                          </button>
-                        ) : null}
-                        {canDeleteLesson ? (
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteGroupLesson(gl)}
-                            disabled={
-                              rowBusy ||
-                              busyGroupLessonId === '__add__' ||
-                              busyGroupId === '__add__' ||
-                              busyGroupId === selectedGroupClass.id
-                            }
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 8,
-                              border: '1px solid #553333',
-                              background: '#4a2a2a',
-                              color: 'white',
-                              cursor:
+                              }
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #555',
+                                background: '#1f2a44',
+                                color: 'white',
+                                cursor:
+                                  rowBusy ||
+                                  busyGroupLessonId === '__add__' ||
+                                  busyGroupId === '__add__' ||
+                                  busyGroupId === selectedGroupClass.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                              }}
+                            >
+                              {rowBusy ? '처리 중...' : '수정'}
+                            </button>
+                          ) : null}
+                          {canDeleteLesson ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteGroupLesson(gl)}
+                              disabled={
                                 rowBusy ||
                                 busyGroupLessonId === '__add__' ||
                                 busyGroupId === '__add__' ||
                                 busyGroupId === selectedGroupClass.id
-                                  ? 'not-allowed'
-                                  : 'pointer',
-                            }}
-                          >
-                            {rowBusy ? '처리 중...' : '삭제'}
-                          </button>
-                        ) : null}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+                              }
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #553333',
+                                background: '#4a2a2a',
+                                color: 'white',
+                                cursor:
+                                  rowBusy ||
+                                  busyGroupLessonId === '__add__' ||
+                                  busyGroupId === '__add__' ||
+                                  busyGroupId === selectedGroupClass.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                              }}
+                            >
+                              {rowBusy ? '처리 중...' : '삭제'}
+                            </button>
+                          ) : null}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         ) : null}
       </>
