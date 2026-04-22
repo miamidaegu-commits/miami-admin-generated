@@ -13,6 +13,15 @@ export async function createTempGroupStudentAddPackage(page, params) {
   return runFirebaseTask(page, 'createTempGroupStudentAddPackage', params);
 }
 
+export async function createTempStudent(page, params) {
+  return runFirebaseTask(page, 'createTempStudent', params);
+}
+
+export async function cleanupTempStudentData(page, params) {
+  if (!params?.studentId && !params?.studentName) return;
+  await runFirebaseTask(page, 'cleanupTempStudentData', params);
+}
+
 export async function cleanupTempGroupStudentAddSetup(page, params) {
   if (!params?.packageId && !params?.groupClassId && !params?.tempStudentId) return;
   await runFirebaseTask(page, 'cleanupTempGroupStudentAddSetup', params);
@@ -25,6 +34,10 @@ export async function createTempGroupAttendanceSetup(page, params) {
 export async function cleanupTempGroupAttendanceSetup(page, params) {
   if (!params?.packageId && !params?.groupStudentId) return;
   await runFirebaseTask(page, 'cleanupTempGroupAttendanceSetup', params);
+}
+
+export async function getGroupPackageStartDate(page, params) {
+  return runFirebaseTask(page, 'getGroupPackageStartDate', params);
 }
 
 async function runFirebaseTask(page, taskName, params) {
@@ -45,6 +58,10 @@ async function runFirebaseTask(page, taskName, params) {
       const db = firestore.getFirestore(app);
 
       switch (taskName) {
+        case 'createTempStudent':
+          return createTempStudentTask({ db, firestore, params });
+        case 'cleanupTempStudentData':
+          return cleanupTempStudentDataTask({ db, firestore, params });
         case 'createTempGroupStudentAddPackage':
           return createTempGroupStudentAddPackageTask({ db, firestore, params });
         case 'cleanupTempGroupStudentAddSetup':
@@ -53,6 +70,8 @@ async function runFirebaseTask(page, taskName, params) {
           return createTempGroupAttendanceSetupTask({ db, firestore, params });
         case 'cleanupTempGroupAttendanceSetup':
           return cleanupTempGroupAttendanceSetupTask({ db, firestore, params });
+        case 'getGroupPackageStartDate':
+          return getGroupPackageStartDateTask({ db, firestore, params });
         default:
           throw new Error(`Unknown Firebase helper task: ${taskName}`);
       }
@@ -178,6 +197,79 @@ async function runFirebaseTask(page, taskName, params) {
         };
       }
 
+      async function createTempStudentTask({ db, firestore: firestoreModule, params }) {
+        const { Timestamp, collection, doc, setDoc } = firestoreModule;
+        const {
+          studentId: requestedStudentId,
+          studentName,
+          teacherName = '',
+          firstRegisteredAt = formatYmdFromDate(new Date()),
+          note = 'E2E temporary student',
+        } = params;
+
+        const studentRef = requestedStudentId
+          ? doc(db, 'privateStudents', requestedStudentId)
+          : doc(collection(db, 'privateStudents'));
+        const nowTs = Timestamp.now();
+
+        await setDoc(studentRef, {
+          name: String(studentName || '').trim(),
+          teacher: String(teacherName || '').trim(),
+          phone: '',
+          carNumber: '',
+          learningPurpose: '',
+          firstRegisteredAt,
+          note,
+          paidLessons: 0,
+          attendanceCount: 0,
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+
+        return {
+          studentId: studentRef.id,
+          studentName: String(studentName || '').trim(),
+        };
+      }
+
+      async function cleanupTempStudentDataTask({ db, firestore: firestoreModule, params }) {
+        const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
+        const { studentId, studentName } = params;
+        const studentIds = new Set();
+
+        if (studentId) {
+          studentIds.add(String(studentId));
+        }
+
+        if (studentName) {
+          const studentSnap = await getDocs(
+            query(collection(db, 'privateStudents'), where('name', '==', studentName))
+          );
+          studentSnap.docs.forEach((studentDoc) => studentIds.add(studentDoc.id));
+        }
+
+        for (const currentStudentId of studentIds) {
+          const [groupStudentSnap, studentPackageSnap] = await Promise.all([
+            getDocs(query(collection(db, 'groupStudents'), where('studentId', '==', currentStudentId))),
+            getDocs(query(collection(db, 'studentPackages'), where('studentId', '==', currentStudentId))),
+          ]);
+
+          await Promise.all(
+            groupStudentSnap.docs.map((groupStudentDoc) =>
+              deleteDoc(doc(db, 'groupStudents', groupStudentDoc.id)).catch(() => {})
+            )
+          );
+
+          await Promise.all(
+            studentPackageSnap.docs.map((studentPackageDoc) =>
+              deleteDoc(doc(db, 'studentPackages', studentPackageDoc.id)).catch(() => {})
+            )
+          );
+
+          await deleteDoc(doc(db, 'privateStudents', currentStudentId)).catch(() => {});
+        }
+      }
+
       async function cleanupTempGroupStudentAddSetupTask({ db, firestore: firestoreModule, params }) {
         const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
         const { packageId, groupClassId, tempStudentId } = params;
@@ -293,6 +385,34 @@ async function runFirebaseTask(page, taskName, params) {
         if (packageId) {
           await deleteDoc(doc(db, 'studentPackages', packageId)).catch(() => {});
         }
+      }
+
+      async function getGroupPackageStartDateTask({ db, firestore: firestoreModule, params }) {
+        const { groupName } = params;
+        const groupClass = await getGroupClassByName(db, firestoreModule, groupName);
+        const groupLessons = await getGroupLessonsByClassId(db, firestoreModule, groupClass.id);
+        const todayYmd = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'Asia/Seoul',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(new Date());
+
+        let earliestFutureLessonYmd = '';
+        for (const lesson of groupLessons) {
+          const lessonDate = String(lesson.data.date || '').trim();
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(lessonDate)) continue;
+          if (lessonDate < todayYmd) continue;
+          if (!earliestFutureLessonYmd || lessonDate < earliestFutureLessonYmd) {
+            earliestFutureLessonYmd = lessonDate;
+          }
+        }
+
+        if (!earliestFutureLessonYmd) {
+          throw new Error(`No future lessons found for group class: ${groupName}`);
+        }
+
+        return earliestFutureLessonYmd;
       }
 
       function formatYmdFromDate(date) {
