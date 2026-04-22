@@ -36,6 +36,15 @@ export async function cleanupTempGroupAttendanceSetup(page, params) {
   await runFirebaseTask(page, 'cleanupTempGroupAttendanceSetup', params);
 }
 
+export async function createTempCalendarGroupLessonSetup(page, params) {
+  return runFirebaseTask(page, 'createTempCalendarGroupLessonSetup', params);
+}
+
+export async function cleanupTempCalendarGroupLessonSetup(page, params) {
+  if (!params?.groupClassId && !params?.groupLessonId) return;
+  await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params);
+}
+
 export async function getGroupPackageStartDate(page, params) {
   return runFirebaseTask(page, 'getGroupPackageStartDate', params);
 }
@@ -70,6 +79,10 @@ async function runFirebaseTask(page, taskName, params) {
           return createTempGroupAttendanceSetupTask({ db, firestore, params });
         case 'cleanupTempGroupAttendanceSetup':
           return cleanupTempGroupAttendanceSetupTask({ db, firestore, params });
+        case 'createTempCalendarGroupLessonSetup':
+          return createTempCalendarGroupLessonSetupTask({ db, firestore, params });
+        case 'cleanupTempCalendarGroupLessonSetup':
+          return cleanupTempCalendarGroupLessonSetupTask({ db, firestore, params });
         case 'getGroupPackageStartDate':
           return getGroupPackageStartDateTask({ db, firestore, params });
         default:
@@ -384,6 +397,83 @@ async function runFirebaseTask(page, taskName, params) {
 
         if (packageId) {
           await deleteDoc(doc(db, 'studentPackages', packageId)).catch(() => {});
+        }
+      }
+
+      async function createTempCalendarGroupLessonSetupTask({
+        db,
+        firestore: firestoreModule,
+        params,
+      }) {
+        const { Timestamp, collection, doc, setDoc } = firestoreModule;
+        const {
+          groupName,
+          teacherName = 'e2e-calendar-teacher',
+          lessonDate,
+          lessonTime,
+          lessonSubject,
+        } = params;
+        const nowTs = Timestamp.now();
+        const groupClassRef = doc(collection(db, 'groupClasses'));
+        const groupLessonRef = doc(collection(db, 'groupLessons'));
+        const normalizedTeacher = String(teacherName || '').trim().toLowerCase();
+        const trimmedGroupName = String(groupName || '').trim();
+
+        await setDoc(groupClassRef, {
+          name: trimmedGroupName,
+          teacher: normalizedTeacher,
+          maxStudents: 8,
+          time: String(lessonTime || '').trim(),
+          subject: String(lessonSubject || '').trim(),
+          weekdays: [],
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+
+        await setDoc(groupLessonRef, {
+          groupClassId: groupClassRef.id,
+          groupClassID: groupClassRef.id,
+          groupClassName: trimmedGroupName,
+          teacher: normalizedTeacher,
+          date: String(lessonDate || '').trim(),
+          time: String(lessonTime || '').trim(),
+          subject: String(lessonSubject || '').trim(),
+          completed: false,
+          countedStudentIDs: [],
+          attendanceAppliedAt: null,
+          bookingMode: 'fixed',
+          capacity: 8,
+          bookedCount: 0,
+          isBookable: false,
+          generationKind: 'manual',
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+
+        return {
+          groupClassId: groupClassRef.id,
+          groupLessonId: groupLessonRef.id,
+          groupName: trimmedGroupName,
+          lessonDate: String(lessonDate || '').trim(),
+          lessonTime: String(lessonTime || '').trim(),
+          lessonSubject: String(lessonSubject || '').trim(),
+        };
+      }
+
+      async function cleanupTempCalendarGroupLessonSetupTask({
+        db,
+        firestore: firestoreModule,
+        params,
+      }) {
+        const { deleteDoc, doc } = firestoreModule;
+        const { groupClassId, groupLessonId } = params;
+
+        if (groupLessonId) {
+          await deleteDoc(doc(db, 'groupLessons', groupLessonId)).catch(() => {});
+        }
+
+        if (groupClassId) {
+          await deleteDoc(doc(db, 'groupClasses', groupClassId)).catch(() => {});
         }
       }
 
