@@ -1,41 +1,17 @@
-import { useEffect, useState } from 'react'
-import {
-  formatGroupStudentStartDate,
-  getGroupStudentExcludedDatesArray,
-  groupStudentDateValueToYmd,
-  groupStudentStartDateToYmd,
-  normalizeGroupStudentOperationalStatus,
-  parseYmdToLocalDate,
-} from '../dashboardViewUtils.js'
+import { formatGroupStudentStartDate } from '../dashboardViewUtils.js'
 
 export default function GroupStudentManageModal({
   groupStudent,
   studentPackages,
+  form,
+  formErrors,
+  onFieldChange,
+  onAddExcludedDate,
+  onRemoveExcludedDate,
   onClose,
   onSave,
   isSubmitting,
 }) {
-  const [startDateStr, setStartDateStr] = useState('')
-  const [studentStatus, setStudentStatus] = useState('active')
-  const [breakStartStr, setBreakStartStr] = useState('')
-  const [breakEndStr, setBreakEndStr] = useState('')
-  const [excludedDates, setExcludedDates] = useState([])
-  const [excludeAddInput, setExcludeAddInput] = useState('')
-  const [formErrors, setFormErrors] = useState({})
-
-  useEffect(() => {
-    if (!groupStudent?.id) return
-    setStartDateStr(groupStudentStartDateToYmd(groupStudent) || '')
-    setStudentStatus(
-      normalizeGroupStudentOperationalStatus(groupStudent) === 'onBreak' ? 'onBreak' : 'active'
-    )
-    setBreakStartStr(groupStudentDateValueToYmd(groupStudent?.breakStartDate) || '')
-    setBreakEndStr(groupStudentDateValueToYmd(groupStudent?.breakEndDate) || '')
-    setExcludedDates(getGroupStudentExcludedDatesArray(groupStudent))
-    setExcludeAddInput('')
-    setFormErrors({})
-  }, [groupStudent?.id])
-
   const pkg = studentPackages.find((p) => p.id === groupStudent?.packageId)
   const displayName =
     String(groupStudent?.studentName || groupStudent?.name || '').trim() || '-'
@@ -44,72 +20,12 @@ export default function GroupStudentManageModal({
     pkg && pkg.remainingCount != null && pkg.remainingCount !== ''
       ? String(pkg.remainingCount)
       : '-'
-
-  function validate() {
-    const errors = {}
-    const sd = String(startDateStr || '').trim()
-    if (!sd) {
-      errors.startDate = '시작일을 선택해주세요.'
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(sd)) {
-      errors.startDate = '시작일 형식이 올바르지 않습니다.'
-    } else if (!parseYmdToLocalDate(sd)) {
-      errors.startDate = '유효한 날짜를 선택해주세요.'
-    }
-
-    if (studentStatus === 'onBreak') {
-      const bs = String(breakStartStr || '').trim()
-      const be = String(breakEndStr || '').trim()
-      if (!bs) errors.breakStartDate = '휴원 시작일을 입력해주세요.'
-      else if (!/^\d{4}-\d{2}-\d{2}$/.test(bs) || !parseYmdToLocalDate(bs)) {
-        errors.breakStartDate = '유효한 날짜를 입력해주세요.'
-      }
-      if (!be) errors.breakEndDate = '휴원 종료일을 입력해주세요.'
-      else if (!/^\d{4}-\d{2}-\d{2}$/.test(be) || !parseYmdToLocalDate(be)) {
-        errors.breakEndDate = '유효한 날짜를 입력해주세요.'
-      }
-      if (!errors.breakStartDate && !errors.breakEndDate && bs && be && bs > be) {
-        errors.breakEndDate = '휴원 종료일은 시작일 이후여야 합니다.'
-      }
-    }
-
-    return errors
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault()
-    const errors = validate()
-    setFormErrors(errors)
-    if (Object.keys(errors).length > 0) return
-
-    const bs = String(breakStartStr || '').trim()
-    const be = String(breakEndStr || '').trim()
-    await onSave({
-      startDateStr: String(startDateStr || '').trim(),
-      studentStatus,
-      breakStartDate: studentStatus === 'onBreak' ? bs : '',
-      breakEndDate: studentStatus === 'onBreak' ? be : '',
-      excludedDates: [...excludedDates].sort(),
-    })
-  }
-
-  function handleAddExcluded() {
-    const t = String(excludeAddInput || '').trim()
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(t) || !parseYmdToLocalDate(t)) {
-      setFormErrors((prev) => ({ ...prev, excludeAdd: 'yyyy-MM-dd 형식으로 입력해주세요.' }))
-      return
-    }
-    setFormErrors((prev) => {
-      const next = { ...prev }
-      delete next.excludeAdd
-      return next
-    })
-    if (excludedDates.includes(t)) {
-      setExcludeAddInput('')
-      return
-    }
-    setExcludedDates((prev) => [...prev, t].sort())
-    setExcludeAddInput('')
-  }
+  const startDateStr = String(form?.startDateStr || '')
+  const studentStatus = form?.studentStatus === 'onBreak' ? 'onBreak' : 'active'
+  const breakStartStr = String(form?.breakStartStr || '')
+  const breakEndStr = String(form?.breakEndStr || '')
+  const excludeAddInput = String(form?.excludeAddInput || '')
+  const excludedDates = Array.isArray(form?.excludedDates) ? form.excludedDates : []
 
   return (
     <div
@@ -172,13 +88,13 @@ export default function GroupStudentManageModal({
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <form onSubmit={onSave} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
             <span style={{ opacity: 0.85 }}>시작일</span>
             <input
               type="date"
               value={startDateStr}
-              onChange={(e) => setStartDateStr(e.target.value)}
+              onChange={(e) => onFieldChange('startDateStr', e.target.value)}
               disabled={isSubmitting}
               style={{
                 padding: '10px 12px',
@@ -197,7 +113,7 @@ export default function GroupStudentManageModal({
             <span style={{ opacity: 0.85 }}>운영 상태</span>
             <select
               value={studentStatus}
-              onChange={(e) => setStudentStatus(e.target.value)}
+              onChange={(e) => onFieldChange('studentStatus', e.target.value)}
               disabled={isSubmitting}
               style={{
                 padding: '10px 12px',
@@ -219,7 +135,7 @@ export default function GroupStudentManageModal({
                 <input
                   type="date"
                   value={breakStartStr}
-                  onChange={(e) => setBreakStartStr(e.target.value)}
+                  onChange={(e) => onFieldChange('breakStartStr', e.target.value)}
                   disabled={isSubmitting}
                   style={{
                     padding: '10px 12px',
@@ -238,7 +154,7 @@ export default function GroupStudentManageModal({
                 <input
                   type="date"
                   value={breakEndStr}
-                  onChange={(e) => setBreakEndStr(e.target.value)}
+                  onChange={(e) => onFieldChange('breakEndStr', e.target.value)}
                   disabled={isSubmitting}
                   style={{
                     padding: '10px 12px',
@@ -261,7 +177,7 @@ export default function GroupStudentManageModal({
               <input
                 type="date"
                 value={excludeAddInput}
-                onChange={(e) => setExcludeAddInput(e.target.value)}
+                onChange={(e) => onFieldChange('excludeAddInput', e.target.value)}
                 disabled={isSubmitting}
                 style={{
                   padding: '8px 10px',
@@ -273,7 +189,7 @@ export default function GroupStudentManageModal({
               />
               <button
                 type="button"
-                onClick={handleAddExcluded}
+                onClick={onAddExcludedDate}
                 disabled={isSubmitting}
                 style={{
                   padding: '8px 12px',
@@ -300,9 +216,7 @@ export default function GroupStudentManageModal({
                     <button
                       type="button"
                       disabled={isSubmitting}
-                      onClick={() =>
-                        setExcludedDates((prev) => prev.filter((x) => x !== d))
-                      }
+                      onClick={() => onRemoveExcludedDate(d)}
                       style={{
                         fontSize: 12,
                         padding: '2px 8px',

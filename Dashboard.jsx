@@ -92,6 +92,7 @@ import useCalendarSectionViewModel from './src/features/dashboard/hooks/useCalen
 import useGroupScheduleRebuildFlow from './src/features/dashboard/hooks/useGroupScheduleRebuildFlow.js'
 import useGroupLessonManagementFlow from './src/features/dashboard/hooks/useGroupLessonManagementFlow.js'
 import useGroupAttendanceFlow from './src/features/dashboard/hooks/useGroupAttendanceFlow.js'
+import useGroupStudentManagementFlow from './src/features/dashboard/hooks/useGroupStudentManagementFlow.js'
 import usePrivateLessonFlow, {
   validatePrivateLessonFormFields as validatePrivateLessonFormFieldsShared,
 } from './src/features/dashboard/hooks/usePrivateLessonFlow.js'
@@ -367,8 +368,6 @@ export default function Dashboard() {
   })
   const [groupStudentFormErrors, setGroupStudentFormErrors] = useState({})
   const [busyGroupStudentId, setBusyGroupStudentId] = useState(null)
-  const [groupStudentManageModal, setGroupStudentManageModal] = useState(null)
-  const [busyGroupStudentManageId, setBusyGroupStudentManageId] = useState(null)
   const [groupLessons, setGroupLessons] = useState([])
 
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
@@ -994,6 +993,22 @@ export default function Dashboard() {
     selectedGroupClass,
     groupLessons,
     createGroupLessonsInDateRange,
+  })
+
+  const {
+    groupStudentManageModal,
+    groupStudentManageForm,
+    groupStudentManageFormErrors,
+    busyGroupStudentManageId,
+    openGroupStudentManageModal,
+    closeGroupStudentManageModal,
+    submitGroupStudentManageModal,
+    updateGroupStudentManageField,
+    addGroupStudentManageExcludedDate,
+    removeGroupStudentManageExcludedDate,
+    isGroupStudentManageSubmitting,
+  } = useGroupStudentManagementFlow({
+    userProfile,
   })
 
   const {
@@ -2204,56 +2219,6 @@ export default function Dashboard() {
     }
   }
 
-  function openGroupStudentManageModal(gs) {
-    if (userProfile?.role !== 'admin') return
-    setGroupStudentManageModal(gs)
-  }
-
-  function closeGroupStudentManageModal() {
-    if (busyGroupStudentManageId) return
-    setGroupStudentManageModal(null)
-  }
-
-  async function submitGroupStudentManageModalSave(payload) {
-    const gs = groupStudentManageModal
-    if (!gs?.id) return
-    if (userProfile?.role !== 'admin') {
-      alert('관리자만 수정할 수 있습니다.')
-      return
-    }
-
-    const dateStr = String(payload?.startDateStr || '').trim()
-    if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr) || !parseYmdToLocalDate(dateStr)) {
-      alert('시작일이 올바르지 않습니다.')
-      return
-    }
-    const [y, mo, d] = dateStr.split('-').map(Number)
-    const startTimestamp = Timestamp.fromDate(new Date(y, mo - 1, d))
-
-    const st = payload?.studentStatus === 'onBreak' ? 'onBreak' : 'active'
-    const breakStartDate = st === 'onBreak' ? String(payload.breakStartDate || '').trim() : ''
-    const breakEndDate = st === 'onBreak' ? String(payload.breakEndDate || '').trim() : ''
-    const excludedDates = Array.isArray(payload.excludedDates) ? payload.excludedDates : []
-
-    try {
-      setBusyGroupStudentManageId(gs.id)
-      await updateDoc(doc(db, 'groupStudents', gs.id), {
-        startDate: startTimestamp,
-        studentStatus: st,
-        breakStartDate,
-        breakEndDate,
-        excludedDates,
-        updatedAt: serverTimestamp(),
-      })
-      setGroupStudentManageModal(null)
-    } catch (error) {
-      console.error('그룹 학생 운영 정보 저장 실패:', error)
-      alert(`저장 실패: ${error.message}`)
-    } finally {
-      setBusyGroupStudentManageId(null)
-    }
-  }
-
   async function handleDeleteGroupLesson(lesson) {
     if (!(userProfile?.role === 'admin' || userProfile?.canDeleteLesson === true)) {
       alert('수업 삭제 권한이 없습니다.')
@@ -2586,6 +2551,19 @@ export default function Dashboard() {
     busyGroupLessonPurge,
   }
 
+  const groupStudentManageModalProps = {
+    groupStudent: groupStudentManageModal,
+    studentPackages,
+    form: groupStudentManageForm,
+    formErrors: groupStudentManageFormErrors,
+    onFieldChange: updateGroupStudentManageField,
+    onAddExcludedDate: addGroupStudentManageExcludedDate,
+    onRemoveExcludedDate: removeGroupStudentManageExcludedDate,
+    onClose: closeGroupStudentManageModal,
+    onSave: submitGroupStudentManageModal,
+    isSubmitting: isGroupStudentManageSubmitting,
+  }
+
   const groupLessonAttendanceModalProps = {
     selectedGroupClass,
     groupLessonForAttendanceModal,
@@ -2742,13 +2720,7 @@ export default function Dashboard() {
       ) : null}
 
       {activeSection === 'groups' && isAdmin && groupStudentManageModal ? (
-        <GroupStudentManageModal
-          groupStudent={groupStudentManageModal}
-          studentPackages={studentPackages}
-          onClose={closeGroupStudentManageModal}
-          onSave={submitGroupStudentManageModalSave}
-          isSubmitting={busyGroupStudentManageId === groupStudentManageModal.id}
-        />
+        <GroupStudentManageModal {...groupStudentManageModalProps} />
       ) : null}
 
       {activeSection === 'groups' && groupLessonModal && selectedGroupClass ? (
