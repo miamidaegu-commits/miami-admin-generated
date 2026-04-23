@@ -7,6 +7,8 @@ const FIREBASE_ENV_KEYS = [
   'VITE_FIREBASE_APP_ID',
 ]
 const E2E_FIREBASE_PROJECT_ID = 'miami-e2e'
+export const DEFAULT_E2E_ACADEMY_ID = 'academy_e2e_default'
+export const DEFAULT_E2E_ACADEMY_NAME = 'Miami E2E Academy'
 
 function getFirebaseConfigFromEnv(env) {
   const missingKeys = FIREBASE_ENV_KEYS.filter((key) => !String(env[key] || '').trim())
@@ -91,7 +93,7 @@ async function runFirebaseTask(page, taskName, params) {
   });
 
   const firebaseTaskPromise = page.evaluate(
-    async ({ firebaseConfig, firebaseVersion, taskName, params }) => {
+    async ({ firebaseConfig, firebaseVersion, taskName, params, defaultAcademyId }) => {
       const [{ getApp, getApps, initializeApp }, { getAuth, onAuthStateChanged }, firestore] =
         await Promise.all([
           import(`https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-app.js`),
@@ -146,6 +148,10 @@ async function runFirebaseTask(page, taskName, params) {
             resolve();
           });
         });
+      }
+
+      function getTaskAcademyId(taskParams) {
+        return String(taskParams?.academyId || defaultAcademyId || '').trim();
       }
 
       async function getGroupClassByName(dbRef, firestoreModule, groupName) {
@@ -206,6 +212,7 @@ async function runFirebaseTask(page, taskName, params) {
       async function createTempGroupStudentAddPackageTask({ db, firestore: firestoreModule, params }) {
         const { Timestamp, collection, doc, setDoc } = firestoreModule;
         const { groupName, tempStudentId, tempStudentName, tempPackageTitle } = params;
+        const academyId = getTaskAcademyId(params);
         const groupClass = await getGroupClassByName(db, firestoreModule, groupName);
         const groupLessons = await getGroupLessonsByClassId(db, firestoreModule, groupClass.id);
 
@@ -237,6 +244,7 @@ async function runFirebaseTask(page, taskName, params) {
         const teacher = String(groupClass.data.teacher || '').trim().toLowerCase();
 
         await setDoc(packageRef, {
+          academyId,
           studentId: tempStudentId,
           studentName: tempStudentName,
           teacher,
@@ -275,6 +283,7 @@ async function runFirebaseTask(page, taskName, params) {
           firstRegisteredAt = formatYmdFromDate(new Date()),
           note = 'E2E temporary student',
         } = params;
+        const academyId = getTaskAcademyId(params);
 
         const studentRef = requestedStudentId
           ? doc(db, 'privateStudents', requestedStudentId)
@@ -282,6 +291,7 @@ async function runFirebaseTask(page, taskName, params) {
         const nowTs = Timestamp.now();
 
         await setDoc(studentRef, {
+          academyId,
           name: String(studentName || '').trim(),
           teacher: String(teacherName || '').trim(),
           phone: '',
@@ -385,6 +395,7 @@ async function runFirebaseTask(page, taskName, params) {
           packageId,
           groupStudentId,
         } = params;
+        const academyId = getTaskAcademyId(params);
         const groupClass = groupClassId
           ? await getGroupClassById(db, firestoreModule, groupClassId)
           : await getGroupClassByName(db, firestoreModule, groupName);
@@ -424,6 +435,7 @@ async function runFirebaseTask(page, taskName, params) {
         const studentDisplayName = String(studentData.name || studentName).trim();
 
         await setDoc(packageRef, {
+          academyId,
           studentId: studentDoc.id,
           studentName: studentDisplayName,
           teacher,
@@ -446,6 +458,7 @@ async function runFirebaseTask(page, taskName, params) {
         });
 
         await setDoc(groupStudentRef, {
+          academyId,
           groupClassId: groupClass.id,
           classID: groupClass.id,
           studentId: studentDoc.id,
@@ -535,6 +548,7 @@ async function runFirebaseTask(page, taskName, params) {
           syncGuardStudentId = '',
           totalCount = 4,
         } = params;
+        const academyId = getTaskAcademyId(params);
         const timeoutMs = Number(params?.firebaseTaskTimeoutMs || 10000);
         const isDeducted = deducted === true;
         const countedStudentIDs = [
@@ -546,6 +560,7 @@ async function runFirebaseTask(page, taskName, params) {
         batch.set(
           doc(db, 'groupLessons', String(groupLessonId)),
           {
+            academyId,
             countedStudentIDs,
             attendanceAppliedAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -555,6 +570,7 @@ async function runFirebaseTask(page, taskName, params) {
         batch.set(
           doc(db, 'studentPackages', String(packageId)),
           {
+            academyId,
             usedCount: isDeducted ? 1 : 0,
             remainingCount: isDeducted ? Math.max(0, Number(totalCount) - 1) : Number(totalCount),
             status: 'active',
@@ -565,6 +581,7 @@ async function runFirebaseTask(page, taskName, params) {
         batch.set(
           doc(db, 'groupStudents', String(groupStudentId)),
           {
+            academyId,
             attendanceCount: isDeducted ? 1 : 0,
             updatedAt: serverTimestamp(),
           },
@@ -597,6 +614,7 @@ async function runFirebaseTask(page, taskName, params) {
           groupLessonId,
           skipPastAttendanceSync = false,
         } = params;
+        const academyId = getTaskAcademyId(params);
         const nowTs = Timestamp.now();
         const groupClassRef = groupClassId
           ? doc(db, 'groupClasses', String(groupClassId))
@@ -608,6 +626,7 @@ async function runFirebaseTask(page, taskName, params) {
         const trimmedGroupName = String(groupName || '').trim();
 
         await setDoc(groupClassRef, {
+          academyId,
           name: trimmedGroupName,
           teacher: normalizedTeacher,
           maxStudents: 8,
@@ -619,6 +638,7 @@ async function runFirebaseTask(page, taskName, params) {
         });
 
         await setDoc(groupLessonRef, {
+          academyId,
           groupClassId: groupClassRef.id,
           groupClassID: groupClassRef.id,
           groupClassName: trimmedGroupName,
@@ -742,6 +762,7 @@ async function runFirebaseTask(page, taskName, params) {
       firebaseVersion: FIREBASE_VERSION,
       taskName,
       params,
+      defaultAcademyId: DEFAULT_E2E_ACADEMY_ID,
     }
   );
 

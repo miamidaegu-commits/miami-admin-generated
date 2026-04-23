@@ -663,6 +663,369 @@ Dashboard 내부 학생/반/캘린더 UX는 기존 구조 유지.
 
 이 세 가지가 끝나야 SaaS 전환의 핵심 리스크가 줄어든다.
 
+### Sprint 1 Execution Order
+
+Sprint 1은 UI와 rules 전환 전에 데이터 모델과 마이그레이션 안전장치를 먼저 준비한다.
+
+1. E2E seed에 기본 `academies/{academyId}`와 `academyMemberships/{academyId_uid}`를 생성한다.
+2. E2E fixture/helper가 새 운영 문서에 `academyId`를 포함하도록 만든다.
+3. `scripts/backfill-academy-id.mjs --dry-run`으로 기존 운영 문서에 들어갈 변경 내역을 먼저 확인한다.
+4. dry-run 결과의 project, academyId, 변경 문서 수를 확인한 뒤에만 `--write`로 실제 backfill을 실행한다.
+5. 다음 Sprint에서 `AuthContext`, dashboard query, write payload, `firestore.rules`를 academy-scoped로 전환한다.
+
+기본 실행 예시:
+
+```bash
+npm run backfill:academy-id -- --dry-run --academy-id=academy_default --academy-name="Default Academy"
+npm run backfill:academy-id -- --write --academy-id=academy_default --academy-name="Default Academy"
+```
+
+### Student Booking System Design
+
+학생용 예약 시스템은 현재 관리자 dashboard의 운영 컬렉션을 유지하면서 학생 portal에서 필요한 최소 문서만 추가한다. 핵심 원칙은 `privateStudents`, `lessons`, `groupLessons`, `studentPackages`, `creditTransactions`를 계속 canonical 운영 데이터로 쓰고, 학생 로그인/예약 요청/좌석 점유 상태만 얇게 보강하는 것이다.
+
+#### 1. 설계 개요
+
+목표:
+
+- 학생이 로그인해서 본인 프로필, 수강권 잔여 횟수, 예약 가능한 개인/오픈 그룹수업을 볼 수 있다.
+- 개인수업은 담당 선생님, 수강권, 시간 충돌을 검증한 뒤 `lessons` 문서로 예약된다.
+- 오픈 그룹수업은 `groupLessons.capacity/bookedCount`를 기준으로 실시간 좌석을 보여주고, transaction으로 선착순 마감한다.
+- 모든 수강권 변경은 `studentPackages`의 현재 상태와 `creditTransactions` ledger를 함께 남긴다.
+- 모든 문서에는 `academyId`를 포함하고, 다음 Sprint의 rules/query 전환 후 학원 간 접근을 차단한다.
+
+#### 2. 학생 계정 구조
+
+기존 `privateStudents/{studentId}`는 학원 내부 학생 원장으로 유지한다. 학생 로그인은 Firebase Auth uid를 전역 `users/{uid}`에 만들고, 학원 내 학생 원장과 연결한다.
+
+```js
+users/{uid} = {
+  uid: string,
+  email: string,
+  displayName: string,
+  phone: string,
+  accountTypes: ['student'],
+  lastSelectedAcademyId: string,
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+```
+
+```js
+privateStudents/{studentId} = {
+  academyId: string,
+  name: string,
+  phone: string,
+  teacher: string,
+  studentAuthUid: string,
+  portalEmail: string,
+  portalStatus: 'invited' | 'active' | 'disabled',
+  portalLinkedAt: timestamp,
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+```
+
+여러 학원 또는 보호자 계정까지 확장하려면 별도 연결 컬렉션을 둔다.
+
+```js
+studentAcademyLinks/{academyId_uid_studentId} = {
+  academyId: string,
+  uid: string,
+  studentId: string,
+  relationship: 'self' | 'guardian',
+  status: 'active' | 'invited' | 'disabled',
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+```
+
+MVP에서는 `privateStudents.studentAuthUid`만으로 시작할 수 있고, 다중 학원/보호자 지원 시 `studentAcademyLinks`를 활성화한다.
+
+#### 3. 개인수업 예약 구조
+
+개인수업 예약은 기존 `lessons` 컬렉션을 재사용한다. 학생이 예약해도 최종 운영 일정은 `lessons/{lessonId}`가 된다.
+
+추가/확장 필드:
+
+```js
+lessons/{lessonId} = {
+  academyId: string,
+  studentId: string,
+  studentName: string,
+  studentAuthUid: string,
+  teacher: string,
+  teacherName: string,
+  date: 'YYYY-MM-DD',
+  time: 'HH:mm',
+  startAt: timestamp,
+  endAt: timestamp,
+  durationMinutes: number,
+  subject: string,
+  packageId: string,
+  packageType: 'private',
+  reservationSource: 'admin' | 'student',
+  reservationStatus: 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'no_show',
+  approvalStatus: 'not_required' | 'pending' | 'approved' | 'rejected',
+  cancellationReason: string,
+  completed: boolean,
+  isDeductCancelled: boolean,
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+```
+
+시간 충돌 방지:
+
+- 같은 `academyId + teacher + date + time` 조합의 active lesson을 확인한다.
+- 더 정확한 충돌 검사는 `startAt < requestedEndAt && endAt > requestedStartAt` 조건이 필요하므로 Cloud Function 또는 transaction 내부에서 선생님 일별 slot 문서를 함께 사용한다.
+- MVP에서는 30/60분 고정 slot이면 `teacherAvailabilitySlots/{academyId_teacher_yyyyMMdd_HHmm}`를 만들고 transaction에서 `status`를 `available -> booked`로 바꾼다.
+
+권장 slot 문서:
+
+```js
+teacherAvailabilitySlots/{slotId} = {
+  academyId: string,
+  teacher: string,
+  date: 'YYYY-MM-DD',
+  time: 'HH:mm',
+  startAt: timestamp,
+  endAt: timestamp,
+  status: 'available' | 'booked' | 'blocked',
+  lessonId: string,
+  bookedByUid: string,
+  updatedAt: timestamp
+}
+```
+
+#### 4. 오픈 그룹수업 예약 구조
+
+오픈 그룹수업은 기존 `groupLessons`에 이미 있는 `bookingMode`, `capacity`, `bookedCount`, `isBookable`를 확장한다.
+
+```js
+groupLessons/{groupLessonId} = {
+  academyId: string,
+  groupClassId: string,
+  groupClassName: string,
+  teacher: string,
+  date: 'YYYY-MM-DD',
+  time: 'HH:mm',
+  startAt: timestamp,
+  subject: string,
+  bookingMode: 'fixed' | 'open',
+  isBookable: boolean,
+  bookingOpenAt: timestamp,
+  bookingCloseAt: timestamp,
+  capacity: number,
+  bookedCount: number,
+  waitlistCount: number,
+  reservationStatus: 'open' | 'full' | 'closed' | 'cancelled',
+  countedStudentIDs: string[],
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+```
+
+학생별 예약은 별도 컬렉션으로 둔다. 배열만으로 예약자를 관리하면 rules, 취소, 중복 예약, 감사 로그가 약해진다.
+
+```js
+lessonBookings/{bookingId} = {
+  academyId: string,
+  bookingType: 'openGroup' | 'private',
+  lessonCollection: 'groupLessons' | 'lessons',
+  lessonId: string,
+  groupClassId: string,
+  studentId: string,
+  studentAuthUid: string,
+  packageId: string,
+  status: 'booked' | 'cancelled' | 'waitlisted' | 'attended' | 'no_show',
+  seatNumber: number,
+  bookedAt: timestamp,
+  cancelledAt: timestamp,
+  cancellationReason: string,
+  source: 'student' | 'admin',
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+```
+
+좌석 표시:
+
+- list 화면은 `groupLessons.capacity`와 `groupLessons.bookedCount`만 구독해 빠르게 `remainingSeats = capacity - bookedCount`를 표시한다.
+- 상세 화면은 `lessonBookings`에서 `academyId + lessonId + status == booked`를 조회해 내 예약 여부와 예약자 수를 확인한다.
+- 선착순 예약은 Firestore transaction으로 `groupLessons`와 `lessonBookings`를 함께 읽고 쓴다.
+
+선착순 transaction 조건:
+
+- `academyId`가 모두 일치해야 한다.
+- `bookingMode === 'open'`
+- `isBookable === true`
+- 현재 시간이 `bookingOpenAt <= now < bookingCloseAt`
+- `bookedCount < capacity`
+- 같은 `studentId + lessonId`의 active booking이 없어야 한다.
+- 연결 수강권의 `remainingCount > 0`
+
+#### 5. 수강권/크레딧 차감 구조
+
+현재 `studentPackages`는 현재 상태, `creditTransactions`는 이력으로 유지한다. 앞으로는 모든 생성/차감/복구/관리자 조정을 ledger 중심으로 남기고, `studentPackages.usedCount/remainingCount/status`는 transaction 결과 스냅샷으로 취급한다.
+
+```js
+studentPackages/{packageId} = {
+  academyId: string,
+  studentId: string,
+  studentAuthUid: string,
+  packageType: 'private' | 'group' | 'openGroup',
+  teacher: string,
+  groupClassId: string,
+  title: string,
+  totalCount: number,
+  usedCount: number,
+  remainingCount: number,
+  status: 'active' | 'usedUp' | 'ended' | 'expired' | 'cancelled',
+  validFrom: 'YYYY-MM-DD',
+  expiresAt: timestamp,
+  createdAt: timestamp,
+  updatedAt: timestamp
+}
+```
+
+```js
+creditTransactions/{txId} = {
+  academyId: string,
+  studentId: string,
+  studentAuthUid: string,
+  packageId: string,
+  packageType: 'private' | 'group' | 'openGroup',
+  sourceType: 'studentPackage' | 'privateLesson' | 'groupLesson' | 'booking' | 'adminAdjustment',
+  sourceId: string,
+  actionType:
+    'package_created' |
+    'private_deduct' |
+    'group_deduct' |
+    'open_group_booking_hold' |
+    'booking_cancel_restore' |
+    'deduct_restore' |
+    'admin_adjustment',
+  deltaCount: number,
+  balanceBefore: number,
+  balanceAfter: number,
+  actorUid: string,
+  actorRole: 'student' | 'admin' | 'teacher' | 'system',
+  memo: string,
+  createdAt: timestamp
+}
+```
+
+차감 정책:
+
+- 수강권 생성: `studentPackages` 생성 + `creditTransactions(package_created, +totalCount)` 기록.
+- 개인수업 예약: MVP는 예약 시 차감하지 않고 수업 완료/출석 처리 시 차감한다. 노쇼/선결제 정책이 필요해지면 `hold` 상태를 추가한다.
+- 오픈 그룹 예약: 좌석 남용 방지를 위해 예약 시 `open_group_booking_hold(-1)`로 먼저 차감하는 방식을 권장한다.
+- 오픈 그룹 취소: 마감 전 취소면 `booking_cancel_restore(+1)`로 복구하고 `bookedCount`를 감소한다.
+- 출석 확정: 이미 예약 hold가 있으면 booking status만 `attended`로 바꾸고 추가 차감하지 않는다.
+- 관리자 복구: 기존 `group_deduct_restore`를 `deduct_restore(+1)`로 일반화하고 원본 tx id를 `reversalOfTxId`로 남긴다.
+- 관리자 조정: `admin_adjustment(+/-n)`을 별도 action으로 남기고 직접 `remainingCount`만 바꾸지 않는다.
+
+#### 6. 최소 Firestore 컬렉션
+
+재사용:
+
+- `privateStudents`: 학생 원장, portal 연결 필드 추가
+- `lessons`: 개인수업 예약/확정 일정
+- `groupClasses`: 그룹수업 기본 정보
+- `groupLessons`: 오픈 그룹수업 slot과 좌석 카운터
+- `studentPackages`: 수강권 현재 상태
+- `creditTransactions`: 수강권 ledger
+- `users`: 학생/관리자/선생님 전역 로그인 프로필
+
+신규 권장:
+
+- `lessonBookings`: 학생별 예약 상태
+- `teacherAvailabilitySlots`: 개인수업 시간 충돌 방지용 slot
+- `studentAcademyLinks`: 다중 학원/보호자 계정 확장 시 사용
+
+#### 7. 새 필드와 기존 확장 구분
+
+바로 추가할 필드:
+
+- `privateStudents`: `academyId`, `studentAuthUid`, `portalEmail`, `portalStatus`, `portalLinkedAt`
+- `lessons`: `academyId`, `studentAuthUid`, `endAt`, `durationMinutes`, `reservationSource`, `reservationStatus`, `approvalStatus`
+- `groupLessons`: `academyId`, `bookingOpenAt`, `bookingCloseAt`, `waitlistCount`, `reservationStatus`
+- `studentPackages`: `academyId`, `studentAuthUid`, `validFrom`
+- `creditTransactions`: `academyId`, `studentAuthUid`, `balanceBefore`, `balanceAfter`, `reversalOfTxId`
+
+나중에 추가할 필드:
+
+- `lessons`: `paymentHoldId`, `rescheduleOfLessonId`
+- `groupLessons`: `waitlistEnabled`, `minStudents`, `autoCloseReason`
+- `lessonBookings`: `checkedInAt`, `noShowMarkedAt`, `refundPolicySnapshot`
+- `studentPackages`: `purchaseChannel`, `subscriptionId`, `refundStatus`
+
+#### 8. 예약/차감 흐름
+
+개인수업 예약:
+
+1. 학생이 로그인하고 `studentAuthUid + academyId`로 본인 `privateStudents`를 찾는다.
+2. active private `studentPackages` 중 `remainingCount > 0`인 수강권을 선택한다.
+3. 선생님/날짜/시간 slot을 선택한다.
+4. transaction에서 `teacherAvailabilitySlots`가 available인지 확인한다.
+5. `lessons`를 `reservationStatus: confirmed` 또는 `pending`으로 생성한다.
+6. slot을 booked로 변경한다.
+7. 수업 완료 또는 출석 처리 시 `studentPackages`와 `creditTransactions`를 transaction으로 차감한다.
+
+오픈 그룹수업 예약:
+
+1. 학생이 `groupLessons`에서 `bookingMode == open`, `isBookable == true`, `academyId == currentAcademyId`인 수업을 본다.
+2. UI는 `capacity - bookedCount`로 잔여 좌석을 표시한다.
+3. 예약 버튼 클릭 시 transaction에서 `bookedCount < capacity`, 중복 booking 없음, 수강권 잔여 횟수를 확인한다.
+4. `lessonBookings`를 `booked`로 생성한다.
+5. `groupLessons.bookedCount`를 1 증가한다.
+6. 정책상 예약 시 차감이면 `studentPackages.remainingCount`를 1 감소하고 `creditTransactions(open_group_booking_hold, -1)`를 만든다.
+7. 취소 시 booking을 `cancelled`로 변경하고 `bookedCount`와 수강권을 복구한다.
+
+관리자 차감/복구:
+
+1. 모든 차감/복구는 `studentPackages` 현재값 변경과 `creditTransactions` 생성을 같은 transaction 또는 callable function에서 처리한다.
+2. 복구는 원본 tx를 찾아 `reversalOfTxId`를 남긴다.
+3. 직접 수정은 `admin_adjustment`로만 허용한다.
+
+#### 9. 구현 우선순위
+
+가장 먼저 만들 것:
+
+1. `academyId` query/rules 전환 완료
+2. `studentPackages`와 `creditTransactions` ledger 필드 확장
+3. `lessonBookings` 컬렉션과 오픈 그룹 예약 transaction
+4. `groupLessons` 오픈 예약 필드 UI 표시
+5. 학생 로그인 계정과 `privateStudents.studentAuthUid` 연결
+
+그 다음 붙일 것:
+
+1. 개인수업 `teacherAvailabilitySlots`
+2. 학생용 예약 화면
+3. 예약 취소/복구 정책
+4. waitlist
+5. 알림
+6. 결제/환불 연동
+
+나중으로 미룰 것:
+
+- 보호자 다중 학생 계정
+- 복잡한 reschedule 정책
+- subscription billing 자동 차감
+- teacher별 커스텀 예약 가능 시간 UI
+- Cloud Functions 기반 대규모 정산 리포트
+
+#### 10. 다음 실제 코딩 단계
+
+Firebase quota가 회복되기 전에는 로컬 코드/테스트 중심으로 다음 순서를 권장한다.
+
+1. `src/**` 변경 없이 `tests/fixtures`와 seed 문서에 `lessonBookings` 예시 fixture를 추가한다.
+2. `creditTransactions` 생성 helper의 payload에 `balanceBefore/balanceAfter/academyId`를 받을 수 있게 준비한다.
+3. `groupLessons` open booking fixture를 추가하고 좌석 표시용 selector/e2e 초안을 작성한다.
+4. quota 회복 후 E2E Firebase에서 `academyId` backfill dry-run을 먼저 검증한다.
+5. 그 다음 `AuthContext/query/rules`를 academy-scoped로 전환한다.
+
 ## 9. Branch Strategy
 
 ### main

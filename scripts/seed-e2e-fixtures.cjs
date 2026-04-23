@@ -12,6 +12,17 @@ const EXPECTED_PROJECT_ID =
   process.env.VITE_FIREBASE_PROJECT_ID ||
   "miami-e2e";
 const SCHOOL_TIME_ZONE = "Asia/Seoul";
+const DEFAULT_E2E_ACADEMY_ID = "academy_e2e_default";
+const DEFAULT_E2E_ACADEMY_NAME = "Miami E2E Academy";
+const ACADEMY_SCOPED_COLLECTIONS = new Set([
+  "privateStudents",
+  "lessons",
+  "groupClasses",
+  "groupStudents",
+  "groupLessons",
+  "studentPackages",
+  "creditTransactions",
+]);
 
 const IDS = {
   student: "e2e-baseline-student-inagyumi",
@@ -121,10 +132,13 @@ async function upsertDoc(collectionName, docId, data) {
   const ref = db.collection(collectionName).doc(docId);
   const snap = await ref.get();
   const existing = snap.exists ? snap.data() || {} : null;
+  const scopedData = ACADEMY_SCOPED_COLLECTIONS.has(collectionName)
+    ? { academyId: DEFAULT_E2E_ACADEMY_ID, ...data }
+    : data;
 
   await ref.set(
     {
-      ...data,
+      ...scopedData,
       createdAt: buildExistingCreatedAt(existing),
       updatedAt: FieldValue.serverTimestamp(),
     },
@@ -143,6 +157,18 @@ async function run() {
   console.log(`Time zone baseline: ${SCHOOL_TIME_ZONE}`);
 
   const adminUid = await resolveUidByEmail("admin@example.com");
+
+  await upsertDoc("academies", DEFAULT_E2E_ACADEMY_ID, {
+    id: DEFAULT_E2E_ACADEMY_ID,
+    name: DEFAULT_E2E_ACADEMY_NAME,
+    slug: DEFAULT_E2E_ACADEMY_ID,
+    ownerUid: adminUid,
+    status: "active",
+    plan: "starter",
+    timezone: SCHOOL_TIME_ZONE,
+    locale: "ko-KR",
+    source: "e2e-fixture-seed",
+  });
 
   const nextMonday = nextWeekdayDate(2, 0);
   const nextWednesday = nextWeekdayDate(4, 0);
@@ -362,6 +388,7 @@ async function run() {
 
   console.log("");
   console.log("Fixture Summary");
+  console.log(`- academy: ${DEFAULT_E2E_ACADEMY_NAME} (${DEFAULT_E2E_ACADEMY_ID})`);
   console.log(`- teacher name: ${FIXTURE.teacherName}`);
   console.log(`- student: ${FIXTURE.studentName} (${IDS.student})`);
   console.log(`- group: ${FIXTURE.groupName} (${IDS.groupClass})`);
