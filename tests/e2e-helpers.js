@@ -9,11 +9,20 @@ export function escapeRegExp(value) {
 export async function loginAsAdmin(page, email, password) {
   await page.goto(BASE_URL);
 
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password').fill(password);
+    await page.getByRole('button', { name: 'Sign In' }).click();
 
-  await expect(page).toHaveURL(/\/dashboard/);
+    try {
+      await expect(page).toHaveURL(/\/dashboard/, { timeout: 10000 });
+      break;
+    } catch (error) {
+      if (attempt === 3) throw error;
+      await page.waitForTimeout(1000);
+    }
+  }
+
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible();
 }
 

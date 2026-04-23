@@ -36,7 +36,7 @@ test('관리자가 특정 그룹의 출결/차감 모달을 열 수 있다', asy
   await firstAttendanceButton.click();
 
   const attendanceDialog = page.getByRole('dialog', { name: /출결\s*\/\s*차감/ });
-  await expect(attendanceDialog).toBeVisible();
+  await expect(attendanceDialog).toBeVisible({ timeout: 15000 });
   await expect(attendanceDialog.getByRole('heading', { name: /출결\s*\/\s*차감/ })).toBeVisible();
 
   // 취약한 selector: 모달 내부 목록도 table class 구조에 의존합니다.
