@@ -594,10 +594,13 @@ service cloud.firestore {
           "studentId",
           "studentName",
           "teacher",
+          "teacherName",
           "date",
           "time",
+          "subject",
           "status",
           "source",
+          "reservedAt",
           "createdAt",
           "updatedAt",
           "cancelledAt"
@@ -610,9 +613,12 @@ service cloud.firestore {
         data.studentId != "" &&
         data.teacher is string &&
         data.teacher != "" &&
+        (!("teacherName" in data.keys()) || data.teacherName is string) &&
         data.date is string &&
         data.time is string &&
+        (!("subject" in data.keys()) || data.subject is string) &&
         data.status in ["active", "cancelled"] &&
+        (!("reservedAt" in data.keys()) || data.reservedAt is timestamp) &&
         data.source == "student";
     }
 

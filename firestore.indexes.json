@@ -221,6 +221,17 @@
       ]
     },
     {
+      "collectionGroup": "privateLessonReservations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "studentId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "time", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "lessonRequests",
       "queryScope": "COLLECTION",
       "fields": [
@@ -250,6 +261,16 @@
       "fields": [
         { "fieldPath": "academyId", "order": "ASCENDING" },
         { "fieldPath": "lessonRequestId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "lessons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "studentId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "time", "order": "ASCENDING" }
       ]
     }
   ],
