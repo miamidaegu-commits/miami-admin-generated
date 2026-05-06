@@ -12,9 +12,11 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   startAfter,
   serverTimestamp,
   Timestamp,
+  and,
   updateDoc,
   where,
   or,
@@ -23,6 +25,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { auth, db } from './firebase'
 import { useAuth } from './AuthContext'
+import { debugLog } from './src/utils/debugLog.js'
 import {
   SCHOOL_TIME_ZONE,
   countUsedAsOfTodayForStudent,
@@ -30,6 +33,7 @@ import {
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
   formatDate,
+  formatLessonSessionNumber,
   formatGroupStudentStartDate,
   formatStudentPackageDetailAmountPaid,
   formatStudentPackageDetailMemo,
@@ -62,8 +66,14 @@ import {
   sanitizePhoneForTel,
 } from './src/features/dashboard/dashboardViewUtils.js'
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
+import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedulePanel.jsx'
 import GroupsSection from './src/features/dashboard/sections/GroupsSection.jsx'
+import PrivateLessonSlotsSection from './src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'
+import LessonRequestsSection from './src/features/dashboard/sections/LessonRequestsSection.jsx'
+import TeacherPrivateLessonRequestsSection from './src/features/dashboard/sections/TeacherPrivateLessonRequestsSection.jsx'
 import StudentsSection from './src/features/dashboard/sections/StudentsSection.jsx'
+import DailyMaterialsSection from './src/features/dashboard/sections/DailyMaterialsSection.jsx'
+import TeacherManagementSection from './src/features/dashboard/sections/TeacherManagementSection.jsx'
 import PostStudentCreateModal from './src/features/dashboard/modals/PostStudentCreateModal.jsx'
 import StudentModal from './src/features/dashboard/modals/StudentModal.jsx'
 import StudentPackageEditModal from './src/features/dashboard/modals/StudentPackageEditModal.jsx'
@@ -87,6 +97,7 @@ import useCalendarSectionViewModel from './src/features/dashboard/hooks/useCalen
 import useGroupScheduleRebuildFlow from './src/features/dashboard/hooks/useGroupScheduleRebuildFlow.js'
 import useGroupLessonManagementFlow from './src/features/dashboard/hooks/useGroupLessonManagementFlow.js'
 import useGroupAttendanceFlow from './src/features/dashboard/hooks/useGroupAttendanceFlow.js'
+import useGroupReservationFlow from './src/features/dashboard/hooks/useGroupReservationFlow.js'
 import useGroupManagementFlow from './src/features/dashboard/hooks/useGroupManagementFlow.js'
 import useGroupStudentAddFlow from './src/features/dashboard/hooks/useGroupStudentAddFlow.js'
 import useGroupStudentManagementFlow from './src/features/dashboard/hooks/useGroupStudentManagementFlow.js'
@@ -96,6 +107,20 @@ import usePrivateLessonFlow, {
 import useStudentManagementFlow from './src/features/dashboard/hooks/useStudentManagementFlow.js'
 import useStudentPackageAdminFlow from './src/features/dashboard/hooks/useStudentPackageAdminFlow.js'
 import useStudentPackageFlow from './src/features/dashboard/hooks/useStudentPackageFlow.js'
+import {
+  assertSameAcademy,
+  isValidOperationalAcademyId,
+  requireCurrentAcademyId,
+} from './src/features/dashboard/academyScope.js'
+import {
+  buildStudentGroupAccessPayloadFromGroupStudent,
+  deleteStudentGroupAccessBatch,
+} from './src/features/group-booking/studentGroupAccessClient.js'
+import { buildPrivateLessonReservationId } from './src/features/private-booking/privateBookingModel.js'
+import {
+  addStudentPrivateSlotAccessBatch,
+  removeStudentPrivateSlotAccessBatch,
+} from './src/features/private-booking/studentPrivateAccessSummaryClient.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -104,16 +129,75 @@ const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
 const ENABLE_GROUP_LEGACY_BACKFILL_TOOL = false
 
 const GROUP_BACKFILL_BATCH_SIZE = 400
+const TODAY_RESERVATION_QUERY_CHUNK_SIZE = 10
+const PRIVATE_SLOT_MANAGEMENT_LABEL = '1:1 예약 시간 관리'
+const ADMIN_GROUP_MANAGEMENT_LABEL = '단체반 관리'
+const TEACHER_GROUP_MANAGEMENT_LABEL = '내 단체반 관리'
+const TEACHER_PRIVATE_LESSON_REQUESTS_LABEL = '내 1:1 관리'
 
-async function fetchAllDocumentsInCollection(dbInstance, collectionName) {
+function isDashboardAdminProfile(profile) {
+  return (
+    profile?.role === 'admin' ||
+    profile?.role === 'owner' ||
+    profile?.membershipRole === 'admin' ||
+    profile?.membershipRole === 'owner'
+  )
+}
+
+function isDashboardTeacherProfile(profile) {
+  return String(profile?.role || '').trim().toLowerCase() === 'teacher'
+}
+
+const EMPTY_TEACHER_FORM = {
+  id: '',
+  name: '',
+  teacherKey: '',
+  status: 'active',
+}
+
+function chunkArray(values, size) {
+  const out = []
+  for (let i = 0; i < values.length; i += size) {
+    out.push(values.slice(i, i + size))
+  }
+  return out
+}
+
+function normalizePrivateSlotEligibleStudentIds(values, privateStudents) {
+  const allowedIds = new Set(privateStudents.map((student) => String(student.id || '').trim()))
+  const out = []
+  const seen = new Set()
+  const source = Array.isArray(values) ? values : []
+  source.forEach((value) => {
+    const studentId = String(value || '').trim()
+    if (!studentId || seen.has(studentId) || !allowedIds.has(studentId)) return
+    seen.add(studentId)
+    out.push(studentId)
+  })
+  return out
+}
+
+async function fetchAllDocumentsInCollection(dbInstance, collectionName, academyId) {
+  const scopedAcademyId = requireCurrentAcademyId(academyId)
   const col = collection(dbInstance, collectionName)
   const pageSize = 500
   const out = []
   let lastDoc = null
   while (true) {
     const q = lastDoc
-      ? query(col, orderBy(documentId()), startAfter(lastDoc), limit(pageSize))
-      : query(col, orderBy(documentId()), limit(pageSize))
+      ? query(
+          col,
+          where('academyId', '==', scopedAcademyId),
+          orderBy(documentId()),
+          startAfter(lastDoc),
+          limit(pageSize)
+        )
+      : query(
+          col,
+          where('academyId', '==', scopedAcademyId),
+          orderBy(documentId()),
+          limit(pageSize)
+        )
     const snap = await getDocs(q)
     if (snap.empty) break
     snap.docs.forEach((d) => out.push(d))
@@ -124,7 +208,8 @@ async function fetchAllDocumentsInCollection(dbInstance, collectionName) {
 }
 
 /** Firestore 기준으로 private 패키지의 usedCount / remainingCount 재계산 */
-async function recomputePrivatePackageUsage(packageId) {
+async function recomputePrivatePackageUsage(packageId, academyId) {
+  const scopedAcademyId = requireCurrentAcademyId(academyId)
   const pid = String(packageId || '').trim()
   if (!pid) return
 
@@ -133,6 +218,7 @@ async function recomputePrivatePackageUsage(packageId) {
   if (!pkgSnap.exists()) return
 
   const pkg = pkgSnap.data()
+  assertSameAcademy(pkg, scopedAcademyId, '수강권')
   if (pkg.packageType !== 'private') return
 
   const packageTeacher = normalizeText(pkg.teacher || '')
@@ -141,6 +227,7 @@ async function recomputePrivatePackageUsage(packageId) {
   const snap = await getDocs(
     query(
       collection(db, 'lessons'),
+      where('academyId', '==', scopedAcademyId),
       where('packageId', '==', pid),
       where('teacher', '==', packageTeacher)
     )
@@ -173,6 +260,7 @@ async function recomputePrivatePackageUsage(packageId) {
  * groupClassId + date + time 기준 중복은 건너뜀. Firestore addDoc 순차 호출.
  */
 async function createGroupLessonsInDateRange({
+  academyId,
   groupClassId,
   groupClassName,
   teacher,
@@ -184,6 +272,7 @@ async function createGroupLessonsInDateRange({
   endYmd,
   existingLessons,
 }) {
+  const scopedAcademyId = requireCurrentAcademyId(academyId)
   const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(weekdays))
   const timeStr = String(time || '').trim()
   const subjectStr = String(subject || '').trim()
@@ -214,6 +303,7 @@ async function createGroupLessonsInDateRange({
     }
 
     await addDoc(collection(db, 'groupLessons'), {
+      academyId: scopedAcademyId,
       groupClassId,
       groupClassName: groupClassName || '',
       teacher: teacherNorm,
@@ -306,10 +396,15 @@ function buildGroupPackageCoverageLessons({
 }
 
 export default function Dashboard() {
-  const { user } = useAuth()
+  const { user, userProfile, currentAcademyId } = useAuth()
   const navigate = useNavigate()
-  const [userProfile, setUserProfile] = useState(null)
-  const [teacherDirectoryUsers, setTeacherDirectoryUsers] = useState([])
+  const [teacherDirectoryMemberships, setTeacherDirectoryMemberships] = useState([])
+  const [teacherRecords, setTeacherRecords] = useState([])
+  const [teachersLoading, setTeachersLoading] = useState(false)
+  const [teacherForm, setTeacherForm] = useState(EMPTY_TEACHER_FORM)
+  const [teacherFormErrors, setTeacherFormErrors] = useState({})
+  const [isTeacherFormSubmitting, setIsTeacherFormSubmitting] = useState(false)
+  const [busyTeacherId, setBusyTeacherId] = useState('')
   const [lessons, setLessons] = useState([])
   const [privateStudents, setPrivateStudents] = useState([])
   const [loading, setLoading] = useState(true)
@@ -333,6 +428,25 @@ export default function Dashboard() {
   const [groupLessons, setGroupLessons] = useState([])
 
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
+  const [groupLessonReservations, setGroupLessonReservations] = useState([])
+  const [groupLessonReservationsLoading, setGroupLessonReservationsLoading] = useState(false)
+  const [todayDashboardGroupLessons, setTodayDashboardGroupLessons] = useState([])
+  const [todayDashboardGroupLessonsLoading, setTodayDashboardGroupLessonsLoading] = useState(false)
+  const [todayGroupLessonReservations, setTodayGroupLessonReservations] = useState([])
+  const [todayGroupLessonReservationsLoading, setTodayGroupLessonReservationsLoading] = useState(false)
+  const [privateLessonSlots, setPrivateLessonSlots] = useState([])
+  const [privateLessonSlotsLoading, setPrivateLessonSlotsLoading] = useState(false)
+  const [privateLessonReservations, setPrivateLessonReservations] = useState([])
+  const [privateLessonReservationsLoading, setPrivateLessonReservationsLoading] = useState(false)
+  const [privateSlotForm, setPrivateSlotForm] = useState({
+    teacher: '',
+    date: '',
+    time: '',
+    durationMinutes: '50',
+    eligibleStudentIds: [],
+  })
+  const [privateSlotFormErrors, setPrivateSlotFormErrors] = useState({})
+  const [busyPrivateSlotActionId, setBusyPrivateSlotActionId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
 
@@ -340,56 +454,207 @@ export default function Dashboard() {
   const [studentPackages, setStudentPackages] = useState([])
 
   useEffect(() => {
-    if (!user?.uid) return
-
-    const unsubscribeUser = onSnapshot(
-      doc(db, 'users', user.uid),
-      (snapshot) => {
-        setUserProfile(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null)
-      },
-      (error) => {
-        console.error('users 프로필 불러오기 실패:', error)
-      }
-    )
-
-    return () => unsubscribeUser()
-  }, [user])
-
-  useEffect(() => {
-    if (userProfile?.role !== 'admin') {
-      setTeacherDirectoryUsers([])
+    if (userProfile?.role !== 'admin' || !isValidOperationalAcademyId(currentAcademyId)) {
+      setTeacherDirectoryMemberships([])
       return
     }
     const unsubscribeUsers = onSnapshot(
-      collection(db, 'users'),
+      query(
+        collection(db, 'academyMemberships'),
+        where('academyId', '==', currentAcademyId)
+      ),
       (snapshot) => {
         const rows = snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-        setTeacherDirectoryUsers(rows)
+        setTeacherDirectoryMemberships(rows)
       },
       (error) => {
-        console.error('users 목록 불러오기 실패:', error)
-        setTeacherDirectoryUsers([])
+        console.error('academyMemberships 선생님 목록 불러오기 실패:', error)
+        setTeacherDirectoryMemberships([])
       }
     )
     return () => unsubscribeUsers()
-  }, [userProfile?.role])
+  }, [currentAcademyId, userProfile?.role])
+
+  useEffect(() => {
+    if (userProfile?.role !== 'admin' || !isValidOperationalAcademyId(currentAcademyId)) {
+      setTeacherRecords([])
+      setTeachersLoading(false)
+      return
+    }
+
+    setTeachersLoading(true)
+    const unsubscribeTeachers = onSnapshot(
+      query(
+        collection(db, 'teachers'),
+        where('academyId', '==', currentAcademyId)
+      ),
+      (snapshot) => {
+        const rows = snapshot.docs
+          .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+          .sort((a, b) => {
+            const statusCompare = String(a.status || 'active').localeCompare(
+              String(b.status || 'active')
+            )
+            if (statusCompare !== 0) return statusCompare
+            return String(a.name || a.teacherName || '').localeCompare(
+              String(b.name || b.teacherName || ''),
+              'ko'
+            )
+          })
+        setTeacherRecords(rows)
+        setTeachersLoading(false)
+      },
+      (error) => {
+        console.error('teachers 목록 불러오기 실패:', error)
+        setTeacherRecords([])
+        setTeachersLoading(false)
+      }
+    )
+    return () => unsubscribeTeachers()
+  }, [currentAcademyId, userProfile?.role])
 
   const teacherSelectOptions = useMemo(() => {
     const map = new Map()
-    for (const u of teacherDirectoryUsers) {
+    for (const teacher of teacherRecords) {
+      if (String(teacher?.status || 'active') === 'inactive') continue
+      const rawName = String(teacher?.name || teacher?.teacherName || '').trim()
+      const value = normalizeText(teacher?.teacherKey || teacher?.teacherName || rawName)
+      if (!value) continue
+      if (!map.has(value)) map.set(value, { value, label: rawName || value })
+    }
+    for (const u of teacherDirectoryMemberships) {
       const rawName = String(u?.teacherName || '').trim()
       if (!rawName) continue
       const role = String(u?.role || '').trim().toLowerCase()
-      if (!(role === 'teacher' || role === 'admin')) continue
+      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) continue
       const value = normalizeText(rawName)
-      if (!value) continue
-      if (!map.has(value)) map.set(value, { value, label: rawName })
+      if (!value || map.has(value)) continue
+      map.set(value, { value, label: rawName })
     }
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ko'))
-  }, [teacherDirectoryUsers])
+  }, [teacherDirectoryMemberships, teacherRecords])
+
+  const validateTeacherForm = (form) => {
+    const name = String(form.name || '').trim()
+    const teacherKey = normalizeText(form.teacherKey || name)
+    const status = form.status === 'inactive' ? 'inactive' : 'active'
+    const errors = {}
+
+    if (!name) errors.name = '선생님 이름을 입력해 주세요.'
+    if (!teacherKey) errors.teacherKey = 'teacherKey를 입력하거나 이름을 입력해 주세요.'
+
+    const duplicate = teacherRecords.find((teacher) => {
+      if (teacher.id === form.id) return false
+      const existingKey = normalizeText(
+        teacher.teacherKey || teacher.teacherName || teacher.name || ''
+      )
+      return existingKey && existingKey === teacherKey
+    })
+    if (duplicate) errors.teacherKey = '이미 같은 teacherKey를 사용하는 선생님이 있습니다.'
+
+    return {
+      ok: Object.keys(errors).length === 0,
+      errors,
+      value: { name, teacherKey, status },
+    }
+  }
+
+  const resetTeacherForm = () => {
+    setTeacherForm(EMPTY_TEACHER_FORM)
+    setTeacherFormErrors({})
+  }
+
+  const submitTeacherForm = async () => {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 선생님을 관리할 수 있습니다.')
+      return
+    }
+
+    let scopedAcademyId
+    try {
+      scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    } catch (error) {
+      alert(error.message)
+      return
+    }
+
+    const result = validateTeacherForm(teacherForm)
+    setTeacherFormErrors(result.errors)
+    if (!result.ok) return
+
+    setIsTeacherFormSubmitting(true)
+    try {
+      const payload = {
+        academyId: scopedAcademyId,
+        name: result.value.name,
+        teacherName: result.value.teacherKey,
+        teacherKey: result.value.teacherKey,
+        status: result.value.status,
+        updatedAt: serverTimestamp(),
+      }
+
+      if (teacherForm.id) {
+        await updateDoc(doc(db, 'teachers', teacherForm.id), payload)
+      } else {
+        await addDoc(collection(db, 'teachers'), {
+          ...payload,
+          createdAt: serverTimestamp(),
+        })
+      }
+
+      resetTeacherForm()
+    } catch (error) {
+      console.error('선생님 저장 실패:', error)
+      alert(error.message || '선생님 저장에 실패했습니다.')
+    } finally {
+      setIsTeacherFormSubmitting(false)
+    }
+  }
+
+  const editTeacher = (teacher) => {
+    setTeacherForm({
+      id: teacher.id,
+      name: String(teacher.name || '').trim(),
+      teacherKey: normalizeText(teacher.teacherKey || teacher.teacherName || teacher.name || ''),
+      status: teacher.status === 'inactive' ? 'inactive' : 'active',
+    })
+    setTeacherFormErrors({})
+    setActiveSection('teachers')
+  }
+
+  const updateTeacherStatus = async (teacher, status) => {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 선생님을 관리할 수 있습니다.')
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      if (String(teacher.academyId || '').trim() !== scopedAcademyId) {
+        throw new Error('선생님 문서가 현재 학원에 속하지 않습니다.')
+      }
+
+      setBusyTeacherId(teacher.id)
+      await updateDoc(doc(db, 'teachers', teacher.id), {
+        status: status === 'inactive' ? 'inactive' : 'active',
+        updatedAt: serverTimestamp(),
+      })
+      if (teacherForm.id === teacher.id) {
+        setTeacherForm((prev) => ({
+          ...prev,
+          status: status === 'inactive' ? 'inactive' : 'active',
+        }))
+      }
+    } catch (error) {
+      console.error('선생님 상태 변경 실패:', error)
+      alert(error.message || '선생님 상태 변경에 실패했습니다.')
+    } finally {
+      setBusyTeacherId('')
+    }
+  }
 
   useEffect(() => {
-    if (!user?.uid) {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
       setLessons([])
       setPrivateStudents([])
       setLoading(false)
@@ -399,8 +664,9 @@ export default function Dashboard() {
 
     const roleKey = String(userProfile.role).trim().toLowerCase()
     const teacherNameRaw = userProfile.teacherName
+    const isAdminProfile = isDashboardAdminProfile(userProfile)
 
-    console.log('[Dashboard] userProfile.role (raw):', userProfile.role, 'normalized:', roleKey)
+    debugLog('[Dashboard] userProfile.role normalized:', roleKey)
 
     let lessonsLoaded = false
     let studentsLoaded = false
@@ -428,9 +694,12 @@ export default function Dashboard() {
     let unsubscribeLessonsLegacy = () => {}
     let unsubscribeStudents = () => {}
 
-    if (roleKey === 'admin') {
+    if (isAdminProfile) {
       unsubscribeLessons = onSnapshot(
-        collection(db, 'lessons'),
+        query(
+          collection(db, 'lessons'),
+          where('academyId', '==', currentAcademyId)
+        ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -447,13 +716,16 @@ export default function Dashboard() {
       )
 
       unsubscribeStudents = onSnapshot(
-        collection(db, 'privateStudents'),
+        query(
+          collection(db, 'privateStudents'),
+          where('academyId', '==', currentAcademyId)
+        ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
             ...docItem.data(),
           }))
-          console.log('[Dashboard] privateStudents(admin) snapshot row count:', rows.length)
+          debugLog('[Dashboard] privateStudents(admin) snapshot row count:', rows.length)
           setPrivateStudents(rows)
           markStudentsLoaded()
         },
@@ -469,7 +741,11 @@ export default function Dashboard() {
       String(teacherNameRaw).length > 0
     ) {
       unsubscribeLessons = onSnapshot(
-        query(collection(db, 'lessons'), where('teacherName', '==', teacherNameRaw)),
+        query(
+          collection(db, 'lessons'),
+          where('academyId', '==', currentAcademyId),
+          where('teacherName', '==', teacherNameRaw)
+        ),
         (snapshot) => {
           lessonsByTeacherNameRows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -487,7 +763,11 @@ export default function Dashboard() {
       )
 
       unsubscribeLessonsLegacy = onSnapshot(
-        query(collection(db, 'lessons'), where('teacher', '==', teacherNameRaw)),
+        query(
+          collection(db, 'lessons'),
+          where('academyId', '==', currentAcademyId),
+          where('teacher', '==', teacherNameRaw)
+        ),
         (snapshot) => {
           lessonsByLegacyTeacherRows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -507,6 +787,7 @@ export default function Dashboard() {
       unsubscribeStudents = onSnapshot(
         query(
           collection(db, 'privateStudents'),
+          where('academyId', '==', currentAcademyId),
           where('teacher', '==', teacherNameRaw)
         ),
         (snapshot) => {
@@ -514,7 +795,7 @@ export default function Dashboard() {
             id: docItem.id,
             ...docItem.data(),
           }))
-          console.log('[Dashboard] privateStudents(teacher) snapshot row count:', rows.length)
+          debugLog('[Dashboard] privateStudents(teacher) snapshot row count:', rows.length)
           setPrivateStudents(rows)
           markStudentsLoaded()
         },
@@ -526,6 +807,7 @@ export default function Dashboard() {
       )
     } else {
       setLessons([])
+      setPrivateStudents([])
       setLoading(false)
     }
 
@@ -534,10 +816,16 @@ export default function Dashboard() {
       unsubscribeLessonsLegacy()
       unsubscribeStudents()
     }
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [
+    currentAcademyId,
+    user?.uid,
+    userProfile?.membershipRole,
+    userProfile?.role,
+    userProfile?.teacherName,
+  ])
 
   useEffect(() => {
-    if (!user?.uid) {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
       setGroupClasses([])
       setGroupClassesLoading(false)
       return
@@ -548,10 +836,65 @@ export default function Dashboard() {
     const teacherName = String(userProfile.teacherName ?? '').trim()
 
     let ref
-    if (role === 'admin') {
-      ref = collection(db, 'groupClasses')
+    if (isDashboardAdminProfile(userProfile)) {
+      ref = query(
+        collection(db, 'groupClasses'),
+        where('academyId', '==', currentAcademyId)
+      )
     } else if (role === 'teacher' && teacherName) {
-      ref = query(collection(db, 'groupClasses'), where('teacher', '==', teacherName))
+      const queryByTeacher = query(
+        collection(db, 'groupClasses'),
+        where('academyId', '==', currentAcademyId),
+        where('teacher', '==', teacherName)
+      )
+      const queryByTeacherName = query(
+        collection(db, 'groupClasses'),
+        where('academyId', '==', currentAcademyId),
+        where('teacherName', '==', teacherName)
+      )
+
+      setGroupClassesLoading(true)
+      const rowsByTeacher = new Map()
+      const rowsByTeacherName = new Map()
+      const mergeRows = () => {
+        const rowsById = new Map([...rowsByTeacher, ...rowsByTeacherName])
+        setGroupClasses([...rowsById.values()])
+        setGroupClassesLoading(false)
+      }
+      const unsubTeacher = onSnapshot(
+        queryByTeacher,
+        (snapshot) => {
+          rowsByTeacher.clear()
+          snapshot.docs.forEach((docItem) => {
+            rowsByTeacher.set(docItem.id, { id: docItem.id, ...docItem.data() })
+          })
+          mergeRows()
+        },
+        (error) => {
+          console.error('teacher groupClasses 불러오기 실패:', error)
+          setGroupClasses([])
+          setGroupClassesLoading(false)
+        }
+      )
+      const unsubTeacherName = onSnapshot(
+        queryByTeacherName,
+        (snapshot) => {
+          rowsByTeacherName.clear()
+          snapshot.docs.forEach((docItem) => {
+            rowsByTeacherName.set(docItem.id, { id: docItem.id, ...docItem.data() })
+          })
+          mergeRows()
+        },
+        (error) => {
+          console.error('teacherName groupClasses 불러오기 실패:', error)
+          setGroupClasses([])
+          setGroupClassesLoading(false)
+        }
+      )
+      return () => {
+        unsubTeacher()
+        unsubTeacherName()
+      }
     } else {
       setGroupClasses([])
       setGroupClassesLoading(false)
@@ -575,10 +918,10 @@ export default function Dashboard() {
       }
     )
     return () => unsubscribe()
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
 
   useEffect(() => {
-    if (!user?.uid) {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
       setStudentPackages([])
       return
     }
@@ -589,7 +932,10 @@ export default function Dashboard() {
 
     if (userProfile.role === 'admin') {
       const unsubscribe = onSnapshot(
-        collection(db, 'studentPackages'),
+        query(
+          collection(db, 'studentPackages'),
+          where('academyId', '==', currentAcademyId)
+        ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -613,6 +959,7 @@ export default function Dashboard() {
       }
       const q = query(
         collection(db, 'studentPackages'),
+        where('academyId', '==', currentAcademyId),
         where('teacher', '==', teacherKey)
       )
       const unsubscribe = onSnapshot(
@@ -633,7 +980,7 @@ export default function Dashboard() {
     }
 
     setStudentPackages([])
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
 
   useEffect(() => {
     if (activeSection !== 'groups') {
@@ -642,7 +989,23 @@ export default function Dashboard() {
   }, [activeSection])
 
   useEffect(() => {
-    if (!selectedGroupClass?.id) {
+    const canUseTeacherGroupSection =
+      isDashboardTeacherProfile(userProfile) && normalizeText(userProfile?.teacherName || '')
+    const canUseTeacherPrivateRequestsSection = canUseTeacherGroupSection
+    if (
+      !isDashboardAdminProfile(userProfile) &&
+      (['students', 'privateSlots', 'lessonRequests', 'teachers', 'dailyMaterials'].includes(
+        activeSection
+      ) ||
+        (activeSection === 'groups' && !canUseTeacherGroupSection) ||
+        (activeSection === 'teacherPrivateRequests' && !canUseTeacherPrivateRequestsSection))
+    ) {
+      setActiveSection('calendar')
+    }
+  }, [activeSection, userProfile?.membershipRole, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!selectedGroupClass?.id || !isValidOperationalAcademyId(currentAcademyId)) {
       setGroupStudents([])
       setGroupStudentsLoading(false)
       return
@@ -652,6 +1015,7 @@ export default function Dashboard() {
     const groupClassId = selectedGroupClass.id
     const q = query(
       collection(db, 'groupStudents'),
+      where('academyId', '==', currentAcademyId),
       where('groupClassId', '==', groupClassId)
     )
 
@@ -673,7 +1037,7 @@ export default function Dashboard() {
     )
 
     return () => unsubscribe()
-  }, [selectedGroupClass?.id])
+  }, [currentAcademyId, selectedGroupClass?.id])
 
   useEffect(() => {
     if (!selectedGroupClass?.id) return
@@ -682,7 +1046,7 @@ export default function Dashboard() {
   }, [groupClasses, selectedGroupClass?.id])
 
   useEffect(() => {
-    if (!selectedGroupClass?.id) {
+    if (!selectedGroupClass?.id || !isValidOperationalAcademyId(currentAcademyId)) {
       setGroupLessons([])
       setGroupLessonsLoading(false)
       return
@@ -692,7 +1056,10 @@ export default function Dashboard() {
     const groupClassId = selectedGroupClass.id
     const q = query(
       collection(db, 'groupLessons'),
-      or(where('groupClassId', '==', groupClassId), where('groupClassID', '==', groupClassId))
+      and(
+        where('academyId', '==', currentAcademyId),
+        or(where('groupClassId', '==', groupClassId), where('groupClassID', '==', groupClassId))
+      )
     )
 
     const unsubscribe = onSnapshot(
@@ -713,10 +1080,149 @@ export default function Dashboard() {
     )
 
     return () => unsubscribe()
-  }, [selectedGroupClass?.id])
+  }, [currentAcademyId, selectedGroupClass?.id])
 
   useEffect(() => {
-    if (!user?.uid) {
+    if (!selectedGroupClass?.id || !isValidOperationalAcademyId(currentAcademyId)) {
+      setGroupLessonReservations([])
+      setGroupLessonReservationsLoading(false)
+      return
+    }
+
+    setGroupLessonReservationsLoading(true)
+    const q = query(
+      collection(db, 'groupLessonReservations'),
+      where('academyId', '==', currentAcademyId),
+      where('groupClassId', '==', selectedGroupClass.id),
+      where('status', 'in', ['active', 'cancelled'])
+    )
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }))
+        setGroupLessonReservations(rows)
+        setGroupLessonReservationsLoading(false)
+      },
+      (error) => {
+        console.error('groupLessonReservations 불러오기 실패:', error)
+        setGroupLessonReservations([])
+        setGroupLessonReservationsLoading(false)
+      }
+    )
+
+    return () => unsubscribe()
+  }, [currentAcademyId, selectedGroupClass?.id])
+
+  useEffect(() => {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
+      setPrivateLessonSlots([])
+      setPrivateLessonSlotsLoading(false)
+      return
+    }
+    if (!userProfile?.role) return
+
+    const role = userProfile.role
+    const teacherName = normalizeText(userProfile.teacherName || '')
+    let ref
+    if (role === 'admin') {
+      ref = query(
+        collection(db, 'privateLessonSlots'),
+        where('academyId', '==', currentAcademyId)
+      )
+    } else if (role === 'teacher' && teacherName) {
+      ref = query(
+        collection(db, 'privateLessonSlots'),
+        where('academyId', '==', currentAcademyId),
+        where('teacher', '==', teacherName)
+      )
+    } else {
+      setPrivateLessonSlots([])
+      setPrivateLessonSlotsLoading(false)
+      return
+    }
+
+    setPrivateLessonSlotsLoading(true)
+    const unsubscribe = onSnapshot(
+      ref,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }))
+        rows.sort((a, b) =>
+          `${a.date || ''} ${a.time || ''} ${a.teacher || ''}`.localeCompare(
+            `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`,
+            'ko'
+          )
+        )
+        setPrivateLessonSlots(rows)
+        setPrivateLessonSlotsLoading(false)
+      },
+      (error) => {
+        console.error('privateLessonSlots 불러오기 실패:', error)
+        setPrivateLessonSlots([])
+        setPrivateLessonSlotsLoading(false)
+      }
+    )
+    return () => unsubscribe()
+  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
+      setPrivateLessonReservations([])
+      setPrivateLessonReservationsLoading(false)
+      return
+    }
+    if (!userProfile?.role) return
+
+    const role = userProfile.role
+    const teacherName = normalizeText(userProfile.teacherName || '')
+    let ref
+    if (role === 'admin') {
+      ref = query(
+        collection(db, 'privateLessonReservations'),
+        where('academyId', '==', currentAcademyId),
+        where('status', 'in', ['active', 'cancelled'])
+      )
+    } else if (role === 'teacher' && teacherName) {
+      ref = query(
+        collection(db, 'privateLessonReservations'),
+        where('academyId', '==', currentAcademyId),
+        where('teacher', '==', teacherName),
+        where('status', 'in', ['active', 'cancelled'])
+      )
+    } else {
+      setPrivateLessonReservations([])
+      setPrivateLessonReservationsLoading(false)
+      return
+    }
+
+    setPrivateLessonReservationsLoading(true)
+    const unsubscribe = onSnapshot(
+      ref,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }))
+        setPrivateLessonReservations(rows)
+        setPrivateLessonReservationsLoading(false)
+      },
+      (error) => {
+        console.error('privateLessonReservations 불러오기 실패:', error)
+        setPrivateLessonReservations([])
+        setPrivateLessonReservationsLoading(false)
+      }
+    )
+    return () => unsubscribe()
+  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
       setStudentSummaryGroupStudents([])
       setStudentSummaryGroupLessons([])
       return
@@ -732,7 +1238,10 @@ export default function Dashboard() {
 
     if (role === 'admin') {
       const unsubGs = onSnapshot(
-        collection(db, 'groupStudents'),
+        query(
+          collection(db, 'groupStudents'),
+          where('academyId', '==', currentAcademyId)
+        ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -746,7 +1255,10 @@ export default function Dashboard() {
         }
       )
       const unsubGl = onSnapshot(
-        collection(db, 'groupLessons'),
+        query(
+          collection(db, 'groupLessons'),
+          where('academyId', '==', currentAcademyId)
+        ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -810,6 +1322,7 @@ export default function Dashboard() {
       chunks.forEach((chunk, chunkIndex) => {
         const qGs = query(
           collection(db, 'groupStudents'),
+          where('academyId', '==', currentAcademyId),
           where('groupClassId', 'in', chunk)
         )
         unsubs.push(
@@ -833,7 +1346,10 @@ export default function Dashboard() {
 
         const qGl = query(
           collection(db, 'groupLessons'),
-          or(where('groupClassId', 'in', chunk), where('groupClassID', 'in', chunk))
+          and(
+            where('academyId', '==', currentAcademyId),
+            or(where('groupClassId', 'in', chunk), where('groupClassID', 'in', chunk))
+          )
         )
         unsubs.push(
           onSnapshot(
@@ -862,8 +1378,164 @@ export default function Dashboard() {
 
     setStudentSummaryGroupStudents([])
     setStudentSummaryGroupLessons([])
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName, groupClasses])
+	  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName, groupClasses])
 
+  const todayYmd = getTodayStorageDateString()
+
+  const studentSummaryTodayGroupLessons = useMemo(() => {
+    return studentSummaryGroupLessons.filter((lesson) => {
+      if (String(lesson.academyId || '').trim() !== String(currentAcademyId || '').trim()) return false
+      return String(lesson.date || '').trim() === todayYmd
+    })
+  }, [currentAcademyId, studentSummaryGroupLessons, todayYmd])
+
+  useEffect(() => {
+    const role = String(userProfile?.role || '').trim().toLowerCase()
+    const teacherName = String(userProfile?.teacherName || '').trim()
+
+    if (
+      !user?.uid ||
+      !isValidOperationalAcademyId(currentAcademyId) ||
+      role !== 'teacher' ||
+      !teacherName
+    ) {
+      setTodayDashboardGroupLessons([])
+      setTodayDashboardGroupLessonsLoading(false)
+      return
+    }
+
+    const groupClassIds = groupClasses.map((groupClass) => String(groupClass.id || '').trim()).filter(Boolean)
+    if (groupClassIds.length === 0) {
+      setTodayDashboardGroupLessons([])
+      setTodayDashboardGroupLessonsLoading(false)
+      return
+    }
+
+    setTodayDashboardGroupLessonsLoading(true)
+    const chunks = chunkArray(groupClassIds, TODAY_RESERVATION_QUERY_CHUNK_SIZE)
+    const chunkMaps = new Map()
+    const unsubs = []
+
+    const mergeRows = () => {
+      if (chunkMaps.size < chunks.length) return
+      const byId = new Map()
+      for (const chunkMap of chunkMaps.values()) {
+        for (const lesson of chunkMap.values()) byId.set(lesson.id, lesson)
+      }
+      setTodayDashboardGroupLessons(Array.from(byId.values()))
+      setTodayDashboardGroupLessonsLoading(false)
+    }
+
+    chunks.forEach((chunk, chunkIndex) => {
+      const q = query(
+        collection(db, 'groupLessons'),
+        where('academyId', '==', currentAcademyId),
+        where('groupClassId', 'in', chunk)
+      )
+
+      unsubs.push(
+        onSnapshot(
+          q,
+          (snapshot) => {
+            const rows = new Map()
+            snapshot.docs.forEach((docItem) => {
+              const lesson = { id: docItem.id, ...docItem.data() }
+              const lessonAcademyId = String(lesson.academyId || '').trim()
+              const lessonTeacher = String(lesson.teacher || lesson.teacherName || '').trim()
+              if (lessonAcademyId !== String(currentAcademyId || '').trim()) return
+              if (String(lesson.date || '').trim() !== todayYmd) return
+              if (lessonTeacher && lessonTeacher !== teacherName) return
+              rows.set(docItem.id, lesson)
+            })
+            chunkMaps.set(chunkIndex, rows)
+            mergeRows()
+          },
+          (error) => {
+            console.error('today teacher groupLessons 불러오기 실패:', error)
+            chunkMaps.set(chunkIndex, new Map())
+            mergeRows()
+          }
+        )
+      )
+    })
+
+    return () => {
+      unsubs.forEach((unsubscribe) => unsubscribe())
+    }
+  }, [currentAcademyId, groupClasses, todayYmd, user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  const todayGroupLessons = useMemo(() => {
+    const role = String(userProfile?.role || '').trim().toLowerCase()
+    return role === 'teacher' ? todayDashboardGroupLessons : studentSummaryTodayGroupLessons
+  }, [studentSummaryTodayGroupLessons, todayDashboardGroupLessons, userProfile?.role])
+
+  useEffect(() => {
+    const role = String(userProfile?.role || '').trim().toLowerCase()
+    if (
+      !user?.uid ||
+      !isValidOperationalAcademyId(currentAcademyId) ||
+      !(role === 'admin' || role === 'teacher')
+    ) {
+      setTodayGroupLessonReservations([])
+      setTodayGroupLessonReservationsLoading(false)
+      return
+    }
+
+    const lessonIds = todayGroupLessons.map((lesson) => String(lesson.id || '').trim()).filter(Boolean)
+    if (lessonIds.length === 0) {
+      setTodayGroupLessonReservations([])
+      setTodayGroupLessonReservationsLoading(false)
+      return
+    }
+
+    setTodayGroupLessonReservationsLoading(true)
+    const chunks = chunkArray(lessonIds, TODAY_RESERVATION_QUERY_CHUNK_SIZE)
+    const chunkMaps = new Map()
+    const unsubs = []
+
+    const mergeRows = () => {
+      if (chunkMaps.size < chunks.length) return
+      const byId = new Map()
+      for (const chunkMap of chunkMaps.values()) {
+        for (const row of chunkMap.values()) byId.set(row.id, row)
+      }
+      setTodayGroupLessonReservations(Array.from(byId.values()))
+      setTodayGroupLessonReservationsLoading(false)
+    }
+
+    chunks.forEach((chunk, chunkIndex) => {
+      const q = query(
+        collection(db, 'groupLessonReservations'),
+        where('academyId', '==', currentAcademyId),
+        where('lessonId', 'in', chunk),
+        where('status', '==', 'active')
+      )
+
+      unsubs.push(
+        onSnapshot(
+          q,
+          (snapshot) => {
+            const rows = new Map()
+            snapshot.docs.forEach((docItem) => {
+              rows.set(docItem.id, { id: docItem.id, ...docItem.data() })
+            })
+            chunkMaps.set(chunkIndex, rows)
+            mergeRows()
+          },
+          (error) => {
+            console.error('today groupLessonReservations 불러오기 실패:', error)
+            chunkMaps.set(chunkIndex, new Map())
+            mergeRows()
+          }
+        )
+      )
+    })
+
+    return () => {
+      unsubs.forEach((unsubscribe) => unsubscribe())
+    }
+  }, [currentAcademyId, todayGroupLessons, user?.uid, userProfile?.role])
+	
   const studentIdLookup = useMemo(() => {
     const map = new Map()
     const duplicatedKeys = new Set()
@@ -924,6 +1596,7 @@ export default function Dashboard() {
   } = useGroupLessonManagementFlow({
     activeSection,
     userProfile,
+    currentAcademyId,
     selectedGroupClass,
     groupLessons,
     createGroupLessonsInDateRange,
@@ -944,6 +1617,7 @@ export default function Dashboard() {
   } = useGroupStudentAddFlow({
     activeSection,
     userProfile,
+    currentAcademyId,
     selectedGroupClass,
     studentPackages,
     groupStudents,
@@ -964,6 +1638,7 @@ export default function Dashboard() {
     isGroupStudentManageSubmitting,
   } = useGroupStudentManagementFlow({
     userProfile,
+    currentAcademyId,
   })
 
   const {
@@ -978,6 +1653,7 @@ export default function Dashboard() {
   } = useGroupAttendanceFlow({
     activeSection,
     userProfile,
+    currentAcademyId,
     groupClasses,
     selectedGroupClass,
     setSelectedGroupClass,
@@ -985,6 +1661,21 @@ export default function Dashboard() {
     studentSummaryGroupStudents,
     studentPackages,
     addCreditTransaction,
+  })
+
+  const {
+    groupReservationModal,
+    busyGroupReservationId,
+    canManageGroupReservations,
+    openGroupLessonReservationAddModal,
+    openGroupLessonReservationViewModal,
+    closeGroupLessonReservationModal,
+    reserveGroupLessonSeat,
+    cancelGroupLessonSeat,
+  } = useGroupReservationFlow({
+    activeSection,
+    userProfile,
+    currentAcademyId,
   })
 
   const {
@@ -1015,22 +1706,178 @@ export default function Dashboard() {
     userProfile,
   })
 
-  const isAdmin = userProfile?.role === 'admin'
-  const canAddStudent = isAdmin || userProfile?.canAddStudent === true
-  const canEditStudent = isAdmin || userProfile?.canEditStudent === true
-  const canDeleteStudent = isAdmin || userProfile?.canDeleteStudent === true
-  const canEditLesson = isAdmin || userProfile?.canEditLesson === true
-  const canDeleteLesson = isAdmin || userProfile?.canDeleteLesson === true
-  const canManageAttendance = isAdmin || userProfile?.canManageAttendance === true
-  const canCreateLessonDirectly = isAdmin || userProfile?.canCreateLessonDirectly === true
+  const isAdmin = isDashboardAdminProfile(userProfile)
+  const teacherGroupClassKey = normalizeText(userProfile?.teacherName || '')
+  const canManageOwnGroupClasses =
+    !isAdmin && isDashboardTeacherProfile(userProfile) && Boolean(teacherGroupClassKey)
+  const canAddStudent = isAdmin
+  const canEditStudent = isAdmin
+  const canDeleteStudent = isAdmin
+  const canEditLesson = isAdmin
+  const canDeleteLesson = isAdmin
+  const canManageAttendance = isAdmin
+  const canCreateLessonDirectly = isAdmin
   const requiresLessonApproval = userProfile?.requiresLessonApproval === true
   const canUseDirectLessonCreation = canCreateLessonDirectly && !requiresLessonApproval
-  const canManageGroupClasses = isAdmin
-  const showPrivateLessonAddInCalendar =
-    isAdmin ||
-    (userProfile?.canCreateLessonDirectly === true &&
-      userProfile?.requiresLessonApproval === false)
+  const canManageGroupClasses = isAdmin || canManageOwnGroupClasses
+  const canDeleteGroupClasses = isAdmin
+  const showPrivateLessonAddInCalendar = isAdmin
   const busyGroupStudentId = busyRemovingGroupStudentId || busyAddingGroupStudentId
+
+  const todayGroupLessonById = useMemo(() => {
+    return new Map(todayGroupLessons.map((lesson) => [lesson.id, lesson]))
+  }, [todayGroupLessons])
+
+  const privateStudentById = useMemo(() => {
+    return new Map(privateStudents.map((student) => [student.id, student]))
+  }, [privateStudents])
+
+  const privateSlotById = useMemo(() => {
+    return new Map(privateLessonSlots.map((slot) => [slot.id, slot]))
+  }, [privateLessonSlots])
+
+  const todayScheduleItems = useMemo(() => {
+    const scopedAcademyId = String(currentAcademyId || '').trim()
+    const privateLessonItems = lessons
+      .filter(
+        (lesson) =>
+          String(lesson.academyId || '').trim() === scopedAcademyId &&
+          getLessonStorageDateString(lesson) === todayYmd
+      )
+      .map((lesson) => ({
+        id: `private-lesson-${lesson.id}`,
+        time: lessonTimeInputValue(lesson) || '-',
+        typeLabel: '1:1 수업',
+        sourceKind: 'privateLesson',
+        sessionLabel: formatLessonSessionNumber(lesson),
+        isDeductCancelled: lesson.isDeductCancelled === true,
+        isLastLesson:
+          lesson.isDeductCancelled !== true &&
+          (() => {
+            const pkg = lesson.packageId
+              ? studentPackages.find((p) => p.id === lesson.packageId)
+              : null
+            return Boolean(
+              pkg &&
+                pkg.packageType === 'private' &&
+                Number(pkg.remainingCount ?? 0) === 1
+            )
+          })(),
+        studentLabel: getStudentName(lesson),
+        teacherLabel: getTeacherName(lesson),
+        title: String(lesson.subject || '').trim() || '1:1 수업',
+        statusLabel: lesson.isDeductCancelled === true ? '차감취소' : '수업 예정',
+      }))
+
+    const groupLessonItems = todayGroupLessons.map((lesson) => {
+      const className = String(lesson.groupClassName || '').trim()
+      const subject = String(lesson.subject || '').trim()
+      return {
+        id: `group-lesson-${lesson.id}`,
+        time: String(lesson.time || '').trim() || '-',
+        typeLabel: '단체반 수업',
+        sourceKind: 'groupLesson',
+        studentLabel: '-',
+        teacherLabel: String(lesson.teacher || lesson.teacherName || '').trim() || '-',
+        title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
+        statusLabel: '수업 예정',
+      }
+    })
+
+    const groupReservationItems = todayGroupLessonReservations
+      .filter((reservation) => reservation.status === 'active')
+      .map((reservation) => {
+        const lesson = todayGroupLessonById.get(reservation.lessonId) || null
+        if (!lesson) return null
+        const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
+        const className = String(lesson.groupClassName || '').trim()
+        const subject = String(lesson.subject || '').trim()
+        return {
+          id: `group-reservation-${reservation.id}`,
+          time: String(lesson.time || reservation.time || '').trim() || '-',
+          typeLabel: '단체반 예약',
+          sourceKind: 'groupReservation',
+          studentLabel:
+            String(reservation.studentName || '').trim() ||
+            String(student?.name || '').trim() ||
+            '-',
+          teacherLabel:
+            String(reservation.teacher || lesson.teacher || lesson.teacherName || '').trim() || '-',
+          title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
+          statusLabel: '예약 완료',
+        }
+      })
+      .filter(Boolean)
+
+    const privateReservationItems = privateLessonReservations
+      .filter((reservation) => {
+        if (reservation.status !== 'active') return false
+        const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+        return String(reservation.date || slot?.date || '').trim() === todayYmd
+      })
+      .map((reservation) => {
+        const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
+        const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+        return {
+          id: `private-reservation-${reservation.id}`,
+          time: String(reservation.time || slot?.time || '').trim() || '-',
+          typeLabel: '1:1 예약',
+          sourceKind: 'privateReservation',
+          studentLabel:
+            String(reservation.studentName || '').trim() ||
+            String(student?.name || '').trim() ||
+            '-',
+          teacherLabel: String(reservation.teacher || slot?.teacher || '').trim() || '-',
+          title:
+            String(reservation.subject || '').trim() ||
+            String(slot?.subject || '').trim() ||
+            '1:1 수업',
+          statusLabel: '예약 완료',
+        }
+      })
+
+    return [
+      ...privateLessonItems,
+      ...groupLessonItems,
+      ...groupReservationItems,
+      ...privateReservationItems,
+    ].sort((a, b) => {
+      const aKey = `${a.time || ''} ${a.typeLabel || ''} ${a.studentLabel || ''} ${a.title || ''}`
+      const bKey = `${b.time || ''} ${b.typeLabel || ''} ${b.studentLabel || ''} ${b.title || ''}`
+      return aKey.localeCompare(bKey, 'ko')
+    })
+  }, [
+    currentAcademyId,
+    lessons,
+    privateLessonReservations,
+    privateSlotById,
+    privateStudentById,
+    studentPackages,
+    todayGroupLessonById,
+    todayGroupLessonReservations,
+    todayGroupLessons,
+    todayYmd,
+  ])
+
+  const todayScheduleSummary = useMemo(() => {
+    const items = Array.isArray(todayScheduleItems) ? todayScheduleItems : []
+    return {
+      privateLessonCount: items.filter(
+        (item) =>
+          item.sourceKind === 'privateLesson' || item.sourceKind === 'privateReservation'
+      ).length,
+      groupLessonCount: items.filter((item) => item.sourceKind === 'groupLesson').length,
+      deductCancelledCount: items.filter((item) => item.isDeductCancelled === true).length,
+      lastLessonCount: items.filter((item) => item.isLastLesson === true).length,
+    }
+  }, [todayScheduleItems])
+
+  const todayScheduleLoading =
+    loading ||
+    groupClassesLoading ||
+    todayDashboardGroupLessonsLoading ||
+    todayGroupLessonReservationsLoading ||
+    privateLessonReservationsLoading
 
   const {
     studentPackageModalStudent,
@@ -1063,6 +1910,7 @@ export default function Dashboard() {
   } = useStudentPackageFlow({
     activeSection,
     userProfile,
+    currentAcademyId,
     privateStudents,
     groupClasses,
     studentPackages,
@@ -1094,6 +1942,7 @@ export default function Dashboard() {
   } = useStudentManagementFlow({
     activeSection,
     userProfile,
+    currentAcademyId,
     formatLocalYmd,
     studentDocFieldToYmdString,
     openStudentPackageModal,
@@ -1116,6 +1965,7 @@ export default function Dashboard() {
     closeStudentPackageHistoryModal,
   } = useStudentPackageAdminFlow({
     userProfile,
+    currentAcademyId,
     addCreditTransaction,
     studentDocFieldToYmdString,
   })
@@ -1132,6 +1982,7 @@ export default function Dashboard() {
     submitPostGroupScheduleRebuild,
   } = useGroupScheduleRebuildFlow({
     userProfile,
+    currentAcademyId,
     fetchGroupLessonsForClassIdMerge,
     createGroupLessonsInDateRange,
   })
@@ -1161,6 +2012,7 @@ export default function Dashboard() {
     selectedDate,
     getStorageDateStringFromDate,
     userProfile,
+    currentAcademyId,
     showPrivateLessonAddInCalendar,
     canEditLesson,
     sortedPrivateStudents: studentsSectionViewModel.sortedPrivateStudents,
@@ -1190,6 +2042,7 @@ export default function Dashboard() {
   } = useGroupManagementFlow({
     activeSection,
     userProfile,
+    currentAcademyId,
     busyGroupId,
     setBusyGroupId,
     selectedDateString,
@@ -1210,14 +2063,15 @@ export default function Dashboard() {
     [selectedDate]
   )
 
-  const { lessonsCountByDate, displayedLessons } = useCalendarSectionViewModel({
-    lessons,
-    studentSummaryGroupLessons,
-    groupClasses,
-    selectedDateString,
-    showOnlySelectedDate,
-    userProfile,
-  })
+  const { lessonsCountByDate, lessonsPreviewByDate, displayedLessons } =
+    useCalendarSectionViewModel({
+      lessons,
+      studentSummaryGroupLessons,
+      groupClasses,
+      selectedDateString,
+      showOnlySelectedDate,
+      userProfile,
+    })
 
   const calendarDays = useMemo(
     () => getCalendarDays(calendarMonth),
@@ -1264,9 +2118,15 @@ export default function Dashboard() {
     }
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       setMigrating(true)
 
-      const snapshot = await getDocs(collection(db, 'lessons'))
+      const snapshot = await getDocs(
+        query(
+          collection(db, 'lessons'),
+          where('academyId', '==', scopedAcademyId)
+        )
+      )
       const batch = writeBatch(db)
       let changedCount = 0
 
@@ -1340,10 +2200,11 @@ export default function Dashboard() {
     }
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       setBusyGroupLegacyBackfill(true)
 
-      const glDocs = await fetchAllDocumentsInCollection(db, 'groupLessons')
-      const gsDocs = await fetchAllDocumentsInCollection(db, 'groupStudents')
+      const glDocs = await fetchAllDocumentsInCollection(db, 'groupLessons', scopedAcademyId)
+      const gsDocs = await fetchAllDocumentsInCollection(db, 'groupStudents', scopedAcademyId)
 
       const glOps = []
       for (const docSnap of glDocs) {
@@ -1464,6 +2325,8 @@ export default function Dashboard() {
     }
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(lesson, scopedAcademyId, '수업')
       setBusyLessonId(lesson.id)
 
       const nextLessons = lessons.map((item) =>
@@ -1474,6 +2337,9 @@ export default function Dashboard() {
 
       const batch = writeBatch(db)
       const lessonRef = doc(db, 'lessons', lesson.id)
+      const lessonSnap = await getDoc(lessonRef)
+      if (!lessonSnap.exists()) throw new Error('수업을 찾을 수 없습니다.')
+      assertSameAcademy(lessonSnap.data(), scopedAcademyId, '수업')
 
       if (usePackagePath) {
         const selectedPackage = studentPackages.find((p) => p.id === packageId)
@@ -1481,6 +2347,11 @@ export default function Dashboard() {
           alert('연결된 수강권을 찾을 수 없습니다.')
           return
         }
+        assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
+        const pkgRef = doc(db, 'studentPackages', packageId)
+        const pkgSnap = await getDoc(pkgRef)
+        if (!pkgSnap.exists()) throw new Error('연결된 수강권을 찾을 수 없습니다.')
+        assertSameAcademy(pkgSnap.data(), scopedAcademyId, '수강권')
         if (selectedPackage.packageType !== 'private') {
           alert('개인 수강권이 아닙니다.')
           return
@@ -1523,6 +2394,11 @@ export default function Dashboard() {
         )
 
         const studentRef = doc(db, 'privateStudents', studentId)
+        const studentSnap = await getDoc(studentRef)
+        if (!studentSnap.exists()) throw new Error('학생 정보를 찾을 수 없습니다.')
+        assertSameAcademy(studentSnap.data(), scopedAcademyId, '학생')
+        const selectedStudent = privateStudents.find((s) => s.id === studentId)
+        assertSameAcademy(selectedStudent, scopedAcademyId, '학생')
 
         batch.update(lessonRef, {
           isDeductCancelled: nextCancelled,
@@ -1530,7 +2406,7 @@ export default function Dashboard() {
           updatedAt: serverTimestamp(),
           studentId,
           studentName: getStudentName(lesson),
-          teacherName: getTeacherName(lesson),
+          teacherName: normalizeText(getTeacherName(lesson)),
         })
 
         batch.update(studentRef, {
@@ -1542,7 +2418,7 @@ export default function Dashboard() {
       await batch.commit()
 
       if (usePackagePath) {
-        await recomputePrivatePackageUsage(packageId)
+        await recomputePrivatePackageUsage(packageId, currentAcademyId)
         const pkgForLog = studentPackages.find((p) => p.id === packageId)
         if (pkgForLog) {
           const datePart = [lesson.date, lesson.time, lesson.subject]
@@ -1601,11 +2477,24 @@ export default function Dashboard() {
   }
 
   async function fetchGroupLessonsForClassIdMerge(gid) {
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
     const id = String(gid || '').trim()
     if (!id) return []
     const [a, b] = await Promise.all([
-      getDocs(query(collection(db, 'groupLessons'), where('groupClassId', '==', id))),
-      getDocs(query(collection(db, 'groupLessons'), where('groupClassID', '==', id))),
+      getDocs(
+        query(
+          collection(db, 'groupLessons'),
+          where('academyId', '==', scopedAcademyId),
+          where('groupClassId', '==', id)
+        )
+      ),
+      getDocs(
+        query(
+          collection(db, 'groupLessons'),
+          where('academyId', '==', scopedAcademyId),
+          where('groupClassID', '==', id)
+        )
+      ),
     ])
     const byId = new Map()
     for (const snap of [a, b]) {
@@ -1642,10 +2531,12 @@ export default function Dashboard() {
 
   async function addCreditTransaction(payload) {
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       await addDoc(collection(db, 'creditTransactions'), {
+        academyId: scopedAcademyId,
         studentId: String(payload.studentId ?? ''),
         studentName: String(payload.studentName ?? ''),
-        teacher: String(payload.teacher ?? ''),
+        teacher: normalizeText(payload.teacher ?? ''),
         packageId: String(payload.packageId ?? ''),
         packageType: String(payload.packageType ?? ''),
         packageTitle: String(payload.packageTitle ?? ''),
@@ -1661,6 +2552,7 @@ export default function Dashboard() {
       })
     } catch (error) {
       console.error('creditTransactions 기록 실패:', error)
+      throw error
     }
   }
 
@@ -1700,6 +2592,7 @@ export default function Dashboard() {
     if (!window.confirm(`이 학생을 삭제할까요?\n${label}`)) return
 
     try {
+      assertSameAcademy(student, currentAcademyId, '학생')
       setBusyDeletingStudentId(student.id)
       await deleteDoc(doc(db, 'privateStudents', student.id))
     } catch (error) {
@@ -1720,6 +2613,7 @@ export default function Dashboard() {
     if (!window.confirm(`이 반을 삭제할까요?\n${label}`)) return
 
     try {
+      assertSameAcademy(group, currentAcademyId, '그룹')
       setBusyGroupId(group.id)
       await deleteDoc(doc(db, 'groupClasses', group.id))
       setSelectedGroupClass((prev) => (prev?.id === group.id ? null : prev))
@@ -1745,8 +2639,16 @@ export default function Dashboard() {
     if (!window.confirm(`이 학생을 이 반에서 제거할까요?\n${label}`)) return
 
     try {
+      assertSameAcademy(row, currentAcademyId, '그룹 학생')
       setBusyRemovingGroupStudentId(row.id)
-      await deleteDoc(doc(db, 'groupStudents', row.id))
+      const batch = writeBatch(db)
+      batch.delete(doc(db, 'groupStudents', row.id))
+      deleteStudentGroupAccessBatch(
+        batch,
+        db,
+        buildStudentGroupAccessPayloadFromGroupStudent(row)
+      )
+      await batch.commit()
     } catch (error) {
       console.error('그룹 학생 제거 실패:', error)
       alert(`그룹 학생 제거 실패: ${error.message}`)
@@ -1765,6 +2667,7 @@ export default function Dashboard() {
     if (!window.confirm(`이 수업 일정을 삭제할까요?\n${label}`)) return
 
     try {
+      assertSameAcademy(lesson, currentAcademyId, '그룹 수업')
       setBusyGroupLessonId(lesson.id)
       await deleteDoc(doc(db, 'groupLessons', lesson.id))
     } catch (error) {
@@ -1775,14 +2678,239 @@ export default function Dashboard() {
     }
   }
 
+  function validatePrivateSlotForm() {
+    const errors = {}
+    const isAdminUser = isAdmin
+    const teacher = isAdminUser
+      ? normalizeText(privateSlotForm.teacher || '')
+      : normalizeText(userProfile?.teacherName || '')
+    const date = String(privateSlotForm.date || '').trim()
+    const time = String(privateSlotForm.time || '').trim()
+    const durationMinutes = Number.parseInt(String(privateSlotForm.durationMinutes || ''), 10)
+
+    if (!teacher) errors.teacher = '선생님을 선택해주세요.'
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parseYmdToLocalDate(date)) {
+      errors.date = '날짜를 선택해주세요.'
+    }
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      errors.time = '시간을 선택해주세요.'
+    }
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 10 || durationMinutes > 240) {
+      errors.durationMinutes = '10~240분 사이로 입력해주세요.'
+    }
+
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      value: {
+        teacher,
+        date,
+        time,
+        durationMinutes,
+        eligibleStudentIds: isAdmin
+          ? normalizePrivateSlotEligibleStudentIds(privateSlotForm.eligibleStudentIds, privateStudents)
+          : [],
+      },
+    }
+  }
+
+  async function createPrivateSlot() {
+    if (!isAdmin) {
+      alert('1:1 수업 시간 생성 권한이 없습니다.')
+      return
+    }
+    const result = validatePrivateSlotForm()
+    setPrivateSlotFormErrors(result.errors)
+    if (!result.valid) return
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const { teacher, date, time, durationMinutes, eligibleStudentIds } = result.value
+      const [year, month, day] = date.split('-').map(Number)
+      const [hour, minute] = time.split(':').map(Number)
+      const startAt = Timestamp.fromDate(new Date(year, month - 1, day, hour, minute))
+      const teacherOption = teacherSelectOptions.find((option) => option.value === teacher)
+      const teacherName = String(teacherOption?.label || teacher).trim()
+
+      setBusyPrivateSlotActionId('__add__')
+      const slotRef = doc(collection(db, 'privateLessonSlots'))
+      const batch = writeBatch(db)
+      const slotPayload = {
+        academyId: scopedAcademyId,
+        teacher,
+        teacherName,
+        date,
+        time,
+        subject: '1:1 수업',
+        capacity: 1,
+        reservedCount: 0,
+        startAt,
+        durationMinutes,
+        status: 'open',
+        reservedStudentId: '',
+        reservationId: '',
+        createdByUid: user?.uid || '',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        reservedAt: null,
+        cancelledAt: null,
+      }
+      if (eligibleStudentIds.length > 0) {
+        slotPayload.eligibleStudentIds = eligibleStudentIds
+      }
+      batch.set(slotRef, slotPayload)
+      eligibleStudentIds.forEach((studentId) => {
+        addStudentPrivateSlotAccessBatch(batch, db, {
+          academyId: scopedAcademyId,
+          studentId,
+          slotId: slotRef.id,
+        })
+      })
+      await batch.commit()
+      setPrivateSlotForm((prev) => ({
+        ...prev,
+        date: '',
+        time: '',
+        durationMinutes: prev.durationMinutes || '50',
+        eligibleStudentIds: [],
+      }))
+    } catch (error) {
+      console.error('1:1 수업 시간 생성 실패:', error)
+      alert(`1:1 수업 시간 생성 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateSlotActionId('')
+    }
+  }
+
+  async function updatePrivateSlotEligibility(slot, nextEligibleStudentIds) {
+    if (!isAdmin) {
+      alert('대상 학생 수정 권한이 없습니다.')
+      return
+    }
+    if (!slot?.id) return
+
+    const nextIds = normalizePrivateSlotEligibleStudentIds(nextEligibleStudentIds, privateStudents)
+    const previousIds = normalizePrivateSlotEligibleStudentIds(slot.eligibleStudentIds, privateStudents)
+    const previousSet = new Set(previousIds)
+    const nextSet = new Set(nextIds)
+    const addedIds = nextIds.filter((studentId) => !previousSet.has(studentId))
+    const removedIds = previousIds.filter((studentId) => !nextSet.has(studentId))
+
+    if (addedIds.length === 0 && removedIds.length === 0) return
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(slot, scopedAcademyId, '1:1 수업 시간')
+      setBusyPrivateSlotActionId(slot.id)
+      const batch = writeBatch(db)
+      batch.update(doc(db, 'privateLessonSlots', slot.id), {
+        eligibleStudentIds: nextIds,
+        updatedAt: serverTimestamp(),
+      })
+      addedIds.forEach((studentId) => {
+        addStudentPrivateSlotAccessBatch(batch, db, {
+          academyId: scopedAcademyId,
+          studentId,
+          slotId: slot.id,
+        })
+      })
+      removedIds.forEach((studentId) => {
+        removeStudentPrivateSlotAccessBatch(batch, db, {
+          academyId: scopedAcademyId,
+          studentId,
+          slotId: slot.id,
+        })
+      })
+      await batch.commit()
+    } catch (error) {
+      console.error('1:1 수업 대상 학생 수정 실패:', error)
+      alert(`1:1 수업 대상 학생 수정 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateSlotActionId('')
+    }
+  }
+
+  async function cancelPrivateSlotOrReservation(slot, reservation) {
+    if (!isAdmin) {
+      alert('1:1 수업 관리 권한이 없습니다.')
+      return
+    }
+    if (!slot?.id) return
+
+    const label = `${slot.date || ''} ${slot.time || ''} ${slot.teacher || ''}`.trim()
+    if (!window.confirm(`${reservation ? '이 예약을 취소할까요?' : '이 수업 시간을 취소할까요?'}\n${label}`)) {
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(slot, scopedAcademyId, '1:1 수업 시간')
+      setBusyPrivateSlotActionId(slot.id)
+
+      if (reservation?.id) {
+        const reservationId = buildPrivateLessonReservationId({
+          academyId: scopedAcademyId,
+          slotId: slot.id,
+          studentId: String(reservation.studentId || '').trim(),
+        })
+        await runTransaction(db, async (transaction) => {
+          const slotRef = doc(db, 'privateLessonSlots', slot.id)
+          const reservationRef = doc(db, 'privateLessonReservations', reservationId)
+          const [slotSnap, reservationSnap] = await Promise.all([
+            transaction.get(slotRef),
+            transaction.get(reservationRef),
+          ])
+          if (!slotSnap.exists()) throw new Error('1:1 수업 시간을 찾을 수 없습니다.')
+          if (!reservationSnap.exists()) throw new Error('1:1 수업 예약을 찾을 수 없습니다.')
+          const slotData = { id: slotSnap.id, ...slotSnap.data() }
+          const reservationData = reservationSnap.data()
+          assertSameAcademy(slotData, scopedAcademyId, '1:1 수업 시간')
+          assertSameAcademy(reservationData, scopedAcademyId, '1:1 수업 예약')
+          if (
+            slotData.status !== 'reserved' ||
+            reservationData.status !== 'active' ||
+            slotData.reservationId !== reservationId ||
+            reservationData.slotId !== slot.id
+          ) {
+            throw new Error('활성 예약 상태가 아닙니다.')
+          }
+          transaction.update(reservationRef, {
+            status: 'cancelled',
+            cancelledAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          })
+          transaction.update(slotRef, {
+            status: 'open',
+            reservedStudentId: '',
+            reservationId: '',
+            reservedAt: null,
+            updatedAt: serverTimestamp(),
+          })
+        })
+      } else {
+        const slotRef = doc(db, 'privateLessonSlots', slot.id)
+        await updateDoc(slotRef, {
+          status: 'cancelled',
+          cancelledAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      }
+    } catch (error) {
+      console.error('1:1 수업 예약 취소 실패:', error)
+      alert(`1:1 수업 예약 취소 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateSlotActionId('')
+    }
+  }
+
   const busyStudentId = busyDeletingStudentId || busyStudentFlowId
 
   const isStudentPackageModalSubmitting = busyStudentPackageSubmit
 
-  console.log('[permission check]', {
-    uid: user?.uid,
+  debugLog('[permission check]', {
+    hasUid: Boolean(user?.uid),
     role: userProfile?.role,
-    teacherName: userProfile?.teacherName,
+    hasTeacherName: Boolean(userProfile?.teacherName),
     canAddStudentRaw: userProfile?.canAddStudent,
     canCreateLessonDirectlyRaw: userProfile?.canCreateLessonDirectly,
     canEditLessonRaw: userProfile?.canEditLesson,
@@ -1792,10 +2920,7 @@ export default function Dashboard() {
     canDeleteStudentRaw: userProfile?.canDeleteStudent,
     canAddStudent,
     canCreateLessonDirectly,
-    showPrivateLessonAddInCalendar:
-      isAdmin ||
-      (userProfile?.canCreateLessonDirectly === true &&
-        userProfile?.requiresLessonApproval === false),
+    showPrivateLessonAddInCalendar,
     canEditLesson,
     canDeleteLesson,
     canManageAttendance,
@@ -1815,10 +2940,11 @@ export default function Dashboard() {
     const packageIdBeforeDelete = String(lesson.packageId || '').trim()
 
     try {
+      assertSameAcademy(lesson, currentAcademyId, '개인 수업')
       setBusyDeletingPrivateLessonId(lesson.id)
       await deleteDoc(doc(db, 'lessons', lesson.id))
       if (packageIdBeforeDelete) {
-        await recomputePrivatePackageUsage(packageIdBeforeDelete)
+        await recomputePrivatePackageUsage(packageIdBeforeDelete, currentAcademyId)
       }
     } catch (error) {
       console.error('개인 수업 삭제 실패:', error)
@@ -1835,6 +2961,7 @@ export default function Dashboard() {
       calendarMonthLabel,
       calendarDays,
       lessonsCountByDate,
+      lessonsPreviewByDate,
       calendarMonth,
       selectedDate,
       setSelectedDate,
@@ -1878,9 +3005,12 @@ export default function Dashboard() {
   const studentsSectionProps = {
     ...studentsSectionViewModel,
     loading,
+    currentAcademyId,
     privateStudents,
     isAdmin,
     groupClasses,
+    studentSummaryGroupLessons,
+    studentSummaryGroupStudents,
     studentPackages,
     busyStudentId,
     busyStudentPackageSubmit,
@@ -1901,7 +3031,9 @@ export default function Dashboard() {
   }
 
   const groupsSectionProps = {
+    sectionTitle: isAdmin ? ADMIN_GROUP_MANAGEMENT_LABEL : TEACHER_GROUP_MANAGEMENT_LABEL,
     canManageGroupClasses,
+    canDeleteGroupClasses,
     busyGroupId,
     groupClassesLoading,
     openGroupAddModal,
@@ -1919,7 +3051,6 @@ export default function Dashboard() {
     busyGroupLessonSeries,
     groupLessonsLoading,
     openGroupLessonAddModal,
-    canCreateLessonDirectly,
     openGroupLessonSeriesModal,
     isAdmin,
     openGroupLessonPurgeModal,
@@ -1927,6 +3058,16 @@ export default function Dashboard() {
     sortedGroupStudentsForSelectedClass,
     handleRemoveGroupStudent,
     sortedGroupLessonsForSelectedClass,
+    groupLessonReservations,
+    groupLessonReservationsLoading,
+    groupReservationModal,
+    busyGroupReservationId,
+    canManageGroupReservations: isAdmin,
+    openGroupLessonReservationAddModal,
+    openGroupLessonReservationViewModal,
+    closeGroupLessonReservationModal,
+    reserveGroupLessonSeat,
+    cancelGroupLessonSeat,
     busyGroupAttendanceStudentId,
     canManageAttendance,
     openGroupLessonAttendanceModal,
@@ -1938,6 +3079,25 @@ export default function Dashboard() {
     openGroupStudentManageModal,
     busyGroupStudentManageId,
     requiresLessonApproval: userProfile?.requiresLessonApproval === true,
+  }
+
+  const privateLessonSlotsSectionProps = {
+    canManagePrivateSlots: isAdmin,
+    teacherSelectOptions,
+    privateSlotForm,
+    setPrivateSlotForm,
+    privateSlotFormErrors,
+    privateStudents,
+    createPrivateSlot,
+    updatePrivateSlotEligibility,
+    isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',
+    privateLessonSlots,
+    privateLessonSlotsLoading,
+    privateLessonReservations,
+    privateLessonReservationsLoading,
+    busyPrivateSlotActionId,
+    cancelPrivateSlotOrReservation,
+    isAdmin,
   }
 
   const studentModalProps = {
@@ -2017,7 +3177,10 @@ export default function Dashboard() {
     setGroupForm,
     groupFormErrors,
     setGroupFormErrors,
-    teacherSelectOptions,
+    teacherSelectOptions: isAdmin
+      ? teacherSelectOptions
+      : [{ value: teacherGroupClassKey, label: userProfile?.teacherName || teacherGroupClassKey }],
+    lockTeacherSelect: !isAdmin,
     closeGroupModal,
     submitGroupModal,
     isGroupModalSubmitting,
@@ -2127,6 +3290,20 @@ export default function Dashboard() {
     isPrivateLessonEditSubmitting,
   }
 
+  const teacherManagementSectionProps = {
+    currentAcademyId,
+    teachers: teacherRecords,
+    teachersLoading,
+    teacherForm,
+    setTeacherForm,
+    teacherFormErrors,
+    isTeacherFormSubmitting,
+    submitTeacherForm,
+    editTeacher,
+    cancelTeacherEdit: resetTeacherForm,
+    updateTeacherStatus,
+    busyTeacherId,
+  }
 
   return (
     <div className="dashboard">
@@ -2139,8 +3316,17 @@ export default function Dashboard() {
         <nav className="sidebar-nav">
   {[
     { key: 'calendar', label: '캘린더' },
-    { key: 'students', label: '학생 관리' },
-    { key: 'groups', label: '반 관리' },
+    ...(isAdmin ? [{ key: 'students', label: '학생 관리' }] : []),
+    ...(canManageOwnGroupClasses
+      ? [{ key: 'teacherPrivateRequests', label: TEACHER_PRIVATE_LESSON_REQUESTS_LABEL }]
+      : []),
+    ...(isAdmin || canManageOwnGroupClasses
+      ? [{ key: 'groups', label: isAdmin ? ADMIN_GROUP_MANAGEMENT_LABEL : TEACHER_GROUP_MANAGEMENT_LABEL }]
+      : []),
+    ...(isAdmin ? [{ key: 'privateSlots', label: PRIVATE_SLOT_MANAGEMENT_LABEL }] : []),
+    ...(isAdmin ? [{ key: 'lessonRequests', label: '수업 요청 관리' }] : []),
+    ...(isAdmin ? [{ key: 'teachers', label: '선생님 관리' }] : []),
+    ...(isAdmin ? [{ key: 'dailyMaterials', label: '오늘의 영상 관리' }] : []),
   ].map((item) => (
     <button
       key={item.key}
@@ -2180,41 +3366,92 @@ export default function Dashboard() {
         <header className="main-header">
           <div>
           <h1 className="page-title">
-  {activeSection === 'calendar'
-    ? '캘린더'
-    : activeSection === 'students'
-    ? '학생 관리'
-    : '반 관리'}
+	  {activeSection === 'calendar'
+	    ? '캘린더'
+	    : activeSection === 'students'
+	    ? '학생 관리'
+	    : activeSection === 'groups'
+	    ? isAdmin
+        ? ADMIN_GROUP_MANAGEMENT_LABEL
+        : TEACHER_GROUP_MANAGEMENT_LABEL
+      : activeSection === 'teacherPrivateRequests'
+      ? TEACHER_PRIVATE_LESSON_REQUESTS_LABEL
+	    : activeSection === 'teachers'
+	    ? '선생님 관리'
+	    : activeSection === 'lessonRequests'
+	    ? '수업 요청 관리'
+	    : activeSection === 'dailyMaterials'
+	    ? '오늘의 영상 관리'
+	    : PRIVATE_SLOT_MANAGEMENT_LABEL}
 </h1>
             <p className="page-sub" data-testid="dashboard-welcome-subtitle">
               {userProfile?.teacherName
                 ? `${userProfile.teacherName} 님 환영합니다`
                 : `${user?.email || '사용자'} 님, 환영합니다`}
             </p>
-          </div>
-          </header>
+	          </div>
+	          </header>
 
-          {activeSection === 'calendar' && (
+          <div style={{ marginBottom: 20 }}>
+            <TodaySchedulePanel
+              items={todayScheduleItems}
+              summary={todayScheduleSummary}
+              loading={todayScheduleLoading}
+              showStudent
+            />
+          </div>
+	
+	          {activeSection === 'calendar' && (
             <CalendarSection {...calendarSectionProps.month} />
           )}
-          {activeSection === 'students' && (
+          {activeSection === 'students' && isAdmin ? (
             <StudentsSection {...studentsSectionProps} />
-          )}
-          {activeSection === 'groups' && (
+          ) : null}
+          {activeSection === 'groups' && (isAdmin || canManageOwnGroupClasses) ? (
             <GroupsSection {...groupsSectionProps} />
-          )}
+          ) : null}
+          {activeSection === 'teacherPrivateRequests' && canManageOwnGroupClasses ? (
+            <TeacherPrivateLessonRequestsSection
+              currentAcademyId={currentAcademyId}
+              user={user}
+              userProfile={userProfile}
+              privateStudents={privateStudents}
+            />
+          ) : null}
+	          {activeSection === 'privateSlots' && isAdmin ? (
+	            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
+	          ) : null}
+	          {activeSection === 'lessonRequests' && isAdmin ? (
+	            <LessonRequestsSection
+	              currentAcademyId={currentAcademyId}
+	              user={user}
+	              userProfile={userProfile}
+	            />
+	          ) : null}
+	          {activeSection === 'dailyMaterials' && isAdmin ? (
+	            <DailyMaterialsSection currentAcademyId={currentAcademyId} user={user} />
+	          ) : null}
+	          {activeSection === 'teachers' && isAdmin ? (
+	            <TeacherManagementSection {...teacherManagementSectionProps} />
+	          ) : null}
 
-        <CalendarSection {...calendarSectionProps.lessons} />
+	        {activeSection !== 'privateSlots' &&
+          activeSection !== 'teacherPrivateRequests' &&
+          activeSection !== 'lessonRequests' &&
+          activeSection !== 'dailyMaterials' &&
+          activeSection !== 'teachers' ? (
+	          <CalendarSection {...calendarSectionProps.lessons} />
+	        ) : null}
 
       </main>
 
-      {activeSection === 'students' && studentModal ? (
+      {activeSection === 'students' && isAdmin && studentModal ? (
         <StudentModal {...studentModalProps} />
       ) : null}
       {activeSection === 'students' && isAdmin && postStudentCreateModalStudent ? (
         <PostStudentCreateModal {...postStudentCreateModalProps} />
       ) : null}
-      {activeSection === 'students' && studentPackageModalStudent ? (
+      {activeSection === 'students' && isAdmin && studentPackageModalStudent ? (
         <StudentPackageModal {...studentPackageModalProps} />
       ) : null}
       {activeSection === 'students' && isAdmin && studentPackageEditModalPackage ? (
@@ -2233,7 +3470,7 @@ export default function Dashboard() {
         <StudentPackageHistoryModal {...studentPackageHistoryModalProps} />
       ) : null}
 
-      {activeSection === 'groups' && groupModal ? (
+      {activeSection === 'groups' && (isAdmin || canManageOwnGroupClasses) && groupModal ? (
         <GroupModal {...groupModalProps} />
       ) : null}
 
@@ -2242,6 +3479,7 @@ export default function Dashboard() {
       ) : null}
 
       {activeSection === 'groups' &&
+      isAdmin &&
       groupStudentAddModalOpen &&
       selectedGroupClass ? (
         <GroupStudentAddModal {...groupStudentAddModalProps} />
@@ -2251,29 +3489,30 @@ export default function Dashboard() {
         <GroupStudentManageModal {...groupStudentManageModalProps} />
       ) : null}
 
-      {activeSection === 'groups' && groupLessonModal && selectedGroupClass ? (
+      {activeSection === 'groups' && isAdmin && groupLessonModal && selectedGroupClass ? (
         <GroupLessonModal {...groupLessonModalProps} />
       ) : null}
 
-      {activeSection === 'groups' && groupLessonSeriesModalOpen && selectedGroupClass ? (
+      {activeSection === 'groups' && isAdmin && groupLessonSeriesModalOpen && selectedGroupClass ? (
         <GroupLessonSeriesModal {...groupLessonSeriesModalProps} />
       ) : null}
 
-      {activeSection === 'groups' && groupLessonPurgeModalOpen && selectedGroupClass ? (
+      {activeSection === 'groups' && isAdmin && groupLessonPurgeModalOpen && selectedGroupClass ? (
         <GroupLessonPurgeModal {...groupLessonPurgeModalProps} />
       ) : null}
 
       {groupLessonAttendanceModal &&
+      isAdmin &&
       selectedGroupClass &&
       groupLessonForAttendanceModal ? (
         <GroupLessonAttendanceModal {...groupLessonAttendanceModalProps} />
       ) : null}
 
-      {activeSection === 'calendar' && privateLessonModalOpen ? (
+      {activeSection === 'calendar' && isAdmin && privateLessonModalOpen ? (
         <PrivateLessonModal {...privateLessonModalProps} />
       ) : null}
 
-      {activeSection === 'calendar' && privateLessonEditModal ? (
+      {activeSection === 'calendar' && isAdmin && privateLessonEditModal ? (
         <PrivateLessonEditModal {...privateLessonEditModalProps} />
       ) : null}
 

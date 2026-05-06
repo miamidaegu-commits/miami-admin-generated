@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   addCalendarDaysToYmd,
   formatLocalDateToYmd,
@@ -138,9 +139,32 @@ function validateGroupFormFields(form, options = {}) {
   }
 }
 
+function isAdminProfile(profile) {
+  return (
+    profile?.role === 'admin' ||
+    profile?.role === 'owner' ||
+    profile?.membershipRole === 'admin' ||
+    profile?.membershipRole === 'owner'
+  )
+}
+
+function getTeacherOwnGroupKey(profile) {
+  if (String(profile?.role || '').trim().toLowerCase() !== 'teacher') return ''
+  return normalizeText(profile?.teacherName || '')
+}
+
+function groupBelongsToTeacher(group, teacherKey) {
+  if (!teacherKey) return false
+  return (
+    normalizeText(group?.teacher || '') === teacherKey ||
+    normalizeText(group?.teacherName || '') === teacherKey
+  )
+}
+
 export default function useGroupManagementFlow({
   activeSection,
   userProfile,
+  currentAcademyId,
   busyGroupId,
   setBusyGroupId,
   selectedDateString,
@@ -189,7 +213,8 @@ export default function useGroupManagementFlow({
   }
 
   function openGroupAddModal() {
-    if (userProfile?.role !== 'admin') {
+    const teacherKey = getTeacherOwnGroupKey(userProfile)
+    if (!isAdminProfile(userProfile) && !teacherKey) {
       alert('그룹 관리 권한이 없습니다.')
       return
     }
@@ -197,6 +222,7 @@ export default function useGroupManagementFlow({
     setGroupFormState(
       createDefaultGroupForm({
         startDate: formatLocalDateToYmd(new Date()),
+        teacher: teacherKey || '',
       })
     )
     setGroupFormErrors({})
@@ -204,7 +230,8 @@ export default function useGroupManagementFlow({
   }
 
   function openGroupEditModal(group) {
-    if (userProfile?.role !== 'admin') {
+    const teacherKey = getTeacherOwnGroupKey(userProfile)
+    if (!isAdminProfile(userProfile) && !groupBelongsToTeacher(group, teacherKey)) {
       alert('그룹 관리 권한이 없습니다.')
       return
     }
@@ -222,7 +249,7 @@ export default function useGroupManagementFlow({
     setGroupFormState(
       createDefaultGroupForm({
         name: group.name || '',
-        teacher: group.teacher || '',
+        teacher: teacherKey || group.teacher || group.teacherName || '',
         maxStudents: groupMaxStudentsToFormString(group.maxStudents),
         time: String(group.time || '').trim(),
         subject: String(group.subject || '').trim(),
@@ -244,17 +271,25 @@ export default function useGroupManagementFlow({
     setGroupFormErrors(result.errors)
     if (!result.valid) return
 
-    const teacherKey = normalizeText(result.teacher)
+    const teacherOwnKey = getTeacherOwnGroupKey(userProfile)
+    const teacherKey = teacherOwnKey || normalizeText(result.teacher)
     const canAutoCreateLessons =
-      (userProfile?.role === 'admin' || userProfile?.canCreateLessonDirectly === true) &&
+      (isAdminProfile(userProfile) || userProfile?.canCreateLessonDirectly === true) &&
       userProfile?.requiresLessonApproval !== true
 
     if (groupModal.type === 'add') {
+      if (!isAdminProfile(userProfile) && !teacherOwnKey) {
+        alert('그룹 관리 권한이 없습니다.')
+        return
+      }
       try {
+        const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
         setBusyGroupId('__add__')
         const docRef = await addDoc(collection(db, 'groupClasses'), {
+          academyId: scopedAcademyId,
           name: result.name,
           teacher: teacherKey,
+          teacherName: teacherKey,
           maxStudents: result.maxStudents,
           time: result.time,
           subject: result.subject,
@@ -276,6 +311,7 @@ export default function useGroupManagementFlow({
           )
           if (endYmd) {
             const { created, skippedDup } = await createGroupLessonsInDateRange({
+              academyId: scopedAcademyId,
               groupClassId: newId,
               groupClassName: result.name,
               teacher: teacherKey,
@@ -306,13 +342,20 @@ export default function useGroupManagementFlow({
     }
 
     const { group } = groupModal
+    if (!isAdminProfile(userProfile) && !groupBelongsToTeacher(group, teacherOwnKey)) {
+      alert('다른 선생님의 반은 수정할 수 없습니다.')
+      return
+    }
     const scheduleAffected = isGroupEditScheduleAffected(group, result)
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(group, scopedAcademyId, '그룹')
       setBusyGroupId(group.id)
       await updateDoc(doc(db, 'groupClasses', group.id), {
         name: result.name,
         teacher: teacherKey,
+        teacherName: teacherKey,
         maxStudents: result.maxStudents,
         time: result.time,
         subject: result.subject,
@@ -323,7 +366,7 @@ export default function useGroupManagementFlow({
       closeGroupModal()
       if (
         scheduleAffected &&
-        userProfile?.role === 'admin' &&
+        isAdminProfile(userProfile) &&
         result.rebuildFutureLessons
       ) {
         const fromYmd = String(result.rebuildFromDate || '').trim()

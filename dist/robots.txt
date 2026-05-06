@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://daegumiami.com/sitemap.xml

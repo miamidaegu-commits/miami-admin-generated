@@ -7,6 +7,7 @@ export default function GroupModal({
   groupFormErrors,
   setGroupFormErrors,
   teacherSelectOptions,
+  lockTeacherSelect = false,
   closeGroupModal,
   submitGroupModal,
   isGroupModalSubmitting,
@@ -107,12 +108,14 @@ export default function GroupModal({
                   onChange={(e) =>
                     setGroupForm((prev) => ({ ...prev, teacher: e.target.value }))
                   }
+                  disabled={lockTeacherSelect}
                   style={{
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
                     background: '#1f1f1f',
                     color: 'white',
+                    cursor: lockTeacherSelect ? 'not-allowed' : 'auto',
                   }}
                 >
                   <option value="">선생님 선택</option>

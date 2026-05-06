@@ -10,115 +10,153 @@ service cloud.firestore {
       return request.auth.uid;
     }
 
-    function currentUserDoc() {
-      return get(/databases/$(database)/documents/users/$(currentUid())).data;
-    }
-
-    function isAdmin() {
-      return signedIn() && currentUserDoc().role == "admin";
-    }
-
     function hasAdminClaim() {
       return signedIn() && request.auth.token.role == "admin";
-    }
-
-    function isTeacher() {
-      return signedIn() && currentUserDoc().role == "teacher";
     }
 
     function isMe(uid) {
       return signedIn() && currentUid() == uid;
     }
 
-    function myTeacherName() {
-      return currentUserDoc().teacherName;
+    function membershipPath(academyId) {
+      return /databases/$(database)/documents/academyMemberships/$(academyId + "_" + currentUid());
+    }
+
+    function myMembership(academyId) {
+      return get(membershipPath(academyId)).data;
+    }
+
+    function isAcademyMember(academyId) {
+      return signedIn() &&
+        academyId is string &&
+        academyId != "" &&
+        academyId != "academy_default" &&
+        exists(membershipPath(academyId)) &&
+        myMembership(academyId).status == "active";
+    }
+
+    function isAcademyAdmin(academyId) {
+      return isAcademyMember(academyId) &&
+        (myMembership(academyId).role == "owner" || myMembership(academyId).role == "admin");
+    }
+
+    function isAcademyTeacherOrStaff(academyId) {
+      return isAcademyMember(academyId) &&
+        (myMembership(academyId).role == "teacher" || myMembership(academyId).role == "staff");
+    }
+
+    function myAcademyTeacherName(academyId) {
+      return myMembership(academyId).teacherName;
+    }
+
+    function sameAcademyOnCreate() {
+      return request.resource.data.academyId is string &&
+        isAcademyMember(request.resource.data.academyId);
+    }
+
+    function sameAcademyOnUpdate() {
+      return resource.data.academyId is string &&
+        request.resource.data.academyId == resource.data.academyId &&
+        isAcademyMember(resource.data.academyId);
+    }
+
+    function sameAcademyOnRead() {
+      return resource.data.academyId is string &&
+        isAcademyMember(resource.data.academyId);
     }
 
     function lessonBelongsToTeacher(data) {
-      return isTeacher() &&
+      return isAcademyTeacherOrStaff(data.academyId) &&
         (
-          (data.teacherName is string && data.teacherName == myTeacherName()) ||
-          (data.teacher is string && data.teacher == myTeacherName())
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId)) ||
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId))
+        );
+    }
+
+    function lessonBelongsToCurrentStudent(data) {
+      return hasStudentIdentity(data.academyId) &&
+        (
+          (data.studentId is string && data.studentId == myStudentId(data.academyId)) ||
+          (data.studentID is string && data.studentID == myStudentId(data.academyId))
         );
     }
 
     function privateStudentBelongsToTeacher(data) {
-      return isTeacher() &&
-        (data.teacher is string && data.teacher == myTeacherName());
+      return isAcademyTeacherOrStaff(data.academyId) &&
+        (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId));
     }
 
     function groupClassBelongsToTeacher(data) {
-      return isTeacher() &&
-        (data.teacher is string && data.teacher == myTeacherName());
+      return isAcademyTeacherOrStaff(data.academyId) &&
+        (
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId))
+        );
     }
 
     function studentPackageBelongsToTeacher(data) {
-      return isTeacher() &&
-        (data.teacher is string && data.teacher == myTeacherName());
+      return isAcademyTeacherOrStaff(data.academyId) &&
+        (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId));
     }
 
     function creditTransactionBelongsToTeacher(data) {
-      return isTeacher() &&
+      return isAcademyTeacherOrStaff(data.academyId) &&
         data.teacher is string &&
-        data.teacher == myTeacherName();
+        data.teacher == myAcademyTeacherName(data.academyId);
     }
 
-    function canManageAttendance() {
-      return signedIn() &&
-        currentUserDoc().role == "teacher" &&
-        currentUserDoc().canManageAttendance == true;
+    function canManageAttendance(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canManageAttendance == true;
     }
 
-    function canAddStudent() {
-      return signedIn() &&
-        currentUserDoc().role == "teacher" &&
-        currentUserDoc().canAddStudent == true;
+    function canAddStudent(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canAddStudent == true;
     }
 
-    function canEditStudent() {
-      return signedIn() &&
-        currentUserDoc().role == "teacher" &&
-        currentUserDoc().canEditStudent == true;
+    function canEditStudent(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canEditStudent == true;
     }
 
-    function canDeleteStudent() {
-      return signedIn() &&
-        currentUserDoc().role == "teacher" &&
-        currentUserDoc().canDeleteStudent == true;
+    function canDeleteStudent(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canDeleteStudent == true;
     }
 
-    function canEditLesson() {
-      return signedIn() &&
-        currentUserDoc().role == "teacher" &&
-        currentUserDoc().canEditLesson == true;
+    function canEditLesson(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canEditLesson == true;
     }
 
-    function canDeleteLesson() {
-      return signedIn() &&
-        currentUserDoc().role == "teacher" &&
-        currentUserDoc().canDeleteLesson == true;
+    function canDeleteLesson(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canDeleteLesson == true;
     }
 
-    function canCreateLessonDirectly() {
-      return signedIn() &&
-        currentUserDoc().role == "teacher" &&
-        currentUserDoc().canCreateLessonDirectly == true &&
-        currentUserDoc().requiresLessonApproval != true;
+    function canCreateLessonDirectly(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canCreateLessonDirectly == true &&
+        myMembership(academyId).permissions.requiresLessonApproval != true;
     }
 
-    function canTeacherUpdateStudentPackageUsage() {
-      return canManageAttendance() ||
-        canCreateLessonDirectly() ||
-        canEditLesson() ||
-        canDeleteLesson();
+    function canTeacherUpdateStudentPackageUsage(academyId) {
+      return canManageAttendance(academyId) ||
+        canCreateLessonDirectly(academyId) ||
+        canEditLesson(academyId) ||
+        canDeleteLesson(academyId);
     }
 
-    function parentGroupClassBelongsToTeacher(groupClassId) {
-      return isTeacher() &&
-        get(/databases/$(database)/documents/groupClasses/$(groupClassId)).data.teacher == myTeacherName();
+    function parentGroupClassBelongsToTeacher(academyId, groupClassId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        get(/databases/$(database)/documents/groupClasses/$(groupClassId)).data.academyId == academyId &&
+        groupClassBelongsToTeacher(
+          get(/databases/$(database)/documents/groupClasses/$(groupClassId)).data
+        );
     }
 
-    /** canonical groupClassId 우선, 없으면 iOS legacy groupClassID, 없으면 classID */
+    /** canonical groupClassId first, then legacy iOS groupClassID, then classID */
     function effectiveGroupClassIdFromData(data) {
       return data.groupClassId is string ? data.groupClassId
         : (data.groupClassID is string ? data.groupClassID
@@ -129,9 +167,1033 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
     }
 
+    function validBookedCountDelta() {
+      return request.resource.data.bookedCount is int &&
+        resource.data.bookedCount is int &&
+        request.resource.data.bookedCount >= 0 &&
+        request.resource.data.bookedCount <= resource.data.capacity &&
+        (
+          request.resource.data.bookedCount == resource.data.bookedCount + 1 ||
+          request.resource.data.bookedCount == resource.data.bookedCount - 1
+        );
+    }
+
+    function hasStudentIdentity(academyId) {
+      return isAcademyMember(academyId) &&
+        myMembership(academyId).role == "student" &&
+        myMembership(academyId).studentId is string &&
+        myMembership(academyId).studentId != "";
+    }
+
+    function myStudentId(academyId) {
+      return myMembership(academyId).studentId;
+    }
+
+    function studentGroupAccessPath(academyId, groupClassId, studentId) {
+      return /databases/$(database)/documents/studentGroupAccess/$(academyId + "__" + groupClassId + "__" + studentId);
+    }
+
+    function myStudentGroupAccessPath(academyId, groupClassId) {
+      return studentGroupAccessPath(academyId, groupClassId, myStudentId(academyId));
+    }
+
+    function studentGroupAccessSummaryPath(academyId, studentId) {
+      return /databases/$(database)/documents/studentGroupAccessSummary/$(academyId + "__" + studentId);
+    }
+
+    function myStudentGroupAccessSummaryPath(academyId) {
+      return studentGroupAccessSummaryPath(academyId, myStudentId(academyId));
+    }
+
+    function isCurrentStudent(academyId, studentId) {
+      return hasStudentIdentity(academyId) &&
+        studentId is string &&
+        studentId != "" &&
+        myStudentId(academyId) == studentId;
+    }
+
+    function studentGroupAccessSummaryIncludesGroupClass(summaryPath, academyId, studentId, groupClassId) {
+      let summary = get(summaryPath).data;
+      return exists(summaryPath) &&
+        summary.academyId == academyId &&
+        summary.studentId == studentId &&
+        summary.groupClassIds is list &&
+        groupClassId in summary.groupClassIds;
+    }
+
+    function hasActiveStudentGroupAccessForStudent(academyId, studentId, groupClassId) {
+      return isCurrentStudent(academyId, studentId) &&
+        groupClassId is string &&
+        groupClassId != "" &&
+        studentGroupAccessSummaryIncludesGroupClass(
+          studentGroupAccessSummaryPath(academyId, studentId),
+          academyId,
+          studentId,
+          groupClassId
+        );
+    }
+
+    function hasActiveStudentGroupAccess(academyId, groupClassId) {
+      return hasActiveStudentGroupAccessForStudent(
+        academyId,
+        myStudentId(academyId),
+        groupClassId
+      );
+    }
+
+    function groupLessonPath(lessonId) {
+      return /databases/$(database)/documents/groupLessons/$(lessonId);
+    }
+
+    function groupLessonReservationPath(academyId, lessonId, studentId) {
+      return /databases/$(database)/documents/groupLessonReservations/$(academyId + "__" + lessonId + "__" + studentId);
+    }
+
+    function myGroupLessonReservationPath(academyId, lessonId) {
+      return groupLessonReservationPath(academyId, lessonId, myStudentId(academyId));
+    }
+
+    function studentPrivateAccessSummaryPath(academyId, studentId) {
+      return /databases/$(database)/documents/studentPrivateAccessSummary/$(academyId + "__" + studentId);
+    }
+
+    function myStudentPrivateAccessSummaryPath(academyId) {
+      return studentPrivateAccessSummaryPath(academyId, myStudentId(academyId));
+    }
+
+    function myPrivateTeacherKeys(academyId) {
+      return get(myStudentPrivateAccessSummaryPath(academyId)).data.teacherKeys;
+    }
+
+    function myPrivateActivePackageIds(academyId) {
+      return get(myStudentPrivateAccessSummaryPath(academyId)).data.activePackageIds;
+    }
+
+    function hasPrivateTeacherAccess(academyId, teacher) {
+      return hasStudentIdentity(academyId) &&
+        exists(myStudentPrivateAccessSummaryPath(academyId)) &&
+        myPrivateTeacherKeys(academyId) is list &&
+        myPrivateActivePackageIds(academyId) is list &&
+        myPrivateActivePackageIds(academyId).size() > 0 &&
+        teacher is string &&
+        teacher != "" &&
+        teacher in myPrivateTeacherKeys(academyId);
+    }
+
+    function privateSlotBelongsToTeacher(data) {
+      return isAcademyTeacherOrStaff(data.academyId) &&
+        data.teacher is string &&
+        data.teacher == myAcademyTeacherName(data.academyId);
+    }
+
+    function privateLessonSlotPath(slotId) {
+      return /databases/$(database)/documents/privateLessonSlots/$(slotId);
+    }
+
+    function privateLessonReservationPath(academyId, slotId, studentId) {
+      return /databases/$(database)/documents/privateLessonReservations/$(academyId + "__" + slotId + "__" + studentId);
+    }
+
+    function studentOwnsReservationForStudent(data, studentId) {
+      return isCurrentStudent(data.academyId, studentId) &&
+        data.studentId is string &&
+        data.studentId == studentId;
+    }
+
+    function studentOwnsReservation(data) {
+      return studentOwnsReservationForStudent(data, myStudentId(data.academyId));
+    }
+
+    function validStudentGroupAccessShape(data) {
+      return data.groupClassId is string &&
+        data.groupClassId != "" &&
+        data.studentId is string &&
+        data.studentId != "" &&
+        data.groupStudentId is string &&
+        data.packageId is string &&
+        data.status in ["active", "ended"] &&
+        data.studentStatus in ["active", "onBreak"];
+    }
+
+    function validTeacherGroupClassShape(data) {
+      return data.keys().hasOnly([
+          "academyId",
+          "name",
+          "teacher",
+          "teacherName",
+          "maxStudents",
+          "time",
+          "subject",
+          "weekdays",
+          "recurrenceMode",
+          "createdAt",
+          "updatedAt"
+        ]) &&
+        data.academyId is string &&
+        data.academyId != "" &&
+        data.name is string &&
+        data.name != "" &&
+        data.teacher is string &&
+        data.teacher == myAcademyTeacherName(data.academyId) &&
+        (!("teacherName" in data.keys()) ||
+          (data.teacherName is string &&
+            data.teacherName == myAcademyTeacherName(data.academyId))) &&
+        data.maxStudents is int &&
+        data.maxStudents >= 1 &&
+        data.time is string &&
+        data.time.matches("^\\d{2}:\\d{2}$") &&
+        data.subject is string &&
+        data.subject != "" &&
+        data.weekdays is list &&
+        data.weekdays.size() > 0 &&
+        (!("recurrenceMode" in data.keys()) || data.recurrenceMode == "fixedWeekdays") &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function validStudentReservationCreateShape() {
+      return request.resource.data.keys().hasOnly([
+          "academyId",
+          "lessonId",
+          "groupClassId",
+          "studentId",
+          "status",
+          "source",
+          "createdAt",
+          "updatedAt",
+          "cancelledAt"
+        ]) &&
+        request.resource.data.lessonId is string &&
+        request.resource.data.groupClassId is string &&
+        request.resource.data.studentId is string &&
+        request.resource.data.status == "active" &&
+        request.resource.data.source == "student" &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == null;
+    }
+
+    function validStudentReservationPairingOnCreateForStudent(studentId) {
+      let lesson = get(groupLessonPath(request.resource.data.lessonId)).data;
+      let lessonAfter = getAfter(groupLessonPath(request.resource.data.lessonId)).data;
+      return isCurrentStudent(request.resource.data.academyId, studentId) &&
+        request.resource.data.studentId == studentId &&
+        lesson.academyId == request.resource.data.academyId &&
+        lesson.groupClassId == request.resource.data.groupClassId &&
+        lesson.isBookable == true &&
+        hasActiveStudentGroupAccessForStudent(
+          request.resource.data.academyId,
+          studentId,
+          request.resource.data.groupClassId
+        ) &&
+        lessonAfter.bookedCount == lesson.bookedCount + 1;
+    }
+
+    function validStudentReservationPairingOnCreate() {
+      return validStudentReservationPairingOnCreateForStudent(
+        myStudentId(request.resource.data.academyId)
+      );
+    }
+
+    function validStudentReservationPairingOnUpdateForStudent(studentId) {
+      let lesson = get(groupLessonPath(resource.data.lessonId)).data;
+      let lessonAfter = getAfter(groupLessonPath(resource.data.lessonId)).data;
+      return resource.data.source == "student" &&
+        studentOwnsReservationForStudent(resource.data, studentId) &&
+        resource.data.groupClassId is string &&
+        resource.data.groupClassId != "" &&
+        lesson.academyId == resource.data.academyId &&
+        lesson.groupClassId == resource.data.groupClassId &&
+        (
+          (
+            resource.data.status == "cancelled" &&
+            request.resource.data.status == "active" &&
+            request.resource.data.updatedAt == request.time &&
+            request.resource.data.cancelledAt == null &&
+            lesson.isBookable == true &&
+            hasActiveStudentGroupAccessForStudent(
+              resource.data.academyId,
+              studentId,
+              resource.data.groupClassId
+            ) &&
+            lessonAfter.bookedCount == lesson.bookedCount + 1
+          ) ||
+          (
+            resource.data.status == "active" &&
+            request.resource.data.status == "cancelled" &&
+            request.resource.data.updatedAt == request.time &&
+            request.resource.data.cancelledAt == request.time &&
+            lessonAfter.bookedCount == lesson.bookedCount - 1
+          )
+        );
+    }
+
+    function validStudentReservationPairingOnUpdate() {
+      return validStudentReservationPairingOnUpdateForStudent(
+        myStudentId(resource.data.academyId)
+      );
+    }
+
+    function reservationActiveBeforeAndCancelledAfter(reservationPath) {
+      return exists(reservationPath) &&
+        get(reservationPath).data.status == "active" &&
+        getAfter(reservationPath).data.status == "cancelled";
+    }
+
+    function reservationAfterMatchesStudentBooking(
+      reservationPath,
+      academyId,
+      lessonId,
+      groupClassId,
+      studentId
+    ) {
+      let reservation = getAfter(reservationPath).data;
+      return reservation.academyId == academyId &&
+        reservation.lessonId == lessonId &&
+        reservation.groupClassId == groupClassId &&
+        reservation.studentId == studentId &&
+        reservation.source == "student" &&
+        reservation.status == "active" &&
+        reservation.updatedAt == request.time;
+    }
+
+    function validStudentBookedCountIncreasePairing(lessonId, studentId) {
+      return request.resource.data.bookedCount == resource.data.bookedCount + 1 &&
+        resource.data.isBookable == true &&
+        reservationAfterMatchesStudentBooking(
+          groupLessonReservationPath(resource.data.academyId, lessonId, studentId),
+          resource.data.academyId,
+          lessonId,
+          resource.data.groupClassId,
+          studentId
+        );
+    }
+
+    function validStudentBookedCountDecreasePairing(lessonId, studentId) {
+      return request.resource.data.bookedCount == resource.data.bookedCount - 1 &&
+        reservationActiveBeforeAndCancelledAfter(
+          groupLessonReservationPath(resource.data.academyId, lessonId, studentId)
+        );
+    }
+
+    function validStudentBookedCountPairingForStudent(lessonId, studentId) {
+      return isCurrentStudent(resource.data.academyId, studentId) &&
+        lessonId is string &&
+        lessonId != "" &&
+        resource.data.groupClassId is string &&
+        resource.data.groupClassId != "" &&
+        request.resource.data.groupClassId == resource.data.groupClassId &&
+        (
+          validStudentBookedCountIncreasePairing(lessonId, studentId) ||
+          validStudentBookedCountDecreasePairing(lessonId, studentId)
+        );
+    }
+
+    function validStudentBookedCountPairing(lessonId) {
+      return validStudentBookedCountPairingForStudent(
+        lessonId,
+        myStudentId(resource.data.academyId)
+      );
+    }
+
+    function validStudentGroupAccessSummaryShape(data) {
+      return data.keys().hasOnly([
+          "academyId",
+          "studentId",
+          "groupClassIds",
+          "createdAt",
+          "updatedAt"
+        ]) &&
+        data.academyId is string &&
+        data.academyId != "" &&
+        data.studentId is string &&
+        data.studentId != "" &&
+        data.groupClassIds is list;
+    }
+
+    function validStudentPrivateAccessSummaryShape(data) {
+      return data.keys().hasOnly([
+          "academyId",
+          "studentId",
+          "teacherKeys",
+          "activePackageIds",
+          "allowedSlotIds",
+          "allowedPrivateLessonSlotIds",
+          "createdAt",
+          "updatedAt"
+        ]) &&
+        data.academyId is string &&
+        data.academyId != "" &&
+        data.studentId is string &&
+        data.studentId != "" &&
+        (!("teacherKeys" in data.keys()) || data.teacherKeys is list) &&
+        (!("activePackageIds" in data.keys()) || data.activePackageIds is list) &&
+        (!("allowedSlotIds" in data.keys()) || data.allowedSlotIds is list) &&
+        (!("allowedPrivateLessonSlotIds" in data.keys()) ||
+          data.allowedPrivateLessonSlotIds is list);
+    }
+
+    function validPrivateSlotBaseShape(data) {
+      return data.keys().hasOnly([
+          "academyId",
+          "teacher",
+          "teacherName",
+          "date",
+          "time",
+          "subject",
+          "capacity",
+          "reservedCount",
+          "startAt",
+          "durationMinutes",
+          "status",
+          "eligibleStudentIds",
+          "reservedStudentId",
+          "reservationId",
+          "createdByUid",
+          "createdAt",
+          "updatedAt",
+          "reservedAt",
+          "cancelledAt"
+        ]) &&
+        data.academyId is string &&
+        data.academyId != "" &&
+        data.teacher is string &&
+        data.teacher != "" &&
+        (!("teacherName" in data.keys()) || data.teacherName is string) &&
+        data.date is string &&
+        data.date != "" &&
+        data.time is string &&
+        data.time != "" &&
+        (!("subject" in data.keys()) || data.subject is string) &&
+        (!("capacity" in data.keys()) || data.capacity is int) &&
+        (!("reservedCount" in data.keys()) || data.reservedCount is int) &&
+        data.startAt is timestamp &&
+        data.durationMinutes is int &&
+        data.durationMinutes >= 10 &&
+        data.durationMinutes <= 240 &&
+        (!("eligibleStudentIds" in data.keys()) || data.eligibleStudentIds is list) &&
+        data.status in ["open", "reserved", "cancelled"];
+    }
+
+    function validPrivateSlotCreateShape() {
+      return validPrivateSlotBaseShape(request.resource.data) &&
+        request.resource.data.status == "open" &&
+        request.resource.data.reservedStudentId == "" &&
+        request.resource.data.reservationId == "" &&
+        request.resource.data.createdByUid == currentUid() &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.reservedAt == null &&
+        request.resource.data.cancelledAt == null;
+    }
+
+    function validPrivateReservationBaseShape(data) {
+      return data.keys().hasOnly([
+          "academyId",
+          "slotId",
+          "studentId",
+          "studentName",
+          "teacher",
+          "date",
+          "time",
+          "status",
+          "source",
+          "createdAt",
+          "updatedAt",
+          "cancelledAt"
+        ]) &&
+        data.academyId is string &&
+        data.academyId != "" &&
+        data.slotId is string &&
+        data.slotId != "" &&
+        data.studentId is string &&
+        data.studentId != "" &&
+        data.teacher is string &&
+        data.teacher != "" &&
+        data.date is string &&
+        data.time is string &&
+        data.status in ["active", "cancelled"] &&
+        data.source == "student";
+    }
+
+    function privateReservationAfterMatchesReserve(reservationPath, academyId, slotId, studentId) {
+      let reservation = getAfter(reservationPath).data;
+      return reservation.academyId == academyId &&
+        reservation.slotId == slotId &&
+        reservation.studentId == studentId &&
+        reservation.status == "active" &&
+        reservation.source == "student" &&
+        reservation.updatedAt == request.time &&
+        reservation.cancelledAt == null;
+    }
+
+    function privateReservationAfterMatchesCancel(reservationPath, academyId, slotId, studentId) {
+      let reservation = getAfter(reservationPath).data;
+      return reservation.academyId == academyId &&
+        reservation.slotId == slotId &&
+        reservation.studentId == studentId &&
+        reservation.status == "cancelled" &&
+        reservation.source == "student" &&
+        reservation.updatedAt == request.time &&
+        reservation.cancelledAt == request.time;
+    }
+
+    function privateSlotAfterMatchesReserve(slotId, academyId, studentId, reservationId) {
+      let slot = getAfter(privateLessonSlotPath(slotId)).data;
+      return slot.academyId == academyId &&
+        slot.status == "reserved" &&
+        slot.reservedStudentId == studentId &&
+        slot.reservationId == reservationId &&
+        slot.reservedAt == request.time &&
+        slot.updatedAt == request.time &&
+        slot.cancelledAt == null;
+    }
+
+    function privateSlotAfterMatchesCancel(slotId, academyId) {
+      let slot = getAfter(privateLessonSlotPath(slotId)).data;
+      return slot.academyId == academyId &&
+        slot.status == "open" &&
+        slot.reservedStudentId == "" &&
+        slot.reservationId == "" &&
+        slot.reservedAt == null &&
+        slot.updatedAt == request.time;
+    }
+
+    function validPrivateSlotStudentReserve(slotId) {
+      let studentId = myStudentId(resource.data.academyId);
+      let reservationPath = privateLessonReservationPath(resource.data.academyId, slotId, studentId);
+      return validPrivateSlotBaseShape(request.resource.data) &&
+        changedOnly(["status", "reservedStudentId", "reservationId", "reservedAt", "updatedAt"]) &&
+        resource.data.status == "open" &&
+        request.resource.data.status == "reserved" &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.startAt == resource.data.startAt &&
+        request.resource.data.durationMinutes == resource.data.durationMinutes &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.reservedStudentId == studentId &&
+        request.resource.data.reservationId == resource.data.academyId + "__" + slotId + "__" + studentId &&
+        request.resource.data.reservedAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == null &&
+        hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacher) &&
+        privateReservationAfterMatchesReserve(
+          reservationPath,
+          resource.data.academyId,
+          slotId,
+          studentId
+        );
+    }
+
+    function validPrivateSlotStudentCancel(slotId) {
+      let studentId = myStudentId(resource.data.academyId);
+      let reservationPath = privateLessonReservationPath(resource.data.academyId, slotId, studentId);
+      return validPrivateSlotBaseShape(request.resource.data) &&
+        changedOnly(["status", "reservedStudentId", "reservationId", "reservedAt", "updatedAt"]) &&
+        resource.data.status == "reserved" &&
+        resource.data.reservedStudentId == studentId &&
+        resource.data.reservationId == resource.data.academyId + "__" + slotId + "__" + studentId &&
+        request.resource.data.status == "open" &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.startAt == resource.data.startAt &&
+        request.resource.data.durationMinutes == resource.data.durationMinutes &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.reservedStudentId == "" &&
+        request.resource.data.reservationId == "" &&
+        request.resource.data.reservedAt == null &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == resource.data.cancelledAt &&
+        privateReservationAfterMatchesCancel(
+          reservationPath,
+          resource.data.academyId,
+          slotId,
+          studentId
+        );
+    }
+
+    function validPrivateSlotManagerCancelOpen() {
+      return validPrivateSlotBaseShape(request.resource.data) &&
+        changedOnly(["status", "updatedAt", "cancelledAt"]) &&
+        resource.data.status == "open" &&
+        request.resource.data.status == "cancelled" &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.startAt == resource.data.startAt &&
+        request.resource.data.durationMinutes == resource.data.durationMinutes &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.reservedStudentId == resource.data.reservedStudentId &&
+        request.resource.data.reservationId == resource.data.reservationId &&
+        request.resource.data.reservedAt == resource.data.reservedAt &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == request.time;
+    }
+
+    function validPrivateSlotManagerCancelReservation(slotId) {
+      return validPrivateSlotBaseShape(request.resource.data) &&
+        changedOnly(["status", "reservedStudentId", "reservationId", "reservedAt", "updatedAt"]) &&
+        resource.data.status == "reserved" &&
+        resource.data.reservedStudentId is string &&
+        resource.data.reservedStudentId != "" &&
+        request.resource.data.status == "open" &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.startAt == resource.data.startAt &&
+        request.resource.data.durationMinutes == resource.data.durationMinutes &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.reservedStudentId == "" &&
+        request.resource.data.reservationId == "" &&
+        request.resource.data.reservedAt == null &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == resource.data.cancelledAt;
+    }
+
+    function validPrivateSlotManagerEligibilityUpdate() {
+      return validPrivateSlotBaseShape(request.resource.data) &&
+        changedOnly(["eligibleStudentIds", "updatedAt"]) &&
+        resource.data.status in ["open", "reserved", "cancelled"] &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.eligibleStudentIds is list;
+    }
+
+    function validPrivateReservationStudentCreate(reservationId) {
+      let slot = get(privateLessonSlotPath(request.resource.data.slotId)).data;
+      let studentId = myStudentId(request.resource.data.academyId);
+      return validPrivateReservationBaseShape(request.resource.data) &&
+        reservationId == request.resource.data.academyId + "__" + request.resource.data.slotId + "__" + studentId &&
+        request.resource.data.studentId == studentId &&
+        request.resource.data.status == "active" &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == null &&
+        slot.academyId == request.resource.data.academyId &&
+        slot.status == "open" &&
+        slot.teacher == request.resource.data.teacher &&
+        slot.date == request.resource.data.date &&
+        slot.time == request.resource.data.time &&
+        hasPrivateTeacherAccess(request.resource.data.academyId, request.resource.data.teacher) &&
+        privateSlotAfterMatchesReserve(
+          request.resource.data.slotId,
+          request.resource.data.academyId,
+          studentId,
+          reservationId
+        );
+    }
+
+    function validPrivateReservationReactivate(reservationId) {
+      let slot = get(privateLessonSlotPath(resource.data.slotId)).data;
+      return validPrivateReservationBaseShape(request.resource.data) &&
+        reservationId == resource.data.academyId + "__" + resource.data.slotId + "__" + resource.data.studentId &&
+        resource.data.status == "cancelled" &&
+        request.resource.data.status == "active" &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.slotId == resource.data.slotId &&
+        request.resource.data.studentId == resource.data.studentId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.source == resource.data.source &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == null &&
+        hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacher) &&
+        slot.status == "open" &&
+        privateSlotAfterMatchesReserve(
+          resource.data.slotId,
+          resource.data.academyId,
+          resource.data.studentId,
+          reservationId
+        );
+    }
+
+    function validPrivateReservationCancel(reservationId) {
+      return validPrivateReservationBaseShape(request.resource.data) &&
+        reservationId == resource.data.academyId + "__" + resource.data.slotId + "__" + resource.data.studentId &&
+        resource.data.status == "active" &&
+        request.resource.data.status == "cancelled" &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.slotId == resource.data.slotId &&
+        request.resource.data.studentId == resource.data.studentId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.source == resource.data.source &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == request.time &&
+        privateSlotAfterMatchesCancel(resource.data.slotId, resource.data.academyId);
+    }
+
+    function validPrivateReservationManagerCancel(reservationId) {
+      return validPrivateReservationBaseShape(request.resource.data) &&
+        reservationId == resource.data.academyId + "__" + resource.data.slotId + "__" + resource.data.studentId &&
+        resource.data.status == "active" &&
+        request.resource.data.status == "cancelled" &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.slotId == resource.data.slotId &&
+        request.resource.data.studentId == resource.data.studentId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.date == resource.data.date &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.source == resource.data.source &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.cancelledAt == request.time;
+    }
+
+    function validDailyMaterialShape(data) {
+      return data.keys().hasOnly([
+          "academyId",
+          "date",
+          "title",
+          "description",
+          "videoUrl",
+          "status",
+          "visibility",
+          "createdByUid",
+          "createdAt",
+          "updatedAt"
+        ]) &&
+        data.academyId is string &&
+        data.academyId != "" &&
+        data.date is string &&
+        data.date.matches("^\\d{4}-\\d{2}-\\d{2}$") &&
+        data.title is string &&
+        data.title != "" &&
+        data.description is string &&
+        data.videoUrl is string &&
+        data.videoUrl.matches("^https://.+") &&
+        data.status in ["published", "draft"] &&
+        data.visibility == "allStudents" &&
+        data.createdByUid is string &&
+        data.createdByUid != "" &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function validDailyMaterialCreate() {
+      return validDailyMaterialShape(request.resource.data) &&
+        request.resource.data.createdByUid == currentUid() &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+    }
+
+    function validDailyMaterialUpdate() {
+      return validDailyMaterialShape(request.resource.data) &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.createdByUid == resource.data.createdByUid &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        request.resource.data.updatedAt == request.time;
+    }
+
+    function canReadDailyMaterial(data) {
+      return data.academyId is string &&
+        isAcademyMember(data.academyId) &&
+        (
+          isAcademyAdmin(data.academyId) ||
+          isAcademyTeacherOrStaff(data.academyId) ||
+          (
+            hasStudentIdentity(data.academyId) &&
+            data.status == "published" &&
+            data.visibility == "allStudents"
+          )
+        );
+    }
+
+    function validLessonRequestTeacherFields(data) {
+      return myAcademyTeacherName(data.academyId) is string &&
+        myAcademyTeacherName(data.academyId) != "" &&
+        (
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId)) ||
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId))
+        ) &&
+        (
+          !("teacherName" in data.keys()) ||
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId))
+        ) &&
+        (
+          !("teacher" in data.keys()) ||
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId))
+        );
+    }
+
+    function validLessonRequestStoredTeacherFields(data) {
+      return (
+          (data.teacherName is string && data.teacherName != "") ||
+          (data.teacher is string && data.teacher != "")
+        ) &&
+        (
+          !("teacherName" in data.keys()) ||
+          (data.teacherName is string && data.teacherName != "")
+        ) &&
+        (
+          !("teacher" in data.keys()) ||
+          (data.teacher is string && data.teacher != "")
+        );
+    }
+
+    function lessonRequestBelongsToTeacher(data) {
+      return isAcademyTeacherOrStaff(data.academyId) &&
+        validLessonRequestTeacherFields(data);
+    }
+
+    function validLessonRequestCoreShape(data) {
+      return data.academyId is string &&
+        data.academyId != "" &&
+        data.teacherUID is string &&
+        data.teacherUID != "" &&
+        data.studentID is string &&
+        data.studentID != "" &&
+        data.studentId is string &&
+        data.studentId != "" &&
+        data.studentName is string &&
+        data.studentName != "" &&
+        data.student is string &&
+        data.student != "" &&
+        data.date is string &&
+        data.date != "" &&
+        data.time is string &&
+        data.time != "" &&
+        data.subject is string &&
+        data.repeatWeekly is bool &&
+        data.repeatWeeks is int &&
+        data.repeatWeeks >= 1 &&
+        data.repeatWeeks <= 60 &&
+        data.approvalStatus in ["pending", "approved", "rejected"] &&
+        data.createdAt is timestamp &&
+        data.rejectionReason is string &&
+        (
+          !("seriesID" in data.keys()) ||
+          data.seriesID is string
+        );
+    }
+
+    function validLessonRequestCreateShape() {
+      return request.resource.data.keys().hasOnly([
+          "academyId",
+          "teacherUID",
+          "teacherName",
+          "teacher",
+          "studentID",
+          "studentId",
+          "studentName",
+          "student",
+          "date",
+          "time",
+          "subject",
+          "repeatWeekly",
+          "repeatWeeks",
+          "approvalStatus",
+          "createdAt",
+          "rejectionReason",
+          "seriesID"
+        ]) &&
+        validLessonRequestCoreShape(request.resource.data) &&
+        validLessonRequestTeacherFields(request.resource.data) &&
+        request.resource.data.teacherUID == currentUid() &&
+        request.resource.data.approvalStatus == "pending";
+    }
+
+    function validTeacherQuickPrivateStudentCreateShape() {
+      return request.resource.data.keys().hasOnly([
+          "academyId",
+          "name",
+          "teacher",
+          "status",
+          "studentStatus",
+          "profileStatus",
+          "createdByUid",
+          "createdByRole",
+          "createdAt",
+          "updatedAt",
+          "paidLessons",
+          "attendanceCount",
+          "weeklyFrequency",
+          "slots"
+        ]) &&
+        request.resource.data.academyId is string &&
+        request.resource.data.academyId != "" &&
+        request.resource.data.name is string &&
+        request.resource.data.name != "" &&
+        privateStudentBelongsToTeacher(request.resource.data) &&
+        request.resource.data.status == "active" &&
+        request.resource.data.studentStatus == "active" &&
+        request.resource.data.profileStatus == "incomplete" &&
+        request.resource.data.createdByUid == currentUid() &&
+        request.resource.data.createdByRole == "teacher" &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time &&
+        request.resource.data.attendanceCount == 0 &&
+        (
+          !("paidLessons" in request.resource.data.keys()) ||
+          (
+            request.resource.data.paidLessons is int &&
+            request.resource.data.paidLessons >= 1 &&
+            request.resource.data.paidLessons <= 300
+          )
+        ) &&
+        (
+          !("weeklyFrequency" in request.resource.data.keys()) ||
+          (
+            request.resource.data.weeklyFrequency is int &&
+            request.resource.data.weeklyFrequency in [1, 2, 3]
+          )
+        ) &&
+        (
+          !("slots" in request.resource.data.keys()) ||
+          request.resource.data.slots is list
+        );
+    }
+
+    function validLessonRequestReviewFields(data) {
+      return (
+          !("updatedAt" in data.keys()) ||
+          data.updatedAt is timestamp
+        ) &&
+        (
+          !("reviewedAt" in data.keys()) ||
+          data.reviewedAt is timestamp
+        ) &&
+        (
+          !("approvedAt" in data.keys()) ||
+          data.approvedAt is timestamp
+        ) &&
+        (
+          !("rejectedAt" in data.keys()) ||
+          data.rejectedAt is timestamp
+        ) &&
+        (
+          !("reviewedBy" in data.keys()) ||
+          data.reviewedBy is string
+        ) &&
+        (
+          !("reviewedByUID" in data.keys()) ||
+          data.reviewedByUID is string
+        ) &&
+        (
+          !("reviewedByName" in data.keys()) ||
+          data.reviewedByName is string
+        ) &&
+        (
+          !("approvedBy" in data.keys()) ||
+          data.approvedBy is string
+        ) &&
+        (
+          !("approvedByUID" in data.keys()) ||
+          data.approvedByUID is string
+        ) &&
+        (
+          !("approvedByName" in data.keys()) ||
+          data.approvedByName is string
+        ) &&
+        (
+          !("rejectedBy" in data.keys()) ||
+          data.rejectedBy is string
+        ) &&
+        (
+          !("rejectedByUID" in data.keys()) ||
+          data.rejectedByUID is string
+        ) &&
+        (
+          !("rejectedByName" in data.keys()) ||
+          data.rejectedByName is string
+        ) &&
+        (
+          !("lessonId" in data.keys()) ||
+          data.lessonId is string
+        ) &&
+        (
+          !("lessonID" in data.keys()) ||
+          data.lessonID is string
+        );
+    }
+
+    function lessonRequestReviewUpdateFields() {
+      return [
+        "approvalStatus",
+        "rejectionReason",
+        "updatedAt",
+        "reviewedAt",
+        "reviewedBy",
+        "reviewedByUID",
+        "reviewedByName",
+        "approvedAt",
+        "approvedBy",
+        "approvedByUID",
+        "approvedByName",
+        "rejectedAt",
+        "rejectedBy",
+        "rejectedByUID",
+        "rejectedByName",
+        "lessonId",
+        "lessonID"
+      ];
+    }
+
+    function validLessonRequestReviewChangesOnly() {
+      return changedOnly(lessonRequestReviewUpdateFields());
+    }
+
+    function validLessonRequestReviewShape() {
+      return request.resource.data.keys().hasOnly([
+          "academyId",
+          "teacherUID",
+          "teacherName",
+          "teacher",
+          "studentID",
+          "studentId",
+          "studentName",
+          "student",
+          "date",
+          "time",
+          "subject",
+          "repeatWeekly",
+          "repeatWeeks",
+          "approvalStatus",
+          "createdAt",
+          "rejectionReason",
+          "seriesID",
+          "updatedAt",
+          "reviewedAt",
+          "reviewedBy",
+          "reviewedByUID",
+          "reviewedByName",
+          "approvedAt",
+          "approvedBy",
+          "approvedByUID",
+          "approvedByName",
+          "rejectedAt",
+          "rejectedBy",
+          "rejectedByUID",
+          "rejectedByName",
+          "lessonId",
+          "lessonID"
+        ]) &&
+        validLessonRequestCoreShape(request.resource.data) &&
+        validLessonRequestStoredTeacherFields(request.resource.data) &&
+        validLessonRequestReviewFields(request.resource.data);
+    }
+
+    function validLessonRequestReviewUpdate() {
+      return validLessonRequestReviewShape() &&
+        resource.data.approvalStatus == "pending" &&
+        request.resource.data.approvalStatus in ["approved", "rejected"] &&
+        validLessonRequestReviewChangesOnly();
+    }
+
     match /users/{uid} {
-      // Bootstrapping AuthContext must not depend on reading users/{currentUid}
-      // through another users/{currentUid} lookup.
       allow get: if isMe(uid) || hasAdminClaim();
       allow list: if hasAdminClaim();
       allow create: if isMe(uid) || hasAdminClaim();
@@ -139,160 +1201,645 @@ service cloud.firestore {
       allow delete: if hasAdminClaim();
     }
 
+    match /academies/{academyId} {
+      allow read: if isAcademyMember(academyId);
+      allow create, update, delete: if false;
+    }
+
+    match /academyMemberships/{membershipId} {
+      allow get: if signedIn() && resource.data.uid == currentUid();
+      allow get: if signedIn() && isAcademyAdmin(resource.data.academyId);
+      allow list: if signedIn() && resource.data.uid == currentUid();
+      allow list: if signedIn() && isAcademyAdmin(resource.data.academyId);
+      allow create, update, delete: if false;
+    }
+
+    match /teachers/{teacherId} {
+      allow get, list: if sameAcademyOnRead();
+      allow create: if sameAcademyOnCreate() &&
+        isAcademyAdmin(request.resource.data.academyId);
+      allow update: if sameAcademyOnUpdate() &&
+        request.resource.data.academyId == resource.data.academyId &&
+        isAcademyAdmin(resource.data.academyId);
+      allow delete: if sameAcademyOnRead() &&
+        isAcademyAdmin(resource.data.academyId);
+    }
+
     match /lessons/{lessonId} {
-      allow read: if isAdmin() || lessonBelongsToTeacher(resource.data);
-      allow create: if isAdmin() || (
-        canCreateLessonDirectly() &&
-        lessonBelongsToTeacher(request.resource.data)
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        lessonBelongsToTeacher(resource.data) ||
+        lessonBelongsToCurrentStudent(resource.data)
       );
-      allow update: if isAdmin() || (
-        canEditLesson() &&
-        lessonBelongsToTeacher(resource.data) &&
-        lessonBelongsToTeacher(request.resource.data) &&
-        changedOnly(["date", "time", "subject", "startAt", "updatedAt"])
-      ) || (
-        canManageAttendance() &&
-        lessonBelongsToTeacher(resource.data) &&
-        lessonBelongsToTeacher(request.resource.data) &&
-        changedOnly([
-          "isDeductCancelled",
-          "deductMemo",
-          "updatedAt",
-          "studentId",
-          "studentName",
-          "teacherName"
-        ])
+      allow create: if sameAcademyOnCreate() && (
+        isAcademyAdmin(request.resource.data.academyId) ||
+        (
+          canCreateLessonDirectly(request.resource.data.academyId) &&
+          lessonBelongsToTeacher(request.resource.data)
+        )
       );
-      allow delete: if isAdmin() || (
-        canDeleteLesson() &&
-        lessonBelongsToTeacher(resource.data)
+      allow update: if sameAcademyOnUpdate() && (
+        isAcademyAdmin(resource.data.academyId) || (
+          canEditLesson(resource.data.academyId) &&
+          lessonBelongsToTeacher(resource.data) &&
+          lessonBelongsToTeacher(request.resource.data) &&
+          changedOnly(["date", "time", "subject", "startAt", "updatedAt"])
+        ) || (
+          canManageAttendance(resource.data.academyId) &&
+          lessonBelongsToTeacher(resource.data) &&
+          lessonBelongsToTeacher(request.resource.data) &&
+          changedOnly([
+            "isDeductCancelled",
+            "deductMemo",
+            "updatedAt",
+            "studentId",
+            "studentName",
+            "teacherName"
+          ])
+        )
+      );
+      allow delete: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          canDeleteLesson(resource.data.academyId) &&
+          lessonBelongsToTeacher(resource.data)
+        )
       );
     }
 
+    match /lessonRequests/{requestId} {
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        lessonRequestBelongsToTeacher(resource.data)
+      );
+
+      allow create: if sameAcademyOnCreate() &&
+        isAcademyTeacherOrStaff(request.resource.data.academyId) &&
+        validLessonRequestCreateShape();
+
+      allow update: if sameAcademyOnUpdate() &&
+        isAcademyAdmin(resource.data.academyId) &&
+        validLessonRequestReviewUpdate();
+
+      allow delete: if false;
+    }
+
     match /privateStudents/{studentId} {
-      allow read: if isAdmin() || privateStudentBelongsToTeacher(resource.data);
-      allow create: if isAdmin() || (
-        canAddStudent() &&
-        privateStudentBelongsToTeacher(request.resource.data)
-      );
-      allow update: if isAdmin() || (
-        canEditStudent() &&
-        privateStudentBelongsToTeacher(resource.data) &&
-        privateStudentBelongsToTeacher(request.resource.data) &&
-        changedOnly([
-          "name",
-          "teacher",
-          "phone",
-          "carNumber",
-          "learningPurpose",
-          "firstRegisteredAt",
-          "note",
-          "updatedAt"
-        ])
-      ) || (
-        canManageAttendance() &&
-        privateStudentBelongsToTeacher(resource.data) &&
-        changedOnly(["attendanceCount", "updatedAt"])
-      );
-      allow delete: if isAdmin() || (
-        canDeleteStudent() &&
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
         privateStudentBelongsToTeacher(resource.data)
+      );
+      allow create: if sameAcademyOnCreate() && (
+        isAcademyAdmin(request.resource.data.academyId) ||
+        validTeacherQuickPrivateStudentCreateShape() ||
+        (
+          canAddStudent(request.resource.data.academyId) &&
+          privateStudentBelongsToTeacher(request.resource.data)
+        )
+      );
+      allow update: if sameAcademyOnUpdate() && (
+        isAcademyAdmin(resource.data.academyId) || (
+          canEditStudent(resource.data.academyId) &&
+          privateStudentBelongsToTeacher(resource.data) &&
+          privateStudentBelongsToTeacher(request.resource.data) &&
+          changedOnly([
+            "name",
+            "teacher",
+            "phone",
+            "carNumber",
+            "learningPurpose",
+            "firstRegisteredAt",
+            "note",
+            "updatedAt"
+          ])
+        ) || (
+          canManageAttendance(resource.data.academyId) &&
+          privateStudentBelongsToTeacher(resource.data) &&
+          changedOnly(["attendanceCount", "updatedAt"])
+        )
+      );
+      allow delete: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          canDeleteStudent(resource.data.academyId) &&
+          privateStudentBelongsToTeacher(resource.data)
+        )
       );
     }
 
     match /groupClasses/{groupClassId} {
-      allow read: if isAdmin() || groupClassBelongsToTeacher(resource.data);
-      allow create, update, delete: if isAdmin();
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        groupClassBelongsToTeacher(resource.data)
+      );
+      allow create: if sameAcademyOnCreate() &&
+        (
+          isAcademyAdmin(request.resource.data.academyId) ||
+          (
+            isAcademyTeacherOrStaff(request.resource.data.academyId) &&
+            validTeacherGroupClassShape(request.resource.data) &&
+            request.resource.data.createdAt == request.time &&
+            request.resource.data.updatedAt == request.time
+          )
+        );
+      allow update: if sameAcademyOnUpdate() &&
+        (
+          isAcademyAdmin(resource.data.academyId) ||
+          (
+            groupClassBelongsToTeacher(resource.data) &&
+            validTeacherGroupClassShape(request.resource.data) &&
+            request.resource.data.academyId == resource.data.academyId &&
+            request.resource.data.createdAt == resource.data.createdAt &&
+            request.resource.data.updatedAt == request.time
+          )
+        );
+      allow delete: if sameAcademyOnRead() &&
+        isAcademyAdmin(resource.data.academyId);
     }
 
     match /groupStudents/{groupStudentId} {
-      allow read: if isAdmin() || (
-        isTeacher() &&
-        effectiveGroupClassIdFromData(resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          )
+        )
       );
 
-      allow create: if isAdmin() || (
-        canAddStudent() &&
-        effectiveGroupClassIdFromData(request.resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data))
+      allow create: if sameAcademyOnCreate() && (
+        isAcademyAdmin(request.resource.data.academyId) ||
+        (
+          canAddStudent(request.resource.data.academyId) &&
+          effectiveGroupClassIdFromData(request.resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            request.resource.data.academyId,
+            effectiveGroupClassIdFromData(request.resource.data)
+          )
+        )
       );
 
-      allow update: if isAdmin() || (
-        canManageAttendance() &&
-        effectiveGroupClassIdFromData(resource.data) != "" &&
-        effectiveGroupClassIdFromData(request.resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data)) &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data)) &&
-        changedOnly(["attendanceCount", "updatedAt"])
+      allow update: if sameAcademyOnUpdate() && (
+        isAcademyAdmin(resource.data.academyId) || (
+          canManageAttendance(resource.data.academyId) &&
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          effectiveGroupClassIdFromData(request.resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          ) &&
+          parentGroupClassBelongsToTeacher(
+            request.resource.data.academyId,
+            effectiveGroupClassIdFromData(request.resource.data)
+          ) &&
+          changedOnly(["attendanceCount", "updatedAt"])
+        )
       );
 
-      allow delete: if isAdmin() || (
-        canDeleteStudent() &&
-        effectiveGroupClassIdFromData(resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
+      allow delete: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          canDeleteStudent(resource.data.academyId) &&
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          )
+        )
       );
+    }
+
+    match /studentGroupAccess/{accessId} {
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          hasStudentIdentity(resource.data.academyId) &&
+          resource.data.studentId == myStudentId(resource.data.academyId)
+        ) ||
+        (
+          resource.data.groupClassId is string &&
+          parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId)
+        )
+      );
+
+      allow create: if sameAcademyOnCreate() &&
+        accessId ==
+          request.resource.data.academyId + "__" +
+          request.resource.data.groupClassId + "__" +
+          request.resource.data.studentId &&
+        validStudentGroupAccessShape(request.resource.data) &&
+        (
+          isAcademyAdmin(request.resource.data.academyId) ||
+          (
+            canAddStudent(request.resource.data.academyId) &&
+            parentGroupClassBelongsToTeacher(
+              request.resource.data.academyId,
+              request.resource.data.groupClassId
+            )
+          )
+        );
+
+      allow update: if sameAcademyOnUpdate() &&
+        accessId ==
+          resource.data.academyId + "__" +
+          resource.data.groupClassId + "__" +
+          resource.data.studentId &&
+        request.resource.data.groupClassId == resource.data.groupClassId &&
+        request.resource.data.studentId == resource.data.studentId &&
+        validStudentGroupAccessShape(request.resource.data) &&
+        (
+          isAcademyAdmin(resource.data.academyId) ||
+          (
+            resource.data.groupClassId is string &&
+            parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId) &&
+            (
+              canAddStudent(resource.data.academyId) ||
+              canEditStudent(resource.data.academyId) ||
+              canDeleteStudent(resource.data.academyId)
+            )
+          )
+        );
+
+      allow delete: if sameAcademyOnRead() &&
+        accessId ==
+          resource.data.academyId + "__" +
+          resource.data.groupClassId + "__" +
+          resource.data.studentId &&
+        (
+          isAcademyAdmin(resource.data.academyId) ||
+          (
+            canDeleteStudent(resource.data.academyId) &&
+            resource.data.groupClassId is string &&
+            parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId)
+          )
+        );
+    }
+
+    match /studentGroupAccessSummary/{summaryId} {
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          hasStudentIdentity(resource.data.academyId) &&
+          resource.data.studentId == myStudentId(resource.data.academyId)
+        ) ||
+        isAcademyTeacherOrStaff(resource.data.academyId)
+      );
+
+      allow create: if sameAcademyOnCreate() &&
+        summaryId ==
+          request.resource.data.academyId + "__" +
+          request.resource.data.studentId &&
+        validStudentGroupAccessSummaryShape(request.resource.data) &&
+        (
+          isAcademyAdmin(request.resource.data.academyId) ||
+          (
+            canAddStudent(request.resource.data.academyId) ||
+            canEditStudent(request.resource.data.academyId) ||
+            canDeleteStudent(request.resource.data.academyId)
+          )
+        );
+
+      allow update: if sameAcademyOnUpdate() &&
+        summaryId ==
+          resource.data.academyId + "__" +
+          resource.data.studentId &&
+        request.resource.data.studentId == resource.data.studentId &&
+        validStudentGroupAccessSummaryShape(request.resource.data) &&
+        (
+          isAcademyAdmin(resource.data.academyId) ||
+          (
+            canAddStudent(resource.data.academyId) ||
+            canEditStudent(resource.data.academyId) ||
+            canDeleteStudent(resource.data.academyId)
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    match /studentPrivateAccessSummary/{summaryId} {
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          hasStudentIdentity(resource.data.academyId) &&
+          resource.data.studentId == myStudentId(resource.data.academyId)
+        )
+      );
+
+      allow create: if sameAcademyOnCreate() &&
+        isAcademyAdmin(request.resource.data.academyId) &&
+        summaryId ==
+          request.resource.data.academyId + "__" +
+          request.resource.data.studentId &&
+        validStudentPrivateAccessSummaryShape(request.resource.data);
+
+      allow update: if sameAcademyOnUpdate() &&
+        isAcademyAdmin(resource.data.academyId) &&
+        summaryId ==
+          resource.data.academyId + "__" +
+          resource.data.studentId &&
+        request.resource.data.studentId == resource.data.studentId &&
+        validStudentPrivateAccessSummaryShape(request.resource.data);
+
+      allow delete: if false;
+    }
+
+    match /privateLessonSlots/{slotId} {
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        privateSlotBelongsToTeacher(resource.data) ||
+        (
+          resource.data.status == "open" &&
+          hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacher)
+        ) ||
+        (
+          resource.data.academyId is string &&
+          resource.data.status == "open" &&
+          hasStudentIdentity(resource.data.academyId) &&
+          resource.data.eligibleStudentIds is list &&
+          myStudentId(resource.data.academyId) in resource.data.eligibleStudentIds
+        ) ||
+        (
+          hasStudentIdentity(resource.data.academyId) &&
+          resource.data.reservedStudentId == myStudentId(resource.data.academyId)
+        )
+      );
+
+      allow create: if sameAcademyOnCreate() &&
+        validPrivateSlotCreateShape() &&
+        isAcademyAdmin(request.resource.data.academyId);
+
+      allow update: if sameAcademyOnUpdate() && (
+        (
+          isAcademyAdmin(resource.data.academyId) &&
+          validPrivateSlotManagerEligibilityUpdate()
+        ) ||
+        (
+          isAcademyAdmin(resource.data.academyId) &&
+          (
+            validPrivateSlotManagerCancelOpen() ||
+            validPrivateSlotManagerCancelReservation(slotId)
+          )
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    match /privateLessonReservations/{reservationId} {
+      allow get: if signedIn() &&
+        !exists(/databases/$(database)/documents/privateLessonReservations/$(reservationId));
+
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          isAcademyTeacherOrStaff(resource.data.academyId) &&
+          resource.data.teacher == myAcademyTeacherName(resource.data.academyId)
+        ) ||
+        (
+          hasStudentIdentity(resource.data.academyId) &&
+          resource.data.studentId == myStudentId(resource.data.academyId)
+        )
+      );
+
+      allow create: if sameAcademyOnCreate() &&
+        validPrivateReservationStudentCreate(reservationId);
+
+      allow update: if sameAcademyOnUpdate() && (
+        (
+          hasStudentIdentity(resource.data.academyId) &&
+          resource.data.studentId == myStudentId(resource.data.academyId) &&
+          (
+            validPrivateReservationReactivate(reservationId) ||
+            validPrivateReservationCancel(reservationId)
+          )
+        ) ||
+        (
+          isAcademyAdmin(resource.data.academyId) &&
+          validPrivateReservationManagerCancel(reservationId)
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    match /dailyMaterials/{materialId} {
+      allow read: if canReadDailyMaterial(resource.data);
+
+      allow create: if sameAcademyOnCreate() &&
+        materialId == request.resource.data.academyId + "__" + request.resource.data.date &&
+        isAcademyAdmin(request.resource.data.academyId) &&
+        validDailyMaterialCreate();
+
+      allow update: if sameAcademyOnUpdate() &&
+        materialId == resource.data.academyId + "__" + resource.data.date &&
+        request.resource.data.date == resource.data.date &&
+        isAcademyAdmin(resource.data.academyId) &&
+        validDailyMaterialUpdate();
+
+      allow delete: if false;
     }
 
     match /groupLessons/{groupLessonId} {
-      allow read: if isAdmin() || (
-        isTeacher() &&
-        effectiveGroupClassIdFromData(resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          )
+        ) ||
+        (
+          resource.data.groupClassId is string &&
+          resource.data.groupClassId != "" &&
+          resource.data.isBookable == true &&
+          hasActiveStudentGroupAccess(resource.data.academyId, resource.data.groupClassId)
+        )
       );
 
-      allow create: if isAdmin() || (
-        canCreateLessonDirectly() &&
-        effectiveGroupClassIdFromData(request.resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data))
+      allow create: if sameAcademyOnCreate() && (
+        isAcademyAdmin(request.resource.data.academyId) ||
+        (
+          canCreateLessonDirectly(request.resource.data.academyId) &&
+          effectiveGroupClassIdFromData(request.resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            request.resource.data.academyId,
+            effectiveGroupClassIdFromData(request.resource.data)
+          )
+        )
       );
 
-      allow update: if isAdmin() || (
-        canEditLesson() &&
-        effectiveGroupClassIdFromData(resource.data) != "" &&
-        effectiveGroupClassIdFromData(request.resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data)) &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data)) &&
-        changedOnly([
-          "groupClassId",
-          "groupClassName",
-          "teacher",
-          "date",
-          "time",
-          "subject",
-          "updatedAt"
-        ])
-      ) || (
-        canManageAttendance() &&
-        effectiveGroupClassIdFromData(resource.data) != "" &&
-        effectiveGroupClassIdFromData(request.resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data)) &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(request.resource.data)) &&
-        changedOnly(["countedStudentIDs", "attendanceAppliedAt", "updatedAt"])
+      allow update: if sameAcademyOnUpdate() && (
+        isAcademyAdmin(resource.data.academyId) || (
+          canEditLesson(resource.data.academyId) &&
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          effectiveGroupClassIdFromData(request.resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          ) &&
+          parentGroupClassBelongsToTeacher(
+            request.resource.data.academyId,
+            effectiveGroupClassIdFromData(request.resource.data)
+          ) &&
+          changedOnly([
+            "groupClassId",
+            "groupClassName",
+            "teacher",
+            "date",
+            "time",
+            "subject",
+            "capacity",
+            "isBookable",
+            "updatedAt"
+          ])
+        ) || (
+          canManageAttendance(resource.data.academyId) &&
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          effectiveGroupClassIdFromData(request.resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          ) &&
+          parentGroupClassBelongsToTeacher(
+            request.resource.data.academyId,
+            effectiveGroupClassIdFromData(request.resource.data)
+          ) &&
+          changedOnly(["countedStudentIDs", "attendanceAppliedAt", "updatedAt"])
+        ) || (
+          isAcademyTeacherOrStaff(resource.data.academyId) &&
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          effectiveGroupClassIdFromData(request.resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          ) &&
+          parentGroupClassBelongsToTeacher(
+            request.resource.data.academyId,
+            effectiveGroupClassIdFromData(request.resource.data)
+          ) &&
+          changedOnly(["bookedCount", "updatedAt"]) &&
+          validBookedCountDelta()
+        ) || (
+          changedOnly(["bookedCount", "updatedAt"]) &&
+          validBookedCountDelta() &&
+          validStudentBookedCountPairing(groupLessonId)
+        )
       );
 
-      allow delete: if isAdmin() || (
-        canDeleteLesson() &&
-        effectiveGroupClassIdFromData(resource.data) != "" &&
-        parentGroupClassBelongsToTeacher(effectiveGroupClassIdFromData(resource.data))
+      allow delete: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          canDeleteLesson(resource.data.academyId) &&
+          effectiveGroupClassIdFromData(resource.data) != "" &&
+          parentGroupClassBelongsToTeacher(
+            resource.data.academyId,
+            effectiveGroupClassIdFromData(resource.data)
+          )
+        )
       );
+    }
+
+    match /groupLessonReservations/{reservationId} {
+      allow get: if signedIn() &&
+        !exists(/databases/$(database)/documents/groupLessonReservations/$(reservationId));
+
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        (
+          resource.data.groupClassId is string &&
+          parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId)
+        ) ||
+        studentOwnsReservation(resource.data)
+      );
+
+      allow create: if sameAcademyOnCreate() &&
+        reservationId ==
+          request.resource.data.academyId + "__" +
+          request.resource.data.lessonId + "__" +
+          request.resource.data.studentId &&
+        request.resource.data.groupClassId is string &&
+        request.resource.data.lessonId is string &&
+        request.resource.data.studentId is string &&
+        (
+          (
+            request.resource.data.status == "active" &&
+            request.resource.data.source == "dashboard" &&
+            (
+              isAcademyAdmin(request.resource.data.academyId) ||
+              parentGroupClassBelongsToTeacher(
+                request.resource.data.academyId,
+                request.resource.data.groupClassId
+              )
+            )
+          ) ||
+          (
+            validStudentReservationCreateShape() &&
+            validStudentReservationPairingOnCreate()
+          )
+        )
+      ;
+
+      allow update: if sameAcademyOnUpdate() &&
+        reservationId ==
+          resource.data.academyId + "__" +
+          resource.data.lessonId + "__" +
+          resource.data.studentId &&
+        request.resource.data.lessonId == resource.data.lessonId &&
+        request.resource.data.groupClassId == resource.data.groupClassId &&
+        request.resource.data.studentId == resource.data.studentId &&
+        request.resource.data.status in ["active", "cancelled"] &&
+        request.resource.data.source == resource.data.source &&
+        changedOnly(["status", "updatedAt", "cancelledAt"]) &&
+        (
+          (
+            request.resource.data.source == "dashboard" &&
+            (
+              isAcademyAdmin(resource.data.academyId) ||
+              parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId)
+            )
+          ) ||
+          (
+            request.resource.data.source == "student" &&
+            validStudentReservationPairingOnUpdate()
+          )
+        );
+
+      allow delete: if false;
     }
 
     match /studentPackages/{packageId} {
-      allow read: if isAdmin() || studentPackageBelongsToTeacher(resource.data);
-      allow create: if isAdmin();
-      allow update: if isAdmin() || (
-        canTeacherUpdateStudentPackageUsage() &&
-        studentPackageBelongsToTeacher(resource.data) &&
-        studentPackageBelongsToTeacher(request.resource.data) &&
-        changedOnly(["usedCount", "remainingCount", "status", "updatedAt"])
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        studentPackageBelongsToTeacher(resource.data)
       );
-      allow delete: if isAdmin();
+      allow create: if sameAcademyOnCreate() &&
+        isAcademyAdmin(request.resource.data.academyId);
+      allow update: if sameAcademyOnUpdate() && (
+        isAcademyAdmin(resource.data.academyId) || (
+          canTeacherUpdateStudentPackageUsage(resource.data.academyId) &&
+          studentPackageBelongsToTeacher(resource.data) &&
+          studentPackageBelongsToTeacher(request.resource.data) &&
+          changedOnly(["usedCount", "remainingCount", "status", "updatedAt"])
+        )
+      );
+      allow delete: if sameAcademyOnRead() &&
+        isAcademyAdmin(resource.data.academyId);
     }
 
     match /creditTransactions/{txId} {
-      allow read: if isAdmin();
-      allow create: if isAdmin() || canManageAttendance();
+      allow read: if sameAcademyOnRead() &&
+        isAcademyAdmin(resource.data.academyId);
+      allow create: if sameAcademyOnCreate() && (
+        isAcademyAdmin(request.resource.data.academyId) ||
+        (
+          canManageAttendance(request.resource.data.academyId) &&
+          creditTransactionBelongsToTeacher(request.resource.data)
+        )
+      );
       allow update: if false;
       allow delete: if false;
     }
