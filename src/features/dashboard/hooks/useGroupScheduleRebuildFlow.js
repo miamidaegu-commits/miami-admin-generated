@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { doc, getDoc, writeBatch } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   addCalendarDaysToYmd,
   getGroupLessonGroupId,
@@ -46,6 +47,7 @@ function isGroupLessonEligibleScheduleRebuildDelete(gl, groupId, effectiveFromYm
 
 export default function useGroupScheduleRebuildFlow({
   userProfile,
+  currentAcademyId,
   fetchGroupLessonsForClassIdMerge,
   createGroupLessonsInDateRange,
 }) {
@@ -141,12 +143,14 @@ export default function useGroupScheduleRebuildFlow({
       addCalendarDaysToYmd(effectiveFromYmd, GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS)
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       setBusyPostGroupScheduleRebuild(true)
       const chunkSize = 400
       for (let i = 0; i < toDelete.length; i += chunkSize) {
         const batch = writeBatch(db)
         const chunk = toDelete.slice(i, i + chunkSize)
         for (const gl of chunk) {
+          assertSameAcademy(gl, scopedAcademyId, '그룹 수업')
           batch.delete(doc(db, 'groupLessons', gl.id))
         }
         await batch.commit()
@@ -155,10 +159,12 @@ export default function useGroupScheduleRebuildFlow({
       const groupSnap = await getDoc(doc(db, 'groupClasses', gid))
       if (!groupSnap.exists()) throw new Error('반 정보를 찾을 수 없습니다.')
       const g = { id: groupSnap.id, ...groupSnap.data() }
+      assertSameAcademy(g, scopedAcademyId, '그룹')
 
       const existingAfterDelete = sourceGroupLessons.filter((gl) => !deletedLessonIds.has(gl.id))
 
       const { created, skippedDup } = await createGroupLessonsInDateRange({
+        academyId: scopedAcademyId,
         groupClassId: gid,
         groupClassName: g.name || data.groupName || '',
         teacher: normalizeText(g.teacher || ''),

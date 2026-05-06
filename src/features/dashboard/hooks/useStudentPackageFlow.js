@@ -12,6 +12,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   buildAutoGroupStudentPackageTitle,
   buildAutoPrivateStudentPackageTitle,
@@ -29,6 +30,11 @@ import {
   parseYmdToLocalDate,
   studentPackageAttentionScope,
 } from '../dashboardViewUtils.js'
+import {
+  buildStudentGroupAccessPayloadFromGroupStudent,
+  setStudentGroupAccessBatch,
+} from '../../group-booking/studentGroupAccessClient.js'
+import { addStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 
 const DEFAULT_STUDENT_PACKAGE_FORM = {
   packageType: 'private',
@@ -76,6 +82,7 @@ function createDefaultPostPrivateLessonScheduleForm(overrides = {}) {
 export default function useStudentPackageFlow({
   activeSection,
   userProfile,
+  currentAcademyId,
   privateStudents,
   groupClasses,
   studentPackages,
@@ -623,9 +630,12 @@ export default function useStudentPackageFlow({
     }
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(student, scopedAcademyId, '학생')
       setBusyStudentPackageSubmit(true)
 
       const newStudentPackagePayload = {
+        academyId: scopedAcademyId,
         studentId,
         studentName,
         teacher,
@@ -657,6 +667,16 @@ export default function useStudentPackageFlow({
       }
 
       const docRef = await addDoc(collection(db, 'studentPackages'), newStudentPackagePayload)
+      if (result.packageType === 'private') {
+        const accessBatch = writeBatch(db)
+        addStudentPrivateTeacherAccessBatch(accessBatch, db, {
+          academyId: scopedAcademyId,
+          studentId,
+          teacher,
+          packageId: docRef.id,
+        })
+        await accessBatch.commit()
+      }
       await addCreditTransaction({
         studentId,
         studentName,
@@ -806,10 +826,15 @@ export default function useStudentPackageFlow({
     const teacherNorm = normalizeText(data.teacher || '')
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       setBusyPostGroupReEnroll(true)
 
       const snap = await getDocs(
-        query(collection(db, 'groupStudents'), where('studentId', '==', enrollStudentId))
+        query(
+          collection(db, 'groupStudents'),
+          where('academyId', '==', scopedAcademyId),
+          where('studentId', '==', enrollStudentId)
+        )
       )
 
       const batch = writeBatch(db)
@@ -824,7 +849,8 @@ export default function useStudentPackageFlow({
       })
 
       const newGroupStudentRef = doc(collection(db, 'groupStudents'))
-      batch.set(newGroupStudentRef, {
+      const newGroupStudentPayload = {
+        academyId: scopedAcademyId,
         groupClassId,
         classID: groupClassId,
         studentId: enrollStudentId,
@@ -843,7 +869,16 @@ export default function useStudentPackageFlow({
         breakEndDate: '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      })
+      }
+      batch.set(newGroupStudentRef, newGroupStudentPayload)
+      setStudentGroupAccessBatch(
+        batch,
+        db,
+        buildStudentGroupAccessPayloadFromGroupStudent(
+          { id: newGroupStudentRef.id, ...newGroupStudentPayload },
+          { groupStudentId: newGroupStudentRef.id }
+        )
+      )
 
       await batch.commit()
       await addCreditTransaction({
@@ -873,6 +908,9 @@ export default function useStudentPackageFlow({
     selectedPackage,
     teacherKey,
   }) {
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    assertSameAcademy(student, scopedAcademyId, '학생')
+    assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
     const studentName = String(student.name || '').trim()
     const scheduleEntries = buildPrivateLessonScheduleEntries({
       date: result.date,
@@ -949,6 +987,7 @@ export default function useStudentPackageFlow({
 
       const lessonRef = doc(collection(db, 'lessons'))
       batch.set(lessonRef, {
+        academyId: scopedAcademyId,
         studentId: student.id,
         studentName,
         teacherName: teacherKey,
@@ -972,7 +1011,7 @@ export default function useStudentPackageFlow({
       })
     }
     await batch.commit()
-    await recomputePrivatePackageUsage(selectedPackage.id)
+    await recomputePrivatePackageUsage(selectedPackage.id, currentAcademyId)
     return { ok: true }
   }
 
@@ -1026,6 +1065,16 @@ export default function useStudentPackageFlow({
       return
     }
     const selectedPackage = { id: packageSnap.id, ...packageSnap.data() }
+    try {
+      assertSameAcademy(student, currentAcademyId, '학생')
+      assertSameAcademy(selectedPackage, currentAcademyId, '수강권')
+    } catch (error) {
+      setPostPrivateLessonScheduleErrors((prev) => ({
+        ...prev,
+        packageId: error.message,
+      }))
+      return
+    }
 
     if (selectedPackage.packageType !== 'private') {
       setPostPrivateLessonScheduleErrors((prev) => ({

@@ -1,0 +1,26 @@
+export const DEFAULT_LEGACY_ACADEMY_ID = 'academy_default'
+
+export function normalizeAcademyId(academyId) {
+  return String(academyId || '').trim()
+}
+
+export function isValidOperationalAcademyId(academyId) {
+  const id = normalizeAcademyId(academyId)
+  return Boolean(id) && id !== DEFAULT_LEGACY_ACADEMY_ID
+}
+
+export function requireCurrentAcademyId(academyId) {
+  const id = normalizeAcademyId(academyId)
+  if (!isValidOperationalAcademyId(id)) {
+    throw new Error('현재 학원 컨텍스트가 없어 작업할 수 없습니다.')
+  }
+  return id
+}
+
+export function assertSameAcademy(row, academyId, label = '문서') {
+  const currentAcademyId = requireCurrentAcademyId(academyId)
+  if (normalizeAcademyId(row?.academyId) !== currentAcademyId) {
+    throw new Error(`${label}가 현재 학원에 속하지 않습니다.`)
+  }
+  return currentAcademyId
+}

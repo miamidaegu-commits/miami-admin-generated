@@ -8,6 +8,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   formatLocalDateToYmd,
   getGroupLessonGroupId,
@@ -21,6 +22,8 @@ const DEFAULT_GROUP_LESSON_FORM = {
   date: '',
   time: '',
   subject: '',
+  capacity: '',
+  isBookable: false,
 }
 
 const DEFAULT_GROUP_LESSON_SERIES_FORM = {
@@ -49,7 +52,23 @@ function resetGroupLessonPurgeState(setGroupLessonPurgeModalOpen, setGroupLesson
 }
 
 export function validateGroupLessonFormFields(form) {
-  return validateLessonDateTimeSubject(form)
+  const base = validateLessonDateTimeSubject(form)
+  const errors = { ...base.errors }
+  const capacityRaw = String(form.capacity ?? '').trim()
+  const capacity = Number(capacityRaw)
+
+  if (!capacityRaw) errors.capacity = '정원을 입력해주세요.'
+  else if (!Number.isInteger(capacity) || capacity < 0) {
+    errors.capacity = '정원은 0 이상의 정수여야 합니다.'
+  }
+
+  return {
+    ...base,
+    valid: Object.keys(errors).length === 0,
+    errors,
+    capacity: Number.isInteger(capacity) && capacity >= 0 ? capacity : 0,
+    isBookable: form.isBookable === true,
+  }
 }
 
 export function validateGroupLessonSeriesFormFields(form) {
@@ -84,6 +103,7 @@ export function validateGroupLessonSeriesFormFields(form) {
 export default function useGroupLessonManagementFlow({
   activeSection,
   userProfile,
+  currentAcademyId,
   selectedGroupClass,
   groupLessons,
   createGroupLessonsInDateRange,
@@ -170,7 +190,12 @@ export default function useGroupLessonManagementFlow({
       return
     }
 
-    setGroupLessonForm(createDefaultGroupLessonForm())
+    setGroupLessonForm(
+      createDefaultGroupLessonForm({
+        capacity: String(selectedGroupClass?.maxStudents ?? 0),
+        isBookable: false,
+      })
+    )
     setGroupLessonFormErrors({})
     setGroupLessonModal({ type: 'add' })
   }
@@ -186,6 +211,8 @@ export default function useGroupLessonManagementFlow({
         date: lesson.date || '',
         time: lesson.time || '',
         subject: lesson.subject || '',
+        capacity: String(lesson.capacity ?? selectedGroupClass?.maxStudents ?? 0),
+        isBookable: lesson.isBookable === true,
       })
     )
     setGroupLessonFormErrors({})
@@ -212,8 +239,11 @@ export default function useGroupLessonManagementFlow({
 
     if (groupLessonModal.type === 'add') {
       try {
+        const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+        assertSameAcademy(selectedGroupClass, scopedAcademyId, '그룹')
         setBusyGroupLessonId('__add__')
         await addDoc(collection(db, 'groupLessons'), {
+          academyId: scopedAcademyId,
           groupClassId: selectedGroupClass.id,
           groupClassName: selectedGroupClass.name || '',
           teacher: normalizeText(selectedGroupClass.teacher || ''),
@@ -224,9 +254,9 @@ export default function useGroupLessonManagementFlow({
           countedStudentIDs: [],
           attendanceAppliedAt: null,
           bookingMode: 'fixed',
-          capacity: Number(selectedGroupClass.maxStudents || 0),
+          capacity: result.capacity,
           bookedCount: 0,
-          isBookable: false,
+          isBookable: result.isBookable,
           generationKind: 'manual',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -243,6 +273,17 @@ export default function useGroupLessonManagementFlow({
 
     const { lesson } = groupLessonModal
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(selectedGroupClass, scopedAcademyId, '그룹')
+      assertSameAcademy(lesson, scopedAcademyId, '그룹 수업')
+      const bookedCount = Number(lesson.bookedCount ?? 0)
+      if (Number.isFinite(bookedCount) && result.capacity < bookedCount) {
+        setGroupLessonFormErrors((prev) => ({
+          ...prev,
+          capacity: '정원은 현재 예약 수보다 작을 수 없습니다.',
+        }))
+        return
+      }
       setBusyGroupLessonId(lesson.id)
       await updateDoc(doc(db, 'groupLessons', lesson.id), {
         groupClassId: selectedGroupClass.id,
@@ -251,6 +292,8 @@ export default function useGroupLessonManagementFlow({
         date: result.date,
         time: result.time,
         subject: result.subject,
+        capacity: result.capacity,
+        isBookable: result.isBookable,
         updatedAt: serverTimestamp(),
       })
       closeGroupLessonModal()
@@ -324,6 +367,7 @@ export default function useGroupLessonManagementFlow({
     try {
       setBusyGroupLessonSeries(true)
       const batchResult = await createGroupLessonsInDateRange({
+        academyId: currentAcademyId,
         groupClassId: gc.id,
         groupClassName: gc.name || '',
         teacher: gc.teacher,
@@ -411,11 +455,14 @@ export default function useGroupLessonManagementFlow({
     let deleted = 0
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(selectedGroupClass, scopedAcademyId, '그룹')
       setBusyGroupLessonPurge(true)
       for (let i = 0; i < toDelete.length; i += chunkSize) {
         const batch = writeBatch(db)
         const chunk = toDelete.slice(i, i + chunkSize)
         for (const gl of chunk) {
+          assertSameAcademy(gl, scopedAcademyId, '그룹 수업')
           batch.delete(doc(db, 'groupLessons', gl.id))
         }
         await batch.commit()

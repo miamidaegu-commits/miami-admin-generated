@@ -16,7 +16,7 @@ test('관리자가 그룹 학생 관리 모달을 열 수 있다', async ({ page
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '반 관리');
+  await openDashboardSection(page, '단체반 관리');
 
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();

@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
-import { addDoc, collection, serverTimestamp, Timestamp } from 'firebase/firestore'
+import { collection, doc, serverTimestamp, Timestamp, writeBatch } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   getEarliestFutureGroupLessonYmdFromLessons,
   getTodayStorageDateString,
   normalizeText,
 } from '../dashboardViewUtils.js'
+import {
+  buildStudentGroupAccessPayloadFromGroupStudent,
+  setStudentGroupAccessBatch,
+} from '../../group-booking/studentGroupAccessClient.js'
 
 const DEFAULT_GROUP_STUDENT_FORM = {
   packageId: '',
@@ -67,6 +72,7 @@ function validateGroupStudentFormFields(form, options = {}) {
 export default function useGroupStudentAddFlow({
   activeSection,
   userProfile,
+  currentAcademyId,
   selectedGroupClass,
   studentPackages,
   groupStudents,
@@ -241,8 +247,14 @@ export default function useGroupStudentAddFlow({
     )
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(selectedGroupClass, scopedAcademyId, '그룹')
+      assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
       setBusyGroupStudentId('__add__')
-      await addDoc(collection(db, 'groupStudents'), {
+      const groupStudentRef = doc(collection(db, 'groupStudents'))
+      const batch = writeBatch(db)
+      const groupStudentPayload = {
+        academyId: scopedAcademyId,
         groupClassId: selectedGroupClass.id,
         classID: selectedGroupClass.id,
         studentId,
@@ -261,7 +273,17 @@ export default function useGroupStudentAddFlow({
         breakEndDate: '',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      })
+      }
+      batch.set(groupStudentRef, groupStudentPayload)
+      setStudentGroupAccessBatch(
+        batch,
+        db,
+        buildStudentGroupAccessPayloadFromGroupStudent(
+          { id: groupStudentRef.id, ...groupStudentPayload },
+          { groupStudentId: groupStudentRef.id }
+        )
+      )
+      await batch.commit()
       closeGroupStudentAddModal()
     } catch (error) {
       console.error('그룹 학생 추가 실패:', error)

@@ -33,7 +33,7 @@ async function getStudentRowByName(page, studentName) {
 }
 
 async function openGroupDetail(page) {
-  await openDashboardSection(page, '반 관리');
+  await openDashboardSection(page, '단체반 관리');
 
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();

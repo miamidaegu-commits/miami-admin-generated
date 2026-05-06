@@ -82,6 +82,10 @@ export async function getGroupPackageStartDate(page, params) {
   return runFirebaseTask(page, 'getGroupPackageStartDate', params);
 }
 
+export async function getLessonRequestApprovalState(page, params) {
+  return runFirebaseTask(page, 'getLessonRequestApprovalState', params);
+}
+
 async function runFirebaseTask(page, taskName, params) {
   const firebaseConfig = getFirebaseConfigFromEnv(process.env)
   const timeoutMs = getFirebaseTaskTimeoutMs(taskName, params);
@@ -129,6 +133,8 @@ async function runFirebaseTask(page, taskName, params) {
           return cleanupTempCalendarGroupLessonSetupTask({ db, firestore, params });
         case 'getGroupPackageStartDate':
           return getGroupPackageStartDateTask({ db, firestore, params });
+        case 'getLessonRequestApprovalState':
+          return getLessonRequestApprovalStateTask({ db, firestore, params });
         default:
           throw new Error(`Unknown Firebase helper task: ${taskName}`);
       }
@@ -154,10 +160,14 @@ async function runFirebaseTask(page, taskName, params) {
         return String(taskParams?.academyId || defaultAcademyId || '').trim();
       }
 
-      async function getGroupClassByName(dbRef, firestoreModule, groupName) {
+      async function getGroupClassByName(dbRef, firestoreModule, groupName, academyId) {
         const { collection, getDocs, query, where } = firestoreModule;
         const groupClassSnap = await getDocs(
-          query(collection(dbRef, 'groupClasses'), where('name', '==', groupName))
+          query(
+            collection(dbRef, 'groupClasses'),
+            where('academyId', '==', academyId),
+            where('name', '==', groupName)
+          )
         );
 
         if (groupClassSnap.empty) {
@@ -185,11 +195,23 @@ async function runFirebaseTask(page, taskName, params) {
         };
       }
 
-      async function getGroupLessonsByClassId(dbRef, firestoreModule, groupClassId) {
+      async function getGroupLessonsByClassId(dbRef, firestoreModule, groupClassId, academyId) {
         const { collection, getDocs, query, where } = firestoreModule;
         const [groupLessonsA, groupLessonsB] = await Promise.all([
-          getDocs(query(collection(dbRef, 'groupLessons'), where('groupClassId', '==', groupClassId))),
-          getDocs(query(collection(dbRef, 'groupLessons'), where('groupClassID', '==', groupClassId))),
+          getDocs(
+            query(
+              collection(dbRef, 'groupLessons'),
+              where('academyId', '==', academyId),
+              where('groupClassId', '==', groupClassId)
+            )
+          ),
+          getDocs(
+            query(
+              collection(dbRef, 'groupLessons'),
+              where('academyId', '==', academyId),
+              where('groupClassID', '==', groupClassId)
+            )
+          ),
         ]);
 
         const lessons = [];
@@ -213,8 +235,8 @@ async function runFirebaseTask(page, taskName, params) {
         const { Timestamp, collection, doc, setDoc } = firestoreModule;
         const { groupName, tempStudentId, tempStudentName, tempPackageTitle } = params;
         const academyId = getTaskAcademyId(params);
-        const groupClass = await getGroupClassByName(db, firestoreModule, groupName);
-        const groupLessons = await getGroupLessonsByClassId(db, firestoreModule, groupClass.id);
+        const groupClass = await getGroupClassByName(db, firestoreModule, groupName, academyId);
+        const groupLessons = await getGroupLessonsByClassId(db, firestoreModule, groupClass.id, academyId);
 
         const todayYmd = new Intl.DateTimeFormat('en-CA', {
           timeZone: 'Asia/Seoul',
@@ -314,6 +336,7 @@ async function runFirebaseTask(page, taskName, params) {
       async function cleanupTempStudentDataTask({ db, firestore: firestoreModule, params }) {
         const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
         const { studentId, studentName } = params;
+        const academyId = getTaskAcademyId(params);
         const studentIds = new Set();
 
         if (studentId) {
@@ -322,15 +345,31 @@ async function runFirebaseTask(page, taskName, params) {
 
         if (studentName) {
           const studentSnap = await getDocs(
-            query(collection(db, 'privateStudents'), where('name', '==', studentName))
+            query(
+              collection(db, 'privateStudents'),
+              where('academyId', '==', academyId),
+              where('name', '==', studentName)
+            )
           );
           studentSnap.docs.forEach((studentDoc) => studentIds.add(studentDoc.id));
         }
 
         for (const currentStudentId of studentIds) {
           const [groupStudentSnap, studentPackageSnap] = await Promise.all([
-            getDocs(query(collection(db, 'groupStudents'), where('studentId', '==', currentStudentId))),
-            getDocs(query(collection(db, 'studentPackages'), where('studentId', '==', currentStudentId))),
+            getDocs(
+              query(
+                collection(db, 'groupStudents'),
+                where('academyId', '==', academyId),
+                where('studentId', '==', currentStudentId)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, 'studentPackages'),
+                where('academyId', '==', academyId),
+                where('studentId', '==', currentStudentId)
+              )
+            ),
           ]);
 
           await Promise.all(
@@ -352,18 +391,27 @@ async function runFirebaseTask(page, taskName, params) {
       async function cleanupTempGroupStudentAddSetupTask({ db, firestore: firestoreModule, params }) {
         const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
         const { packageId, groupClassId, tempStudentId } = params;
+        const academyId = getTaskAcademyId(params);
         const groupStudentDocIds = new Set();
 
         if (packageId) {
           const byPackageSnap = await getDocs(
-            query(collection(db, 'groupStudents'), where('packageId', '==', packageId))
+            query(
+              collection(db, 'groupStudents'),
+              where('academyId', '==', academyId),
+              where('packageId', '==', packageId)
+            )
           );
           byPackageSnap.docs.forEach((docItem) => groupStudentDocIds.add(docItem.id));
         }
 
         if (tempStudentId) {
           const byStudentSnap = await getDocs(
-            query(collection(db, 'groupStudents'), where('studentId', '==', tempStudentId))
+            query(
+              collection(db, 'groupStudents'),
+              where('academyId', '==', academyId),
+              where('studentId', '==', tempStudentId)
+            )
           );
           byStudentSnap.docs.forEach((docItem) => {
             const row = docItem.data() || {};
@@ -398,7 +446,7 @@ async function runFirebaseTask(page, taskName, params) {
         const academyId = getTaskAcademyId(params);
         const groupClass = groupClassId
           ? await getGroupClassById(db, firestoreModule, groupClassId)
-          : await getGroupClassByName(db, firestoreModule, groupName);
+          : await getGroupClassByName(db, firestoreModule, groupName, academyId);
         let studentDoc = null;
         let studentData = null;
 
@@ -412,7 +460,11 @@ async function runFirebaseTask(page, taskName, params) {
           studentData = studentSnap.data() || {};
         } else {
           const studentSnap = await getDocs(
-            query(collection(db, 'privateStudents'), where('name', '==', studentName))
+            query(
+              collection(db, 'privateStudents'),
+              where('academyId', '==', academyId),
+              where('name', '==', studentName)
+            )
           );
 
           if (studentSnap.empty) {
@@ -496,6 +548,7 @@ async function runFirebaseTask(page, taskName, params) {
           groupLessonId,
           skipCreditTransactionCleanup = false,
         } = params;
+        const academyId = getTaskAcademyId(params);
 
         if (groupStudentId) {
           await deleteDoc(doc(db, 'groupStudents', groupStudentId)).catch(() => {});
@@ -504,7 +557,11 @@ async function runFirebaseTask(page, taskName, params) {
         if (packageId) {
           if (!skipCreditTransactionCleanup) {
             const creditTransactionSnap = await getDocs(
-              query(collection(db, 'creditTransactions'), where('packageId', '==', packageId))
+              query(
+                collection(db, 'creditTransactions'),
+                where('academyId', '==', academyId),
+                where('packageId', '==', packageId)
+              )
             ).catch(() => null);
 
             if (creditTransactionSnap && !creditTransactionSnap.empty) {
@@ -677,6 +734,7 @@ async function runFirebaseTask(page, taskName, params) {
       }) {
         const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
         const { groupClassId, groupLessonId, groupLessonIds, strictLessonIdsOnly = false } = params;
+        const academyId = getTaskAcademyId(params);
         const explicitLessonIds = new Set(
           Array.isArray(groupLessonIds)
             ? groupLessonIds.map((lessonId) => String(lessonId || '').trim()).filter(Boolean)
@@ -698,10 +756,18 @@ async function runFirebaseTask(page, taskName, params) {
         if (groupClassId && !strictLessonIdsOnly) {
           const [groupLessonsA, groupLessonsB] = await Promise.all([
             getDocs(
-              query(collection(db, 'groupLessons'), where('groupClassId', '==', groupClassId))
+              query(
+                collection(db, 'groupLessons'),
+                where('academyId', '==', academyId),
+                where('groupClassId', '==', groupClassId)
+              )
             ).catch(() => null),
             getDocs(
-              query(collection(db, 'groupLessons'), where('groupClassID', '==', groupClassId))
+              query(
+                collection(db, 'groupLessons'),
+                where('academyId', '==', academyId),
+                where('groupClassID', '==', groupClassId)
+              )
             ).catch(() => null),
           ]);
 
@@ -725,8 +791,9 @@ async function runFirebaseTask(page, taskName, params) {
 
       async function getGroupPackageStartDateTask({ db, firestore: firestoreModule, params }) {
         const { groupName } = params;
-        const groupClass = await getGroupClassByName(db, firestoreModule, groupName);
-        const groupLessons = await getGroupLessonsByClassId(db, firestoreModule, groupClass.id);
+        const academyId = getTaskAcademyId(params);
+        const groupClass = await getGroupClassByName(db, firestoreModule, groupName, academyId);
+        const groupLessons = await getGroupLessonsByClassId(db, firestoreModule, groupClass.id, academyId);
         const todayYmd = new Intl.DateTimeFormat('en-CA', {
           timeZone: 'Asia/Seoul',
           year: 'numeric',
@@ -749,6 +816,55 @@ async function runFirebaseTask(page, taskName, params) {
         }
 
         return earliestFutureLessonYmd;
+      }
+
+      async function getLessonRequestApprovalStateTask({ db, firestore: firestoreModule, params }) {
+        const { collection, doc, getDoc, getDocs, query, where } = firestoreModule;
+        const academyId = getTaskAcademyId(params);
+        const requestId = String(params.requestId || '').trim();
+        if (!requestId) throw new Error('requestId is required.');
+
+        const requestSnap = await getDoc(doc(db, 'lessonRequests', requestId));
+        const requestData = requestSnap.exists() ? requestSnap.data() || {} : null;
+        const lessonsSnap = await getDocs(
+          query(
+            collection(db, 'lessons'),
+            where('academyId', '==', academyId),
+            where('lessonRequestId', '==', requestId)
+          )
+        );
+
+        const lessons = lessonsSnap.docs
+          .map((lessonDoc) => {
+            const data = lessonDoc.data() || {};
+            return {
+              id: lessonDoc.id,
+              date: String(data.date || ''),
+              time: String(data.time || ''),
+              subject: String(data.subject || ''),
+              studentId: String(data.studentId || ''),
+              studentID: String(data.studentID || ''),
+              studentName: String(data.studentName || ''),
+              teacher: String(data.teacher || ''),
+              completed: data.completed === true,
+              isDeductCancelled: data.isDeductCancelled === true,
+              deductMemo: String(data.deductMemo || ''),
+              seriesID: String(data.seriesID || ''),
+              sessionNumber: data.sessionNumber || null,
+            };
+          })
+          .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
+
+        return {
+          exists: requestSnap.exists(),
+          approvalStatus: String(requestData?.approvalStatus || ''),
+          rejectionReason: String(requestData?.rejectionReason || ''),
+          lessonId: String(requestData?.lessonId || requestData?.lessonID || ''),
+          reviewedByUID: String(requestData?.reviewedByUID || ''),
+          approvedByUID: String(requestData?.approvedByUID || ''),
+          rejectedByUID: String(requestData?.rejectedByUID || ''),
+          lessons,
+        };
       }
       function formatYmdFromDate(date) {
         const year = date.getFullYear();

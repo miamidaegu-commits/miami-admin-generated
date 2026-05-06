@@ -116,6 +116,50 @@ export default function GroupLessonModal({
               </span>
             ) : null}
           </label>
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+            <span style={{ opacity: 0.85 }}>예약 정원</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={groupLessonForm.capacity}
+              onChange={(e) =>
+                setGroupLessonForm((prev) => ({ ...prev, capacity: e.target.value }))
+              }
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid #444',
+                background: '#1f1f1f',
+                color: 'white',
+              }}
+            />
+            {groupLessonFormErrors.capacity ? (
+              <span style={{ color: '#f08080', fontSize: 12 }}>
+                {groupLessonFormErrors.capacity}
+              </span>
+            ) : null}
+          </label>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 13,
+              opacity: 0.9,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={groupLessonForm.isBookable === true}
+              onChange={(e) =>
+                setGroupLessonForm((prev) => ({ ...prev, isBookable: e.target.checked }))
+              }
+            />
+            예약 가능
+          </label>
         </div>
 
         <div

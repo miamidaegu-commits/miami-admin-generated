@@ -12,12 +12,18 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   creditTransactionCreatedAtToMillis,
   getNextStudentPackageStatus,
   normalizeText,
   parseRequiredMinOneIntField,
 } from '../dashboardViewUtils.js'
+import {
+  buildStudentGroupAccessPayloadFromGroupStudent,
+  updateStudentGroupAccessBatch,
+} from '../../group-booking/studentGroupAccessClient.js'
+import { removeStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 
 const DEFAULT_STUDENT_PACKAGE_EDIT_FORM = {
   title: '',
@@ -36,6 +42,7 @@ function createDefaultStudentPackageEditForm(overrides = {}) {
 
 export default function useStudentPackageAdminFlow({
   userProfile,
+  currentAcademyId,
   addCreditTransaction,
   studentDocFieldToYmdString,
 }) {
@@ -68,8 +75,11 @@ export default function useStudentPackageAdminFlow({
     setStudentPackageHistoryRows([])
     setStudentPackageHistoryLoading(true)
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(pkg, scopedAcademyId, '수강권')
       const q = query(
         collection(db, 'creditTransactions'),
+        where('academyId', '==', scopedAcademyId),
         where('packageId', '==', pkg.id)
       )
       const snap = await getDocs(q)
@@ -189,6 +199,8 @@ export default function useStudentPackageAdminFlow({
     if (!result.valid) return
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(pkg, scopedAcademyId, '수강권')
       setBusyStudentPackageActionId(pkg.id)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
       const remainingCount = Math.max(0, result.totalCount - usedCount)
@@ -298,12 +310,18 @@ export default function useStudentPackageAdminFlow({
     if (!window.confirm(`이 수강권을 종료할까요?\n${label}`)) return
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(pkg, scopedAcademyId, '수강권')
       setBusyStudentPackageActionId(pkg.id)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
       const pt = pkg.packageType
 
       if (pt === 'group' || pt === 'openGroup') {
-        const q = query(collection(db, 'groupStudents'), where('packageId', '==', pkg.id))
+        const q = query(
+          collection(db, 'groupStudents'),
+          where('academyId', '==', scopedAcademyId),
+          where('packageId', '==', pkg.id)
+        )
         const snap = await getDocs(q)
         const batch = writeBatch(db)
         batch.update(pkgRef, { status: 'ended', updatedAt: serverTimestamp() })
@@ -314,7 +332,45 @@ export default function useStudentPackageAdminFlow({
             status: 'ended',
             updatedAt: serverTimestamp(),
           })
+          updateStudentGroupAccessBatch(
+            batch,
+            db,
+            buildStudentGroupAccessPayloadFromGroupStudent(
+              { id: d.id, ...data },
+              { status: 'ended' }
+            )
+          )
         })
+        await batch.commit()
+      } else if (pt === 'private') {
+        const studentId = String(pkg.studentId || '').trim()
+        const teacher = normalizeText(pkg.teacher || '')
+        const activeSameTeacherSnap =
+          studentId && teacher
+            ? await getDocs(
+                query(
+                  collection(db, 'studentPackages'),
+                  where('academyId', '==', scopedAcademyId),
+                  where('studentId', '==', studentId),
+                  where('teacher', '==', teacher),
+                  where('status', '==', 'active')
+                )
+              )
+            : null
+        const hasOtherActiveSameTeacher = activeSameTeacherSnap
+          ? activeSameTeacherSnap.docs.some((docItem) => docItem.id !== pkg.id)
+          : false
+        const batch = writeBatch(db)
+        batch.update(pkgRef, { status: 'ended', updatedAt: serverTimestamp() })
+        if (studentId && teacher) {
+          removeStudentPrivateTeacherAccessBatch(batch, db, {
+            academyId: scopedAcademyId,
+            studentId,
+            teacher,
+            packageId: pkg.id,
+            removeTeacher: !hasOtherActiveSameTeacher,
+          })
+        }
         await batch.commit()
       } else {
         await updateDoc(pkgRef, { status: 'ended', updatedAt: serverTimestamp() })

@@ -68,6 +68,12 @@ export function getTeacherName(lesson) {
   return lesson.teacherName || lesson.teacher || '-'
 }
 
+export function formatLessonSessionNumber(lesson) {
+  const value = Number(lesson?.sessionNumber)
+  if (!Number.isFinite(value) || value <= 0) return ''
+  return `${value}회차`
+}
+
 export function getTodayStorageDateString() {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: SCHOOL_TIME_ZONE,

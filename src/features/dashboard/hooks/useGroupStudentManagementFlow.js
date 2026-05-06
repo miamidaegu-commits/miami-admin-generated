@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { doc, serverTimestamp, Timestamp, updateDoc } from 'firebase/firestore'
+import { doc, serverTimestamp, Timestamp, writeBatch } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy } from '../academyScope.js'
 import {
   getGroupStudentExcludedDatesArray,
   groupStudentDateValueToYmd,
@@ -8,6 +9,10 @@ import {
   normalizeGroupStudentOperationalStatus,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
+import {
+  buildStudentGroupAccessPayloadFromGroupStudent,
+  updateStudentGroupAccessBatch,
+} from '../../group-booking/studentGroupAccessClient.js'
 
 const DEFAULT_GROUP_STUDENT_MANAGE_FORM = {
   startDateStr: '',
@@ -105,7 +110,7 @@ function validateGroupStudentManageForm(form) {
   }
 }
 
-export default function useGroupStudentManagementFlow({ userProfile }) {
+export default function useGroupStudentManagementFlow({ userProfile, currentAcademyId }) {
   const [groupStudentManageModal, setGroupStudentManageModal] = useState(null)
   const [groupStudentManageForm, setGroupStudentManageFormState] = useState(
     DEFAULT_GROUP_STUDENT_MANAGE_FORM
@@ -211,8 +216,10 @@ export default function useGroupStudentManagementFlow({ userProfile }) {
     const startTimestamp = Timestamp.fromDate(new Date(year, month - 1, day))
 
     try {
+      assertSameAcademy(groupStudent, currentAcademyId, '그룹 학생')
       setBusyGroupStudentManageId(groupStudent.id)
-      await updateDoc(doc(db, 'groupStudents', groupStudent.id), {
+      const batch = writeBatch(db)
+      batch.update(doc(db, 'groupStudents', groupStudent.id), {
         startDate: startTimestamp,
         studentStatus: result.studentStatus,
         breakStartDate: result.studentStatus === 'onBreak' ? result.breakStartStr : '',
@@ -220,6 +227,14 @@ export default function useGroupStudentManagementFlow({ userProfile }) {
         excludedDates: result.excludedDates,
         updatedAt: serverTimestamp(),
       })
+      updateStudentGroupAccessBatch(
+        batch,
+        db,
+        buildStudentGroupAccessPayloadFromGroupStudent(groupStudent, {
+          studentStatus: result.studentStatus,
+        })
+      )
+      await batch.commit()
       setGroupStudentManageModal(null)
     } catch (error) {
       console.error('그룹 학생 운영 정보 저장 실패:', error)

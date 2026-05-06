@@ -34,7 +34,7 @@ test('관리자가 그룹 학생 관리 모달에서 제외 날짜를 저장하�
   const excludedDate = formatYmd(addDays(new Date(), 920));
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '반 관리');
+  await openDashboardSection(page, '단체반 관리');
 
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();

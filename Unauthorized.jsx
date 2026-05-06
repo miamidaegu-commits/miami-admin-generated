@@ -17,7 +17,7 @@ export default function Unauthorized() {
         <div className="login-header">
           <div className="login-icon" style={{ color: 'var(--danger)' }}>⊘</div>
           <h1>Access Denied</h1>
-          <p>Your account does not have admin privileges.</p>
+          <p>Your account does not have access to this page.</p>
           <p style={{ marginTop: '0.25rem', fontSize: '0.8rem', opacity: 0.5 }}>
             Contact your administrator if you think this is a mistake.
           </p>

@@ -31,25 +31,14 @@ function getFirebaseConfigFromEnv(env) {
   }
 }
 
-const firebaseConfig = {
-  apiKey: 'AIzaSyDgF4BT9KnyRpApMY23ScZgbBMSmu-ExuU',
-  authDomain: 'miamiacademyschedule.firebaseapp.com',
-  projectId: 'miamiacademyschedule',
-  storageBucket: 'miamiacademyschedule.firebasestorage.app',
-  messagingSenderId: '1086077006833',
-  appId: '1:1086077006833:web:344e89ad2f30b5c0b44a50',
+if (
+  import.meta.env.MODE === 'e2e' &&
+  import.meta.env.VITE_FIREBASE_PROJECT_ID !== 'miami-e2e'
+) {
+  throw new Error('E2E mode requires VITE_FIREBASE_PROJECT_ID=miami-e2e.')
 }
 
-const isE2ETestFirebase =
-  import.meta.env.VITE_FIREBASE_PROJECT_ID === 'miami-e2e'
-
-const e2eFirebaseConfig = isE2ETestFirebase
-  ? getFirebaseConfigFromEnv(import.meta.env)
-  : null
-
-const activeFirebaseConfig = e2eFirebaseConfig
-  ? e2eFirebaseConfig
-  : firebaseConfig
+const activeFirebaseConfig = getFirebaseConfigFromEnv(import.meta.env)
 
 const app = getApps().length > 0 ? getApp() : initializeApp(activeFirebaseConfig)
 

@@ -1,5 +1,6 @@
 import { Navigate } from 'react-router-dom'
 import { useAuth } from './AuthContext'
+import { debugLog } from './src/utils/debugLog.js'
 
 export default function ProtectedRoute({
   children,
@@ -7,8 +8,8 @@ export default function ProtectedRoute({
 }) {
   const { user, role, loading } = useAuth()
   
-  console.log('[ProtectedRoute]', {
-    user: user?.email,
+  debugLog('[ProtectedRoute]', {
+    hasUser: Boolean(user),
     role,
     loading,
     allowedRoles,

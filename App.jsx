@@ -4,8 +4,10 @@ import { httpsCallable } from "firebase/functions";
 import { AuthProvider, useAuth } from "./AuthContext";
 import Login from "./Login";
 import Dashboard from "./Dashboard";
+import StudentBookingPage from "./StudentBookingPage";
 import Unauthorized from "./Unauthorized";
 import ProtectedRoute from "./ProtectedRoute";
+import PublicClassIntroPage from "./src/features/public/PublicClassIntroPage.jsx";
 import { auth, functions } from "./firebase";
 
 /** 운영에서는 false 유지. 개발 중에만 선생님 생성 툴바(uid / teacherName / Create Teacher)를 표시합니다. */
@@ -93,12 +95,21 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Login />} />
           <Route path="/login" element={<Login />} />
+          <Route path="/classes" element={<PublicClassIntroPage />} />
           <Route path="/unauthorized" element={<Unauthorized />} />
           <Route
             path="/dashboard"
             element={
               <ProtectedRoute allowedRoles={['admin', 'teacher']}>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/student-booking"
+            element={
+              <ProtectedRoute allowedRoles={['student']}>
+                <StudentBookingPage />
               </ProtectedRoute>
             }
           />

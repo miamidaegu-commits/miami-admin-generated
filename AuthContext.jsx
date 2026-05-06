@@ -1,164 +1,368 @@
 // src/context/AuthContext.jsx
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { onAuthStateChanged, signOut } from 'firebase/auth'
-import { doc, getDoc } from 'firebase/firestore'
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from 'firebase/firestore'
 import { auth, db } from './firebase'
+import { debugLog, debugWarn } from './src/utils/debugLog.js'
+import {
+  isValidOperationalAcademyId,
+  normalizeAcademyId,
+} from './src/features/dashboard/academyScope.js'
 
 const AuthContext = createContext(null)
 
+const PERMISSION_KEYS = [
+  'canManageAttendance',
+  'canAddStudent',
+  'canEditStudent',
+  'canDeleteStudent',
+  'canEditLesson',
+  'canDeleteLesson',
+  'canCreateLessonDirectly',
+  'requiresLessonApproval',
+]
+
 const emptyState = {
   user: null,
-  role: null,
+  globalUserProfile: null,
+  userProfile: null,
+  memberships: [],
+  currentAcademyId: '',
+  currentMembership: null,
+  currentAcademy: null,
   loading: true,
-  isAdmin: false,
-  isActive: false,
-  teacherName: '',
-  canAddStudent: false,
-  canEditLesson: false,
-  canDeleteLesson: false,
-  canManageAttendance: false,
-  canEditStudent: false,
-  canDeleteStudent: false,
-  canCreateLessonDirectly: false,
-  requiresLessonApproval: false,
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function normalizeDashboardRole(role, fallbackRole = '') {
+  const normalized = String(role || fallbackRole || '').trim().toLowerCase()
+  if (normalized === 'owner' || normalized === 'admin') return 'admin'
+  if (normalized === 'teacher') return 'teacher'
+  return normalized || null
+}
+
+function normalizeMembershipRole(role, fallbackRole = '') {
+  const normalized = String(role || fallbackRole || '').trim().toLowerCase()
+  if (['owner', 'admin', 'teacher', 'staff', 'student'].includes(normalized)) {
+    return normalized
+  }
+  return normalized || 'staff'
+}
+
+function normalizePermissions(source = {}) {
+  const rawPermissions = source.permissions && typeof source.permissions === 'object'
+    ? source.permissions
+    : source
+
+  return Object.fromEntries(
+    PERMISSION_KEYS.map((key) => [key, rawPermissions?.[key] === true])
+  )
+}
+
+function sortMemberships(rows) {
+  return [...rows].sort((a, b) => {
+    const academyCompare = String(a.academyId || '').localeCompare(String(b.academyId || ''))
+    if (academyCompare !== 0) return academyCompare
+    return String(a.uid || '').localeCompare(String(b.uid || ''))
+  })
+}
+
+function chooseAcademyId(userData, memberships) {
+  const activeMemberships = sortMemberships(memberships).filter((membership) =>
+    isValidOperationalAcademyId(membership.academyId)
+  )
+  if (activeMemberships.length === 0) return ''
+
+  const preferredAcademyId = normalizeAcademyId(userData?.lastSelectedAcademyId)
+  if (
+    isValidOperationalAcademyId(preferredAcademyId) &&
+    activeMemberships.some((membership) => membership.academyId === preferredAcademyId)
+  ) {
+    return preferredAcademyId
+  }
+
+  return String(activeMemberships[0].academyId || '')
+}
+
+function buildUserProfileAdapter({
+  firebaseUser,
+  globalUserProfile,
+  currentMembership,
+  currentAcademyId,
+}) {
+  if (!firebaseUser || !globalUserProfile || !currentMembership) return null
+
+  const sourceProfile = currentMembership
+  const membershipRole = normalizeMembershipRole(
+    sourceProfile?.role,
+    globalUserProfile.role
+  )
+  const role = normalizeDashboardRole(membershipRole, globalUserProfile.role)
+  const admin = role === 'admin'
+  const permissions = normalizePermissions(sourceProfile || {})
+
+  return {
+    ...globalUserProfile,
+    id: firebaseUser.uid,
+    uid: firebaseUser.uid,
+    email: globalUserProfile.email || firebaseUser.email || '',
+    displayName: globalUserProfile.displayName || firebaseUser.displayName || '',
+    accountScope: globalUserProfile.accountScope || 'global',
+    academyId: currentAcademyId || '',
+    currentAcademyId: currentAcademyId || '',
+    membershipId: currentMembership?.id || '',
+    membershipRole,
+    role,
+    studentId: String(sourceProfile?.studentId || '').trim(),
+    isActive: currentMembership.status !== 'disabled',
+    teacherName: normalizeText(sourceProfile?.teacherName || globalUserProfile.teacherName),
+    canManageAttendance: admin || permissions.canManageAttendance === true,
+    canAddStudent: admin || permissions.canAddStudent === true,
+    canEditStudent: admin || permissions.canEditStudent === true,
+    canDeleteStudent: admin || permissions.canDeleteStudent === true,
+    canEditLesson: admin || permissions.canEditLesson === true,
+    canDeleteLesson: admin || permissions.canDeleteLesson === true,
+    canCreateLessonDirectly: admin || permissions.canCreateLessonDirectly === true,
+    requiresLessonApproval: !admin && permissions.requiresLessonApproval === true,
+  }
+}
+
+async function loadActiveMemberships(uid) {
+  try {
+    const membershipSnap = await getDocs(
+      query(
+        collection(db, 'academyMemberships'),
+        where('uid', '==', uid),
+        where('status', '==', 'active')
+      )
+    )
+
+    const memberships = membershipSnap.docs.map((docItem) => ({
+      id: docItem.id,
+      ...docItem.data(),
+    }))
+
+    return sortMemberships(memberships)
+  } catch (error) {
+    debugWarn('[AuthContext] academyMemberships 로드 실패:', error)
+  }
+  return []
+}
+
+async function loadAcademy(academyId) {
+  if (!academyId) return null
+
+  try {
+    const academySnap = await getDoc(doc(db, 'academies', academyId))
+    return academySnap.exists() ? { id: academySnap.id, ...academySnap.data() } : null
+  } catch (error) {
+    debugWarn('[AuthContext] academies 문서 로드 실패:', academyId, error)
+    return null
+  }
+}
+
+async function healLastSelectedAcademyId(uid, previousAcademyId, nextAcademyId) {
+  if (!uid || !isValidOperationalAcademyId(nextAcademyId)) return
+  if (normalizeAcademyId(previousAcademyId) === nextAcademyId) return
+
+  try {
+    await updateDoc(doc(db, 'users', uid), {
+      lastSelectedAcademyId: nextAcademyId,
+      updatedAt: serverTimestamp(),
+    })
+  } catch (error) {
+    debugWarn('[AuthContext] lastSelectedAcademyId 자동 보정 실패:', error)
+  }
 }
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(emptyState.user)
-  const [role, setRole] = useState(emptyState.role)
-  const [loading, setLoading] = useState(emptyState.loading)
-  const [isAdmin, setIsAdmin] = useState(emptyState.isAdmin)
-  const [isActive, setIsActive] = useState(emptyState.isActive)
-  const [teacherName, setTeacherName] = useState(emptyState.teacherName)
-  const [canAddStudent, setCanAddStudent] = useState(emptyState.canAddStudent)
-  const [canEditLesson, setCanEditLesson] = useState(emptyState.canEditLesson)
-  const [canDeleteLesson, setCanDeleteLesson] = useState(emptyState.canDeleteLesson)
-  const [canManageAttendance, setCanManageAttendance] = useState(emptyState.canManageAttendance)
-  const [canEditStudent, setCanEditStudent] = useState(emptyState.canEditStudent)
-  const [canDeleteStudent, setCanDeleteStudent] = useState(emptyState.canDeleteStudent)
-  const [canCreateLessonDirectly, setCanCreateLessonDirectly] = useState(emptyState.canCreateLessonDirectly)
-  const [requiresLessonApproval, setRequiresLessonApproval] = useState(emptyState.requiresLessonApproval)
+  const [session, setSession] = useState(emptyState)
 
-  const resetSession = () => {
-    setUser(null)
-    setRole(null)
-    setIsAdmin(false)
-    setIsActive(false)
-    setTeacherName('')
-    setCanAddStudent(false)
-    setCanEditLesson(false)
-    setCanDeleteLesson(false)
-    setCanManageAttendance(false)
-    setCanEditStudent(false)
-    setCanDeleteStudent(false)
-    setCanCreateLessonDirectly(false)
-    setRequiresLessonApproval(false)
-  }
+  const resetSession = useCallback((loading = false) => {
+    setSession({
+      ...emptyState,
+      loading,
+    })
+  }, [])
 
   useEffect(() => {
+    let cancelled = false
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setLoading(true)
+      setSession((prev) => ({ ...prev, loading: true }))
 
       if (!firebaseUser) {
-        resetSession()
-        setLoading(false)
+        resetSession(false)
         return
       }
 
       try {
-        const snap = await getDoc(doc(db, 'users', firebaseUser.uid))
+        const userSnap = await getDoc(doc(db, 'users', firebaseUser.uid))
 
-        if (!snap.exists()) {
-          console.warn('[AuthContext] users/{uid} 문서가 없습니다:', firebaseUser.uid)
-          resetSession()
+        if (!userSnap.exists()) {
+          debugWarn('[AuthContext] users/{uid} 문서가 없습니다')
+          resetSession(false)
           await signOut(auth)
-          setLoading(false)
           return
         }
 
-        const data = snap.data() || {}
-        const active = data.isActive === true
-        const nextRole = data.role ?? null
-        const admin = active && nextRole === 'admin'
-        const normalizedTeacherName =
-          typeof data.teacherName === 'string'
-            ? data.teacherName.trim().toLowerCase()
-            : ''
+        const globalUserProfile = {
+          id: userSnap.id,
+          uid: firebaseUser.uid,
+          ...userSnap.data(),
+        }
 
-        console.log('[AuthContext] uid=', firebaseUser.uid)
-        console.log('[AuthContext] email=', firebaseUser.email)
-        console.log('[AuthContext] role=', nextRole)
-        console.log('[AuthContext] rawTeacherName=', data.teacherName ?? null)
-        console.log('[AuthContext] normalizedTeacherName=', normalizedTeacherName)
-        console.log('[AuthContext] isActive=', active)
-
-        if (!active) {
-          console.warn('[AuthContext] 비활성 계정입니다. 자동 로그아웃합니다.')
-          resetSession()
+        if (globalUserProfile.isActive === false) {
+          debugWarn('[AuthContext] 비활성 계정입니다. 자동 로그아웃합니다.')
+          resetSession(false)
           await signOut(auth)
-          setLoading(false)
           return
         }
 
-        setUser(firebaseUser)
-        setRole(nextRole)
-        setIsAdmin(admin)
-        setIsActive(active)
-        setTeacherName(normalizedTeacherName)
+        const memberships = await loadActiveMemberships(firebaseUser.uid)
+        const currentAcademyId = chooseAcademyId(globalUserProfile, memberships)
+        const currentMembership =
+          memberships.find((membership) => membership.academyId === currentAcademyId) || null
 
-        setCanAddStudent(admin || data.canAddStudent === true)
-        setCanEditLesson(admin || data.canEditLesson === true)
-        setCanDeleteLesson(admin || data.canDeleteLesson === true)
-        setCanManageAttendance(admin || data.canManageAttendance === true)
-        setCanEditStudent(admin || data.canEditStudent === true)
-        setCanDeleteStudent(admin || data.canDeleteStudent === true)
-        setCanCreateLessonDirectly(admin || data.canCreateLessonDirectly === true)
-        setRequiresLessonApproval(!admin && data.requiresLessonApproval === true)
+        if (!currentMembership || !currentAcademyId) {
+          debugWarn('[AuthContext] 활성 academyMemberships 가 없어 세션을 종료합니다.')
+          resetSession(false)
+          await signOut(auth)
+          return
+        }
+
+        const currentAcademy = await loadAcademy(currentAcademyId)
+        const userProfile = buildUserProfileAdapter({
+          firebaseUser,
+          globalUserProfile,
+          currentMembership,
+          currentAcademyId,
+        })
+
+        await healLastSelectedAcademyId(
+          firebaseUser.uid,
+          globalUserProfile.lastSelectedAcademyId,
+          currentAcademyId
+        )
+
+        debugLog('[AuthContext] session loaded', {
+          hasUid: Boolean(firebaseUser.uid),
+          hasEmail: Boolean(firebaseUser.email),
+          hasAcademy: Boolean(currentAcademyId),
+          memberships: memberships.length,
+          membershipRole: currentMembership?.role || null,
+          dashboardRole: userProfile?.role || null,
+          hasTeacherName: Boolean(userProfile?.teacherName),
+        })
+
+        if (!cancelled) {
+          setSession({
+            user: firebaseUser,
+            globalUserProfile,
+            userProfile,
+            memberships,
+            currentAcademyId,
+            currentMembership,
+            currentAcademy,
+            loading: false,
+          })
+        }
       } catch (error) {
-        console.error('[AuthContext] 사용자 문서 로드 실패:', error)
-        resetSession()
-      } finally {
-        setLoading(false)
+        console.error('[AuthContext] 사용자 세션 로드 실패:', error)
+        if (!cancelled) resetSession(false)
       }
     })
 
-    return unsubscribe
-  }, [])
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
+  }, [resetSession])
 
-  const value = useMemo(
-    () => ({
-      user,
-      role,
-      loading,
-      isAdmin,
-      isActive,
-      teacherName,
-      canAddStudent,
-      canEditLesson,
-      canDeleteLesson,
-      canManageAttendance,
-      canEditStudent,
-      canDeleteStudent,
-      canCreateLessonDirectly,
-      requiresLessonApproval,
-    }),
-    [
-      user,
-      role,
-      loading,
-      isAdmin,
-      isActive,
-      teacherName,
-      canAddStudent,
-      canEditLesson,
-      canDeleteLesson,
-      canManageAttendance,
-      canEditStudent,
-      canDeleteStudent,
-      canCreateLessonDirectly,
-      requiresLessonApproval,
-    ]
+  const selectCurrentAcademyId = useCallback(
+    async (academyId) => {
+      const nextAcademyId = normalizeAcademyId(academyId)
+      if (!session.user?.uid || !isValidOperationalAcademyId(nextAcademyId)) return false
+
+      const nextMembership =
+        session.memberships.find((membership) => membership.academyId === nextAcademyId) || null
+
+      if (!nextMembership) {
+        debugWarn('[AuthContext] 선택할 수 없는 academyId 입니다')
+        return false
+      }
+
+      const nextAcademy = await loadAcademy(nextAcademyId)
+      const nextUserProfile = buildUserProfileAdapter({
+        firebaseUser: session.user,
+        globalUserProfile: session.globalUserProfile,
+        currentMembership: nextMembership,
+        currentAcademyId: nextAcademyId,
+      })
+
+      setSession((prev) => ({
+        ...prev,
+        currentAcademyId: nextAcademyId,
+        currentMembership: nextMembership,
+        currentAcademy: nextAcademy,
+        userProfile: nextUserProfile,
+      }))
+
+      try {
+        await updateDoc(doc(db, 'users', session.user.uid), {
+          lastSelectedAcademyId: nextAcademyId,
+          updatedAt: serverTimestamp(),
+        })
+      } catch (error) {
+        debugWarn('[AuthContext] lastSelectedAcademyId 저장 실패:', error)
+      }
+
+      return true
+    },
+    [session.globalUserProfile, session.memberships, session.user]
   )
+
+  const value = useMemo(() => {
+    const userProfile = session.userProfile
+    const role = userProfile?.role || null
+
+    return {
+      user: session.user,
+      globalUserProfile: session.globalUserProfile,
+      userProfile,
+      memberships: session.memberships,
+      currentAcademyId: session.currentAcademyId,
+      currentMembership: session.currentMembership,
+      currentAcademy: session.currentAcademy,
+      setCurrentAcademyId: selectCurrentAcademyId,
+      role,
+      loading: session.loading,
+      isAdmin: role === 'admin',
+      isActive: userProfile?.isActive === true,
+      teacherName: userProfile?.teacherName || '',
+      studentId: userProfile?.studentId || '',
+      canAddStudent: userProfile?.canAddStudent === true,
+      canEditLesson: userProfile?.canEditLesson === true,
+      canDeleteLesson: userProfile?.canDeleteLesson === true,
+      canManageAttendance: userProfile?.canManageAttendance === true,
+      canEditStudent: userProfile?.canEditStudent === true,
+      canDeleteStudent: userProfile?.canDeleteStudent === true,
+      canCreateLessonDirectly: userProfile?.canCreateLessonDirectly === true,
+      requiresLessonApproval: userProfile?.requiresLessonApproval === true,
+    }
+  }, [selectCurrentAcademyId, session])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

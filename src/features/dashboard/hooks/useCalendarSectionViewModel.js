@@ -3,6 +3,8 @@ import {
   getGroupLessonGroupId,
   getLessonDate,
   getLessonStorageDateString,
+  formatLessonSessionNumber,
+  getStudentName,
   getTeacherName,
   normalizeText,
 } from '../dashboardViewUtils.js'
@@ -109,6 +111,30 @@ export default function useCalendarSectionViewModel({
     return map
   }, [calendarCombinedLessons])
 
+  const lessonsPreviewByDate = useMemo(() => {
+    const map = new Map()
+
+    calendarCombinedLessons.forEach((lesson) => {
+      const dateKey = getLessonStorageDateString(lesson)
+      if (!dateKey) return
+      const current = map.get(dateKey) || []
+      const isGroupRow = lesson._calendarRowKind === 'group'
+      current.push({
+        id: lesson.id,
+        label: [
+          isGroupRow ? lesson.groupClassDisplayName || '단체수업' : getStudentName(lesson),
+          lesson.time || '',
+          formatLessonSessionNumber(lesson),
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      })
+      map.set(dateKey, current)
+    })
+
+    return map
+  }, [calendarCombinedLessons])
+
   return {
     visibleLessons,
     visibleGroupLessons,
@@ -116,5 +142,6 @@ export default function useCalendarSectionViewModel({
     calendarCombinedLessons,
     displayedLessons,
     lessonsCountByDate,
+    lessonsPreviewByDate,
   }
 }

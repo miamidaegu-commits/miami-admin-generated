@@ -1,8 +1,15 @@
 // src/pages/Login.jsx
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { signInWithEmailAndPassword } from 'firebase/auth'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { auth } from './firebase'
+import { useAuth } from './AuthContext'
+
+function getDefaultRouteForRole(role) {
+  if (role === 'student') return '/student-booking'
+  if (role === 'admin' || role === 'teacher') return '/dashboard'
+  return null
+}
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -10,6 +17,13 @@ export default function Login() {
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
+  const { user, role, loading: authLoading } = useAuth()
+
+  useEffect(() => {
+    if (authLoading || !user) return
+    const nextPath = getDefaultRouteForRole(role)
+    if (nextPath) navigate(nextPath, { replace: true })
+  }, [authLoading, navigate, role, user])
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -17,7 +31,6 @@ export default function Login() {
     setLoading(true)
     try {
       await signInWithEmailAndPassword(auth, email, password)
-      navigate('/dashboard')
     } catch (err) {
       setError(getFriendlyError(err.code))
     } finally {
@@ -43,18 +56,21 @@ export default function Login() {
       <div className="login-card">
         <div className="login-header">
           <div className="login-icon">⬡</div>
-          <h1>Admin Portal</h1>
-          <p>Sign in to access the dashboard</p>
+          <h1>마이애미 영어회화</h1>
+          <p>수업 관리와 예약을 위해 로그인하세요.</p>
+          <Link className="login-public-link" to="/classes">
+            수업 소개 보기
+          </Link>
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
           <div className="field">
-            <label htmlFor="email">Email</label>
+            <label htmlFor="email">이메일</label>
             <input
               id="email"
               type="email"
               autoComplete="email"
-              placeholder="admin@example.com"
+              placeholder="email@example.com"
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
@@ -62,7 +78,7 @@ export default function Login() {
           </div>
 
           <div className="field">
-            <label htmlFor="password">Password</label>
+            <label htmlFor="password">비밀번호</label>
             <input
               id="password"
               type="password"
@@ -77,7 +93,7 @@ export default function Login() {
           {error && <p className="error-msg">{error}</p>}
 
           <button type="submit" className="btn-primary" disabled={loading}>
-            {loading ? 'Signing in…' : 'Sign In'}
+            {loading ? '로그인 중…' : '로그인'}
           </button>
         </form>
       </div>

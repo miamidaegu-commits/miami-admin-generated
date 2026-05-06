@@ -294,7 +294,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       groupStudentId: tempGroupStudentId,
     });
 
-    await openDashboardSection(page, '반 관리');
+    await openDashboardSection(page, '단체반 관리');
 
     const groupRow = getGroupRow(page, groupName);
     await expect(groupRow).toBeVisible();

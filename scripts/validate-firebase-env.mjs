@@ -8,7 +8,15 @@ const FIREBASE_ENV_KEYS = [
   'VITE_FIREBASE_MESSAGING_SENDER_ID',
   'VITE_FIREBASE_APP_ID',
 ]
+const PUBLIC_ENV_KEYS = [
+  'VITE_PUBLIC_APP_URL',
+]
 const E2E_FIREBASE_PROJECT_ID = 'miami-e2e'
+const PRODUCTION_FIREBASE_PROJECT_ID = 'daegu-miami-production'
+const REQUIRED_PROJECT_BY_MODE = {
+  e2e: E2E_FIREBASE_PROJECT_ID,
+  production: PRODUCTION_FIREBASE_PROJECT_ID,
+}
 
 const requestedMode = process.argv[2] || 'development'
 const loadedEnv = loadEnv(requestedMode, process.cwd(), '')
@@ -19,7 +27,10 @@ for (const [key, value] of Object.entries(loadedEnv)) {
   }
 }
 
-const missingKeys = FIREBASE_ENV_KEYS.filter((key) => !String(process.env[key] || '').trim())
+const requiredKeys = requestedMode === 'e2e' || requestedMode === 'production'
+  ? [...FIREBASE_ENV_KEYS, ...PUBLIC_ENV_KEYS]
+  : FIREBASE_ENV_KEYS
+const missingKeys = requiredKeys.filter((key) => !String(process.env[key] || '').trim())
 
 if (missingKeys.length > 0) {
   console.error(
@@ -28,12 +39,11 @@ if (missingKeys.length > 0) {
   process.exit(1)
 }
 
-if (
-  requestedMode === 'e2e' &&
-  process.env.VITE_FIREBASE_PROJECT_ID !== E2E_FIREBASE_PROJECT_ID
-) {
+const requiredProjectId = REQUIRED_PROJECT_BY_MODE[requestedMode]
+
+if (requiredProjectId && process.env.VITE_FIREBASE_PROJECT_ID !== requiredProjectId) {
   console.error(
-    `E2E mode requires VITE_FIREBASE_PROJECT_ID=${E2E_FIREBASE_PROJECT_ID}, received ${String(process.env.VITE_FIREBASE_PROJECT_ID || '')}.`
+    `${requestedMode} mode requires VITE_FIREBASE_PROJECT_ID=${requiredProjectId}, received ${String(process.env.VITE_FIREBASE_PROJECT_ID || '')}.`
   )
   process.exit(1)
 }

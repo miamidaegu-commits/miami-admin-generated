@@ -1,29 +1,46 @@
 import { expect } from '@playwright/test';
 
-export const BASE_URL = 'http://localhost:5173/';
+export const BASE_URL = 'http://127.0.0.1:5173/';
 
 export function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export async function loginAsAdmin(page, email, password) {
+async function loginAndExpectPath(page, email, password, pathPattern) {
   await page.goto(BASE_URL);
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    await page.getByLabel('Email').fill(email);
-    await page.getByLabel('Password').fill(password);
-    await page.getByRole('button', { name: 'Sign In' }).click();
+    const emailInput = page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first();
+    const passwordInput = page
+      .getByLabel(/Password|비밀번호/i)
+      .or(page.locator('input[type="password"]'))
+      .first();
+
+    await emailInput.fill(email);
+    await passwordInput.fill(password);
+    await page.getByRole('button', { name: /Sign In|로그인/i }).click();
 
     try {
-      await expect(page).toHaveURL(/\/dashboard/, { timeout: 10000 });
+      await expect(page).toHaveURL(pathPattern, { timeout: 10000 });
       break;
     } catch (error) {
       if (attempt === 3) throw error;
       await page.waitForTimeout(1000);
     }
   }
+}
+
+export async function loginAsAdmin(page, email, password) {
+  await loginAndExpectPath(page, email, password, /\/dashboard/);
 
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible();
+}
+
+export async function loginAsStudent(page, email, password) {
+  await loginAndExpectPath(page, email, password, /\/student-booking/);
+  await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
+    timeout: 15000,
+  });
 }
 
 export async function openDashboardSection(page, sectionName) {

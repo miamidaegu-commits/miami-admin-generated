@@ -3,6 +3,8 @@ export const ADMIN_PASSWORD = '123456';
 
 export const TEST_TEACHER_EMAIL = 'teacher@example.com';
 export const TEST_TEACHER_PASSWORD = '123456';
+export const TEST_STUDENT_EMAIL = 'student@example.com';
+export const TEST_STUDENT_PASSWORD = '123456';
 
 export const DEFAULT_E2E_ACADEMY_ID = 'academy_e2e_default';
 export const DEFAULT_E2E_ACADEMY_NAME = 'Miami E2E Academy';

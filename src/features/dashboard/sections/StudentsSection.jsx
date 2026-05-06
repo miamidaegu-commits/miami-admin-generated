@@ -1,5 +1,16 @@
-import { Fragment } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
+  collection,
+  getDocs,
+  query,
+  where,
+} from 'firebase/firestore'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions as firebaseFunctions } from '../../../../firebase'
+import {
+  formatCreditTransactionActionTypeLabel,
+  formatCreditTransactionCreatedAtDisplay,
+  formatCreditTransactionDeltaCountDisplay,
   formatDate,
   formatGroupStudentStartDate,
   formatStudentPackageDetailAmountPaid,
@@ -15,8 +26,175 @@ import {
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
 
+function cleanText(value, fallback = '-') {
+  const text = String(value ?? '').trim()
+  return text || fallback
+}
+
+const STUDENT_INVITATION_APP_URL_BY_PROJECT_ID = {
+  'daegu-miami-production': 'https://daegumiami.com',
+  'miami-e2e': 'https://miami-e2e.web.app',
+}
+
+function getStudentInvitationAppUrl() {
+  const configuredUrl = String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
+  if (configuredUrl) return configuredUrl
+  return (
+    STUDENT_INVITATION_APP_URL_BY_PROJECT_ID[import.meta.env.VITE_FIREBASE_PROJECT_ID] ||
+    'https://miami-e2e.web.app'
+  )
+}
+
+const STUDENT_INVITATION_APP_URL = getStudentInvitationAppUrl()
+
+function toFiniteNumber(value) {
+  const n = Number(value)
+  return Number.isFinite(n) ? n : 0
+}
+
+function toPositiveInteger(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.floor(n)
+}
+
+function packageKindLabel(packageType) {
+  if (packageType === 'private') return '1:1'
+  if (packageType === 'group' || packageType === 'openGroup') return '단체반'
+  return formatStudentPackageDetailTypeLabel(packageType)
+}
+
+function PrivateLessonProgressSummary({ progress }) {
+  if (!progress) return null
+  return (
+    <span
+      data-testid="student-private-lesson-progress"
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '4px 8px',
+        marginTop: 4,
+        fontSize: 12,
+        lineHeight: 1.35,
+        opacity: 0.82,
+      }}
+    >
+      <span>총 {Number(progress.totalRegistered) || 0}회</span>
+      <span>지난 {Number(progress.pastLessons) || 0}회</span>
+      <span>예정 {Number(progress.remainingScheduled ?? progress.upcomingLessons) || 0}회</span>
+    </span>
+  )
+}
+
+function privateLessonProgressForDisplay(student, progress) {
+  if (progress) return progress
+  const paidLessons = toPositiveInteger(student?.paidLessons)
+  if (paidLessons <= 0) return null
+  return {
+    totalRegistered: paidLessons,
+    pastLessons: 0,
+    upcomingLessons: 0,
+    remainingScheduled: 0,
+  }
+}
+
+function docDateToMillis(raw) {
+  if (!raw) return 0
+  if (typeof raw.toMillis === 'function') return raw.toMillis()
+  if (typeof raw.toDate === 'function') return raw.toDate().getTime()
+  if (raw.seconds != null) return Number(raw.seconds) * 1000
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+    const d = parseYmdToLocalDate(raw.trim())
+    return d ? d.getTime() : 0
+  }
+  return 0
+}
+
+function ymdTimeToMillis(dateValue, timeValue) {
+  const date = String(dateValue || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const time = String(timeValue || '').trim()
+  const safeTime = /^\d{2}:\d{2}$/.test(time) ? time : '23:59'
+  const d = new Date(`${date}T${safeTime}:00`)
+  const ms = d.getTime()
+  return Number.isFinite(ms) ? ms : null
+}
+
+function reservationStatusLabel(row, startsAtMs) {
+  if (row?.status !== 'active') return '예약 취소'
+  if (startsAtMs !== null && startsAtMs < Date.now()) return '지난 수업'
+  return '예약 완료'
+}
+
+function creditTransactionHistoryStatus(row) {
+  const actionType = String(row?.actionType || '').trim()
+  const delta = Number(row?.deltaCount ?? 0)
+  if (actionType === 'group_deduct' || delta < 0) return '출석 처리됨'
+  if (actionType.includes('restore') || actionType.includes('cancel') || delta > 0) {
+    return '차감 취소'
+  }
+  return formatCreditTransactionActionTypeLabel(actionType)
+}
+
+function buildStudentInvitationMessage({ email, resetLink }) {
+  return [
+    '안녕하세요. 수업 예약 페이지 로그인 안내입니다.',
+    '아래 링크를 눌러 비밀번호를 설정한 뒤 로그인해 주세요.',
+    '',
+    `로그인 이메일: ${String(email || '').trim()}`,
+    `비밀번호 설정 링크: ${String(resetLink || '').trim()}`,
+    `예약 페이지: ${STUDENT_INVITATION_APP_URL}`,
+  ].join('\n')
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator?.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return
+    } catch (error) {
+      console.warn('Clipboard API copy failed, falling back to selection copy:', error)
+    }
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.top = '-1000px'
+  textarea.style.left = '-1000px'
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    document.execCommand('copy')
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
+function getStudentAccountLinkErrorMessage(error) {
+  const message = String(error?.message || '').trim()
+  if (error?.code === 'functions/unauthenticated') {
+    return '로그인이 필요합니다.'
+  }
+  if (error?.code === 'functions/permission-denied') {
+    return '학원 관리자만 학생 로그인 초대를 만들 수 있습니다.'
+  }
+  if (error?.code === 'functions/invalid-argument') {
+    return message || '입력값을 확인해 주세요.'
+  }
+  if (error?.code === 'functions/failed-precondition') {
+    if (/customClaims role|existing .* user|existing academy membership role/i.test(message)) {
+      return '이미 관리자, 선생님, 직원 권한이 있는 이메일은 학생 로그인 초대로 사용할 수 없습니다.'
+    }
+    return message || '이미 연결된 계정 정보를 확인해 주세요.'
+  }
+  return message || '학생 로그인 초대에 실패했습니다.'
+}
+
 export default function StudentsSection({
   loading,
+  currentAcademyId,
   privateStudents,
   filteredSortedPrivateStudents,
   studentSearchQuery,
@@ -41,6 +219,7 @@ export default function StudentsSection({
   studentListTeacherOptions,
   isAdmin,
   studentPackageTableSummaryByStudentId,
+  privateLessonProgressByStudentId = new Map(),
   studentPackagesSortedByStudentId,
   expandedStudentPackageStudentId,
   setExpandedStudentPackageStudentId,
@@ -51,6 +230,8 @@ export default function StudentsSection({
   nextPrivateLessonByStudentId,
   nextGroupLessonByStudentId,
   groupClasses,
+  studentSummaryGroupLessons,
+  studentSummaryGroupStudents,
   studentPackages,
   busyStudentId,
   busyStudentPackageSubmit,
@@ -71,6 +252,310 @@ export default function StudentsSection({
   formatStudentFirstRegisteredForTable,
   formatStudentPackageCellSummary,
 }) {
+  const [studentAccountLinkModalStudent, setStudentAccountLinkModalStudent] = useState(null)
+  const [studentAccountEmail, setStudentAccountEmail] = useState('')
+  const [studentAccountDisplayName, setStudentAccountDisplayName] = useState('')
+  const [studentAccountLinkBusy, setStudentAccountLinkBusy] = useState(false)
+  const [studentAccountLinkError, setStudentAccountLinkError] = useState('')
+  const [studentAccountLinkResult, setStudentAccountLinkResult] = useState(null)
+  const [studentAccountInvitationCopied, setStudentAccountInvitationCopied] = useState(false)
+  const [studentHistoryModalStudent, setStudentHistoryModalStudent] = useState(null)
+  const [studentHistoryLoading, setStudentHistoryLoading] = useState(false)
+  const [studentHistoryError, setStudentHistoryError] = useState('')
+  const [studentHistoryGroupReservations, setStudentHistoryGroupReservations] = useState([])
+  const [studentHistoryPrivateReservations, setStudentHistoryPrivateReservations] = useState([])
+  const [studentHistoryCreditTransactions, setStudentHistoryCreditTransactions] = useState([])
+
+  const groupLessonById = useMemo(() => {
+    const map = new Map()
+    ;(studentSummaryGroupLessons || []).forEach((lesson) => {
+      if (lesson?.id) map.set(lesson.id, lesson)
+    })
+    return map
+  }, [studentSummaryGroupLessons])
+
+  const studentAccountPasswordResetLink = String(
+    studentAccountLinkResult?.passwordResetLink || studentAccountLinkResult?.resetLink || ''
+  ).trim()
+
+  const studentAccountInvitationMessage = useMemo(() => {
+    const email = String(studentAccountLinkResult?.email || studentAccountEmail || '').trim()
+    if (!email || !studentAccountPasswordResetLink) return ''
+    return buildStudentInvitationMessage({
+      email,
+      resetLink: studentAccountPasswordResetLink,
+    })
+  }, [studentAccountEmail, studentAccountLinkResult?.email, studentAccountPasswordResetLink])
+
+  const studentHistoryPackages = useMemo(() => {
+    const studentId = String(studentHistoryModalStudent?.id || '').trim()
+    if (!studentId) return []
+    return studentPackages
+      .filter(
+        (pkg) =>
+          String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+          String(pkg.studentId || '').trim() === studentId
+      )
+      .sort((a, b) => docDateToMillis(b.createdAt) - docDateToMillis(a.createdAt))
+  }, [currentAcademyId, studentHistoryModalStudent?.id, studentPackages])
+
+  const studentHistoryGroupRows = useMemo(() => {
+    const studentId = String(studentHistoryModalStudent?.id || '').trim()
+    if (!studentId) return []
+    return (studentSummaryGroupStudents || []).filter(
+      (row) =>
+        String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+        String(row.studentId || '').trim() === studentId
+    )
+  }, [currentAcademyId, studentHistoryModalStudent?.id, studentSummaryGroupStudents])
+
+  const studentHistoryPackageById = useMemo(() => {
+    return new Map(studentHistoryPackages.map((pkg) => [pkg.id, pkg]))
+  }, [studentHistoryPackages])
+
+  const studentHistorySummary = useMemo(() => {
+    const activePackages = studentHistoryPackages.filter((pkg) => isStudentPackageRowActive(pkg))
+    const endedPackages = studentHistoryPackages.filter((pkg) => !isStudentPackageRowActive(pkg))
+    const activeRemainingTotal = activePackages.reduce(
+      (sum, pkg) => sum + toFiniteNumber(pkg.remainingCount),
+      0
+    )
+    const usedTotal = studentHistoryPackages.reduce(
+      (sum, pkg) => sum + toFiniteNumber(pkg.usedCount ?? pkg.attendanceCount),
+      0
+    )
+    const latestPackage = studentHistoryPackages[0] || null
+    return {
+      activeCount: activePackages.length,
+      endedCount: endedPackages.length,
+      activeRemainingTotal,
+      usedTotal,
+      latestStatus: latestPackage
+        ? formatStudentPackageDetailStatusLabel(latestPackage.status)
+        : '-',
+    }
+  }, [studentHistoryPackages])
+
+  const studentHistoryRows = useMemo(() => {
+    const groupRows = studentHistoryGroupReservations.map((reservation) => {
+      const lesson = groupLessonById.get(reservation.lessonId) || null
+      const date = cleanText(reservation.date || lesson?.date, '')
+      const time = cleanText(reservation.time || lesson?.time, '')
+      const startsAtMs = ymdTimeToMillis(date, time)
+      const groupClassId = cleanText(reservation.groupClassId || lesson?.groupClassId, '')
+      const groupRegistration =
+        studentHistoryGroupRows.find(
+          (row) => cleanText(row.groupClassId, '') === groupClassId && cleanText(row.packageId, '')
+        ) || null
+      const packageId = cleanText(reservation.packageId || groupRegistration?.packageId, '')
+      const pkg = packageId ? studentHistoryPackageById.get(packageId) : null
+      return {
+        key: `group-reservation-${reservation.id}`,
+        date,
+        time,
+        type: '단체반 수업',
+        teacher: cleanText(reservation.teacher || lesson?.teacher || lesson?.teacherName),
+        title: cleanText(reservation.subject || lesson?.subject || lesson?.groupClassName, '단체반 수업'),
+        status: reservationStatusLabel(reservation, startsAtMs),
+        packageTitle: cleanText(reservation.packageTitle || pkg?.title, '-'),
+        sortMs: startsAtMs ?? docDateToMillis(reservation.updatedAt),
+      }
+    })
+
+    const privateRows = studentHistoryPrivateReservations.map((reservation) => {
+      const date = cleanText(reservation.date, '')
+      const time = cleanText(reservation.time, '')
+      const startsAtMs = ymdTimeToMillis(date, time)
+      const pkg = reservation.packageId
+        ? studentHistoryPackageById.get(String(reservation.packageId))
+        : null
+      return {
+        key: `private-reservation-${reservation.id}`,
+        date,
+        time,
+        type: '1:1 수업',
+        teacher: cleanText(reservation.teacher),
+        title: '1:1 수업',
+        status: reservationStatusLabel(reservation, startsAtMs),
+        packageTitle: cleanText(reservation.packageTitle || pkg?.title, '-'),
+        sortMs: startsAtMs ?? docDateToMillis(reservation.updatedAt),
+      }
+    })
+
+    const creditRows = studentHistoryCreditTransactions.map((row) => {
+      const pkg = row.packageId ? studentHistoryPackageById.get(String(row.packageId)) : null
+      return {
+        key: `credit-${row.id}`,
+        date: formatCreditTransactionCreatedAtDisplay(row.createdAt),
+        time: '-',
+        type: packageKindLabel(row.packageType) === '1:1' ? '1:1 수업' : '단체반 수업',
+        teacher: cleanText(row.teacher),
+        title: cleanText(row.memo, '차감 이력'),
+        status: creditTransactionHistoryStatus(row),
+        packageTitle: cleanText(row.packageTitle || pkg?.title, '-'),
+        delta: formatCreditTransactionDeltaCountDisplay(row.deltaCount),
+        sortMs: docDateToMillis(row.createdAt),
+      }
+    })
+
+    return [...groupRows, ...privateRows, ...creditRows].sort((a, b) => b.sortMs - a.sortMs)
+  }, [
+    groupLessonById,
+    studentHistoryCreditTransactions,
+    studentHistoryGroupReservations,
+    studentHistoryGroupRows,
+    studentHistoryPackageById,
+    studentHistoryPrivateReservations,
+  ])
+
+  function openStudentAccountLinkModal(student) {
+    setStudentAccountLinkModalStudent(student)
+    setStudentAccountEmail(String(student.studentEmail || student.email || '').trim())
+    setStudentAccountDisplayName(String(student.name || '').trim())
+    setStudentAccountLinkError('')
+    setStudentAccountLinkResult(null)
+    setStudentAccountInvitationCopied(false)
+  }
+
+  function closeStudentAccountLinkModal() {
+    if (studentAccountLinkBusy) return
+    setStudentAccountLinkModalStudent(null)
+    setStudentAccountEmail('')
+    setStudentAccountDisplayName('')
+    setStudentAccountLinkError('')
+    setStudentAccountLinkResult(null)
+    setStudentAccountInvitationCopied(false)
+  }
+
+  function closeStudentHistoryModal() {
+    if (studentHistoryLoading) return
+    setStudentHistoryModalStudent(null)
+    setStudentHistoryError('')
+    setStudentHistoryGroupReservations([])
+    setStudentHistoryPrivateReservations([])
+    setStudentHistoryCreditTransactions([])
+  }
+
+  async function openStudentHistoryModal(student) {
+    if (!isAdmin || !student?.id) return
+    setStudentHistoryModalStudent(student)
+    setStudentHistoryLoading(true)
+    setStudentHistoryError('')
+    setStudentHistoryGroupReservations([])
+    setStudentHistoryPrivateReservations([])
+    setStudentHistoryCreditTransactions([])
+
+    try {
+      const studentId = String(student.id || '').trim()
+      const packagesForStudent = studentPackages.filter(
+        (pkg) =>
+          String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+          String(pkg.studentId || '').trim() === studentId
+      )
+
+      const [groupReservationSnap, privateReservationSnap, creditTransactionSnaps] =
+        await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'groupLessonReservations'),
+              where('academyId', '==', currentAcademyId),
+              where('studentId', '==', studentId),
+              where('status', 'in', ['active', 'cancelled'])
+            )
+          ),
+          getDocs(
+            query(
+              collection(db, 'privateLessonReservations'),
+              where('academyId', '==', currentAcademyId),
+              where('studentId', '==', studentId),
+              where('status', 'in', ['active', 'cancelled'])
+            )
+          ),
+          Promise.all(
+            packagesForStudent.map((pkg) =>
+              getDocs(
+                query(
+                  collection(db, 'creditTransactions'),
+                  where('academyId', '==', currentAcademyId),
+                  where('packageId', '==', pkg.id)
+                )
+              )
+            )
+          ),
+        ])
+
+      setStudentHistoryGroupReservations(
+        groupReservationSnap.docs
+          .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+          .filter(
+            (row) =>
+              String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+              String(row.studentId || '').trim() === studentId
+          )
+      )
+      setStudentHistoryPrivateReservations(
+        privateReservationSnap.docs
+          .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+          .filter(
+            (row) =>
+              String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+              String(row.studentId || '').trim() === studentId
+          )
+      )
+      setStudentHistoryCreditTransactions(
+        creditTransactionSnaps
+          .flatMap((snap) => snap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })))
+          .filter((row) => {
+            const actionType = String(row.actionType || '').trim()
+            return (
+              String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+              String(row.studentId || '').trim() === studentId &&
+              (String(row.sourceType || '').trim() === 'groupLesson' ||
+                actionType.includes('deduct'))
+            )
+          })
+      )
+    } catch (error) {
+      console.error('학생 수업 내역 조회 실패:', error)
+      setStudentHistoryError('학생 수업 내역을 불러오지 못했습니다.')
+    } finally {
+      setStudentHistoryLoading(false)
+    }
+  }
+
+  async function copyStudentAccountInvitationMessage() {
+    if (!studentAccountInvitationMessage) return
+    try {
+      await copyTextToClipboard(studentAccountInvitationMessage)
+      setStudentAccountInvitationCopied(true)
+    } catch (error) {
+      console.warn('학생 로그인 초대 안내문 복사 실패:', error)
+    }
+  }
+
+  async function submitStudentAccountLink() {
+    if (!studentAccountLinkModalStudent || studentAccountLinkBusy) return
+    setStudentAccountLinkBusy(true)
+    setStudentAccountLinkError('')
+    setStudentAccountLinkResult(null)
+    setStudentAccountInvitationCopied(false)
+    try {
+      const linkStudentAccount = httpsCallable(firebaseFunctions, 'linkStudentAccount')
+      const result = await linkStudentAccount({
+        academyId: currentAcademyId,
+        studentId: studentAccountLinkModalStudent.id,
+        email: studentAccountEmail.trim(),
+        displayName: studentAccountDisplayName.trim(),
+      })
+      setStudentAccountLinkResult(result.data)
+    } catch (error) {
+      console.error('학생 로그인 초대 실패:', error)
+      setStudentAccountLinkError(getStudentAccountLinkErrorMessage(error))
+    } finally {
+      setStudentAccountLinkBusy(false)
+    }
+  }
+
   return (
   <section className="activity-section">
     <div
@@ -417,6 +902,10 @@ export default function StudentsSection({
             groupCount: 0,
             groupRemainingTotal: 0,
           }
+          const privateLessonProgress = privateLessonProgressForDisplay(
+            student,
+            privateLessonProgressByStudentId.get(student.id)
+          )
           const pkgListAll = studentPackagesSortedByStudentId.get(student.id) ?? []
           const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
           const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
@@ -479,11 +968,19 @@ export default function StudentsSection({
                 {studentPhoneTrim ? studentPhoneTrim : '-'}
               </span>
               <span>{formatStudentFirstRegisteredForTable(student.firstRegisteredAt)}</span>
-              <span>
-                {formatStudentPackageCellSummary(
-                  pkgSum.privateCount,
-                  pkgSum.privateRemainingTotal
-                )}
+              <span
+                data-testid="student-private-package-cell"
+                style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+              >
+                {Number(pkgSum.privateCount) > 0 || !privateLessonProgress ? (
+                  <span>
+                    {formatStudentPackageCellSummary(
+                      pkgSum.privateCount,
+                      pkgSum.privateRemainingTotal
+                    )}
+                  </span>
+                ) : null}
+                <PrivateLessonProgressSummary progress={privateLessonProgress} />
               </span>
               <span>
                 {formatStudentPackageCellSummary(
@@ -601,6 +1098,48 @@ export default function StudentsSection({
                     }}
                   >
                     {rowBusy ? '처리 중...' : '삭제'}
+                  </button>
+                ) : null}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => openStudentHistoryModal(student)}
+                    disabled={rowBusy || busyStudentId === '__add__'}
+                    data-testid="student-history-open-button"
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #4a6fff44',
+                      background: '#1a2238',
+                      color: 'white',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__'
+                          ? 'not-allowed'
+                          : 'pointer',
+                    }}
+                  >
+                    수업 내역
+                  </button>
+                ) : null}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => openStudentAccountLinkModal(student)}
+                    disabled={rowBusy || busyStudentId === '__add__'}
+                    data-testid="student-account-link-open-button"
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #4b5875',
+                      background: '#20293d',
+                      color: 'white',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__'
+                          ? 'not-allowed'
+                          : 'pointer',
+                    }}
+                  >
+                    로그인 초대
                   </button>
                 ) : null}
                 {isAdmin ? (
@@ -859,6 +1398,44 @@ export default function StudentsSection({
                           </div>
                         )}
                       </div>
+
+                      {privateLessonProgress ? (
+                        <div>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              fontWeight: 600,
+                              marginBottom: 8,
+                              opacity: 0.95,
+                            }}
+                          >
+                            개인 수업 진행
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 13,
+                              lineHeight: 1.55,
+                              padding: '8px 10px',
+                              borderRadius: 8,
+                              border: '1px solid var(--border)',
+                              background: 'var(--surface)',
+                            }}
+                          >
+                            <div>
+                              <span style={{ opacity: 0.72 }}>총 등록</span>{' '}
+                              {Number(privateLessonProgress.totalRegistered) || 0}회
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>지난 수업</span>{' '}
+                              {Number(privateLessonProgress.pastLessons) || 0}회
+                            </div>
+                            <div>
+                              <span style={{ opacity: 0.72 }}>예정 수업</span>{' '}
+                              {Number(privateLessonProgress.remainingScheduled) || 0}회
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   )
                 })()}
@@ -1121,6 +1698,421 @@ export default function StudentsSection({
         })}
       </div>
     )}
+    {isAdmin && studentHistoryModalStudent ? (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="student-history-modal-title"
+        data-testid="student-history-modal"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 1120,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          background: 'rgba(0, 0, 0, 0.55)',
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget && !studentHistoryLoading) {
+            closeStudentHistoryModal()
+          }
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 980,
+            maxHeight: '90vh',
+            overflow: 'auto',
+            border: '1px solid #2e3240',
+            borderRadius: 12,
+            background: '#151922',
+            color: 'white',
+            padding: 20,
+            boxSizing: 'border-box',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+              gap: 12,
+              marginBottom: 16,
+            }}
+          >
+            <div>
+              <h2
+                id="student-history-modal-title"
+                style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700 }}
+              >
+                학생 수업 내역
+              </h2>
+              <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
+                선택한 학생의 수강권과 수업 예약 내역만 표시됩니다.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={closeStudentHistoryModal}
+              disabled={studentHistoryLoading}
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #555',
+                background: 'transparent',
+                color: 'white',
+                cursor: studentHistoryLoading ? 'not-allowed' : 'pointer',
+              }}
+            >
+              닫기
+            </button>
+          </div>
+
+          {studentHistoryError ? (
+            <p style={{ color: '#f4a7a7', marginTop: 0 }}>{studentHistoryError}</p>
+          ) : null}
+
+          <div style={{ display: 'grid', gap: 18 }}>
+            <section>
+              <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem' }}>학생 정보</h3>
+              <div
+                data-testid="student-history-profile"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                  gap: 10,
+                  padding: 12,
+                  borderRadius: 10,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  fontSize: 13,
+                }}
+              >
+                <div><span style={{ opacity: 0.72 }}>이름</span><br />{cleanText(studentHistoryModalStudent.name)}</div>
+                <div><span style={{ opacity: 0.72 }}>담당 선생님</span><br />{cleanText(studentHistoryModalStudent.teacher)}</div>
+                <div><span style={{ opacity: 0.72 }}>연락처</span><br />{cleanText(studentHistoryModalStudent.phone)}</div>
+              </div>
+            </section>
+
+            <section>
+              <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem' }}>수강권 요약</h3>
+              <div
+                data-testid="student-history-package-summary"
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+                  gap: 10,
+                }}
+              >
+                {[
+                  ['사용 중 수강권', studentHistorySummary.activeCount],
+                  ['종료 수강권', studentHistorySummary.endedCount],
+                  ['남은 횟수 합계', studentHistorySummary.activeRemainingTotal],
+                  ['사용 횟수 합계', studentHistorySummary.usedTotal],
+                  ['최근 수강권 상태', studentHistorySummary.latestStatus],
+                ].map(([label, value]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: 12,
+                      borderRadius: 10,
+                      border: '1px solid var(--border)',
+                      background: 'var(--surface)',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, opacity: 0.72 }}>{label}</div>
+                    <div style={{ marginTop: 4, fontSize: 18, fontWeight: 700 }}>{value}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            <section>
+              <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem' }}>수강권 목록</h3>
+              {studentHistoryPackages.length === 0 ? (
+                <p style={{ opacity: 0.78, margin: 0 }}>등록된 수강권이 없습니다.</p>
+              ) : (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {studentHistoryPackages.map((pkg) => (
+                    <div
+                      key={pkg.id}
+                      data-testid="student-history-package-row"
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1.2fr 0.7fr 0.8fr repeat(3, 0.7fr) 0.8fr 1fr',
+                        gap: 10,
+                        alignItems: 'center',
+                        padding: 10,
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        fontSize: 12,
+                      }}
+                    >
+                      <span>{cleanText(pkg.title, '수강권')}</span>
+                      <span>{packageKindLabel(pkg.packageType)}</span>
+                      <span>{cleanText(pkg.teacher)}</span>
+                      <span>총 {cleanText(pkg.totalCount ?? pkg.paidLessons)}</span>
+                      <span>사용 {cleanText(pkg.usedCount ?? pkg.attendanceCount)}</span>
+                      <span>남은 {cleanText(pkg.remainingCount)}</span>
+                      <span>{formatStudentPackageDetailStatusLabel(pkg.status)}</span>
+                      <span>
+                        {[formatGroupStudentStartDate(pkg.startDate), formatGroupStudentStartDate(pkg.expiresAt)]
+                          .filter((v) => v && v !== '-')
+                          .join(' ~ ') || '-'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section>
+              <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem' }}>수업/예약 내역</h3>
+              {studentHistoryLoading ? (
+                <p style={{ opacity: 0.78, margin: 0 }}>불러오는 중...</p>
+              ) : studentHistoryRows.length === 0 ? (
+                <p style={{ opacity: 0.78, margin: 0 }}>아직 표시할 수업 내역이 없습니다.</p>
+              ) : (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  {studentHistoryRows.map((row) => (
+                    <div
+                      key={row.key}
+                      data-testid="student-history-lesson-row"
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '0.9fr 0.45fr 0.75fr 0.75fr 0.8fr 0.9fr 1.25fr',
+                        gap: 10,
+                        alignItems: 'center',
+                        padding: 10,
+                        borderRadius: 8,
+                        border: '1px solid var(--border)',
+                        background: 'var(--surface)',
+                        fontSize: 12,
+                      }}
+                    >
+                      <span>{cleanText(row.date)}</span>
+                      <span>{cleanText(row.time)}</span>
+                      <span>{cleanText(row.type)}</span>
+                      <span>{cleanText(row.teacher)}</span>
+                      <span>{cleanText(row.status)}</span>
+                      <span>{cleanText(row.packageTitle)}</span>
+                      <span>{cleanText(row.title)}{row.delta ? ` · ${row.delta}` : ''}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        </div>
+      </div>
+    ) : null}
+    {isAdmin && studentAccountLinkModalStudent ? (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="student-account-link-modal-title"
+        data-testid="student-account-link-modal"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 1100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          background: 'rgba(0, 0, 0, 0.55)',
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget && !studentAccountLinkBusy) {
+            closeStudentAccountLinkModal()
+          }
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 620,
+            border: '1px solid #2e3240',
+            borderRadius: 12,
+            background: '#151922',
+            color: 'white',
+            padding: 20,
+            boxSizing: 'border-box',
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2
+            id="student-account-link-modal-title"
+            style={{ margin: '0 0 12px 0', fontSize: '1.1rem', fontWeight: 600 }}
+          >
+            학생 로그인 초대
+          </h2>
+          <p style={{ margin: '0 0 16px 0', opacity: 0.75, fontSize: 13 }}>
+            {studentAccountLinkModalStudent.name || '-'} 학생에게 예약 페이지 로그인 안내를 보냅니다.
+          </p>
+
+          <div style={{ display: 'grid', gap: 12 }}>
+            <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+              <span style={{ opacity: 0.8 }}>학생 이메일</span>
+              <input
+                type="email"
+                value={studentAccountEmail}
+                onChange={(e) => setStudentAccountEmail(e.target.value)}
+                disabled={studentAccountLinkBusy}
+                data-testid="student-account-link-email-input"
+                style={{
+                  padding: '9px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'inherit',
+                }}
+              />
+            </label>
+
+            <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+              <span style={{ opacity: 0.8 }}>표시 이름</span>
+              <input
+                type="text"
+                value={studentAccountDisplayName}
+                onChange={(e) => setStudentAccountDisplayName(e.target.value)}
+                disabled={studentAccountLinkBusy}
+                data-testid="student-account-link-display-name-input"
+                style={{
+                  padding: '9px 10px',
+                  borderRadius: 8,
+                  border: '1px solid var(--border)',
+                  background: 'var(--surface)',
+                  color: 'inherit',
+                }}
+              />
+            </label>
+
+            {studentAccountLinkError ? (
+              <p
+                data-testid="student-account-link-error"
+                style={{ margin: 0, color: '#f4a7a7', fontSize: 13 }}
+              >
+                {studentAccountLinkError}
+              </p>
+            ) : null}
+
+            {studentAccountLinkResult ? (
+              <div
+                data-testid="student-account-link-success"
+                style={{
+                  border: '1px solid #355d3f',
+                  borderRadius: 8,
+                  background: '#15291a',
+                  padding: 12,
+                  fontSize: 13,
+                  lineHeight: 1.7,
+                }}
+              >
+                <strong>초대 링크 준비 완료</strong>
+                <div style={{ opacity: 0.85 }}>
+                  학생이 안내문 링크에서 비밀번호를 설정한 뒤 예약 페이지에 로그인할 수 있습니다.
+                </div>
+              </div>
+            ) : null}
+
+            {studentAccountInvitationMessage ? (
+            <div data-testid="student-account-link-invitation-section">
+              <div style={{ opacity: 0.85, fontSize: 13, marginBottom: 6, fontWeight: 600 }}>
+                학생에게 보낼 안내문
+              </div>
+              <pre
+                data-testid="student-account-link-invitation-message"
+                style={{
+                  margin: 0,
+                  padding: 12,
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  borderRadius: 8,
+                  border: '1px solid #30394f',
+                  background: '#101521',
+                  color: '#dbe7ff',
+                  fontSize: 12,
+                  minHeight: 48,
+                }}
+              >
+                {studentAccountInvitationMessage}
+              </pre>
+            </div>
+            ) : null}
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 8,
+              marginTop: 18,
+              flexWrap: 'wrap',
+            }}
+          >
+            <button
+              type="button"
+              onClick={closeStudentAccountLinkModal}
+              disabled={studentAccountLinkBusy}
+              style={{
+                padding: '9px 14px',
+                borderRadius: 8,
+                border: '1px solid #555',
+                background: 'transparent',
+                color: 'white',
+                cursor: studentAccountLinkBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              닫기
+            </button>
+              <button
+                type="button"
+              onClick={copyStudentAccountInvitationMessage}
+              disabled={!studentAccountInvitationMessage || studentAccountLinkBusy}
+              data-testid="student-account-link-copy-button"
+              style={{
+                padding: '9px 14px',
+                borderRadius: 8,
+                border: '1px solid #4b5875',
+                background: '#20293d',
+                color: 'white',
+                cursor:
+                  studentAccountInvitationMessage && !studentAccountLinkBusy
+                    ? 'pointer'
+                    : 'not-allowed',
+              }}
+            >
+              {studentAccountInvitationCopied ? '복사 완료' : '안내문 복사'}
+            </button>
+            <button
+              type="button"
+              onClick={submitStudentAccountLink}
+              disabled={!studentAccountEmail.trim() || studentAccountLinkBusy}
+              data-testid="student-account-link-submit-button"
+              style={{
+                padding: '9px 14px',
+                borderRadius: 8,
+                border: '1px solid #335544',
+                background: '#243528',
+                color: 'white',
+                cursor:
+                  studentAccountEmail.trim() && !studentAccountLinkBusy
+                    ? 'pointer'
+                    : 'not-allowed',
+              }}
+            >
+              {studentAccountLinkBusy ? '초대 링크 만드는 중...' : '초대 링크 만들기'}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
   </section>
   );
 }

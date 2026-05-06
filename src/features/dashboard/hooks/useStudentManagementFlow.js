@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import { normalizeText } from '../dashboardViewUtils.js'
 
 const DEFAULT_STUDENT_FORM = {
@@ -27,6 +28,7 @@ function createDefaultStudentForm(overrides = {}) {
 export default function useStudentManagementFlow({
   activeSection,
   userProfile,
+  currentAcademyId,
   formatLocalYmd,
   studentDocFieldToYmdString,
   openStudentPackageModal,
@@ -224,8 +226,10 @@ export default function useStudentManagementFlow({
       : normalizeText(userProfile?.teacherName)
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       setBusyStudentSubmit(true)
       const docRef = await addDoc(collection(db, 'privateStudents'), {
+        academyId: scopedAcademyId,
         name: result.name,
         teacher: teacherStored,
         phone: result.phone,
@@ -268,6 +272,8 @@ export default function useStudentManagementFlow({
       : normalizeText(userProfile?.teacherName)
 
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(editStudentModalStudent, scopedAcademyId, '학생')
       setBusyEditStudentSubmit(editStudentModalStudent.id)
       await updateDoc(doc(db, 'privateStudents', editStudentModalStudent.id), {
         name: result.name,

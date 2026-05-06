@@ -63,6 +63,8 @@ const USERS = [
       teacherName: "",
       canManageAttendance: true,
       canAddStudent: true,
+      canEditStudent: true,
+      canDeleteStudent: true,
       canEditLesson: true,
       canDeleteLesson: true,
       canCreateLessonDirectly: true,
@@ -83,6 +85,30 @@ const USERS = [
       teacherName: "teacher",
       canManageAttendance: false,
       canAddStudent: false,
+      canEditStudent: false,
+      canDeleteStudent: false,
+      canEditLesson: false,
+      canDeleteLesson: false,
+      canCreateLessonDirectly: false,
+      requiresLessonApproval: false,
+    },
+  },
+  {
+    key: "student",
+    email: "student@example.com",
+    password: "123456",
+    displayName: "Student E2E",
+    claims: { role: "student" },
+    firestoreData: {
+      email: "student@example.com",
+      displayName: "Student E2E",
+      role: "student",
+      isActive: true,
+      teacherName: "",
+      canManageAttendance: false,
+      canAddStudent: false,
+      canEditStudent: false,
+      canDeleteStudent: false,
       canEditLesson: false,
       canDeleteLesson: false,
       canCreateLessonDirectly: false,
@@ -90,6 +116,10 @@ const USERS = [
     },
   },
 ];
+
+function buildSeedStudentId(result) {
+  return `student_${result.uid}`;
+}
 
 function buildMembershipPermissions(firestoreData) {
   return Object.fromEntries(
@@ -197,6 +227,17 @@ async function seedAcademyAndMemberships(results) {
   for (const result of results) {
     const membershipId = `${DEFAULT_E2E_ACADEMY_ID}_${result.uid}`;
     const role = result.key === "admin" ? "owner" : result.firestoreData.role || "staff";
+    const teacherName =
+      role === "teacher" || role === "staff"
+        ? String(
+            result.firestoreData.teacherName ||
+              result.displayName ||
+              result.email.split("@")[0] ||
+              result.uid
+          )
+            .trim()
+            .toLowerCase()
+        : String(result.firestoreData.teacherName || "").trim().toLowerCase();
 
     await setMergeWithTimestamps(
       db.collection("academyMemberships").doc(membershipId),
@@ -206,7 +247,8 @@ async function seedAcademyAndMemberships(results) {
         email: result.email,
         displayName: result.displayName,
         role,
-        teacherName: result.firestoreData.teacherName || "",
+        teacherName,
+        studentId: role === "student" ? buildSeedStudentId(result) : "",
         status: result.firestoreData.isActive === false ? "disabled" : "active",
         permissions: buildMembershipPermissions(result.firestoreData),
         sourceUserDocId: result.uid,

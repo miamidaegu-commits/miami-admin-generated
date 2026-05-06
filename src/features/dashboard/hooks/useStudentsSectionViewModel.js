@@ -16,6 +16,24 @@ import {
   studentPackageExpiresAtToYmd,
 } from '../dashboardViewUtils.js'
 
+function toPositiveInteger(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return 0
+  return Math.floor(n)
+}
+
+function isApprovedPrivateLessonForStudentProgress(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const approvalStatus = String(lesson?.approvalStatus || '').trim().toLowerCase()
+  return (
+    lesson?.cancelled !== true &&
+    lesson?.canceled !== true &&
+    status !== 'cancelled' &&
+    status !== 'canceled' &&
+    (approvalStatus === '' || approvalStatus === 'approved')
+  )
+}
+
 /**
  * Students 탭 전용: 필터·정렬·KPI·표 요약·전화 복사 등 읽기/뷰 상태만 담당.
  * Firestore 쓰기·모달 submit·권한 판단 변경은 Dashboard에 둔다.
@@ -89,6 +107,73 @@ export default function useStudentsSectionViewModel({
     }
     return map
   }, [studentPackages])
+
+  const privateLessonProgressByStudentId = useMemo(() => {
+    const today = getTodayStorageDateString()
+    const studentPaidLessonById = new Map()
+    for (const student of privateStudents) {
+      const sid = String(student?.id || '').trim()
+      if (!sid) continue
+      const paidLessons = toPositiveInteger(student?.paidLessons)
+      if (paidLessons > 0) studentPaidLessonById.set(sid, paidLessons)
+    }
+
+    const byStudentId = new Map()
+    for (const lesson of lessons) {
+      if (!isApprovedPrivateLessonForStudentProgress(lesson)) continue
+      const sid = String(lesson?.studentId || lesson?.studentID || '').trim()
+      if (!sid) continue
+      const dateStr = getLessonStorageDateString(lesson)
+      if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
+      if (!byStudentId.has(sid)) {
+        byStudentId.set(sid, {
+          lessonCount: 0,
+          maxSessionNumber: 0,
+          pastLessons: 0,
+          upcomingLessons: 0,
+        })
+      }
+      const progress = byStudentId.get(sid)
+      progress.lessonCount += 1
+      const sessionNumber = toPositiveInteger(lesson?.sessionNumber)
+      if (sessionNumber > progress.maxSessionNumber) {
+        progress.maxSessionNumber = sessionNumber
+      }
+      if (dateStr < today) {
+        progress.pastLessons += 1
+      } else {
+        progress.upcomingLessons += 1
+      }
+    }
+
+    for (const [sid, paidLessons] of studentPaidLessonById) {
+      if (!byStudentId.has(sid)) {
+        byStudentId.set(sid, {
+          lessonCount: 0,
+          maxSessionNumber: 0,
+          pastLessons: 0,
+          upcomingLessons: 0,
+        })
+      }
+      byStudentId.get(sid).paidLessons = paidLessons
+    }
+
+    const out = new Map()
+    for (const [sid, progress] of byStudentId) {
+      const totalRegistered =
+        toPositiveInteger(progress.paidLessons) ||
+        toPositiveInteger(progress.maxSessionNumber) ||
+        toPositiveInteger(progress.lessonCount)
+      if (totalRegistered <= 0 && progress.lessonCount <= 0) continue
+      out.set(sid, {
+        totalRegistered,
+        pastLessons: progress.pastLessons,
+        upcomingLessons: progress.upcomingLessons,
+        remainingScheduled: progress.upcomingLessons,
+      })
+    }
+    return out
+  }, [privateStudents, lessons])
 
   const studentPackagesSortedByStudentId = useMemo(() => {
     const statusOrder = (s) => {
@@ -560,6 +645,7 @@ export default function useStudentsSectionViewModel({
     setStudentTodayLessonOnly,
     sortedPrivateStudents,
     studentPackageTableSummaryByStudentId,
+    privateLessonProgressByStudentId,
     studentPackagesSortedByStudentId,
     activeGroupRegistrationsByStudentId,
     nextPrivateLessonByStudentId,

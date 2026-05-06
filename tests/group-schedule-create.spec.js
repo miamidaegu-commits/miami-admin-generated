@@ -33,7 +33,7 @@ test('관리자가 특정 그룹의 미래 일정을 실제로 생성한다', as
   const rangeEnd = formatYmd(addDays(today, 430));
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '반 관리');
+  await openDashboardSection(page, '단체반 관리');
 
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();

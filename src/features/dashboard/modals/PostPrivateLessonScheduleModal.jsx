@@ -81,12 +81,12 @@ export default function PostPrivateLessonScheduleModal({
               background: 'rgba(40, 55, 110, 0.25)',
             }}
           >
-            정기등록 기준으로 첫 수업과 반복 슬롯을 확인해주세요.
+            정기등록 기준으로 첫 수업과 반복 시간을 확인해주세요.
             {weeklyFrequencyStr === '2' || weeklyFrequencyStr === '3' ? (
               <>
                 {' '}
                 주 2회·3회인 경우 두 번째
-                {weeklyFrequencyStr === '3' ? '·세 번째' : ''} 슬롯의 첫 날짜와 시간을 입력해야
+                {weeklyFrequencyStr === '3' ? '·세 번째' : ''} 수업 시간의 첫 날짜와 시간을 입력해야
                 전체 일정이 맞게 채워집니다.
               </>
             ) : null}
@@ -272,7 +272,7 @@ export default function PostPrivateLessonScheduleModal({
                 </label>
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                  <span style={{ opacity: 0.85 }}>주당 횟수 (반복 슬롯)</span>
+                  <span style={{ opacity: 0.85 }}>주당 횟수 (반복 시간)</span>
                   <select
                     value={String(postPrivateLessonScheduleForm.weeklyFrequency ?? '1')}
                     onChange={(e) =>

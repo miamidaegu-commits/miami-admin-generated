@@ -43,7 +43,7 @@ test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 
   const lessonSubject = `E2E 특별수업 ${Date.now()}`;
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '반 관리');
+  await openDashboardSection(page, '단체반 관리');
 
   const groupRow = getGroupRow(page, TEST_GROUP_NAME);
   await expect(groupRow).toBeVisible();

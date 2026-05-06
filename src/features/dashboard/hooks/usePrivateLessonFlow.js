@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { doc, serverTimestamp, Timestamp, updateDoc } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy } from '../academyScope.js'
 import {
   lessonDateInputValue,
   lessonTimeInputValue,
@@ -168,7 +169,7 @@ export function validatePrivateLessonFormFields(form, options = {}) {
       slotKeys.push(`${weeklySlot3Date} ${weeklySlot3Time}`)
     }
     if (slotKeys.length >= 2 && new Set(slotKeys).size !== slotKeys.length) {
-      errors.scheduleSlots = '각 슬롯의 날짜·시간은 서로 달라야 합니다.'
+      errors.scheduleSlots = '각 수업 시간의 날짜·시간은 서로 달라야 합니다.'
     }
   }
 
@@ -196,6 +197,7 @@ export default function usePrivateLessonFlow({
   selectedDate,
   getStorageDateStringFromDate,
   userProfile,
+  currentAcademyId,
   showPrivateLessonAddInCalendar,
   canEditLesson,
   sortedPrivateStudents,
@@ -405,6 +407,8 @@ export default function usePrivateLessonFlow({
     }
 
     try {
+      assertSameAcademy(student, currentAcademyId, '학생')
+      assertSameAcademy(selectedPackage, currentAcademyId, '수강권')
       setBusyPrivateLessonAdd(true)
       const created = await createPrivateLessonsForPackage({
         result,
@@ -468,6 +472,7 @@ export default function usePrivateLessonFlow({
     }
 
     try {
+      assertSameAcademy(lesson, currentAcademyId, '개인 수업')
       setBusyPrivateLessonEditId(lesson.id)
       await updateDoc(doc(db, 'lessons', lesson.id), {
         date: result.date,
@@ -478,7 +483,7 @@ export default function usePrivateLessonFlow({
       })
       const pkgId = String(lesson.packageId || '').trim()
       if (pkgId) {
-        await recomputePrivatePackageUsage(pkgId)
+        await recomputePrivatePackageUsage(pkgId, currentAcademyId)
       }
       closePrivateLessonEditModal()
     } catch (error) {

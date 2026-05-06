@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "miamiacademyschedule"
+    "default": "miami-e2e",
+    "staging": "miami-e2e",
+    "prod": "daegu-miami-production"
   }
 }

@@ -32,7 +32,7 @@ test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다'
   const subject = `E2E 과목 ${uniqueToken}`;
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '반 관리');
+  await openDashboardSection(page, '단체반 관리');
 
   const targetGroupRow = getGroupRow(page, groupName);
   await expect(targetGroupRow).toHaveCount(0);

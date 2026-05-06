@@ -1,0 +1,353 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { createRequire } from 'node:module';
+import admin from 'firebase-admin';
+import { test, expect } from '@playwright/test';
+import {
+  getStudentRow,
+  getStudentSearchInput,
+  loginAsAdmin,
+  openDashboardSection,
+} from './e2e-helpers.js';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  DEFAULT_E2E_ACADEMY_ID,
+  DEFAULT_E2E_ACADEMY_NAME,
+} from './fixtures/test-data.js';
+
+const require = createRequire(import.meta.url);
+const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
+
+function hasServiceAccount() {
+  return fs.existsSync(SERVICE_ACCOUNT_PATH);
+}
+
+function initializeAdmin() {
+  if (admin.apps.length > 0) return;
+  const serviceAccount = require(SERVICE_ACCOUNT_PATH);
+  if (serviceAccount.project_id !== 'miami-e2e') {
+    throw new Error(`Expected miami-e2e service account, received ${serviceAccount.project_id}`);
+  }
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+}
+
+async function getAuthUserByEmail(auth, email) {
+  try {
+    return await auth.getUserByEmail(email);
+  } catch (error) {
+    if (error?.code === 'auth/user-not-found') return null;
+    throw error;
+  }
+}
+
+async function deleteAuthUserByEmail(auth, email) {
+  const user = await getAuthUserByEmail(auth, email);
+  if (!user) return null;
+  await auth.deleteUser(user.uid);
+  return user.uid;
+}
+
+async function deleteProvisioningLogs(db, email) {
+  const snap = await db.collection('accountProvisioningLogs').where('email', '==', email).get();
+  const batch = db.batch();
+  snap.docs.forEach((docSnap) => batch.delete(docSnap.ref));
+  if (!snap.empty) await batch.commit();
+  return snap.size;
+}
+
+function expectProvisioningLogsDoNotContainPasswordResetLink(logs) {
+  for (const log of logs) {
+    expect(log).not.toHaveProperty('passwordResetLink');
+    expect(log).not.toHaveProperty('resetLink');
+  }
+}
+
+async function ensureAdminFixture({ auth, db }) {
+  const adminUser = await auth.getUserByEmail(ADMIN_EMAIL);
+  const nowTs = admin.firestore.FieldValue.serverTimestamp();
+  const permissions = {
+    canManageAttendance: true,
+    canAddStudent: true,
+    canEditStudent: true,
+    canDeleteStudent: true,
+    canEditLesson: true,
+    canDeleteLesson: true,
+    canCreateLessonDirectly: true,
+    requiresLessonApproval: false,
+  };
+
+  await Promise.all([
+    db.collection('academies').doc(DEFAULT_E2E_ACADEMY_ID).set(
+      {
+        id: DEFAULT_E2E_ACADEMY_ID,
+        name: DEFAULT_E2E_ACADEMY_NAME,
+        slug: DEFAULT_E2E_ACADEMY_ID,
+        status: 'active',
+        timezone: 'Asia/Seoul',
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    ),
+    db.collection('users').doc(adminUser.uid).set(
+      {
+        uid: adminUser.uid,
+        email: ADMIN_EMAIL,
+        role: 'admin',
+        isActive: true,
+        lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    ),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${adminUser.uid}`).set(
+      {
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        uid: adminUser.uid,
+        email: ADMIN_EMAIL,
+        displayName: 'Admin E2E',
+        role: 'owner',
+        teacherName: '',
+        status: 'active',
+        permissions,
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    ),
+  ]);
+}
+
+async function createTempPrivateStudent({ db, studentId, studentName }) {
+  await db.collection('privateStudents').doc(studentId).set({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    name: studentName,
+    teacher: 'teacher',
+    status: 'active',
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+}
+
+async function verifyAccountLinkWrites({ auth, db, email, studentId }) {
+  const authUser = await auth.getUserByEmail(email);
+  const uid = authUser.uid;
+  const membershipId = `${DEFAULT_E2E_ACADEMY_ID}_${uid}`;
+  const [userSnap, membershipSnap, logSnap] = await Promise.all([
+    db.collection('users').doc(uid).get(),
+    db.collection('academyMemberships').doc(membershipId).get(),
+    db.collection('accountProvisioningLogs').where('email', '==', email).get(),
+  ]);
+
+  expect(userSnap.exists).toBe(true);
+  expect(membershipSnap.exists).toBe(true);
+
+  const userData = userSnap.data() || {};
+  const membership = membershipSnap.data() || {};
+  expect(userData.email).toBe(email);
+  expect(userData.role).toBe('student');
+  expect(membership.academyId).toBe(DEFAULT_E2E_ACADEMY_ID);
+  expect(membership.uid).toBe(uid);
+  expect(membership.role).toBe('student');
+  expect(membership.status).toBe('active');
+  expect(membership.studentId).toBe(studentId);
+
+  const matchingLogs = logSnap.docs
+    .map((docSnap) => docSnap.data() || {})
+    .filter((row) => row.studentId === studentId && row.uid === uid);
+  expect(matchingLogs.length).toBeGreaterThan(0);
+  expectProvisioningLogsDoNotContainPasswordResetLink(matchingLogs);
+  for (const log of matchingLogs) {
+    expect(log.academyId).toBe(DEFAULT_E2E_ACADEMY_ID);
+    expect(typeof log.actorUid).toBe('string');
+    expect(log.actorUid.length).toBeGreaterThan(0);
+    expect(log.studentId).toBe(studentId);
+    expect(log.uid).toBe(uid);
+    expect(log.email).toBe(email);
+    expect(log.membershipId).toBe(membershipId);
+    expect(typeof log.alreadyLinked).toBe('boolean');
+    expect(log.passwordSet).toBe(false);
+    expect(['created', 'updated']).toContain(log.action);
+    expect(log.result).toBe('success');
+  }
+
+  return { uid, membershipId, logCount: matchingLogs.length };
+}
+
+async function verifyAccessSummariesPreserved({ db, studentId, expected }) {
+  const summaryId = `${DEFAULT_E2E_ACADEMY_ID}__${studentId}`;
+  const [groupSnap, privateSnap] = await Promise.all([
+    db.collection('studentGroupAccessSummary').doc(summaryId).get(),
+    db.collection('studentPrivateAccessSummary').doc(summaryId).get(),
+  ]);
+
+  expect(groupSnap.exists).toBe(true);
+  expect(privateSnap.exists).toBe(true);
+
+  const groupSummary = groupSnap.data() || {};
+  const privateSummary = privateSnap.data() || {};
+  expect(groupSummary.groupClassIds || []).toEqual(expected.groupClassIds);
+  expect(privateSummary.teacherKeys || []).toEqual(expected.teacherKeys);
+  expect(privateSummary.activePackageIds || []).toEqual(expected.activePackageIds);
+}
+
+test('admin creates a student login invitation through dashboard UI', async ({ page }) => {
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json is required for live account-link smoke.');
+  initializeAdmin();
+
+  const db = admin.firestore();
+  const auth = admin.auth();
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const studentId = `e2e-ui-link-student-${unique}`;
+  const studentName = `로그인초대 ${unique}`;
+  const email = `e2e-ui-link-${unique}@example.com`;
+  const protectedEmail = `e2e-ui-link-protected-${unique}@example.com`;
+  let linkedUid = '';
+  let protectedUid = '';
+
+  await ensureAdminFixture({ auth, db });
+  await createTempPrivateStudent({ db, studentId, studentName });
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '학생 관리');
+
+    await getStudentSearchInput(page).fill(studentName);
+    const studentRow = getStudentRow(page, studentName);
+    await expect(studentRow).toBeVisible({ timeout: 15000 });
+    await expect(studentRow.getByTestId('student-account-link-open-button')).toHaveText('로그인 초대');
+    await studentRow.getByTestId('student-account-link-open-button').click();
+
+    const modal = page.getByTestId('student-account-link-modal');
+    await expect(modal).toBeVisible();
+    await expect(modal.getByRole('heading', { name: '학생 로그인 초대' })).toBeVisible();
+    await expect(modal.getByTestId('student-account-link-password-input')).toHaveCount(0);
+    await modal.getByTestId('student-account-link-email-input').fill(email);
+    await modal.getByTestId('student-account-link-display-name-input').fill(studentName);
+    await modal.getByTestId('student-account-link-submit-button').click();
+
+    const success = modal.getByTestId('student-account-link-success');
+    await expect(success).toBeVisible({ timeout: 30000 });
+    await expect(success).toContainText('초대 링크 준비 완료');
+
+    const invitationMessage = modal.getByTestId('student-account-link-invitation-message');
+    await expect(modal.getByTestId('student-account-link-invitation-section')).toContainText(
+      '학생에게 보낼 안내문'
+    );
+    await expect(invitationMessage).toBeVisible();
+    await expect(invitationMessage).toContainText(`로그인 이메일: ${email}`);
+    await expect(invitationMessage).toContainText('예약 페이지: https://miami-e2e.web.app');
+    await expect(invitationMessage).toContainText('비밀번호 설정 링크: https://');
+
+    const messageText = await invitationMessage.innerText();
+    const resetLink = messageText.match(/비밀번호 설정 링크:\s*(https?:\/\/\S+)/)?.[1] || '';
+    expect(resetLink).toMatch(/^https?:\/\//);
+    expect(messageText).not.toContain('uid:');
+    expect(messageText).not.toContain('membershipId:');
+    expect(messageText).not.toContain('studentId:');
+
+    await modal.getByTestId('student-account-link-copy-button').click();
+    await expect(modal.getByTestId('student-account-link-copy-button')).toHaveText('복사 완료');
+
+    await expect
+      .poll(async () => {
+        await verifyAccountLinkWrites({ auth, db, email, studentId });
+        return true;
+      }, { timeout: 30000 })
+      .toBe(true);
+
+    linkedUid = (await auth.getUserByEmail(email)).uid;
+    const membershipId = `${DEFAULT_E2E_ACADEMY_ID}_${linkedUid}`;
+    const summaryId = `${DEFAULT_E2E_ACADEMY_ID}__${studentId}`;
+    const preservedAccess = {
+      groupClassIds: [`preserved-group-${unique}`],
+      teacherKeys: [`preserved-teacher-${unique}`],
+      activePackageIds: [`preserved-package-${unique}`],
+    };
+    await Promise.all([
+      db.collection('studentGroupAccessSummary').doc(summaryId).set(
+        {
+          groupClassIds: preservedAccess.groupClassIds,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      ),
+      db.collection('studentPrivateAccessSummary').doc(summaryId).set(
+        {
+          teacherKeys: preservedAccess.teacherKeys,
+          activePackageIds: preservedAccess.activePackageIds,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      ),
+    ]);
+
+    await modal.getByTestId('student-account-link-submit-button').click();
+    await expect(success).toBeVisible({ timeout: 30000 });
+    await expect
+      .poll(async () => {
+        const verification = await verifyAccountLinkWrites({ auth, db, email, studentId });
+        await verifyAccessSummariesPreserved({ db, studentId, expected: preservedAccess });
+        return verification.membershipId;
+      }, { timeout: 30000 })
+      .toBe(membershipId);
+
+    const protectedUser = await auth.createUser({
+      email: protectedEmail,
+      displayName: 'Protected UI Link Probe',
+      password: '123456',
+      disabled: false,
+    });
+    protectedUid = protectedUser.uid;
+    await Promise.all([
+      auth.setCustomUserClaims(protectedUid, { role: 'admin' }),
+      db.collection('users').doc(protectedUid).set({
+        uid: protectedUid,
+        email: protectedEmail,
+        role: 'admin',
+        isActive: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }),
+    ]);
+
+    await modal.getByTestId('student-account-link-email-input').fill(protectedEmail);
+    await modal.getByTestId('student-account-link-display-name-input').fill('Protected UI Link Probe');
+    await modal.getByTestId('student-account-link-submit-button').click();
+    await expect(modal.getByTestId('student-account-link-error')).toContainText(
+      '이미 관리자, 선생님, 직원 권한이 있는 이메일은 학생 로그인 초대로 사용할 수 없습니다.',
+      { timeout: 30000 }
+    );
+  } finally {
+    const resolvedUid = linkedUid || (await getAuthUserByEmail(auth, email))?.uid || '';
+    await Promise.all([
+      db.collection('privateStudents').doc(studentId).delete().catch(() => {}),
+      db.collection('studentGroupAccessSummary').doc(`${DEFAULT_E2E_ACADEMY_ID}__${studentId}`).delete().catch(() => {}),
+      db.collection('studentPrivateAccessSummary').doc(`${DEFAULT_E2E_ACADEMY_ID}__${studentId}`).delete().catch(() => {}),
+      resolvedUid
+        ? db.collection('users').doc(resolvedUid).delete().catch(() => {})
+        : Promise.resolve(),
+      resolvedUid
+        ? db
+            .collection('academyMemberships')
+            .doc(`${DEFAULT_E2E_ACADEMY_ID}_${resolvedUid}`)
+            .delete()
+            .catch(() => {})
+        : Promise.resolve(),
+      protectedUid
+        ? db.collection('users').doc(protectedUid).delete().catch(() => {})
+        : Promise.resolve(),
+      protectedUid
+        ? db
+            .collection('academyMemberships')
+            .doc(`${DEFAULT_E2E_ACADEMY_ID}_${protectedUid}`)
+            .delete()
+            .catch(() => {})
+        : Promise.resolve(),
+      deleteAuthUserByEmail(auth, email).catch(() => null),
+      deleteAuthUserByEmail(auth, protectedEmail).catch(() => null),
+      deleteProvisioningLogs(db, email).catch(() => 0),
+      deleteProvisioningLogs(db, protectedEmail).catch(() => 0),
+    ]);
+  }
+});

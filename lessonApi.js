@@ -1,5 +1,6 @@
 import { addDoc, collection, serverTimestamp, Timestamp } from 'firebase/firestore'
 import { db } from './firebase'
+import { requireCurrentAcademyId } from './src/features/dashboard/academyScope.js'
 
 function pad(value) {
   return String(value).padStart(2, '0')
@@ -13,7 +14,12 @@ function formatLegacyTime(date) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`
 }
 
+function normalizeTeacherName(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
 export async function createLesson({
+  academyId,
   studentId,
   studentName,
   teacherName,
@@ -21,13 +27,16 @@ export async function createLesson({
   startDate,
   seriesID = null,
 }) {
+  const scopedAcademyId = requireCurrentAcademyId(academyId)
+  const teacherKey = normalizeTeacherName(teacherName)
   const payload = {
+    academyId: scopedAcademyId,
     studentId,
     studentName,
-    teacherName,
+    teacherName: teacherKey,
     startAt: Timestamp.fromDate(startDate),
     student: studentName,
-    teacher: teacherName,
+    teacher: teacherKey,
     date: formatLegacyDate(startDate),
     time: formatLegacyTime(startDate),
     subject: subject || '',

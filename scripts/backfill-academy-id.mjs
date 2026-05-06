@@ -11,7 +11,7 @@ const DEFAULT_SERVICE_ACCOUNT_PATH = path.join(__dirname, '..', 'serviceAccountK
 const DEFAULT_ACADEMY_ID =
   process.env.DEFAULT_ACADEMY_ID ||
   process.env.E2E_DEFAULT_ACADEMY_ID ||
-  'academy_default'
+  'academy_main'
 const DEFAULT_ACADEMY_NAME =
   process.env.DEFAULT_ACADEMY_NAME ||
   process.env.E2E_DEFAULT_ACADEMY_NAME ||
@@ -37,6 +37,16 @@ const PERMISSION_KEYS = [
   'canCreateLessonDirectly',
   'requiresLessonApproval',
 ]
+
+const OPERATIONAL_TEACHER_FIELDS = {
+  privateStudents: ['teacher'],
+  lessons: ['teacher', 'teacherName'],
+  groupClasses: ['teacher'],
+  groupStudents: ['teacher'],
+  groupLessons: ['teacher'],
+  studentPackages: ['teacher'],
+  creditTransactions: ['teacher'],
+}
 
 function parseArgs(argv) {
   const options = {
@@ -80,8 +90,10 @@ function parseArgs(argv) {
     throw new Error(`Unknown argument: ${arg}`)
   }
 
-  if (!options.academyId) {
-    throw new Error('Missing academy id. Pass --academy-id=<id>.')
+  if (!options.academyId || options.academyId === 'academy_default') {
+    throw new Error(
+      'Missing real academy id. Pass --academy-id=<real-academy-id>; academy_default is not allowed.'
+    )
   }
 
   return options
@@ -174,7 +186,7 @@ function getMembershipRole(uid, userData, ownerUid) {
   if (uid === ownerUid) return 'owner'
   const role = String(userData.role || '').trim()
   if (['owner', 'admin', 'teacher', 'staff'].includes(role)) return role
-  return role === 'teacher' ? 'teacher' : 'staff'
+  return 'staff'
 }
 
 function getMembershipPermissions(userData) {
@@ -183,6 +195,44 @@ function getMembershipPermissions(userData) {
     permissions[key] = userData[key] === true
   }
   return permissions
+}
+
+function getFallbackTeacherName(uid, userData) {
+  const candidates = [
+    userData.teacherName,
+    userData.displayName,
+    userData.name,
+    String(userData.email || '').split('@')[0],
+    uid,
+  ]
+  for (const candidate of candidates) {
+    const value = String(candidate || '').trim().toLowerCase()
+    if (value) return value
+  }
+  return uid
+}
+
+function getMembershipTeacherName(uid, userData, role) {
+  const rawTeacherName = String(userData.teacherName || '').trim().toLowerCase()
+  if (role === 'teacher' || role === 'staff') {
+    return rawTeacherName || getFallbackTeacherName(uid, userData)
+  }
+  return rawTeacherName
+}
+
+function normalizeTeacherValue(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function buildOperationalTeacherFieldUpdates(collectionName, data) {
+  const fields = OPERATIONAL_TEACHER_FIELDS[collectionName] || []
+  const updates = {}
+  for (const field of fields) {
+    if (data[field] == null) continue
+    const normalized = normalizeTeacherValue(data[field])
+    if (normalized) updates[field] = normalized
+  }
+  return updates
 }
 
 async function fetchAllDocs(db, collectionName) {
@@ -228,6 +278,7 @@ async function buildBackfillOperations({ db, academyId, academyName }) {
       path: `academies/${academyId}`,
       existingData: academySnap.exists ? academySnap.data() || {} : null,
       desiredFields: {
+        id: academyId,
         name: academyName,
         slug: academyId,
         ownerUid,
@@ -262,6 +313,7 @@ async function buildBackfillOperations({ db, academyId, academyName }) {
     )
 
     const membershipId = `${academyId}_${uid}`
+    const role = getMembershipRole(uid, userData, ownerUid)
     const membershipSnap = await db.collection('academyMemberships').doc(membershipId).get()
     operations.push(
       createOperation({
@@ -273,8 +325,8 @@ async function buildBackfillOperations({ db, academyId, academyName }) {
           uid,
           email: String(userData.email || '').trim(),
           displayName,
-          role: getMembershipRole(uid, userData, ownerUid),
-          teacherName: String(userData.teacherName || '').trim(),
+          role,
+          teacherName: getMembershipTeacherName(uid, userData, role),
           status: userData.isActive === false ? 'disabled' : 'active',
           permissions: getMembershipPermissions(userData),
           sourceUserDocId: uid,
@@ -295,6 +347,7 @@ async function buildBackfillOperations({ db, academyId, academyName }) {
           existingData: data,
           desiredFields: {
             academyId,
+            ...buildOperationalTeacherFieldUpdates(collectionName, data),
           },
         })
       )

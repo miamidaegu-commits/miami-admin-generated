@@ -7,6 +7,7 @@ import {
   serverTimestamp,
 } from 'firebase/firestore'
 import { db } from '../../../../firebase'
+import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   SCHOOL_TIME_ZONE,
   getGroupLessonGroupId,
@@ -40,6 +41,7 @@ function getNowSchoolDateTimeParts() {
 export default function useGroupAttendanceFlow({
   activeSection,
   userProfile,
+  currentAcademyId,
   groupClasses,
   selectedGroupClass,
   setSelectedGroupClass,
@@ -168,6 +170,9 @@ export default function useGroupAttendanceFlow({
 
     const busyKey = `${lesson.id}__${groupStudentRow.id}`
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(lesson, scopedAcademyId, '그룹 수업')
+      assertSameAcademy(groupStudentRow, scopedAcademyId, '그룹 학생')
       setBusyGroupAttendanceStudentId(busyKey)
       await runTransaction(db, async (transaction) => {
         const adminUi = userProfile?.role === 'admin'
@@ -188,9 +193,11 @@ export default function useGroupAttendanceFlow({
         if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
+        assertSameAcademy(lData, scopedAcademyId, '그룹 수업')
         if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
 
         const pData = pkgSnap.data()
+        assertSameAcademy(pData, scopedAcademyId, '수강권')
         if (pData.packageType !== 'group') {
           throw new Error(adminUi ? '그룹 수강권이 아닙니다.' : '그룹 등록이 아닙니다.')
         }
@@ -214,6 +221,7 @@ export default function useGroupAttendanceFlow({
         const used = Number(pData.usedCount ?? 0)
 
         const gsData = gsSnap.data()
+        assertSameAcademy(gsData, scopedAcademyId, '그룹 학생')
         if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
         if (String(gsData.status || 'active') !== 'active') throw new Error('비활성 학생입니다.')
 
@@ -290,6 +298,9 @@ export default function useGroupAttendanceFlow({
 
     const busyKey = `${lesson.id}__${groupStudentRow.id}`
     try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(lesson, scopedAcademyId, '그룹 수업')
+      assertSameAcademy(groupStudentRow, scopedAcademyId, '그룹 학생')
       setBusyGroupAttendanceStudentId(busyKey)
       await runTransaction(db, async (transaction) => {
         const adminUi = userProfile?.role === 'admin'
@@ -310,9 +321,11 @@ export default function useGroupAttendanceFlow({
         if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
+        assertSameAcademy(lData, scopedAcademyId, '그룹 수업')
         if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
 
         const pData = pkgSnap.data()
+        assertSameAcademy(pData, scopedAcademyId, '수강권')
         if (pData.packageType !== 'group') {
           throw new Error(adminUi ? '그룹 수강권이 아닙니다.' : '그룹 등록이 아닙니다.')
         }
@@ -336,6 +349,7 @@ export default function useGroupAttendanceFlow({
         const rem = Number(pData.remainingCount ?? 0)
 
         const gsData = gsSnap.data()
+        assertSameAcademy(gsData, scopedAcademyId, '그룹 학생')
         if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
 
         const att = Number(gsData.attendanceCount ?? 0)

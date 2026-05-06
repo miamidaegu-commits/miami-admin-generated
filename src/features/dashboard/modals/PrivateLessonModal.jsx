@@ -325,7 +325,7 @@ export default function PrivateLessonModal({
                 </label>
 
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                  <span style={{ opacity: 0.85 }}>주당 횟수 (반복 슬롯)</span>
+                  <span style={{ opacity: 0.85 }}>주당 횟수 (반복 시간)</span>
                   <select
                     value={String(privateLessonForm.weeklyFrequency ?? '1')}
                     onChange={(e) =>

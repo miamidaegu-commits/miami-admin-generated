@@ -1,5 +1,6 @@
 import {
   formatDate,
+  formatLessonSessionNumber,
   formatTime,
   getLessonDate,
   getLessonStorageDateString,
@@ -21,6 +22,7 @@ export default function CalendarSection(props) {
       calendarMonthLabel,
       calendarDays,
       lessonsCountByDate,
+      lessonsPreviewByDate,
       calendarMonth,
       selectedDate,
       setSelectedDate,
@@ -106,6 +108,7 @@ export default function CalendarSection(props) {
           {calendarDays.map((day) => {
             const dateKey = getStorageDateStringFromDate(day)
             const count = lessonsCountByDate.get(dateKey) || 0
+            const previews = lessonsPreviewByDate?.get(dateKey) || []
             const isCurrentMonth = day.getMonth() === calendarMonth.getMonth()
             const isSelected = isSameStorageDate(day, selectedDate)
 
@@ -117,7 +120,7 @@ export default function CalendarSection(props) {
                   setShowOnlySelectedDate(true)
                 }}
                 style={{
-                  minHeight: 72,
+                  minHeight: 96,
                   borderRadius: 10,
                   border: isSelected ? '1px solid #6b8cff' : '1px solid #2e3240',
                   background: isSelected ? '#1f2a44' : '#151922',
@@ -137,6 +140,27 @@ export default function CalendarSection(props) {
                     }}
                   >
                     수업 {count}개
+                  </div>
+                ) : null}
+                {previews.slice(0, 2).map((preview) => (
+                  <div
+                    key={preview.id}
+                    style={{
+                      marginTop: 4,
+                      fontSize: 11,
+                      lineHeight: 1.35,
+                      opacity: 0.82,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {preview.label}
+                  </div>
+                ))}
+                {previews.length > 2 ? (
+                  <div style={{ marginTop: 4, fontSize: 11, opacity: 0.62 }}>
+                    +{previews.length - 2}
                   </div>
                 ) : null}
               </button>
@@ -297,12 +321,13 @@ export default function CalendarSection(props) {
             className="table-head"
             style={{
               gridTemplateColumns:
-                'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
+                'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(64px, 0.7fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
             }}
           >
             <span>날짜</span>
             <span>시간</span>
             <span>학생 / 반</span>
+            <span>회차</span>
             <span>선생님</span>
             <span>과목</span>
             <span>남은 횟수</span>
@@ -343,6 +368,7 @@ export default function CalendarSection(props) {
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
             const rowLessonActionBusy =
               busyLessonId === lesson.id || rowPrivateCrudBusy || busyPrivateLessonAdd
+            const sessionLabel = formatLessonSessionNumber(lesson)
             const badgeStyle = {
               display: 'inline-block',
               fontSize: 10,
@@ -386,7 +412,7 @@ export default function CalendarSection(props) {
                 }
                 style={{
                   gridTemplateColumns:
-                    'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
+                    'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(64px, 0.7fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
                   cursor: canOpenGroupAttendance ? 'pointer' : 'default',
                   background: canOpenGroupAttendance ? 'rgba(90, 127, 208, 0.08)' : undefined,
                 }}
@@ -397,6 +423,7 @@ export default function CalendarSection(props) {
                   <span style={badgeStyle}>{isGroupRow ? '그룹' : '개인'}</span>
                   {nameLabel}
                 </span>
+                <span>{sessionLabel || '-'}</span>
                 <span>{getTeacherName(lesson)}</span>
                 <span>{lesson.subject || '-'}</span>
                 <span>{remainingLessons}</span>

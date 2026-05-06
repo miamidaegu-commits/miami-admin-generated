@@ -17,7 +17,7 @@ test('관리자가 특정 그룹의 미래 수업 일정을 확인한다', async
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '반 관리');
+  await openDashboardSection(page, '단체반 관리');
 
   // 취약한 selector: 그룹 row에 안정적인 식별자가 없어 class+텍스트 조합을 사용합니다.
   // 가능하면 `data-testid="group-row"`를 넣고 이름은 별도 data attribute로 노출하세요.

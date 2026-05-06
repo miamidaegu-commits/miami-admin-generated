@@ -40,7 +40,7 @@ test('관리자가 그룹 학생 등록을 실제로 저장하고 다시 제거�
       tempPackageTitle,
     });
 
-    await openDashboardSection(page, '반 관리');
+    await openDashboardSection(page, '단체반 관리');
 
     const groupRow = getGroupRow(page, TEST_GROUP_NAME);
     await expect(groupRow).toBeVisible();
