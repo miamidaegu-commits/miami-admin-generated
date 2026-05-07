@@ -105,6 +105,14 @@ service cloud.firestore {
         data.teacher == myAcademyTeacherName(data.academyId);
     }
 
+    function notificationEventBelongsToTeacher(data) {
+      return isAcademyTeacherOrStaff(data.academyId) &&
+        (
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId))
+        );
+    }
+
     function canManageAttendance(academyId) {
       return isAcademyTeacherOrStaff(academyId) &&
         myMembership(academyId).permissions.canManageAttendance == true;
@@ -1848,6 +1856,14 @@ service cloud.firestore {
       );
       allow update: if false;
       allow delete: if false;
+    }
+
+    match /notificationEvents/{eventId} {
+      allow read: if sameAcademyOnRead() && (
+        isAcademyAdmin(resource.data.academyId) ||
+        notificationEventBelongsToTeacher(resource.data)
+      );
+      allow create, update, delete: if false;
     }
 
     match /{document=**} {

@@ -130,6 +130,10 @@ const ENABLE_GROUP_LEGACY_BACKFILL_TOOL = false
 
 const GROUP_BACKFILL_BATCH_SIZE = 400
 const TODAY_RESERVATION_QUERY_CHUNK_SIZE = 10
+const RESERVATION_NOTIFICATION_EVENT_TYPES = [
+  'private_slot_reserved',
+  'private_slot_cancelled',
+]
 const PRIVATE_SLOT_MANAGEMENT_LABEL = '1:1 예약 시간 관리'
 const ADMIN_GROUP_MANAGEMENT_LABEL = '단체반 관리'
 const TEACHER_GROUP_MANAGEMENT_LABEL = '내 단체반 관리'
@@ -146,6 +150,77 @@ function isDashboardAdminProfile(profile) {
 
 function isDashboardTeacherProfile(profile) {
   return String(profile?.role || '').trim().toLowerCase() === 'teacher'
+}
+
+function getNotificationEventCreatedAtMillis(event) {
+  const raw = event?.createdAt
+  if (raw?.toMillis) return raw.toMillis()
+  if (raw instanceof Date) return raw.getTime()
+  const parsed = Date.parse(String(raw || ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function formatReservationNotificationMessage(event) {
+  const studentName = String(event?.studentName || '').trim() || '학생'
+  const date = String(event?.date || '').trim() || '-'
+  const time = String(event?.time || '').trim() || '-'
+  if (event?.type === 'private_slot_cancelled') {
+    return `${studentName} 학생이 ${date} ${time} 1:1 수업 예약을 취소했습니다.`
+  }
+  return `${studentName} 학생이 ${date} ${time} 1:1 수업을 예약했습니다.`
+}
+
+function ReservationNotificationsPanel({ events, loading }) {
+  const rows = Array.isArray(events) ? events : []
+
+  return (
+    <section
+      className="activity-section"
+      data-testid="reservation-notifications-panel"
+      style={{ marginBottom: 20 }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <h2 className="section-title" style={{ margin: 0 }}>
+          예약 알림
+        </h2>
+        <span style={{ fontSize: 12, opacity: 0.65 }}>최근 20개</span>
+      </div>
+
+      {loading ? (
+        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>예약 알림을 불러오는 중입니다.</p>
+      ) : rows.length === 0 ? (
+        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>최근 예약 알림이 없습니다.</p>
+      ) : (
+        <div style={{ display: 'grid', gap: 8 }}>
+          {rows.map((event) => (
+            <div
+              key={event.id}
+              data-testid="reservation-notification-row"
+              style={{
+                border: '1px solid #2e3240',
+                borderRadius: 8,
+                background: '#151922',
+                padding: '10px 12px',
+                color: '#f5f7fb',
+                fontSize: 14,
+                lineHeight: 1.45,
+              }}
+            >
+              {formatReservationNotificationMessage(event)}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  )
 }
 
 const EMPTY_TEACHER_FORM = {
@@ -438,6 +513,9 @@ export default function Dashboard() {
   const [privateLessonSlotsLoading, setPrivateLessonSlotsLoading] = useState(false)
   const [privateLessonReservations, setPrivateLessonReservations] = useState([])
   const [privateLessonReservationsLoading, setPrivateLessonReservationsLoading] = useState(false)
+  const [reservationNotificationEvents, setReservationNotificationEvents] = useState([])
+  const [reservationNotificationEventsLoading, setReservationNotificationEventsLoading] =
+    useState(false)
   const [privateSlotForm, setPrivateSlotForm] = useState({
     teacher: '',
     date: '',
@@ -918,6 +996,112 @@ export default function Dashboard() {
       }
     )
     return () => unsubscribe()
+  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId) || !userProfile?.role) {
+      setReservationNotificationEvents([])
+      setReservationNotificationEventsLoading(false)
+      return
+    }
+
+    const isAdminProfile = isDashboardAdminProfile(userProfile)
+    const isTeacherProfile = isDashboardTeacherProfile(userProfile)
+    const teacherName = String(userProfile.teacherName || '').trim()
+    if (!isAdminProfile && (!isTeacherProfile || !teacherName)) {
+      setReservationNotificationEvents([])
+      setReservationNotificationEventsLoading(false)
+      return
+    }
+
+    setReservationNotificationEventsLoading(true)
+    const mergeAndSetRows = (snapshots) => {
+      const byId = new Map()
+      snapshots.forEach((snapshot) => {
+        snapshot.docs.forEach((docItem) => {
+          const row = { id: docItem.id, ...docItem.data() }
+          if (!RESERVATION_NOTIFICATION_EVENT_TYPES.includes(row.type)) return
+          byId.set(docItem.id, row)
+        })
+      })
+      const rows = Array.from(byId.values())
+        .sort(
+          (a, b) =>
+            getNotificationEventCreatedAtMillis(b) - getNotificationEventCreatedAtMillis(a)
+        )
+        .slice(0, 20)
+      setReservationNotificationEvents(rows)
+      setReservationNotificationEventsLoading(false)
+    }
+
+    const baseConstraints = [
+      where('academyId', '==', currentAcademyId),
+      where('type', 'in', RESERVATION_NOTIFICATION_EVENT_TYPES),
+    ]
+
+    if (isAdminProfile) {
+      const unsubscribe = onSnapshot(
+        query(
+          collection(db, 'notificationEvents'),
+          ...baseConstraints,
+          orderBy('createdAt', 'desc'),
+          limit(20)
+        ),
+        (snapshot) => mergeAndSetRows([snapshot]),
+        (error) => {
+          console.error('notificationEvents(admin) 불러오기 실패:', error)
+          setReservationNotificationEvents([])
+          setReservationNotificationEventsLoading(false)
+        }
+      )
+      return () => unsubscribe()
+    }
+
+    let teacherSnapshot = null
+    let teacherNameSnapshot = null
+    const maybeMergeTeacherRows = () => {
+      if (!teacherSnapshot || !teacherNameSnapshot) return
+      mergeAndSetRows([teacherSnapshot, teacherNameSnapshot])
+    }
+    const queryOptions = [orderBy('createdAt', 'desc'), limit(20)]
+    const unsubscribeTeacher = onSnapshot(
+      query(
+        collection(db, 'notificationEvents'),
+        ...baseConstraints,
+        where('teacher', '==', teacherName),
+        ...queryOptions
+      ),
+      (snapshot) => {
+        teacherSnapshot = snapshot
+        maybeMergeTeacherRows()
+      },
+      (error) => {
+        console.error('notificationEvents(teacher) 불러오기 실패:', error)
+        teacherSnapshot = { docs: [] }
+        maybeMergeTeacherRows()
+      }
+    )
+    const unsubscribeTeacherName = onSnapshot(
+      query(
+        collection(db, 'notificationEvents'),
+        ...baseConstraints,
+        where('teacherName', '==', teacherName),
+        ...queryOptions
+      ),
+      (snapshot) => {
+        teacherNameSnapshot = snapshot
+        maybeMergeTeacherRows()
+      },
+      (error) => {
+        console.error('notificationEvents(teacherName) 불러오기 실패:', error)
+        teacherNameSnapshot = { docs: [] }
+        maybeMergeTeacherRows()
+      }
+    )
+    return () => {
+      unsubscribeTeacher()
+      unsubscribeTeacherName()
+    }
   }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
 
   useEffect(() => {
@@ -3400,6 +3584,13 @@ export default function Dashboard() {
               showStudent
             />
           </div>
+
+          {activeSection === 'calendar' ? (
+            <ReservationNotificationsPanel
+              events={reservationNotificationEvents}
+              loading={reservationNotificationEventsLoading}
+            />
+          ) : null}
 	
 	          {activeSection === 'calendar' && (
             <CalendarSection {...calendarSectionProps.month} />
