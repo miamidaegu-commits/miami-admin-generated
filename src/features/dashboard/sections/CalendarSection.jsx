@@ -197,8 +197,10 @@ export default function CalendarSection(props) {
     busyLessonId,
     busyPrivateLessonCrudId,
     busyPrivateLessonAdd,
+    busyPrivateReservationOutcomeId,
     openPrivateLessonEditModal,
     handleDeletePrivateLesson,
+    onMarkPrivateReservationOutcome,
     canEditLesson,
     canDeleteLesson,
     onOpenCalendarGroupLessonAttendance,
@@ -370,6 +372,11 @@ export default function CalendarSection(props) {
                     ? '정상 차감'
                     : '예정'
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
+            const reservationCompleteBusy =
+              busyPrivateReservationOutcomeId === `${lesson.id}:completed`
+            const reservationNoShowBusy =
+              busyPrivateReservationOutcomeId === `${lesson.id}:no_show`
+            const reservationOutcomeBusy = reservationCompleteBusy || reservationNoShowBusy
             const rowLessonActionBusy =
               busyLessonId === lesson.id || rowPrivateCrudBusy || busyPrivateLessonAdd
             const sessionLabel = formatLessonSessionNumber(lesson)
@@ -528,6 +535,40 @@ export default function CalendarSection(props) {
                   ) : null}
                   {isPrivateReservationRow ? (
                     <span style={{ fontSize: 12, opacity: 0.65 }}>읽기 전용</span>
+                  ) : null}
+                  {activeSection === 'calendar' && isAdmin && isPrivateReservationRow ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => onMarkPrivateReservationOutcome?.(lesson, 'completed')}
+                        disabled={reservationOutcomeBusy}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #555',
+                          background: '#1f2a44',
+                          color: 'white',
+                          cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {reservationCompleteBusy ? '처리 중...' : '완료 처리'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onMarkPrivateReservationOutcome?.(lesson, 'no_show')}
+                        disabled={reservationOutcomeBusy}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #553333',
+                          background: '#4a2a2a',
+                          color: 'white',
+                          cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {reservationNoShowBusy ? '처리 중...' : '노쇼 처리'}
+                      </button>
+                    </>
                   ) : null}
                 </span>
               </div>

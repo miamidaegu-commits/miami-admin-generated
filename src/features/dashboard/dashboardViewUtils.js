@@ -342,6 +342,8 @@ export function formatCreditTransactionActionTypeLabel(actionType) {
     package_updated: '수강권 정보 수정',
     private_deduct_cancel: '개인 차감취소',
     private_deduct_restore: '개인 차감복구',
+    private_reservation_completed_deduct: '1:1 예약 완료 차감',
+    private_reservation_no_show_deduct: '1:1 예약 노쇼 차감',
     group_deduct: '그룹 차감',
     group_deduct_restore: '그룹 차감복구',
     package_ended: '수강권 종료',

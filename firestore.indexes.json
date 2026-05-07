@@ -254,6 +254,14 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "deductionPackageId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "privateLessonReservations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
         { "fieldPath": "studentId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]

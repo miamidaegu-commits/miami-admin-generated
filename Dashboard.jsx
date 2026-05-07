@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
+import { httpsCallable } from 'firebase/functions'
 import {
   addDoc,
   collection,
@@ -23,7 +24,7 @@ import {
   writeBatch,
 } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
-import { auth, db } from './firebase'
+import { auth, db, functions as firebaseFunctions } from './firebase'
 import { useAuth } from './AuthContext'
 import { debugLog } from './src/utils/debugLog.js'
 import {
@@ -345,6 +346,20 @@ async function recomputePrivatePackageUsage(packageId, academyId) {
     usedCount += 1
   })
 
+  const reservationSnap = await getDocs(
+    query(
+      collection(db, 'privateLessonReservations'),
+      where('academyId', '==', scopedAcademyId),
+      where('deductionPackageId', '==', pid)
+    )
+  )
+  reservationSnap.docs.forEach((reservationDoc) => {
+    const data = reservationDoc.data()
+    if (data.deductionApplied !== true) return
+    if (data.status !== 'completed' && data.status !== 'no_show') return
+    usedCount += 1
+  })
+
   const total = Number(pkg.totalCount ?? 0)
   const remainingCount = Math.max(0, total - usedCount)
   const status = getNextStudentPackageStatus(pkg.status, remainingCount)
@@ -540,6 +555,7 @@ export default function Dashboard() {
   const [privateLessonSlotsLoading, setPrivateLessonSlotsLoading] = useState(false)
   const [privateLessonReservations, setPrivateLessonReservations] = useState([])
   const [privateLessonReservationsLoading, setPrivateLessonReservationsLoading] = useState(false)
+  const [busyPrivateReservationOutcomeId, setBusyPrivateReservationOutcomeId] = useState('')
   const [reservationNotificationEvents, setReservationNotificationEvents] = useState([])
   const [reservationNotificationEventsLoading, setReservationNotificationEventsLoading] =
     useState(false)
@@ -3211,6 +3227,48 @@ export default function Dashboard() {
     }
   }
 
+  async function markPrivateReservationOutcome(reservation, outcome) {
+    if (!isAdmin) {
+      alert('예약 처리 권한이 없습니다.')
+      return
+    }
+    if (!reservation?.id) return
+    const isNoShow = outcome === 'no_show'
+    const label = [
+      reservation.date,
+      reservation.time,
+      reservation.studentName || reservation.studentId,
+      reservation.subject,
+    ]
+      .filter(Boolean)
+      .join(' ')
+    const actionLabel = isNoShow ? '노쇼 처리' : '완료 처리'
+    if (
+      !window.confirm(
+        `${actionLabel}하고 수강권 1회를 차감할까요?\n${label || '1:1 예약'}`
+      )
+    ) {
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(reservation, scopedAcademyId, '1:1 예약')
+      setBusyPrivateReservationOutcomeId(`${reservation.id}:${outcome}`)
+      const callable = httpsCallable(firebaseFunctions, 'markPrivateReservationOutcome')
+      await callable({
+        academyId: scopedAcademyId,
+        reservationId: reservation.id,
+        outcome,
+      })
+    } catch (error) {
+      console.error('1:1 예약 처리 실패:', error)
+      alert(`1:1 예약 처리 실패: ${error.message || '알 수 없는 오류'}`)
+    } finally {
+      setBusyPrivateReservationOutcomeId('')
+    }
+  }
+
   const busyStudentId = busyDeletingStudentId || busyStudentFlowId
 
   const isStudentPackageModalSubmitting = busyStudentPackageSubmit
@@ -3302,8 +3360,10 @@ export default function Dashboard() {
       busyLessonId,
       busyPrivateLessonCrudId,
       busyPrivateLessonAdd,
+      busyPrivateReservationOutcomeId,
       openPrivateLessonEditModal,
       handleDeletePrivateLesson,
+      onMarkPrivateReservationOutcome: markPrivateReservationOutcome,
       canEditLesson,
       canDeleteLesson,
       onOpenCalendarGroupLessonAttendance: openCalendarGroupLessonAttendance,

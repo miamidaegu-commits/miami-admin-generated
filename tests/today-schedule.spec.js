@@ -554,6 +554,8 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expect(ownReservationRow).toContainText(fixture.teacherName);
   await expect(ownReservationRow).toContainText('예약됨');
   await expect(ownReservationRow).toContainText('예약 1:1');
+  await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toBeVisible();
+  await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toBeVisible();
   await expect(
     page
       .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
@@ -587,6 +589,8 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
   await expect(ownReservationRow).toContainText(fixture.studentName);
   await expect(ownReservationRow).toContainText(fixture.teacherName);
   await expect(ownReservationRow).toContainText('예약됨');
+  await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
+  await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
   await expect(
     page
       .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
