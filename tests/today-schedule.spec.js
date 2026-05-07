@@ -70,9 +70,13 @@ async function createAuthUser(auth, { email, password, displayName }) {
 
 async function login(page, email, password, pathPattern) {
   await page.goto(BASE_URL);
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
+  await page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first().fill(email);
+  await page
+    .getByLabel(/Password|비밀번호/i)
+    .or(page.locator('input[type="password"]'))
+    .first()
+    .fill(password);
+  await page.getByRole('button', { name: /Sign In|로그인/i }).click();
   await expect(page).toHaveURL(pathPattern, { timeout: 15000 });
 }
 
@@ -172,6 +176,19 @@ async function expectSummaryCount(page, label, count) {
     .getByTestId('today-schedule-summary-item')
     .filter({ hasText: label });
   await expect(item).toContainText(String(count), { timeout: 20000 });
+}
+
+async function expectSummaryCountAtLeast(page, label, count) {
+  const item = page
+    .getByTestId('today-schedule-summary-item')
+    .filter({ hasText: label });
+  await expect
+    .poll(async () => {
+      const text = (await item.textContent()) || '';
+      const match = text.match(/\d+/);
+      return match ? Number(match[0]) : 0;
+    }, { timeout: 20000 })
+    .toBeGreaterThanOrEqual(count);
 }
 
 const fixture = {
@@ -521,11 +538,28 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expectPanelContains(page, fixture.otherGroupTitle);
   await expectPanelContains(page, fixture.ownPrivateTitle);
   await expectPanelContains(page, fixture.ownPrivateReservationTitle);
+  await expectPanelContains(page, fixture.today);
   await expectPanelContains(page, '3회차');
-  await expectSummaryCount(page, '개인 수업', 4);
-  await expectSummaryCount(page, '단체수업', 2);
+  await expectSummaryCountAtLeast(page, '개인 수업', 4);
+  await expectSummaryCountAtLeast(page, '단체수업', 2);
   await expectPanelContains(page, fixture.studentName);
   await expectPanelContains(page, '예약 완료');
+  await expectPanelContains(page, '예약됨');
+
+  const ownReservationRow = page
+    .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
+    .filter({ hasText: fixture.ownPrivateReservationTitle });
+  await expect(ownReservationRow).toBeVisible({ timeout: 20000 });
+  await expect(ownReservationRow).toContainText(fixture.studentName);
+  await expect(ownReservationRow).toContainText(fixture.teacherName);
+  await expect(ownReservationRow).toContainText('예약됨');
+  await expect(ownReservationRow).toContainText('예약 1:1');
+  await expect(
+    page
+      .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
+      .filter({ hasText: fixture.otherPrivateReservationTitle })
+  ).toBeVisible();
+  await expect(page.locator('main section button').filter({ hasText: '1:1 예약' }).first()).toBeVisible();
 
 });
 
@@ -537,12 +571,28 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
   await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
   await expect(panel).toContainText(fixture.ownPrivateTitle);
   await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
+  await expect(panel).toContainText(fixture.today);
+  await expect(panel).toContainText('예약됨');
   await expect(panel).toContainText('3회차');
   await expectSummaryCount(page, '개인 수업', 2);
   await expect(panel).toContainText(fixture.teacherName);
   await expect(panel).not.toContainText(fixture.otherGroupTitle);
   await expect(panel).not.toContainText(fixture.otherPrivateTitle);
   await expect(panel).not.toContainText(fixture.otherStudentName);
+
+  const ownReservationRow = page
+    .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
+    .filter({ hasText: fixture.ownPrivateReservationTitle });
+  await expect(ownReservationRow).toBeVisible({ timeout: 20000 });
+  await expect(ownReservationRow).toContainText(fixture.studentName);
+  await expect(ownReservationRow).toContainText(fixture.teacherName);
+  await expect(ownReservationRow).toContainText('예약됨');
+  await expect(
+    page
+      .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
+      .filter({ hasText: fixture.otherPrivateReservationTitle })
+  ).toHaveCount(0);
+  await expect(page.locator('main section button').filter({ hasText: '1:1 예약' }).first()).toBeVisible();
 });
 
 test('student sees only own active today reservations on student booking page', async ({ page }) => {

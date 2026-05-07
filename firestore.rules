@@ -1610,7 +1610,10 @@ service cloud.firestore {
         isAcademyAdmin(resource.data.academyId) ||
         (
           isAcademyTeacherOrStaff(resource.data.academyId) &&
-          resource.data.teacher == myAcademyTeacherName(resource.data.academyId)
+          (
+            resource.data.teacher == myAcademyTeacherName(resource.data.academyId) ||
+            resource.data.teacherName == myAcademyTeacherName(resource.data.academyId)
+          )
         ) ||
         (
           hasStudentIdentity(resource.data.academyId) &&

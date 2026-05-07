@@ -170,6 +170,33 @@ function formatReservationNotificationMessage(event) {
   return `${studentName} 학생이 ${date} ${time} 1:1 수업을 예약했습니다.`
 }
 
+function getPrivateReservationStudentLabel(reservation, student = null) {
+  return (
+    String(reservation?.studentName || '').trim() ||
+    String(student?.name || '').trim() ||
+    String(reservation?.studentId || '').trim() ||
+    '-'
+  )
+}
+
+function getPrivateReservationTeacherLabel(reservation, slot = null) {
+  return (
+    String(reservation?.teacherName || '').trim() ||
+    String(reservation?.teacher || '').trim() ||
+    String(slot?.teacherName || '').trim() ||
+    String(slot?.teacher || '').trim() ||
+    '-'
+  )
+}
+
+function getPrivateReservationSubjectLabel(reservation, slot = null) {
+  return (
+    String(reservation?.subject || '').trim() ||
+    String(slot?.subject || '').trim() ||
+    '1:1 수업'
+  )
+}
+
 function ReservationNotificationsPanel({ events, loading }) {
   const rows = Array.isArray(events) ? events : []
 
@@ -1363,46 +1390,92 @@ export default function Dashboard() {
     }
     if (!userProfile?.role) return
 
-    const role = userProfile.role
+    const isAdminProfile = isDashboardAdminProfile(userProfile)
     const teacherName = normalizeText(userProfile.teacherName || '')
-    let ref
-    if (role === 'admin') {
-      ref = query(
-        collection(db, 'privateLessonReservations'),
-        where('academyId', '==', currentAcademyId),
-        where('status', 'in', ['active', 'cancelled'])
+    if (isAdminProfile) {
+      setPrivateLessonReservationsLoading(true)
+      const unsubscribe = onSnapshot(
+        query(
+          collection(db, 'privateLessonReservations'),
+          where('academyId', '==', currentAcademyId),
+          where('status', '==', 'active')
+        ),
+        (snapshot) => {
+          const rows = snapshot.docs.map((docItem) => ({
+            id: docItem.id,
+            ...docItem.data(),
+          }))
+          setPrivateLessonReservations(rows)
+          setPrivateLessonReservationsLoading(false)
+        },
+        (error) => {
+          console.error('privateLessonReservations 불러오기 실패:', error)
+          setPrivateLessonReservations([])
+          setPrivateLessonReservationsLoading(false)
+        }
       )
-    } else if (role === 'teacher' && teacherName) {
-      ref = query(
-        collection(db, 'privateLessonReservations'),
+      return () => unsubscribe()
+    } else if (isDashboardTeacherProfile(userProfile) && teacherName) {
+      setPrivateLessonReservationsLoading(true)
+      let teacherSnapshot = null
+      let teacherNameSnapshot = null
+      const mergeTeacherRows = () => {
+        if (!teacherSnapshot || !teacherNameSnapshot) return
+        const byId = new Map()
+        const snapshots = [teacherSnapshot, teacherNameSnapshot]
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docItem) => {
+            byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
+          })
+        })
+        setPrivateLessonReservations(Array.from(byId.values()))
+        setPrivateLessonReservationsLoading(false)
+      }
+      const queryBase = [
         where('academyId', '==', currentAcademyId),
-        where('teacher', '==', teacherName),
-        where('status', 'in', ['active', 'cancelled'])
+        where('status', '==', 'active'),
+      ]
+      const unsubscribeTeacher = onSnapshot(
+        query(
+          collection(db, 'privateLessonReservations'),
+          ...queryBase,
+          where('teacher', '==', teacherName)
+        ),
+        (snapshot) => {
+          teacherSnapshot = snapshot
+          mergeTeacherRows()
+        },
+        (error) => {
+          console.error('privateLessonReservations(teacher) 불러오기 실패:', error)
+          teacherSnapshot = { docs: [] }
+          mergeTeacherRows()
+        }
       )
+      const unsubscribeTeacherName = onSnapshot(
+        query(
+          collection(db, 'privateLessonReservations'),
+          ...queryBase,
+          where('teacherName', '==', teacherName)
+        ),
+        (snapshot) => {
+          teacherNameSnapshot = snapshot
+          mergeTeacherRows()
+        },
+        (error) => {
+          console.error('privateLessonReservations(teacherName) 불러오기 실패:', error)
+          teacherNameSnapshot = { docs: [] }
+          mergeTeacherRows()
+        }
+      )
+      return () => {
+        unsubscribeTeacher()
+        unsubscribeTeacherName()
+      }
     } else {
       setPrivateLessonReservations([])
       setPrivateLessonReservationsLoading(false)
       return
     }
-
-    setPrivateLessonReservationsLoading(true)
-    const unsubscribe = onSnapshot(
-      ref,
-      (snapshot) => {
-        const rows = snapshot.docs.map((docItem) => ({
-          id: docItem.id,
-          ...docItem.data(),
-        }))
-        setPrivateLessonReservations(rows)
-        setPrivateLessonReservationsLoading(false)
-      },
-      (error) => {
-        console.error('privateLessonReservations 불러오기 실패:', error)
-        setPrivateLessonReservations([])
-        setPrivateLessonReservationsLoading(false)
-      }
-    )
-    return () => unsubscribe()
   }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
 
   useEffect(() => {
@@ -1930,6 +2003,7 @@ export default function Dashboard() {
       )
       .map((lesson) => ({
         id: `private-lesson-${lesson.id}`,
+        date: getLessonStorageDateString(lesson) || todayYmd,
         time: lessonTimeInputValue(lesson) || '-',
         typeLabel: '1:1 수업',
         sourceKind: 'privateLesson',
@@ -1958,6 +2032,7 @@ export default function Dashboard() {
       const subject = String(lesson.subject || '').trim()
       return {
         id: `group-lesson-${lesson.id}`,
+        date: String(lesson.date || '').trim() || todayYmd,
         time: String(lesson.time || '').trim() || '-',
         typeLabel: '단체반 수업',
         sourceKind: 'groupLesson',
@@ -1978,6 +2053,7 @@ export default function Dashboard() {
         const subject = String(lesson.subject || '').trim()
         return {
           id: `group-reservation-${reservation.id}`,
+          date: String(lesson.date || reservation.date || '').trim() || todayYmd,
           time: String(lesson.time || reservation.time || '').trim() || '-',
           typeLabel: '단체반 예약',
           sourceKind: 'groupReservation',
@@ -1993,30 +2069,76 @@ export default function Dashboard() {
       })
       .filter(Boolean)
 
+    const approvedPrivateLessonReservationKeys = new Set()
+    lessons
+      .filter(
+        (lesson) =>
+          String(lesson.academyId || '').trim() === scopedAcademyId &&
+          getLessonStorageDateString(lesson) === todayYmd
+      )
+      .forEach((lesson) => {
+        const reservationId = String(lesson.reservationId || '').trim()
+        const slotId = String(lesson.slotId || '').trim()
+        if (reservationId) approvedPrivateLessonReservationKeys.add(`reservationId:${reservationId}`)
+        if (slotId) approvedPrivateLessonReservationKeys.add(`slotId:${slotId}`)
+        const base = [
+          todayYmd,
+          String(lessonTimeInputValue(lesson) || lesson.time || '').trim(),
+          normalizeText(getTeacherName(lesson)),
+        ]
+        const studentKeys = [
+          normalizeText(lesson.studentId || lesson.studentID || ''),
+          normalizeText(getStudentName(lesson)),
+        ].filter(Boolean)
+        studentKeys.forEach((studentKey) => {
+          approvedPrivateLessonReservationKeys.add([base[0], base[1], studentKey, base[2]].join('__'))
+        })
+      })
+
     const privateReservationItems = privateLessonReservations
       .filter((reservation) => {
         if (reservation.status !== 'active') return false
         const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
-        return String(reservation.date || slot?.date || '').trim() === todayYmd
+        const reservationDate = String(reservation.date || slot?.date || '').trim()
+        if (reservationDate !== todayYmd) return false
+        const reservationId = String(reservation.id || reservation.reservationId || '').trim()
+        const slotId = String(reservation.slotId || '').trim()
+        if (
+          (reservationId &&
+            approvedPrivateLessonReservationKeys.has(`reservationId:${reservationId}`)) ||
+          (slotId && approvedPrivateLessonReservationKeys.has(`slotId:${slotId}`))
+        ) {
+          return false
+        }
+        const duplicateKey = [
+          reservationDate,
+          String(reservation.time || slot?.time || '').trim(),
+          normalizeText(
+            reservation.studentName || reservation.student || reservation.studentId || ''
+          ),
+          normalizeText(
+            reservation.teacherName ||
+              reservation.teacher ||
+              slot?.teacherName ||
+              slot?.teacher ||
+              ''
+          ),
+        ].join('__')
+        return !approvedPrivateLessonReservationKeys.has(duplicateKey)
       })
       .map((reservation) => {
         const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
         const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
         return {
           id: `private-reservation-${reservation.id}`,
+          date: String(reservation.date || slot?.date || '').trim() || todayYmd,
           time: String(reservation.time || slot?.time || '').trim() || '-',
           typeLabel: '1:1 예약',
           sourceKind: 'privateReservation',
-          studentLabel:
-            String(reservation.studentName || '').trim() ||
-            String(student?.name || '').trim() ||
-            '-',
-          teacherLabel: String(reservation.teacher || slot?.teacher || '').trim() || '-',
-          title:
-            String(reservation.subject || '').trim() ||
-            String(slot?.subject || '').trim() ||
-            '1:1 수업',
-          statusLabel: '예약 완료',
+          studentLabel: getPrivateReservationStudentLabel(reservation, student),
+          teacherLabel: getPrivateReservationTeacherLabel(reservation, slot),
+          title: getPrivateReservationSubjectLabel(reservation, slot),
+          statusLabel: '예약됨',
         }
       })
 
@@ -2250,6 +2372,8 @@ export default function Dashboard() {
   const { lessonsCountByDate, lessonsPreviewByDate, displayedLessons } =
     useCalendarSectionViewModel({
       lessons,
+      privateLessonReservations,
+      privateLessonSlots,
       studentSummaryGroupLessons,
       groupClasses,
       selectedDateString,

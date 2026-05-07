@@ -78,6 +78,10 @@ export default function TodaySchedulePanel({
               }}
             >
               <span>
+                <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>날짜</span>
+                {item.date || '-'}
+              </span>
+              <span>
                 <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>시간</span>
                 {item.time || '-'}
               </span>

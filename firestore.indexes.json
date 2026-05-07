@@ -245,6 +245,15 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "teacherName", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "privateLessonReservations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
         { "fieldPath": "studentId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
