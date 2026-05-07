@@ -18,6 +18,8 @@ setGlobalOptions({maxInstances: 10});
 
 const OWNER_EMAIL = "miamidaegu@gmail.com";
 const REGION = "us-central1";
+const STUDENT_PRIVATE_CANCEL_LIMIT = 4;
+const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000;
 const PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE =
   "1:1 예약 기능은 아직 준비 중입니다.";
 const HOSTED_APP_URL_BY_PROJECT_ID = {
@@ -286,60 +288,9 @@ function isApprovedLessonAtSameTime(data) {
   return !approvalStatus || approvalStatus === "approved";
 }
 
-function toPositiveInteger(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.floor(n);
-}
-
-function getTodayYmdInSeoul() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Seoul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const byType = new Map(parts.map((part) => [part.type, part.value]));
-  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
-}
-
 function getLessonDateString(data) {
   const date = String((data && (data.date || data.lessonDate)) || "").trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "";
-}
-
-function buildPrivateLessonProgress({student, lessons, activeReservations}) {
-  const today = getTodayYmdInSeoul();
-  const approvedLessons = lessons.filter((lesson) =>
-    isApprovedLessonAtSameTime(lesson),
-  );
-  const totalRegistered =
-    toPositiveInteger(student && student.paidLessons) ||
-    approvedLessons.reduce((max, lesson) => {
-      return Math.max(max, toPositiveInteger(lesson && lesson.sessionNumber));
-    }, 0) ||
-    approvedLessons.length;
-
-  const pastLessons = approvedLessons.filter((lesson) => {
-    const date = getLessonDateString(lesson);
-    return date && date < today;
-  }).length;
-  const upcomingLessons = approvedLessons.filter((lesson) => {
-    const date = getLessonDateString(lesson);
-    return date && date >= today;
-  }).length;
-  const activeReservationCount = activeReservations.filter((reservation) =>
-    isActivePrivateReservation(reservation),
-  ).length;
-
-  return {
-    totalRegistered,
-    pastLessons,
-    upcomingLessons,
-    activeReservations: activeReservationCount,
-    reservableRemaining:
-      totalRegistered - pastLessons - upcomingLessons - activeReservationCount,
-  };
 }
 
 async function getStudentLessonRows(transaction, db, {academyId, studentId}) {
@@ -368,6 +319,88 @@ async function getStudentLessonRows(transaction, db, {academyId, studentId}) {
 function getOptionalSlotString(slot, key) {
   const value = normalizeId(slot && slot[key]);
   return value || null;
+}
+
+function getOptionalStudentName({student, membership, reservation}) {
+  return (
+    getOptionalSlotString(student, "name") ||
+    getOptionalSlotString(student, "studentName") ||
+    getOptionalSlotString(membership, "displayName") ||
+    getOptionalSlotString(reservation, "studentName") ||
+    null
+  );
+}
+
+function getTimestampMillis(value) {
+  if (!value) return null;
+  if (typeof value.toMillis === "function") {
+    const millis = value.toMillis();
+    return Number.isFinite(millis) ? millis : null;
+  }
+  if (value instanceof Date) {
+    const millis = value.getTime();
+    return Number.isFinite(millis) ? millis : null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const millis = Date.parse(value);
+    return Number.isFinite(millis) ? millis : null;
+  }
+  return null;
+}
+
+function getSeoulDateTimeMillis(dateValue, timeValue) {
+  const date = String(dateValue || "").trim();
+  const time = String(timeValue || "").trim();
+  const dateMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const timeMatch = time.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (!dateMatch || !timeMatch) return null;
+
+  const year = Number(dateMatch[1]);
+  const month = Number(dateMatch[2]);
+  const day = Number(dateMatch[3]);
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+
+  return Date.UTC(year, month - 1, day, hour - 9, minute, 0, 0);
+}
+
+function getPrivateSlotStartMillis(slot) {
+  const startAtMillis = getTimestampMillis(slot && slot.startAt);
+  if (startAtMillis !== null) return startAtMillis;
+  return getSeoulDateTimeMillis(slot && slot.date, slot && slot.time);
+}
+
+function createPrivateSlotNotification(transaction, db, {
+  academyId,
+  type,
+  studentId,
+  studentName,
+  teacher,
+  teacherName,
+  slotId,
+  reservationId,
+  date,
+  time,
+  source,
+  createdAt,
+}) {
+  const eventData = {
+    academyId,
+    type,
+    studentId,
+    teacher,
+    slotId,
+    reservationId,
+    date,
+    time,
+    source,
+    createdAt,
+  };
+  if (studentName) eventData.studentName = studentName;
+  if (teacherName) eventData.teacherName = teacherName;
+
+  transaction.create(db.collection("notificationEvents").doc(), eventData);
 }
 
 exports.reservePrivateLessonSlot = onCall(
@@ -492,34 +525,11 @@ exports.reservePrivateLessonSlot = onCall(
             );
           }
 
-          const allActiveReservationSnap = await transaction.get(
-              db
-                  .collection("privateLessonReservations")
-                  .where("academyId", "==", academyId)
-                  .where("studentId", "==", studentId)
-                  .where("status", "==", "active"),
-          );
-          const activeReservations = allActiveReservationSnap.docs.map(
-              (docSnap) => docSnap.data() || {},
-          );
-
           const studentLessons = await getStudentLessonRows(
               transaction,
               db,
               {academyId, studentId},
           );
-          const progress = buildPrivateLessonProgress({
-            student,
-            lessons: studentLessons,
-            activeReservations,
-          });
-          if (progress.reservableRemaining <= 0) {
-            throw new HttpsError(
-                "failed-precondition",
-                "예약 가능한 잔여 횟수가 없습니다.",
-            );
-          }
-
           const hasLessonConflict = studentLessons.some((lesson) =>
             getLessonDateString(lesson) === date &&
               String(lesson.time || "").trim() === time &&
@@ -567,8 +577,10 @@ exports.reservePrivateLessonSlot = onCall(
           };
           const teacherName = getOptionalSlotString(slot, "teacherName");
           const subject = getOptionalSlotString(slot, "subject");
+          const studentName = getOptionalStudentName({student, membership});
           if (teacherName) reservationData.teacherName = teacherName;
           if (subject) reservationData.subject = subject;
+          if (studentName) reservationData.studentName = studentName;
 
           transaction.set(reservationRef, reservationData, {merge: true});
           transaction.update(slotRef, {
@@ -578,6 +590,20 @@ exports.reservePrivateLessonSlot = onCall(
             reservedAt: now,
             updatedAt: now,
             reservedCount: 1,
+          });
+          createPrivateSlotNotification(transaction, db, {
+            academyId,
+            type: "private_slot_reserved",
+            studentId,
+            studentName,
+            teacher,
+            teacherName,
+            slotId,
+            reservationId,
+            date,
+            time,
+            source: "student",
+            createdAt: now,
           });
 
           return {
@@ -627,11 +653,18 @@ exports.cancelPrivateLessonReservation = onCall(
           const reservationRef = db
               .collection("privateLessonReservations")
               .doc(reservationId);
+          const statsRef = db
+              .collection("studentPrivateBookingStats")
+              .doc(`${academyId}__${studentId}`);
+          const studentRef = db.collection("privateStudents").doc(studentId);
 
-          const [reservationSnap, slotSnap] = await Promise.all([
-            transaction.get(reservationRef),
-            transaction.get(slotRef),
-          ]);
+          const [reservationSnap, slotSnap, statsSnap, studentSnap] =
+            await Promise.all([
+              transaction.get(reservationRef),
+              transaction.get(slotRef),
+              transaction.get(statsRef),
+              transaction.get(studentRef),
+            ]);
 
           if (!reservationSnap.exists) {
             throw new HttpsError(
@@ -678,13 +711,50 @@ exports.cancelPrivateLessonReservation = onCall(
                 "Private lesson slot academy mismatch.",
             );
           }
+          const startMillis = getPrivateSlotStartMillis(slot);
+          if (startMillis === null) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Private lesson slot start time is invalid.",
+            );
+          }
+          if (Date.now() > startMillis - STUDENT_PRIVATE_CANCEL_CUTOFF_MS) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Private reservation can only be cancelled at least 6 hours " +
+                "before start time.",
+            );
+          }
+
+          const stats = statsSnap.exists ? statsSnap.data() || {} : {};
+          const studentCancelCount = Number(stats.studentCancelCount || 0);
+          const safeStudentCancelCount =
+            Number.isFinite(studentCancelCount) && studentCancelCount > 0 ?
+              Math.floor(studentCancelCount) :
+              0;
+          if (safeStudentCancelCount >= STUDENT_PRIVATE_CANCEL_LIMIT) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Student private reservation cancellation limit reached.",
+            );
+          }
 
           const now = admin.firestore.FieldValue.serverTimestamp();
           transaction.update(reservationRef, {
             status: "cancelled",
             cancelledAt: now,
+            cancelledBy: "student",
+            cancelledByUid: uid,
             updatedAt: now,
           });
+          transaction.set(statsRef, {
+            academyId,
+            studentId,
+            studentCancelCount: safeStudentCancelCount + 1,
+            createdAt:
+              statsSnap.exists && stats.createdAt ? stats.createdAt : now,
+            updatedAt: now,
+          }, {merge: true});
 
           if (normalizeId(slot.reservationId) === reservationId) {
             transaction.update(slotRef, {
@@ -697,6 +767,31 @@ exports.cancelPrivateLessonReservation = onCall(
               reservedCount: 0,
             });
           }
+          const student = studentSnap.exists ? studentSnap.data() || {} : null;
+          const date = requireString(slot, "date");
+          const time = requireString(slot, "time");
+          const teacher = requireString(slot, "teacher");
+          const teacherName = getOptionalSlotString(slot, "teacherName") ||
+            getOptionalSlotString(reservation, "teacherName");
+          const studentName = getOptionalStudentName({
+            student,
+            membership,
+            reservation,
+          });
+          createPrivateSlotNotification(transaction, db, {
+            academyId,
+            type: "private_slot_cancelled",
+            studentId,
+            studentName,
+            teacher,
+            teacherName,
+            slotId,
+            reservationId,
+            date,
+            time,
+            source: "student",
+            createdAt: now,
+          });
 
           return {
             ok: true,
