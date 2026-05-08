@@ -35,6 +35,8 @@ jobs:
 
       - name: Build app
         run: npm run build:e2e
+        env:
+          VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
 
       - name: Run Chromium e2e tests
         env:
