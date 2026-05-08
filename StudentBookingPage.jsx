@@ -3,6 +3,7 @@ import { signOut } from 'firebase/auth'
 import {
   collection,
   doc,
+  documentId,
   onSnapshot,
   query,
   runTransaction,
@@ -38,10 +39,17 @@ import {
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
 const PRIVATE_TEACHER_QUERY_CHUNK_SIZE = 10
+function isEnabledFlag(value) {
+  return ['1', 'true', 'yes', 'on', 'enabled'].includes(
+    String(value || '').trim().toLowerCase()
+  )
+}
+
 const PRIVATE_SLOT_BOOKING_ENABLED =
-  import.meta.env.MODE === 'e2e' &&
-  typeof window !== 'undefined' &&
-  new URLSearchParams(window.location.search).get('privateSlotBooking') === 'enabled'
+  isEnabledFlag(import.meta.env.VITE_PRIVATE_SLOT_BOOKING_ENABLED) ||
+  (import.meta.env.MODE === 'e2e' &&
+    typeof window !== 'undefined' &&
+    new URLSearchParams(window.location.search).get('privateSlotBooking') === 'enabled')
 
 function chunkValues(values, size) {
   const out = []
@@ -156,6 +164,8 @@ export default function StudentBookingPage() {
   const [reservationsError, setReservationsError] = useState('')
   const [busyReservationId, setBusyReservationId] = useState('')
   const [allowedPrivateTeacherKeys, setAllowedPrivateTeacherKeys] = useState([])
+  const [allowedPrivateSlotIds, setAllowedPrivateSlotIds] = useState([])
+  const [privateSlotBookingPilotEnabled, setPrivateSlotBookingPilotEnabled] = useState(false)
   const [privateAccessLoading, setPrivateAccessLoading] = useState(false)
   const [privateAccessResolved, setPrivateAccessResolved] = useState(false)
   const [privateAccessError, setPrivateAccessError] = useState('')
@@ -274,6 +284,8 @@ export default function StudentBookingPage() {
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
       setAllowedPrivateTeacherKeys([])
+      setAllowedPrivateSlotIds([])
+      setPrivateSlotBookingPilotEnabled(false)
       setPrivateAccessLoading(false)
       setPrivateAccessResolved(false)
       setPrivateAccessError('')
@@ -303,9 +315,16 @@ export default function StudentBookingPage() {
         const activePackageIds = Array.isArray(summaryData?.activePackageIds)
           ? summaryData.activePackageIds
           : []
+        const summaryAllowedSlotIds = [
+          ...(Array.isArray(summaryData?.allowedSlotIds) ? summaryData.allowedSlotIds : []),
+          ...(Array.isArray(summaryData?.allowedPrivateLessonSlotIds)
+            ? summaryData.allowedPrivateLessonSlotIds
+            : []),
+        ]
         const hasActivePrivateAccess = activePackageIds.some((value) =>
           String(value || '').trim()
         )
+        setPrivateSlotBookingPilotEnabled(summaryData?.privateSlotBookingPilotEnabled === true)
         const nextKeys = new Set()
         if (hasActivePrivateAccess) {
           teacherKeys.forEach((value) => {
@@ -314,13 +333,22 @@ export default function StudentBookingPage() {
             nextKeys.add(teacherKey)
           })
         }
+        const nextSlotIds = new Set()
+        summaryAllowedSlotIds.forEach((value) => {
+          const slotId = String(value || '').trim()
+          if (!slotId) return
+          nextSlotIds.add(slotId)
+        })
         setAllowedPrivateTeacherKeys(Array.from(nextKeys.values()))
+        setAllowedPrivateSlotIds(Array.from(nextSlotIds.values()))
         setPrivateAccessLoading(false)
         setPrivateAccessResolved(true)
       },
       (error) => {
         console.error('studentPrivateAccessSummary 불러오기 실패:', error)
         setAllowedPrivateTeacherKeys([])
+        setAllowedPrivateSlotIds([])
+        setPrivateSlotBookingPilotEnabled(false)
         setPrivateAccessLoading(false)
         setPrivateAccessResolved(true)
         setPrivateAccessError('예약 가능한 1:1 선생님 권한을 확인할 수 없습니다.')
@@ -406,7 +434,7 @@ export default function StudentBookingPage() {
       setPrivateSlotsError('')
       return
     }
-    if (allowedPrivateTeacherKeys.length === 0) {
+    if (allowedPrivateTeacherKeys.length === 0 && allowedPrivateSlotIds.length === 0) {
       setPrivateSlots([])
       setPrivateSlotsLoading(false)
       setPrivateSlotsError('')
@@ -416,7 +444,12 @@ export default function StudentBookingPage() {
     setPrivateSlotsLoading(true)
     setPrivateSlotsError('')
 
-    const chunks = chunkValues(allowedPrivateTeacherKeys, PRIVATE_TEACHER_QUERY_CHUNK_SIZE)
+    const teacherChunks = chunkValues(allowedPrivateTeacherKeys, PRIVATE_TEACHER_QUERY_CHUNK_SIZE)
+    const slotChunks = chunkValues(allowedPrivateSlotIds, PRIVATE_TEACHER_QUERY_CHUNK_SIZE)
+    const chunks = [
+      ...teacherChunks.map((values) => ({ type: 'teacher', values })),
+      ...slotChunks.map((values) => ({ type: 'slot', values })),
+    ]
     const chunkMaps = new Map()
     const unsubs = []
 
@@ -434,20 +467,31 @@ export default function StudentBookingPage() {
     }
 
     chunks.forEach((chunk, chunkIndex) => {
+      const privateSlotQuery =
+        chunk.type === 'slot'
+          ? query(collection(db, 'privateLessonSlots'), where(documentId(), 'in', chunk.values))
+          : query(
+              collection(db, 'privateLessonSlots'),
+              where('academyId', '==', currentAcademyId),
+              where('status', '==', 'open'),
+              where('teacher', 'in', chunk.values)
+            )
       const unsubscribe = onSnapshot(
-        query(
-          collection(db, 'privateLessonSlots'),
-          where('academyId', '==', currentAcademyId),
-          where('status', '==', 'open'),
-          where('teacher', 'in', chunk)
-        ),
+        privateSlotQuery,
         (snapshot) => {
           const rows = new Map()
           snapshot.docs.forEach((docItem) => {
-            rows.set(docItem.id, {
+            const row = {
               id: docItem.id,
               ...docItem.data(),
-            })
+            }
+            if (
+              String(row.academyId || '').trim() !== currentAcademyId ||
+              String(row.status || '').trim() !== 'open'
+            ) {
+              return
+            }
+            rows.set(docItem.id, row)
           })
           chunkMaps.set(chunkIndex, rows)
           mergeRows()
@@ -467,6 +511,7 @@ export default function StudentBookingPage() {
       unsubs.forEach((unsubscribe) => unsubscribe())
     }
   }, [
+    allowedPrivateSlotIds,
     allowedPrivateTeacherKeys,
     currentAcademyId,
     hasOperationalAcademy,
@@ -1063,6 +1108,10 @@ export default function StudentBookingPage() {
       alert('1:1 예약 시간은 현재 관리자만 변경할 수 있습니다.')
       return
     }
+    if (!privateSlotBookingPilotEnabled) {
+      alert('1:1 예약 기능은 아직 선택된 학생에게만 제공됩니다.')
+      return
+    }
     if (role !== 'student') {
       alert('학생 계정만 예약할 수 있습니다.')
       return
@@ -1073,7 +1122,14 @@ export default function StudentBookingPage() {
     validatePrivateSlotBookingState(slot, 'reserve')
 
     const teacherKey = String(slot.teacher || '').trim()
-    if (!teacherKey || !allowedPrivateTeacherKeys.includes(teacherKey)) {
+    const slotEligibleStudentIds = Array.isArray(slot.eligibleStudentIds)
+      ? slot.eligibleStudentIds
+      : []
+    const hasSlotAccess =
+      allowedPrivateSlotIds.includes(slot.id) ||
+      slotEligibleStudentIds.some((value) => String(value || '').trim() === scopedStudentId)
+    const hasTeacherAccess = teacherKey && allowedPrivateTeacherKeys.includes(teacherKey)
+    if (!hasTeacherAccess && !hasSlotAccess) {
       alert('예약 가능한 선생님 권한이 없습니다.')
       return
     }
@@ -1196,6 +1252,10 @@ export default function StudentBookingPage() {
   async function cancelPrivateReservation(reservation) {
     if (!PRIVATE_SLOT_BOOKING_ENABLED) {
       alert('1:1 예약 시간은 현재 관리자만 변경할 수 있습니다.')
+      return
+    }
+    if (!privateSlotBookingPilotEnabled) {
+      alert('1:1 예약 기능은 아직 선택된 학생에게만 제공됩니다.')
       return
     }
     if (role !== 'student') {
@@ -1577,8 +1637,17 @@ export default function StudentBookingPage() {
                       studentId: scopedStudentId,
                     })
                     const isBusy = busyPrivateReservationId === reservationId
+                    const slotEligibleStudentIds = Array.isArray(slot.eligibleStudentIds)
+                      ? slot.eligibleStudentIds
+                      : []
+                    const isSlotEligible =
+                      slotEligibleStudentIds.some(
+                        (value) => String(value || '').trim() === scopedStudentId
+                      ) || allowedPrivateSlotIds.includes(slot.id)
                     const canReserve =
                       PRIVATE_SLOT_BOOKING_ENABLED &&
+                      privateSlotBookingPilotEnabled &&
+                      isSlotEligible &&
                       (!reservation || reservation.status !== 'active')
                         ? !busyPrivateReservationId && slot.status === 'open'
                         : false
@@ -1626,7 +1695,7 @@ export default function StudentBookingPage() {
                               cursor: canReserve ? 'pointer' : 'not-allowed',
                             }}
                           >
-                            {isBusy ? '예약 중...' : PRIVATE_SLOT_BOOKING_ENABLED ? '1:1 수업 예약' : '예약 중지'}
+                            {isBusy ? '예약 중...' : canReserve ? '1:1 수업 예약' : '예약 중지'}
                           </button>
                         </div>
                       </article>
@@ -1708,7 +1777,7 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                           </div>
-                          {isActive && PRIVATE_SLOT_BOOKING_ENABLED ? (
+                          {isActive && PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled ? (
                             <button
                               type="button"
                               onClick={() => cancelPrivateReservation(reservation)}

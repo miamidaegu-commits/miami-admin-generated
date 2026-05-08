@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import {
   collection,
   getDocs,
+  onSnapshot,
   query,
   where,
 } from 'firebase/firestore'
@@ -25,6 +26,7 @@ import {
   sanitizePhoneForTel,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
+import { setStudentPrivateSlotBookingPilotEnabled } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 
 function cleanText(value, fallback = '-') {
   const text = String(value ?? '').trim()
@@ -265,6 +267,39 @@ export default function StudentsSection({
   const [studentHistoryGroupReservations, setStudentHistoryGroupReservations] = useState([])
   const [studentHistoryPrivateReservations, setStudentHistoryPrivateReservations] = useState([])
   const [studentHistoryCreditTransactions, setStudentHistoryCreditTransactions] = useState([])
+  const [studentPrivateAccessSummaryByStudentId, setStudentPrivateAccessSummaryByStudentId] =
+    useState(new Map())
+  const [busyPrivateSlotPilotStudentId, setBusyPrivateSlotPilotStudentId] = useState('')
+
+  useEffect(() => {
+    if (!isAdmin || !currentAcademyId) {
+      setStudentPrivateAccessSummaryByStudentId(new Map())
+      return undefined
+    }
+
+    const unsubscribe = onSnapshot(
+      query(
+        collection(db, 'studentPrivateAccessSummary'),
+        where('academyId', '==', currentAcademyId)
+      ),
+      (snapshot) => {
+        const next = new Map()
+        snapshot.docs.forEach((docItem) => {
+          const data = docItem.data()
+          const studentId = String(data.studentId || '').trim()
+          if (!studentId) return
+          next.set(studentId, { id: docItem.id, ...data })
+        })
+        setStudentPrivateAccessSummaryByStudentId(next)
+      },
+      (error) => {
+        console.error('studentPrivateAccessSummary(admin) 불러오기 실패:', error)
+        setStudentPrivateAccessSummaryByStudentId(new Map())
+      }
+    )
+
+    return () => unsubscribe()
+  }, [currentAcademyId, isAdmin])
 
   const groupLessonById = useMemo(() => {
     const map = new Map()
@@ -553,6 +588,23 @@ export default function StudentsSection({
       setStudentAccountLinkError(getStudentAccountLinkErrorMessage(error))
     } finally {
       setStudentAccountLinkBusy(false)
+    }
+  }
+
+  async function togglePrivateSlotBookingPilot(student, enabled) {
+    if (!isAdmin || !student?.id || !currentAcademyId) return
+    setBusyPrivateSlotPilotStudentId(student.id)
+    try {
+      await setStudentPrivateSlotBookingPilotEnabled(db, {
+        academyId: currentAcademyId,
+        studentId: student.id,
+        enabled,
+      })
+    } catch (error) {
+      console.error('1:1 예약 테스트 권한 변경 실패:', error)
+      alert(`1:1 예약 테스트 권한 변경 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateSlotPilotStudentId('')
     }
   }
 
@@ -912,6 +964,10 @@ export default function StudentsSection({
             hasRenewalNeeded: false,
             hasExpiringSoon: false,
           }
+          const privateAccessSummary = studentPrivateAccessSummaryByStudentId.get(student.id) || null
+          const privateSlotBookingPilotEnabled =
+            privateAccessSummary?.privateSlotBookingPilotEnabled === true
+          const isPrivateSlotPilotBusy = busyPrivateSlotPilotStudentId === student.id
 
           return (
             <Fragment key={student.id}>
@@ -1098,6 +1154,43 @@ export default function StudentsSection({
                     }}
                   >
                     {rowBusy ? '처리 중...' : '삭제'}
+                  </button>
+                ) : null}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      togglePrivateSlotBookingPilot(student, !privateSlotBookingPilotEnabled)
+                    }
+                    disabled={
+                      rowBusy ||
+                      busyStudentId === '__add__' ||
+                      busyPrivateSlotPilotStudentId !== ''
+                    }
+                    data-testid="student-private-slot-pilot-toggle-button"
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: privateSlotBookingPilotEnabled
+                        ? '1px solid #665032'
+                        : '1px solid #335544',
+                      background: privateSlotBookingPilotEnabled ? '#3d3122' : '#243528',
+                      color: 'white',
+                      cursor:
+                        rowBusy ||
+                        busyStudentId === '__add__' ||
+                        busyPrivateSlotPilotStudentId !== ''
+                          ? 'not-allowed'
+                          : 'pointer',
+                      fontSize: 12,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {isPrivateSlotPilotBusy
+                      ? '변경 중...'
+                      : privateSlotBookingPilotEnabled
+                        ? '1:1 예약 테스트 해제'
+                        : '1:1 예약 테스트 허용'}
                   </button>
                 ) : null}
                 {isAdmin ? (

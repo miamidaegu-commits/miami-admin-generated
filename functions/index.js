@@ -21,7 +21,7 @@ const REGION = "us-central1";
 const STUDENT_PRIVATE_CANCEL_LIMIT = 4;
 const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000;
 const PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE =
-  "1:1 예약 기능은 아직 준비 중입니다.";
+  "1:1 예약 기능은 아직 선택된 학생에게만 제공됩니다.";
 const HOSTED_APP_URL_BY_PROJECT_ID = {
   "daegu-miami-production": "https://daegumiami.com",
   "miami-e2e": "https://miami-e2e.web.app",
@@ -67,15 +67,24 @@ function isPrivateSlotReservationEnabled() {
   const projectId = getRuntimeProjectId();
   if (projectId === "miami-e2e") return true;
 
-  return (
-    isEnabledFlag(process.env.PRIVATE_SLOT_BOOKING_ENABLED) ||
-    isEnabledFlag(process.env.PRIVATE_SLOT_RESERVATION_ENABLED) ||
-    isEnabledFlag(process.env.RESERVE_PRIVATE_LESSON_SLOT_ENABLED)
-  );
+  return isEnabledFlag(process.env.PRIVATE_SLOT_BOOKING_ENABLED);
+}
+
+function isPrivateSlotReservationPilotRequired() {
+  return getRuntimeProjectId() !== "miami-e2e";
 }
 
 function requirePrivateSlotReservationEnabled() {
   if (isPrivateSlotReservationEnabled()) return;
+  throw new HttpsError(
+      "failed-precondition",
+      PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE,
+  );
+}
+
+function requirePrivateSlotBookingPilotEnabled(summary) {
+  if (!isPrivateSlotReservationPilotRequired()) return;
+  if (summary && summary.privateSlotBookingPilotEnabled === true) return;
   throw new HttpsError(
       "failed-precondition",
       PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE,
@@ -517,6 +526,7 @@ exports.reservePrivateLessonSlot = onCall(
             );
           }
           const summary = summarySnap.exists ? summarySnap.data() || {} : null;
+          requirePrivateSlotBookingPilotEnabled(summary);
 
           if (!hasSlotAccess({slot, summary, slotId, studentId})) {
             throw new HttpsError(
@@ -699,14 +709,23 @@ exports.cancelPrivateLessonReservation = onCall(
               .collection("studentPrivateBookingStats")
               .doc(`${academyId}__${studentId}`);
           const studentRef = db.collection("privateStudents").doc(studentId);
+          const summaryRef = db
+              .collection("studentPrivateAccessSummary")
+              .doc(`${academyId}__${studentId}`);
 
-          const [reservationSnap, slotSnap, statsSnap, studentSnap] =
-            await Promise.all([
-              transaction.get(reservationRef),
-              transaction.get(slotRef),
-              transaction.get(statsRef),
-              transaction.get(studentRef),
-            ]);
+          const [
+            reservationSnap,
+            slotSnap,
+            statsSnap,
+            studentSnap,
+            summarySnap,
+          ] = await Promise.all([
+            transaction.get(reservationRef),
+            transaction.get(slotRef),
+            transaction.get(statsRef),
+            transaction.get(studentRef),
+            transaction.get(summaryRef),
+          ]);
 
           if (!reservationSnap.exists) {
             throw new HttpsError(
@@ -751,6 +770,14 @@ exports.cancelPrivateLessonReservation = onCall(
             throw new HttpsError(
                 "permission-denied",
                 "Private lesson slot academy mismatch.",
+            );
+          }
+          const summary = summarySnap.exists ? summarySnap.data() || {} : null;
+          requirePrivateSlotBookingPilotEnabled(summary);
+          if (!hasSlotAccess({slot, summary, slotId, studentId})) {
+            throw new HttpsError(
+                "permission-denied",
+                "Student is not eligible for this private lesson slot.",
             );
           }
           const startMillis = getPrivateSlotStartMillis(slot);

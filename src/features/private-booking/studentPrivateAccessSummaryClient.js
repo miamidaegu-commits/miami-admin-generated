@@ -1,4 +1,4 @@
-import { arrayRemove, arrayUnion, doc, serverTimestamp } from 'firebase/firestore'
+import { arrayRemove, arrayUnion, doc, serverTimestamp, setDoc } from 'firebase/firestore'
 import {
   buildStudentPrivateAccessSummaryId,
   normalizePrivateTeacherKey,
@@ -84,4 +84,21 @@ export function removeStudentPrivateSlotAccessBatch(batch, db, { academyId, stud
     { merge: true }
   )
   return summaryRef
+}
+
+export function setStudentPrivateSlotBookingPilotEnabled(
+  db,
+  { academyId, studentId, enabled }
+) {
+  const summaryRef = buildStudentPrivateAccessSummaryRef(db, { academyId, studentId })
+  return setDoc(
+    summaryRef,
+    {
+      academyId: String(academyId || '').trim(),
+      studentId: String(studentId || '').trim(),
+      privateSlotBookingPilotEnabled: enabled === true,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  )
 }

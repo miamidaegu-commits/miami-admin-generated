@@ -527,6 +527,7 @@ service cloud.firestore {
           "activePackageIds",
           "allowedSlotIds",
           "allowedPrivateLessonSlotIds",
+          "privateSlotBookingPilotEnabled",
           "createdAt",
           "updatedAt"
         ]) &&
@@ -538,7 +539,9 @@ service cloud.firestore {
         (!("activePackageIds" in data.keys()) || data.activePackageIds is list) &&
         (!("allowedSlotIds" in data.keys()) || data.allowedSlotIds is list) &&
         (!("allowedPrivateLessonSlotIds" in data.keys()) ||
-          data.allowedPrivateLessonSlotIds is list);
+          data.allowedPrivateLessonSlotIds is list) &&
+        (!("privateSlotBookingPilotEnabled" in data.keys()) ||
+          data.privateSlotBookingPilotEnabled is bool);
     }
 
     function validPrivateSlotBaseShape(data) {
