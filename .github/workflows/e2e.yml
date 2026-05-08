@@ -41,6 +41,7 @@ jobs:
       - name: Run Chromium e2e tests
         env:
           CI: true
+          VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
         run: npm run test:e2e:chromium
 
       - name: Upload Playwright report
