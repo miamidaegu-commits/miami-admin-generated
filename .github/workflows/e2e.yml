@@ -38,6 +38,16 @@ jobs:
         env:
           VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
 
+      - name: Write e2e service account key
+        env:
+          MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64: ${{ secrets.MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64 }}
+        run: |
+          if [ -z "$MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64" ]; then
+            echo "Missing MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64 secret"
+            exit 1
+          fi
+          printf '%s' "$MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64" | base64 --decode > serviceAccountKey.json
+
       - name: Run Chromium e2e tests
         env:
           CI: true
