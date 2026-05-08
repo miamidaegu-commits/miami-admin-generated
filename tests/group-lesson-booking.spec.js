@@ -26,7 +26,7 @@ function hasServiceAccount() {
 }
 
 function initializeAdmin() {
-  if (admin.apps.length > 0) return;
+  if (admin.apps.find((app) => app?.name === '[DEFAULT]')) return;
   const serviceAccount = require(SERVICE_ACCOUNT_PATH);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),

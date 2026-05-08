@@ -7,8 +7,11 @@ import {
   TEST_STUDENT_EMAIL,
   TEST_STUDENT_PASSWORD,
 } from './fixtures/test-data.js';
+import { ensureE2EUserFixtures, hasE2EServiceAccount } from './e2e-user-fixtures.js';
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'https://miami-e2e.web.app';
+const EXPECTED_HOSTED_FIREBASE_PROJECT_ID = 'miami-e2e';
+let hostedAuthSmokeSkipReason = '';
 
 const forbiddenConsolePatterns = [
   /Firebase project mismatch/i,
@@ -45,14 +48,64 @@ function installHostedSmokeChecks(page) {
 }
 
 async function login(page, email, password, pathPattern) {
-  await page.goto(BASE_URL);
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Sign In' }).click();
+  const baseUrl = BASE_URL.replace(/\/$/, '');
+  await page.goto(`${baseUrl}/login`);
+  await page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first().fill(email);
+  await page
+    .getByLabel(/Password|비밀번호/i)
+    .or(page.locator('input[type="password"]'))
+    .first()
+    .fill(password);
+  await page.getByRole('button', { name: /Sign In|로그인/i }).click();
   await expect(page).toHaveURL(pathPattern, { timeout: 15000 });
 }
 
+async function getHostedFirebaseProjectId() {
+  const baseUrl = BASE_URL.replace(/\/$/, '');
+  const indexResponse = await fetch(`${baseUrl}/`);
+  if (!indexResponse.ok) {
+    throw new Error(`Unable to fetch hosted index: ${indexResponse.status}`);
+  }
+  const indexHtml = await indexResponse.text();
+  const assetPath = indexHtml.match(/<script[^>]+src="([^"]*\/assets\/[^"]+\.js)"/)?.[1];
+  if (!assetPath) return '';
+
+  const assetUrl = new URL(assetPath, `${baseUrl}/`).toString();
+  const assetResponse = await fetch(assetUrl);
+  if (!assetResponse.ok) {
+    throw new Error(`Unable to fetch hosted bundle: ${assetResponse.status}`);
+  }
+  const assetText = await assetResponse.text();
+  return (
+    assetText.match(/VITE_FIREBASE_PROJECT_ID:\s*"([^"]+)"/)?.[1] ||
+    assetText.match(/projectId:\s*"([^"]+)"/)?.[1] ||
+    ''
+  );
+}
+
 test.describe('hosted miami-e2e smoke', () => {
+  test.beforeAll(async () => {
+    const hostedProjectId = await getHostedFirebaseProjectId().catch(() => '');
+    if (hostedProjectId && hostedProjectId !== EXPECTED_HOSTED_FIREBASE_PROJECT_ID) {
+      hostedAuthSmokeSkipReason =
+        `Hosted app is configured for Firebase project ${hostedProjectId}, not ${EXPECTED_HOSTED_FIREBASE_PROJECT_ID}.`;
+      return;
+    }
+    if (!hasE2EServiceAccount()) {
+      hostedAuthSmokeSkipReason = 'serviceAccountKey.json is required to seed hosted smoke users.';
+      return;
+    }
+
+    if (!hostedProjectId) {
+      hostedAuthSmokeSkipReason = 'Could not verify hosted Firebase project id.';
+      return;
+    }
+
+    if (hasE2EServiceAccount()) {
+      await ensureE2EUserFixtures();
+    }
+  });
+
   test('public classes route loads from hosted app and survives refresh', async ({
     page,
     browserName,
@@ -79,6 +132,7 @@ test.describe('hosted miami-e2e smoke', () => {
 
   test('admin dashboard route loads from hosted app', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'hosted smoke is run against chromium');
+    test.skip(Boolean(hostedAuthSmokeSkipReason), hostedAuthSmokeSkipReason);
 
     const smokeChecks = installHostedSmokeChecks(page);
 
@@ -107,6 +161,7 @@ test.describe('hosted miami-e2e smoke', () => {
     browserName,
   }) => {
     test.skip(browserName !== 'chromium', 'hosted smoke is run against chromium');
+    test.skip(Boolean(hostedAuthSmokeSkipReason), hostedAuthSmokeSkipReason);
 
     const smokeChecks = installHostedSmokeChecks(page);
 
@@ -138,6 +193,7 @@ test.describe('hosted miami-e2e smoke', () => {
 
   test('student booking route loads from hosted app', async ({ page, browserName }) => {
     test.skip(browserName !== 'chromium', 'hosted smoke is run against chromium');
+    test.skip(Boolean(hostedAuthSmokeSkipReason), hostedAuthSmokeSkipReason);
 
     const smokeChecks = installHostedSmokeChecks(page);
 

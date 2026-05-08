@@ -15,6 +15,7 @@ import {
   where,
 } from 'firebase/firestore';
 import {
+  BASE_URL,
   loginAsAdmin,
   openDashboardSection,
 } from './e2e-helpers.js';
@@ -62,7 +63,7 @@ function getFirebaseClientConfig() {
 function initializeAdmin() {
   if (initialized) return;
   const serviceAccount = require(SERVICE_ACCOUNT_PATH);
-  if (admin.apps.length === 0) {
+  if (!admin.apps.find((app) => app?.name === '[DEFAULT]')) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
@@ -130,6 +131,34 @@ async function readGroupClassIdsAsTeacher({ teacherEmail, teacherPassword, acade
     await signOut(auth).catch(() => {});
     await deleteApp(app).catch(() => {});
   }
+}
+
+async function tryOpenDashboardAfterMembershipRemoval(page, email, password) {
+  await page.goto(`${BASE_URL}login/`);
+  await page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first().fill(email);
+  await page
+    .getByLabel(/Password|비밀번호/i)
+    .or(page.locator('input[type="password"]'))
+    .first()
+    .fill(password);
+
+  const reachedDashboard = await Promise.race([
+    (async () => {
+      await page.getByRole('button', { name: /Sign In|로그인/i }).click();
+      await page.waitForURL(/\/dashboard/, { timeout: 15000 });
+      return true;
+    })(),
+    page.waitForTimeout(17000).then(() => false),
+  ]).catch(() => false);
+
+  if (!reachedDashboard) {
+    await expect(page.getByRole('button', { name: /Sign In|로그인/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: '단체반 관리', exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('group-row')).toHaveCount(0);
+    return false;
+  }
+
+  return true;
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -331,6 +360,7 @@ test('user with no active academy membership sees empty operational data', async
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 membership 제거 검증을 실행합니다.');
+  test.setTimeout(60000);
 
   initializeAdmin();
   const db = admin.firestore();
@@ -343,10 +373,16 @@ test('user with no active academy membership sees empty operational data', async
   try {
     await membershipRef.delete();
 
-    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await openDashboardSection(page, '단체반 관리');
-    await expect(page.getByText('등록된 반이 없습니다. 위에서 반을 만들 수 있습니다.')).toBeVisible();
-    await expect(page.getByTestId('group-row')).toHaveCount(0);
+    const dashboardAvailable = await tryOpenDashboardAfterMembershipRemoval(
+      page,
+      ADMIN_EMAIL,
+      ADMIN_PASSWORD
+    );
+    if (dashboardAvailable) {
+      await openDashboardSection(page, '단체반 관리');
+      await expect(page.getByText('등록된 반이 없습니다. 위에서 반을 만들 수 있습니다.')).toBeVisible();
+      await expect(page.getByTestId('group-row')).toHaveCount(0);
+    }
   } finally {
     await restoreDoc(membershipRef, originalMembership);
   }

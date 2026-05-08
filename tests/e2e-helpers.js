@@ -7,7 +7,7 @@ export function escapeRegExp(value) {
 }
 
 async function loginAndExpectPath(page, email, password, pathPattern) {
-  await page.goto(BASE_URL);
+  await page.goto(`${BASE_URL}login/`);
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const emailInput = page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first();

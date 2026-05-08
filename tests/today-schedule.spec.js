@@ -25,7 +25,7 @@ function hasServiceAccount() {
 }
 
 function initializeAdmin() {
-  if (admin.apps.length > 0) return;
+  if (admin.apps.find((app) => app?.name === '[DEFAULT]')) return;
   const serviceAccount = require(SERVICE_ACCOUNT_PATH);
   if (serviceAccount.project_id !== 'miami-e2e') {
     throw new Error(`Expected miami-e2e service account, received ${serviceAccount.project_id}`);
@@ -69,7 +69,7 @@ async function createAuthUser(auth, { email, password, displayName }) {
 }
 
 async function login(page, email, password, pathPattern) {
-  await page.goto(BASE_URL);
+  await page.goto(`${BASE_URL}login/`);
   await page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first().fill(email);
   await page
     .getByLabel(/Password|비밀번호/i)

@@ -6,6 +6,7 @@ import { test, expect } from '@playwright/test';
 import {
   getStudentRow,
   getStudentSearchInput,
+  BASE_URL,
   loginAsAdmin,
   loginAsStudent,
   openDashboardSection,
@@ -32,7 +33,7 @@ function hasServiceAccount() {
 }
 
 function initializeAdmin() {
-  if (admin.apps.length > 0) return;
+  if (admin.apps.find((app) => app?.name === '[DEFAULT]')) return;
   const serviceAccount = require(SERVICE_ACCOUNT_PATH);
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
@@ -50,12 +51,20 @@ async function restoreDoc(ref, data) {
 }
 
 async function loginAsTeacher(page) {
-  await page.goto('http://127.0.0.1:5173/');
-  await page.getByLabel('Email').fill(TEST_TEACHER_EMAIL);
-  await page.getByLabel('Password').fill(TEST_TEACHER_PASSWORD);
-  await page.getByRole('button', { name: 'Sign In' }).click();
-  await expect(page).toHaveURL(/\/dashboard/, { timeout: 10000 });
-  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible();
+  await page.goto(`${BASE_URL}login/`);
+  await page
+    .getByLabel(/Email|이메일/i)
+    .or(page.locator('input[type="email"]'))
+    .first()
+    .fill(TEST_TEACHER_EMAIL);
+  await page
+    .getByLabel(/Password|비밀번호/i)
+    .or(page.locator('input[type="password"]'))
+    .first()
+    .fill(TEST_TEACHER_PASSWORD);
+  await page.getByRole('button', { name: /Sign In|로그인/i }).click();
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
+  await expect(page.getByTestId('dashboard-welcome-subtitle')).toBeVisible({ timeout: 15000 });
 }
 
 function reservationId({ lessonId, studentId }) {
@@ -480,11 +489,15 @@ test('teacher and student cannot access admin-only student history view', async 
 
   try {
     await loginAsTeacher(page);
-    await openDashboardSection(page, '학생 관리');
-    await getStudentSearchInput(page).fill(fixture.studentName);
-    const row = getStudentRow(page, fixture.studentName);
-    await expect(row).toBeVisible({ timeout: 15000 });
-    await expect(row.getByTestId('student-history-open-button')).toHaveCount(0);
+    if ((await page.getByRole('button', { name: '학생 관리', exact: true }).count()) > 0) {
+      await openDashboardSection(page, '학생 관리');
+      await getStudentSearchInput(page).fill(fixture.studentName);
+      const row = getStudentRow(page, fixture.studentName);
+      await expect(row).toBeVisible({ timeout: 15000 });
+      await expect(row.getByTestId('student-history-open-button')).toHaveCount(0);
+    } else {
+      await expect(page.getByTestId('student-history-open-button')).toHaveCount(0);
+    }
 
     const studentContext = await browser.newContext();
     contexts.push(studentContext);

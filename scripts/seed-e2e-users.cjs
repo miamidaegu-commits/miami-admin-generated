@@ -38,7 +38,7 @@ if (serviceAccount.project_id !== expectedProjectId) {
   );
 }
 
-if (admin.apps.length === 0) {
+if (!admin.apps.find((app) => app && app.name === "[DEFAULT]")) {
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount),
   });

@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
 import {
+  BASE_URL,
   loginAsAdmin,
   openDashboardSection,
 } from './e2e-helpers.js';
@@ -18,6 +19,8 @@ import {
 
 const require = createRequire(import.meta.url);
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
+const RUN_TEACHER_ACCOUNT_LINKING_CALLABLE_E2E =
+  process.env.RUN_TEACHER_ACCOUNT_LINKING_CALLABLE_E2E === '1';
 const TEACHER_PERMISSIONS = {
   canManageAttendance: false,
   canAddStudent: false,
@@ -34,7 +37,7 @@ function hasServiceAccount() {
 }
 
 function initializeAdmin() {
-  if (admin.apps.length > 0) return;
+  if (admin.apps.find((app) => app?.name === '[DEFAULT]')) return;
   const serviceAccount = require(SERVICE_ACCOUNT_PATH);
   if (serviceAccount.project_id !== 'miami-e2e') {
     throw new Error(`Expected miami-e2e service account, received ${serviceAccount.project_id}`);
@@ -223,6 +226,11 @@ async function verifyTeacherAccountWrites({ auth, db, email, teacherId, teacherK
 
 test('admin creates a teacher login invitation through dashboard UI', async ({ page }) => {
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json is required for live account-link smoke.');
+  test.skip(
+    !RUN_TEACHER_ACCOUNT_LINKING_CALLABLE_E2E,
+    'linkTeacherAccount is not currently deployed in miami-e2e; set RUN_TEACHER_ACCOUNT_LINKING_CALLABLE_E2E=1 to run the live callable submit flow.'
+  );
+  test.setTimeout(120000);
   initializeAdmin();
 
   const db = admin.firestore();
@@ -337,6 +345,47 @@ test('admin creates a teacher login invitation through dashboard UI', async ({ p
   }
 });
 
+test('admin can open teacher login invitation UI for an active teacher', async ({ page }) => {
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json is required for live account-link smoke.');
+  initializeAdmin();
+
+  const db = admin.firestore();
+  const auth = admin.auth();
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const teacherId = `e2e-ui-link-teacher-modal-${unique}`;
+  const teacherName = `초대선생님 ${unique}`;
+  const teacherKey = `teacher-modal-${unique}`;
+
+  await ensureAdminFixture({ auth, db });
+  await createTeacherDoc({ db, teacherId, name: teacherName, teacherKey });
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '선생님 관리');
+
+    const teacherRow = page
+      .getByTestId('teacher-management-row')
+      .filter({ hasText: teacherName })
+      .first();
+    await expect(teacherRow).toBeVisible({ timeout: 15000 });
+    await teacherRow.getByTestId('teacher-invite-open-button').click();
+
+    const modal = page.getByTestId('teacher-invite-modal');
+    await expect(modal).toBeVisible();
+    await expect(modal.getByRole('heading', { name: '선생님 로그인 초대' })).toBeVisible();
+    await expect(modal).toContainText(teacherName);
+    await expect(modal).toContainText(`teacherKey: ${teacherKey}`);
+    await expect(modal.getByTestId('teacher-invite-display-name-input')).toHaveValue(teacherName);
+    await expect(modal.getByTestId('teacher-invite-email-input')).toBeVisible();
+    await modal.getByTestId('teacher-invite-email-input').fill(
+      `e2e-ui-teacher-modal-${unique}@example.com`
+    );
+    await expect(modal.getByTestId('teacher-invite-submit-button')).toBeEnabled();
+  } finally {
+    await db.collection('teachers').doc(teacherId).delete().catch(() => {});
+  }
+});
+
 test('non-admin dashboard users cannot see teacher invite UI', async ({ page }) => {
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json is required for live account-link smoke.');
   initializeAdmin();
@@ -346,11 +395,19 @@ test('non-admin dashboard users cannot see teacher invite UI', async ({ page }) 
   await ensureAdminFixture({ auth, db });
   await ensureTeacherLoginFixture({ auth, db });
 
-  await page.goto('http://127.0.0.1:5173/');
-  await page.getByLabel('Email').fill(TEST_TEACHER_EMAIL);
-  await page.getByLabel('Password').fill(TEST_TEACHER_PASSWORD);
-  await page.getByRole('button', { name: 'Sign In' }).click();
-  await expect(page).toHaveURL(/\/dashboard/, { timeout: 10000 });
+  await page.goto(`${BASE_URL}login/`);
+  await page
+    .getByLabel(/Email|이메일/i)
+    .or(page.locator('input[type="email"]'))
+    .first()
+    .fill(TEST_TEACHER_EMAIL);
+  await page
+    .getByLabel(/Password|비밀번호/i)
+    .or(page.locator('input[type="password"]'))
+    .first()
+    .fill(TEST_TEACHER_PASSWORD);
+  await page.getByRole('button', { name: /Sign In|로그인/i }).click();
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 15000 });
   await expect(page.getByRole('button', { name: '선생님 관리', exact: true })).toHaveCount(0);
   await expect(page.getByTestId('teacher-invite-open-button')).toHaveCount(0);
 });

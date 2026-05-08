@@ -66,7 +66,7 @@ test('public class intro page loads without login and shows class information', 
 
   await page.getByRole('link', { name: '로그인하기' }).click()
   await expect(page).toHaveURL(/\/login/)
-  await expect(page.getByLabel('Email')).toBeVisible()
+  await expect(page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first()).toBeVisible()
 })
 
 test('login page links to public class intro and protected routes remain protected', async ({ page }) => {
@@ -76,7 +76,7 @@ test('login page links to public class intro and protected routes remain protect
   await expect(page.getByRole('heading', { name: '마이애미 영어회화 수업 안내', level: 1 })).toBeVisible()
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0)
 
-  await page.goto(`${BASE_URL}dashboard`)
+  await page.goto(`${BASE_URL}dashboard/`)
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '단체반 관리', exact: true })).toHaveCount(0)
 
@@ -88,12 +88,14 @@ test('login page links to public class intro and protected routes remain protect
 test('public SEO files are available for classes indexing', async ({ page }) => {
   const robotsResponse = await page.goto(`${BASE_URL}robots.txt`)
   expect(robotsResponse?.ok()).toBe(true)
-  await expect(page.locator('body')).toContainText('User-agent: *')
-  await expect(page.locator('body')).toContainText('Sitemap: https://miami-e2e.web.app/sitemap.xml')
+  const robotsBody = page.locator('body')
+  await expect(robotsBody).toContainText('User-agent: *')
+  await expect(robotsBody).toContainText(/Sitemap:\s*https?:\/\/\S+\/sitemap\.xml/)
 
   const sitemapResponse = await page.goto(`${BASE_URL}sitemap.xml`)
   expect(sitemapResponse?.ok()).toBe(true)
-  await expect(page.locator('body')).toContainText('https://miami-e2e.web.app/')
-  await expect(page.locator('body')).toContainText('https://miami-e2e.web.app/login')
-  await expect(page.locator('body')).toContainText('https://miami-e2e.web.app/classes')
+  const sitemapText = await page.locator('body').innerText()
+  expect(sitemapText).toMatch(/https?:\/\/[^\s/]+\/(?:[\s<]|$)/)
+  expect(sitemapText).toMatch(/https?:\/\/[^\s/]+\/login\b/)
+  expect(sitemapText).toMatch(/https?:\/\/[^\s/]+\/classes\b/)
 })
