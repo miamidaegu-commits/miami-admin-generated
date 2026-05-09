@@ -584,7 +584,7 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     await page.getByLabel('1:1 수업 날짜').fill(fixture.createdDate);
     await page.getByLabel('1:1 수업 시작 시간').fill(fixture.createdTime);
     await page.getByLabel('1:1 수업 진행 시간').fill('50');
-    await page.getByLabel(`${fixture.firstStudentName} · ${TEACHER_NAME}`).check();
+    await expect(page.getByText('대상 학생')).toHaveCount(0);
     await page.getByTestId('private-slot-create-button').click();
     await expect(page.getByText(fixture.createdDate).first()).toBeVisible({ timeout: 15000 });
     fixture.createdSlotId = await queryCreatedSlot(db, {
@@ -598,9 +598,9 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
       teacher: TEACHER_NAME,
       date: fixture.createdDate,
       time: fixture.createdTime,
-      eligibleStudentIds: [fixture.firstStudentId],
     });
-    await expectSummarySlotAccess(db, fixture.firstStudentId, fixture.createdSlotId, true);
+    expect(Array.isArray(createdSlot?.eligibleStudentIds) ? createdSlot.eligibleStudentIds : []).toEqual([]);
+    await expectSummarySlotAccess(db, fixture.firstStudentId, fixture.createdSlotId, false);
     await expectSlotStatus(db, fixture.createdSlotId, 'open');
 
     const createdDashboardSlotRow = page

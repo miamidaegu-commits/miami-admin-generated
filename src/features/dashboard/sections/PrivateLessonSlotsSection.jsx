@@ -180,69 +180,6 @@ export default function PrivateLessonSlotsSection({
               <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.durationMinutes}</span>
             ) : null}
           </label>
-          {isAdmin ? (
-            <fieldset
-              style={{
-                display: 'grid',
-                gap: 8,
-                gridColumn: '1 / -1',
-                border: '1px solid #2e3240',
-                borderRadius: 10,
-                padding: 12,
-                margin: 0,
-              }}
-            >
-              <legend style={{ padding: '0 6px', fontSize: 13 }}>대상 학생</legend>
-              {privateStudentOptions.length === 0 ? (
-                <span style={{ opacity: 0.7, fontSize: 13 }}>등록된 학생이 없습니다.</span>
-              ) : (
-                <div
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                    gap: 8,
-                  }}
-                >
-                  {privateStudentOptions.map((student) => {
-                    const checked = normalizeEligibleStudentIds(
-                      privateSlotForm.eligibleStudentIds
-                    ).includes(student.id)
-                    return (
-                      <label
-                        key={student.id}
-                        style={{
-                          display: 'flex',
-                          gap: 8,
-                          alignItems: 'center',
-                          fontSize: 13,
-                          minWidth: 0,
-                        }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() =>
-                            setPrivateSlotForm((prev) => ({
-                              ...prev,
-                              eligibleStudentIds: toggleStudentId(
-                                prev.eligibleStudentIds,
-                                student.id
-                              ),
-                            }))
-                          }
-                          data-testid="private-slot-eligible-student-checkbox"
-                        />
-                        <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                          {student.name || student.id}
-                          {student.teacher ? ` · ${student.teacher}` : ''}
-                        </span>
-                      </label>
-                    )
-                  })}
-                </div>
-              )}
-            </fieldset>
-          ) : null}
           <div style={{ display: 'flex', alignItems: 'end' }}>
             <button
               type="submit"
@@ -277,7 +214,7 @@ export default function PrivateLessonSlotsSection({
             <span>일시</span>
             <span>선생님</span>
             <span>상태</span>
-            <span>대상 학생</span>
+            <span>예약 가능 대상</span>
             <span>예약</span>
             <span>작업</span>
           </div>
@@ -304,7 +241,9 @@ export default function PrivateLessonSlotsSection({
                 <span>{slot.teacherName || slot.teacher || '-'}</span>
                 <span>{slotStatusLabel(slot.status)}</span>
                 <span data-testid="private-slot-eligible-students">
-                  {eligibleStudentLabels.length > 0 ? eligibleStudentLabels.join(', ') : '미지정'}
+                  {eligibleStudentLabels.length > 0
+                    ? `특정 학생 제한: ${eligibleStudentLabels.join(', ')}`
+                    : '해당 선생님 개인 수강권 보유 학생'}
                 </span>
                 <span>
                   {activeReservation

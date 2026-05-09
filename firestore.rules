@@ -1569,7 +1569,10 @@ service cloud.firestore {
         privateSlotBelongsToTeacher(resource.data) ||
         (
           resource.data.status == "open" &&
-          hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacher)
+          (
+            hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacher) ||
+            hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacherName)
+          )
         ) ||
         (
           resource.data.academyId is string &&

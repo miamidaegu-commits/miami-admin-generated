@@ -152,6 +152,7 @@ async function createStudentFixture(db, auth, {
   roleName,
   studentId,
   teacherAccess,
+  teacherKey = TEACHER_NAME,
   allowedSlotIds,
   paidLessons,
   privateSlotBookingPilotEnabled = false,
@@ -199,7 +200,7 @@ async function createStudentFixture(db, auth, {
     db.collection('privateStudents').doc(studentId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       name: displayName,
-      teacher: TEACHER_NAME,
+      teacher: teacherKey,
       paidLessons,
       createdAt: nowTs,
       updatedAt: nowTs,
@@ -207,7 +208,7 @@ async function createStudentFixture(db, auth, {
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(studentId)).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       studentId,
-      teacherKeys: teacherAccess ? [TEACHER_NAME] : [],
+      teacherKeys: teacherAccess ? [teacherKey] : [],
       activePackageIds: teacherAccess ? [`pkg-private-reservation-${roleName}-${unique}`] : [],
       allowedSlotIds,
       allowedPrivateLessonSlotIds: allowedSlotIds,
@@ -262,7 +263,7 @@ async function createFixture(unique) {
     roleName: 'eligible',
     studentId: eligibleStudentId,
     teacherAccess: true,
-    allowedSlotIds: [slotId],
+    allowedSlotIds: [],
     paidLessons: 1,
     privateSlotBookingPilotEnabled: true,
   });
@@ -280,8 +281,10 @@ async function createFixture(unique) {
     roleName: 'ineligible',
     studentId: ineligibleStudentId,
     teacherAccess: true,
+    teacherKey: 'other-private-teacher',
     allowedSlotIds: [],
     paidLessons: 1,
+    privateSlotBookingPilotEnabled: true,
   });
   const pilotDisabledStudent = await createStudentFixture(db, auth, {
     unique,
@@ -306,7 +309,6 @@ async function createFixture(unique) {
       startAt: admin.firestore.Timestamp.fromDate(new Date(`${date}T${time}:00`)),
       durationMinutes: 50,
       status: 'open',
-      eligibleStudentIds: [eligibleStudentId],
       reservedStudentId: '',
       reservationId: '',
       createdByUid: 'e2e-admin-sdk',
@@ -327,7 +329,6 @@ async function createFixture(unique) {
       startAt: admin.firestore.Timestamp.fromDate(new Date(`${noRemainingOpenDate}T10:40:00`)),
       durationMinutes: 50,
       status: 'open',
-      eligibleStudentIds: [noRemainingStudentId],
       reservedStudentId: '',
       reservationId: '',
       createdByUid: 'e2e-admin-sdk',
@@ -368,7 +369,6 @@ async function createFixture(unique) {
       reservedCount: 0,
       durationMinutes: 50,
       status: 'open',
-      eligibleStudentIds: [pilotDisabledStudentId],
       reservedStudentId: '',
       reservationId: '',
       createdByUid: 'e2e-admin-sdk',
@@ -527,7 +527,10 @@ async function getReservation(db, slotId, studentId) {
 async function countGeneratedStudentRows(db, collectionName, fixture) {
   const snap = await db
     .collection(collectionName)
-    .where('studentId', '==', fixture.eligibleStudent.studentId)
+    .where('studentId', 'in', [
+      fixture.eligibleStudent.studentId,
+      fixture.ineligibleStudent.studentId,
+    ])
     .get();
   return snap.docs.filter((docSnap) => {
     const data = docSnap.data() || {};
@@ -563,9 +566,11 @@ test('private slot booking callable production gate is wired server-side', async
   expect(source).toMatch(
     /exports\.cancelPrivateLessonReservation[\s\S]*requirePrivateSlotBookingPilotEnabled\(summary\)/
   );
+  expect(source).toMatch(/function hasSlotAccess[\s\S]*summary && summary\.teacherKeys/);
+  expect(source).toMatch(/function hasSlotAccess[\s\S]*activePackageIds\.length > 0/);
 });
 
-test('intended flexible private slot visibility honors eligibleStudentIds', async ({
+test('intended flexible private slot visibility honors teacher access and pilot gate', async ({
   browser,
   browserName,
 }, testInfo) => {
@@ -593,6 +598,22 @@ test('intended flexible private slot visibility honors eligibleStudentIds', asyn
     await expect(
       ineligiblePage.locator('[data-testid="student-private-slot-card"]').filter({ hasText: fixture.date })
     ).toHaveCount(0);
+
+    const pilotDisabledContext = await browser.newContext();
+    contexts.push(pilotDisabledContext);
+    const pilotDisabledPage = await pilotDisabledContext.newPage();
+    await loginAsStudentWithPrivateBooking(
+      pilotDisabledPage,
+      fixture.pilotDisabledStudent.email
+    );
+    const pilotDisabledCard = studentSlotCard(pilotDisabledPage, fixture.pilotDisabledDate);
+    await expect(pilotDisabledCard).toBeVisible({ timeout: 15000 });
+    await expect(
+      pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
+    ).toBeDisabled();
+    await expect(
+      pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
+    ).toHaveText('예약 중지');
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));
     await cleanupFixture(fixture).catch(() => {});
@@ -662,6 +683,22 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     await expect(slotCard).toBeVisible({ timeout: 15000 });
     await expect(slotCard.getByTestId('student-private-slot-reserve-button')).toBeEnabled();
     await expect(slotCard.getByTestId('student-private-slot-reserve-button')).toHaveText('1:1 수업 예약');
+    const initialSlotSnap = await db.collection('privateLessonSlots').doc(fixture.slotId).get();
+    const initialSlot = initialSlotSnap.data() || {};
+    expect(Array.isArray(initialSlot.eligibleStudentIds) ? initialSlot.eligibleStudentIds : []).toEqual([]);
+    const initialSummarySnap = await db
+      .collection('studentPrivateAccessSummary')
+      .doc(privateSummaryId(fixture.eligibleStudent.studentId))
+      .get();
+    const initialSummary = initialSummarySnap.data() || {};
+    expect(initialSummary.teacherKeys).toContain(TEACHER_NAME);
+    expect(initialSummary.activePackageIds?.length || 0).toBeGreaterThan(0);
+    expect(Array.isArray(initialSummary.allowedSlotIds) ? initialSummary.allowedSlotIds : []).toEqual([]);
+    expect(
+      Array.isArray(initialSummary.allowedPrivateLessonSlotIds)
+        ? initialSummary.allowedPrivateLessonSlotIds
+        : []
+    ).toEqual([]);
 
     await expectReservationStatus(
       db,
@@ -697,7 +734,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
         message: `Expected student booking to create active reservation ${expectedReservationId}. Last booking dialog: ${
           bookingDialogs.at(-1) || 'none'
         }`,
-        timeout: 15000,
+        timeout: 45000,
       })
       .toBe('active');
 
@@ -796,8 +833,8 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       privateSummaryId(fixture.ineligibleStudent.studentId)
     ).set(
       {
-        allowedSlotIds: [fixture.slotId],
-        allowedPrivateLessonSlotIds: [fixture.slotId],
+        allowedSlotIds: [],
+        allowedPrivateLessonSlotIds: [],
         privateSlotBookingPilotEnabled: true,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },

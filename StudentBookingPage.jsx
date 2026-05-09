@@ -35,6 +35,7 @@ import {
 import {
   buildPrivateLessonReservationId,
   buildStudentPrivateAccessSummaryId,
+  normalizePrivateTeacherKey,
 } from './src/features/private-booking/privateBookingModel.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
@@ -114,6 +115,23 @@ function getDateTimeMs(dateValue, timeValue) {
   const parsed = new Date(`${date}T${safeTime}:00`)
   const value = parsed.getTime()
   return Number.isFinite(value) ? value : null
+}
+
+function normalizePrivateAccessKey(value) {
+  return normalizePrivateTeacherKey(value).toLowerCase()
+}
+
+function privateTeacherValuesMatch(values, teacherValue) {
+  const teacherKey = normalizePrivateAccessKey(teacherValue)
+  if (!teacherKey) return false
+  return values.some((value) => normalizePrivateAccessKey(value) === teacherKey)
+}
+
+function slotMatchesPrivateTeacherAccess(slot, teacherKeys) {
+  return (
+    privateTeacherValuesMatch(teacherKeys, slot?.teacher) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherName)
+  )
 }
 
 function getLessonHistoryStatusLabel(item) {
@@ -448,6 +466,8 @@ export default function StudentBookingPage() {
     const slotChunks = chunkValues(allowedPrivateSlotIds, PRIVATE_TEACHER_QUERY_CHUNK_SIZE)
     const chunks = [
       ...teacherChunks.map((values) => ({ type: 'teacher', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
+      { type: 'eligibleStudent', values: [scopedStudentId] },
       ...slotChunks.map((values) => ({ type: 'slot', values })),
     ]
     const chunkMaps = new Map()
@@ -470,11 +490,18 @@ export default function StudentBookingPage() {
       const privateSlotQuery =
         chunk.type === 'slot'
           ? query(collection(db, 'privateLessonSlots'), where(documentId(), 'in', chunk.values))
+          : chunk.type === 'eligibleStudent'
+            ? query(
+                collection(db, 'privateLessonSlots'),
+                where('academyId', '==', currentAcademyId),
+                where('status', '==', 'open'),
+                where('eligibleStudentIds', 'array-contains', scopedStudentId)
+              )
           : query(
               collection(db, 'privateLessonSlots'),
               where('academyId', '==', currentAcademyId),
               where('status', '==', 'open'),
-              where('teacher', 'in', chunk.values)
+              where(chunk.type, 'in', chunk.values)
             )
       const unsubscribe = onSnapshot(
         privateSlotQuery,
@@ -488,6 +515,13 @@ export default function StudentBookingPage() {
             if (
               String(row.academyId || '').trim() !== currentAcademyId ||
               String(row.status || '').trim() !== 'open'
+            ) {
+              return
+            }
+            if (
+              chunk.type !== 'slot' &&
+              chunk.type !== 'eligibleStudent' &&
+              !slotMatchesPrivateTeacherAccess(row, allowedPrivateTeacherKeys)
             ) {
               return
             }
@@ -1121,14 +1155,13 @@ export default function StudentBookingPage() {
     assertSameAcademy(slot, scopedAcademyId, '1:1 수업 시간')
     validatePrivateSlotBookingState(slot, 'reserve')
 
-    const teacherKey = String(slot.teacher || '').trim()
     const slotEligibleStudentIds = Array.isArray(slot.eligibleStudentIds)
       ? slot.eligibleStudentIds
       : []
     const hasSlotAccess =
       allowedPrivateSlotIds.includes(slot.id) ||
       slotEligibleStudentIds.some((value) => String(value || '').trim() === scopedStudentId)
-    const hasTeacherAccess = teacherKey && allowedPrivateTeacherKeys.includes(teacherKey)
+    const hasTeacherAccess = slotMatchesPrivateTeacherAccess(slot, allowedPrivateTeacherKeys)
     if (!hasTeacherAccess && !hasSlotAccess) {
       alert('예약 가능한 선생님 권한이 없습니다.')
       return
@@ -1644,10 +1677,14 @@ export default function StudentBookingPage() {
                       slotEligibleStudentIds.some(
                         (value) => String(value || '').trim() === scopedStudentId
                       ) || allowedPrivateSlotIds.includes(slot.id)
+                    const isTeacherEligible = slotMatchesPrivateTeacherAccess(
+                      slot,
+                      allowedPrivateTeacherKeys
+                    )
                     const canReserve =
                       PRIVATE_SLOT_BOOKING_ENABLED &&
                       privateSlotBookingPilotEnabled &&
-                      isSlotEligible &&
+                      (isTeacherEligible || isSlotEligible) &&
                       (!reservation || reservation.status !== 'active')
                         ? !busyPrivateReservationId && slot.status === 'open'
                         : false

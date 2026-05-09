@@ -3031,9 +3031,7 @@ export default function Dashboard() {
         date,
         time,
         durationMinutes,
-        eligibleStudentIds: isAdmin
-          ? normalizePrivateSlotEligibleStudentIds(privateSlotForm.eligibleStudentIds, privateStudents)
-          : [],
+        eligibleStudentIds: [],
       },
     }
   }

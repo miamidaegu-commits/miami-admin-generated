@@ -220,6 +220,15 @@
       "fields": [
         { "fieldPath": "academyId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "teacherName", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "privateLessonSlots",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "eligibleStudentIds", "arrayConfig": "CONTAINS" }
       ]
     },

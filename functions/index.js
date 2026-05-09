@@ -262,6 +262,12 @@ function normalizeIdList(value) {
     [];
 }
 
+function normalizeTeacherKeyList(value) {
+  return Array.isArray(value) ?
+    value.map((item) => normalizeTeacherKey(item)).filter(Boolean) :
+    [];
+}
+
 function privateReservationDocId({academyId, slotId, studentId}) {
   return `${academyId}__${slotId}__${studentId}`;
 }
@@ -272,10 +278,20 @@ function hasSlotAccess({slot, summary, slotId, studentId}) {
   const allowedPrivateLessonSlotIds = normalizeIdList(
       summary && summary.allowedPrivateLessonSlotIds,
   );
+  const teacherKeys = normalizeTeacherKeyList(summary && summary.teacherKeys);
+  const activePackageIds = normalizeIdList(summary && summary.activePackageIds);
+  const slotTeacherKeys = [
+    normalizeTeacherKey(slot && slot.teacher),
+    normalizeTeacherKey(slot && slot.teacherName),
+  ].filter(Boolean);
+  const hasTeacherPackageAccess =
+    activePackageIds.length > 0 &&
+    slotTeacherKeys.some((teacherKey) => teacherKeys.includes(teacherKey));
 
   return eligibleStudentIds.includes(studentId) ||
     allowedSlotIds.includes(slotId) ||
-    allowedPrivateLessonSlotIds.includes(slotId);
+    allowedPrivateLessonSlotIds.includes(slotId) ||
+    hasTeacherPackageAccess;
 }
 
 function isActivePrivateReservation(data) {
@@ -774,12 +790,6 @@ exports.cancelPrivateLessonReservation = onCall(
           }
           const summary = summarySnap.exists ? summarySnap.data() || {} : null;
           requirePrivateSlotBookingPilotEnabled(summary);
-          if (!hasSlotAccess({slot, summary, slotId, studentId})) {
-            throw new HttpsError(
-                "permission-denied",
-                "Student is not eligible for this private lesson slot.",
-            );
-          }
           const startMillis = getPrivateSlotStartMillis(slot);
           if (startMillis === null) {
             throw new HttpsError(
