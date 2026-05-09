@@ -452,13 +452,6 @@ export default function StudentBookingPage() {
       setPrivateSlotsError('')
       return
     }
-    if (allowedPrivateTeacherKeys.length === 0 && allowedPrivateSlotIds.length === 0) {
-      setPrivateSlots([])
-      setPrivateSlotsLoading(false)
-      setPrivateSlotsError('')
-      return
-    }
-
     setPrivateSlotsLoading(true)
     setPrivateSlotsError('')
 
@@ -468,6 +461,8 @@ export default function StudentBookingPage() {
       ...teacherChunks.map((values) => ({ type: 'teacher', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
       { type: 'eligibleStudent', values: [scopedStudentId] },
+      { type: 'eligibleStudentAcademy', values: [scopedStudentId] },
+      { type: 'eligibleStudentFallback', values: [scopedStudentId] },
       ...slotChunks.map((values) => ({ type: 'slot', values })),
     ]
     const chunkMaps = new Map()
@@ -497,6 +492,17 @@ export default function StudentBookingPage() {
                 where('status', '==', 'open'),
                 where('eligibleStudentIds', 'array-contains', scopedStudentId)
               )
+          : chunk.type === 'eligibleStudentAcademy'
+            ? query(
+                collection(db, 'privateLessonSlots'),
+                where('academyId', '==', currentAcademyId),
+                where('eligibleStudentIds', 'array-contains', scopedStudentId)
+              )
+          : chunk.type === 'eligibleStudentFallback'
+            ? query(
+                collection(db, 'privateLessonSlots'),
+                where('eligibleStudentIds', 'array-contains', scopedStudentId)
+              )
           : query(
               collection(db, 'privateLessonSlots'),
               where('academyId', '==', currentAcademyId),
@@ -521,6 +527,8 @@ export default function StudentBookingPage() {
             if (
               chunk.type !== 'slot' &&
               chunk.type !== 'eligibleStudent' &&
+              chunk.type !== 'eligibleStudentAcademy' &&
+              chunk.type !== 'eligibleStudentFallback' &&
               !slotMatchesPrivateTeacherAccess(row, allowedPrivateTeacherKeys)
             ) {
               return

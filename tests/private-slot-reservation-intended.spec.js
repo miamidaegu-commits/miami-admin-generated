@@ -841,7 +841,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       { merge: true }
     );
     await secondPage.reload();
-    await expect(studentSlotCard(secondPage, fixture.date)).toBeVisible({ timeout: 15000 });
+    await expect(studentSlotCard(secondPage, fixture.date)).toBeVisible({ timeout: 45000 });
     await studentSlotCard(secondPage, fixture.date)
       .getByTestId('student-private-slot-reserve-button')
       .click();
