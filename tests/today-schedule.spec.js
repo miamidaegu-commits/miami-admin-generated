@@ -204,6 +204,9 @@ test.beforeAll(async () => {
   const auth = admin.auth();
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const today = todayInSeoul();
+  const pastPrivateReservationStartAt = admin.firestore.Timestamp.fromDate(
+    new Date(`${today}T00:10:00+09:00`)
+  );
   const now = admin.firestore.FieldValue.serverTimestamp();
 
   fixture.unique = unique;
@@ -448,6 +451,8 @@ test.beforeAll(async () => {
       teacher: fixture.teacherName,
       date: today,
       time: '13:50',
+      startAt: pastPrivateReservationStartAt,
+      durationMinutes: 50,
       subject: fixture.ownPrivateReservationTitle,
       status: 'reserved',
       reservedStudentId: fixture.studentId,
@@ -458,6 +463,8 @@ test.beforeAll(async () => {
       teacher: fixture.otherTeacherName,
       date: today,
       time: '15:10',
+      startAt: pastPrivateReservationStartAt,
+      durationMinutes: 50,
       subject: fixture.otherPrivateReservationTitle,
       status: 'reserved',
       reservedStudentId: fixture.otherStudentId,
@@ -471,6 +478,8 @@ test.beforeAll(async () => {
       teacher: fixture.teacherName,
       date: today,
       time: '13:50',
+      startAt: pastPrivateReservationStartAt,
+      durationMinutes: 50,
       subject: fixture.ownPrivateReservationTitle,
       status: 'active',
       updatedAt: now,
@@ -483,6 +492,8 @@ test.beforeAll(async () => {
       teacher: fixture.otherTeacherName,
       date: today,
       time: '15:10',
+      startAt: pastPrivateReservationStartAt,
+      durationMinutes: 50,
       subject: fixture.otherPrivateReservationTitle,
       status: 'active',
       updatedAt: now,

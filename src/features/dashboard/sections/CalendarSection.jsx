@@ -11,6 +11,52 @@ import {
   isSameStorageDate,
 } from '../dashboardViewUtils.js'
 
+function calendarTimestampToMillis(value) {
+  if (!value) return null
+  if (typeof value.toMillis === 'function') {
+    const millis = value.toMillis()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof value.toDate === 'function') {
+    const millis = value.toDate().getTime()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (value instanceof Date) {
+    const millis = value.getTime()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string') {
+    const millis = Date.parse(value)
+    return Number.isFinite(millis) ? millis : null
+  }
+  return null
+}
+
+function seoulDateTimeToMillis(dateValue, timeValue) {
+  const date = String(dateValue || '').trim()
+  const time = String(timeValue || '').trim()
+  const dateMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const timeMatch = time.match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  if (!dateMatch || !timeMatch) return null
+  const year = Number(dateMatch[1])
+  const month = Number(dateMatch[2])
+  const day = Number(dateMatch[3])
+  const hour = Number(timeMatch[1])
+  const minute = Number(timeMatch[2])
+  return Date.UTC(year, month - 1, day, hour - 9, minute, 0, 0)
+}
+
+function getPrivateReservationEndMillis(row) {
+  const startMillis =
+    calendarTimestampToMillis(row?.startAt) ||
+    seoulDateTimeToMillis(row?.date, row?.time)
+  if (startMillis == null) return null
+  const duration = Number(row?.durationMinutes)
+  const durationMinutes = Number.isFinite(duration) && duration > 0 ? duration : 50
+  return startMillis + durationMinutes * 60 * 1000
+}
+
 /**
  * view="month": 월 달력 그리드
  * view="lessons": 전체/선택일 수업 목록 + 상단 액션(캘린더 탭에서만 일부 노출)
@@ -201,6 +247,7 @@ export default function CalendarSection(props) {
     openPrivateLessonEditModal,
     handleDeletePrivateLesson,
     onMarkPrivateReservationOutcome,
+    onReversePrivateReservationOutcome,
     canEditLesson,
     canDeleteLesson,
     onOpenCalendarGroupLessonAttendance,
@@ -362,10 +409,15 @@ export default function CalendarSection(props) {
                 : Boolean(getMatchedStudentId(lesson)))
             const todayString = getTodayStorageDateString()
             const lessonDateStr = getLessonStorageDateString(lesson)
+            const privateReservationStatus = String(lesson.status || '').trim()
             const statusLabel = isGroupRow
               ? '예정'
               : isPrivateReservationRow
-                ? '예약됨'
+                ? privateReservationStatus === 'completed'
+                  ? '완료'
+                  : privateReservationStatus === 'no_show'
+                    ? '노쇼'
+                    : '예약됨'
                 : lesson.isDeductCancelled
                   ? '차감취소'
                   : lessonDateStr && lessonDateStr <= todayString
@@ -376,7 +428,15 @@ export default function CalendarSection(props) {
               busyPrivateReservationOutcomeId === `${lesson.id}:completed`
             const reservationNoShowBusy =
               busyPrivateReservationOutcomeId === `${lesson.id}:no_show`
-            const reservationOutcomeBusy = reservationCompleteBusy || reservationNoShowBusy
+            const reservationReverseBusy =
+              busyPrivateReservationOutcomeId === `${lesson.id}:reverse`
+            const reservationOutcomeBusy =
+              reservationCompleteBusy || reservationNoShowBusy || reservationReverseBusy
+            const privateReservationEndMillis = isPrivateReservationRow
+              ? getPrivateReservationEndMillis(lesson)
+              : null
+            const privateReservationHasEnded =
+              privateReservationEndMillis != null && Date.now() >= privateReservationEndMillis
             const rowLessonActionBusy =
               busyLessonId === lesson.id || rowPrivateCrudBusy || busyPrivateLessonAdd
             const sessionLabel = formatLessonSessionNumber(lesson)
@@ -536,39 +596,82 @@ export default function CalendarSection(props) {
                   {isPrivateReservationRow ? (
                     <span style={{ fontSize: 12, opacity: 0.65 }}>읽기 전용</span>
                   ) : null}
-                  {activeSection === 'calendar' && isAdmin && isPrivateReservationRow ? (
+                  {activeSection === 'calendar' &&
+                  isAdmin &&
+                  isPrivateReservationRow &&
+                  privateReservationStatus === 'active' ? (
                     <>
-                      <button
-                        type="button"
-                        onClick={() => onMarkPrivateReservationOutcome?.(lesson, 'completed')}
-                        disabled={reservationOutcomeBusy}
-                        style={{
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          border: '1px solid #555',
-                          background: '#1f2a44',
-                          color: 'white',
-                          cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        {reservationCompleteBusy ? '처리 중...' : '완료 처리'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onMarkPrivateReservationOutcome?.(lesson, 'no_show')}
-                        disabled={reservationOutcomeBusy}
-                        style={{
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          border: '1px solid #553333',
-                          background: '#4a2a2a',
-                          color: 'white',
-                          cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        {reservationNoShowBusy ? '처리 중...' : '노쇼 처리'}
-                      </button>
+                      {privateReservationHasEnded ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => onMarkPrivateReservationOutcome?.(lesson, 'completed')}
+                            disabled={reservationOutcomeBusy}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #555',
+                              background: '#1f2a44',
+                              color: 'white',
+                              cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            {reservationCompleteBusy ? '처리 중...' : '완료 처리'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onMarkPrivateReservationOutcome?.(lesson, 'no_show')}
+                            disabled={reservationOutcomeBusy}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #553333',
+                              background: '#4a2a2a',
+                              color: 'white',
+                              cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            {reservationNoShowBusy ? '처리 중...' : '노쇼 처리'}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #555',
+                            background: '#2a2f3a',
+                            color: 'white',
+                            cursor: 'not-allowed',
+                            opacity: 0.72,
+                          }}
+                        >
+                          수업 종료 후 처리
+                        </button>
+                      )}
                     </>
+                  ) : null}
+                  {activeSection === 'calendar' &&
+                  isAdmin &&
+                  isPrivateReservationRow &&
+                  ['completed', 'no_show'].includes(privateReservationStatus) ? (
+                    <button
+                      type="button"
+                      onClick={() => onReversePrivateReservationOutcome?.(lesson)}
+                      disabled={reservationOutcomeBusy}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #555',
+                        background: '#1f2a44',
+                        color: 'white',
+                        cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {reservationReverseBusy ? '처리 중...' : '완료취소'}
+                    </button>
                   ) : null}
                 </span>
               </div>

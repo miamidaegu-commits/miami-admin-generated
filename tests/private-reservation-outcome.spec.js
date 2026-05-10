@@ -46,6 +46,10 @@ function todayInSeoul() {
   return `${year}-${month}-${day}`;
 }
 
+function timestampFromOffset(offsetMs) {
+  return admin.firestore.Timestamp.fromMillis(Date.now() + offsetMs);
+}
+
 async function login(page, email, password) {
   await page.goto(BASE_URL);
   await page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first().fill(email);
@@ -128,9 +132,17 @@ async function ensureAdminAndTeacher({ auth, db }) {
   ]);
 }
 
-async function seedReservationFixture({ db, unique, kind, status = 'active' }) {
+async function seedReservationFixture({
+  db,
+  unique,
+  kind,
+  status = 'active',
+  startOffsetMs = -2 * 60 * 60 * 1000,
+  durationMinutes = 50,
+}) {
   const now = admin.firestore.FieldValue.serverTimestamp();
   const date = todayInSeoul();
+  const startAt = timestampFromOffset(startOffsetMs);
   const studentId = `outcome-${kind}-student-${unique}`;
   const slotId = `outcome-${kind}-slot-${unique}`;
   const packageId = `outcome-${kind}-package-${unique}`;
@@ -161,6 +173,8 @@ async function seedReservationFixture({ db, unique, kind, status = 'active' }) {
       teacher: TEACHER_NAME,
       date,
       time: kind === 'complete' ? '17:10' : kind === 'no-show' ? '17:20' : '17:30',
+      startAt,
+      durationMinutes,
       subject,
       status: status === 'active' ? 'reserved' : 'open',
       reservedStudentId: status === 'active' ? studentId : '',
@@ -175,6 +189,8 @@ async function seedReservationFixture({ db, unique, kind, status = 'active' }) {
       teacher: TEACHER_NAME,
       date,
       time: kind === 'complete' ? '17:10' : kind === 'no-show' ? '17:20' : '17:30',
+      startAt,
+      durationMinutes,
       subject,
       status,
       deductionApplied: false,
@@ -211,6 +227,7 @@ test.describe('private reservation admin outcome deduction', () => {
   let db;
   let completeFixture;
   let noShowFixture;
+  let futureFixture;
   let cancelledFixture;
 
   test.beforeAll(async () => {
@@ -219,19 +236,27 @@ test.describe('private reservation admin outcome deduction', () => {
     await ensureAdminAndTeacher({ auth: admin.auth(), db });
     completeFixture = await seedReservationFixture({ db, unique, kind: 'complete' });
     noShowFixture = await seedReservationFixture({ db, unique, kind: 'no-show' });
+    futureFixture = await seedReservationFixture({
+      db,
+      unique,
+      kind: 'future',
+      startOffsetMs: 2 * 60 * 60 * 1000,
+    });
     cancelledFixture = await seedReservationFixture({
       db,
       unique,
       kind: 'cancelled',
       status: 'cancelled',
     });
-    [completeFixture, noShowFixture, cancelledFixture].forEach((fixture) => {
+    [completeFixture, noShowFixture, futureFixture, cancelledFixture].forEach((fixture) => {
       refs.push(
         db.collection('privateStudents').doc(fixture.studentId),
         db.collection('studentPackages').doc(fixture.packageId),
         db.collection('privateLessonSlots').doc(fixture.slotId),
         db.collection('privateLessonReservations').doc(fixture.id),
-        db.collection('creditTransactions').doc(`privateReservationDeduction__${fixture.id}`)
+        db.collection('creditTransactions').doc(`privateReservationDeduction__${fixture.id}__1`),
+        db.collection('creditTransactions').doc(`privateReservationDeduction__${fixture.id}__2`),
+        db.collection('creditTransactions').doc(`privateReservationDeductionReversal__${fixture.id}__1`)
       );
     });
   });
@@ -242,14 +267,26 @@ test.describe('private reservation admin outcome deduction', () => {
     await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
   });
 
-  test('admin can complete reservation and deduction is applied once', async ({ page }) => {
+  test('admin cannot complete reservation before scheduled end time', async ({ page }) => {
+    await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    const row = page
+      .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
+      .filter({ hasText: futureFixture.subject });
+    await expect(row).toBeVisible({ timeout: 20000 });
+    await expect(row.getByRole('button', { name: '수업 종료 후 처리' })).toBeVisible();
+    await expect(row.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
+    await expect(row.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
+    await expectPackageCounts(db, futureFixture.packageId, 0, 2);
+  });
+
+  test('admin can complete reservation, reverse with reason, and reprocess without transaction collision', async ({ page }) => {
     await login(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     const row = page
       .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
       .filter({ hasText: completeFixture.subject });
     page.once('dialog', (dialog) => dialog.accept());
     await row.getByRole('button', { name: '완료 처리' }).click();
-    await expect(row).toHaveCount(0, { timeout: 20000 });
+    await expect(row).toContainText('완료', { timeout: 20000 });
     await expectPackageCounts(db, completeFixture.packageId, 1, 1);
     const reservationSnap = await db
       .collection('privateLessonReservations')
@@ -262,9 +299,62 @@ test.describe('private reservation admin outcome deduction', () => {
     });
     const creditSnap = await db
       .collection('creditTransactions')
-      .doc(`privateReservationDeduction__${completeFixture.id}`)
+      .doc(`privateReservationDeduction__${completeFixture.id}__1`)
       .get();
     expect(creditSnap.data()).toMatchObject({
+      sourceType: 'privateReservation',
+      sourceId: completeFixture.id,
+      actionType: 'private_reservation_completed_deduct',
+      deltaCount: -1,
+    });
+
+    page.once('dialog', (dialog) => dialog.accept(''));
+    await row.getByRole('button', { name: '완료취소' }).click();
+    await expectPackageCounts(db, completeFixture.packageId, 1, 1);
+    const stillCompletedSnap = await db
+      .collection('privateLessonReservations')
+      .doc(completeFixture.id)
+      .get();
+    expect(stillCompletedSnap.data()?.status).toBe('completed');
+
+    const reversalReason = `E2E reversal reason ${unique}`;
+    page.once('dialog', (dialog) => dialog.accept(reversalReason));
+    await row.getByRole('button', { name: '완료취소' }).click();
+    await expect(row).toContainText('예약됨', { timeout: 20000 });
+    await expectPackageCounts(db, completeFixture.packageId, 0, 2);
+    const reversedSnap = await db
+      .collection('privateLessonReservations')
+      .doc(completeFixture.id)
+      .get();
+    expect(reversedSnap.data()).toMatchObject({
+      status: 'active',
+      deductionApplied: false,
+      previousOutcomeStatus: 'completed',
+      outcomeReversalReason: reversalReason,
+    });
+    const reversalCreditSnap = await db
+      .collection('creditTransactions')
+      .doc(`privateReservationDeductionReversal__${completeFixture.id}__1`)
+      .get();
+    expect(reversalCreditSnap.data()).toMatchObject({
+      sourceType: 'privateReservation',
+      sourceId: completeFixture.id,
+      actionType: 'private_reservation_completed_deduct_reversal',
+      deltaCount: 1,
+      reversalReason,
+    });
+    expect(reversalCreditSnap.data()?.memo || '').toContain('1:1 예약 처리 취소');
+    expect(reversalCreditSnap.data()?.memo || '').toContain(reversalReason);
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await row.getByRole('button', { name: '완료 처리' }).click();
+    await expect(row).toContainText('완료', { timeout: 20000 });
+    await expectPackageCounts(db, completeFixture.packageId, 1, 1);
+    const secondCreditSnap = await db
+      .collection('creditTransactions')
+      .doc(`privateReservationDeduction__${completeFixture.id}__2`)
+      .get();
+    expect(secondCreditSnap.data()).toMatchObject({
       sourceType: 'privateReservation',
       sourceId: completeFixture.id,
       actionType: 'private_reservation_completed_deduct',
@@ -279,7 +369,7 @@ test.describe('private reservation admin outcome deduction', () => {
       .filter({ hasText: noShowFixture.subject });
     page.once('dialog', (dialog) => dialog.accept());
     await row.getByRole('button', { name: '노쇼 처리' }).click();
-    await expect(row).toHaveCount(0, { timeout: 20000 });
+    await expect(row).toContainText('노쇼', { timeout: 20000 });
     await expectPackageCounts(db, noShowFixture.packageId, 1, 1);
     const reservationSnap = await db
       .collection('privateLessonReservations')
@@ -292,7 +382,7 @@ test.describe('private reservation admin outcome deduction', () => {
     });
     const creditSnap = await db
       .collection('creditTransactions')
-      .doc(`privateReservationDeduction__${noShowFixture.id}`)
+      .doc(`privateReservationDeduction__${noShowFixture.id}__1`)
       .get();
     expect(creditSnap.data()).toMatchObject({
       sourceType: 'privateReservation',
@@ -306,6 +396,7 @@ test.describe('private reservation admin outcome deduction', () => {
     await login(page, TEST_TEACHER_EMAIL, TEST_TEACHER_PASSWORD);
     await expect(page.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '완료취소' })).toHaveCount(0);
   });
 
   test('cancelled reservation cannot be completed from the calendar', async ({ page }) => {

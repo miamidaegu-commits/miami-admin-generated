@@ -112,7 +112,9 @@ export default function useCalendarSectionViewModel({
   const calendarPrivateReservationRows = useMemo(() => {
     const rows = Array.isArray(privateLessonReservations) ? privateLessonReservations : []
     return rows
-      .filter((reservation) => String(reservation.status || '').trim() === 'active')
+      .filter((reservation) =>
+        ['active', 'completed', 'no_show'].includes(String(reservation.status || '').trim())
+      )
       .map((reservation) => {
         const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
         const date = String(reservation.date || slot?.date || '').trim()
@@ -139,6 +141,8 @@ export default function useCalendarSectionViewModel({
           teacherName: teacherLabel || '-',
           teacher: teacherLabel || '-',
           subject,
+          startAt: reservation.startAt || slot?.startAt || null,
+          durationMinutes: reservation.durationMinutes || slot?.durationMinutes || 50,
         }
       })
       .filter((reservation) => {

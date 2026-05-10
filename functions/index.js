@@ -224,6 +224,15 @@ async function requireAcademyAdmin(db, academyId, uid) {
         "Active academy owner/admin membership required.",
     );
   }
+  return {
+    ...membership,
+    role,
+  };
+}
+
+async function canMarkPrivateReservationOutcome(db, academyId, uid) {
+  await requireAcademyAdmin(db, academyId, uid);
+  return {actorRole: "admin"};
 }
 
 function requireActiveStudentMembership(membershipSnap) {
@@ -299,8 +308,9 @@ function isActivePrivateReservation(data) {
 }
 
 function getNextStudentPackageStatus(currentStatus, remainingCount) {
-  if (String(currentStatus || "").trim().toLowerCase() === "ended") {
-    return "ended";
+  const status = String(currentStatus || "").trim().toLowerCase();
+  if (status === "ended" || status === "cancelled" || status === "canceled") {
+    return status;
   }
   const rem = Number(remainingCount || 0);
   if (!Number.isFinite(rem) || rem <= 0) return "exhausted";
@@ -436,6 +446,40 @@ function getPrivateSlotStartMillis(slot) {
   const startAtMillis = getTimestampMillis(slot && slot.startAt);
   if (startAtMillis !== null) return startAtMillis;
   return getSeoulDateTimeMillis(slot && slot.date, slot && slot.time);
+}
+
+function getPrivateReservationStartMillis(reservation, slot) {
+  const slotStartAtMillis = getTimestampMillis(slot && slot.startAt);
+  if (slotStartAtMillis !== null) return slotStartAtMillis;
+  return getSeoulDateTimeMillis(
+      (reservation && reservation.date) || (slot && slot.date),
+      (reservation && reservation.time) || (slot && slot.time),
+  );
+}
+
+function getPrivateReservationDurationMinutes(reservation, slot) {
+  const slotDuration = Number(slot && slot.durationMinutes);
+  if (Number.isFinite(slotDuration) && slotDuration > 0) return slotDuration;
+  const reservationDuration = Number(
+      reservation && reservation.durationMinutes,
+  );
+  if (Number.isFinite(reservationDuration) && reservationDuration > 0) {
+    return reservationDuration;
+  }
+  return 50;
+}
+
+function getPrivateReservationEndMillis(reservation, slot) {
+  const startMillis = getPrivateReservationStartMillis(reservation, slot);
+  if (startMillis === null) return null;
+  return startMillis +
+    getPrivateReservationDurationMinutes(reservation, slot) * 60 * 1000;
+}
+
+function normalizePositiveAttempt(value) {
+  const attempt = Number(value || 0);
+  if (!Number.isFinite(attempt) || attempt < 0) return 0;
+  return Math.floor(attempt);
 }
 
 function createPrivateSlotNotification(transaction, db, {
@@ -905,7 +949,8 @@ exports.markPrivateReservationOutcome = onCall(
 
         const db = admin.firestore();
         const uid = request.auth.uid;
-        await requireAcademyAdmin(db, academyId, uid);
+        const outcomeActor =
+          await canMarkPrivateReservationOutcome(db, academyId, uid);
 
         const reservationRef = db
             .collection("privateLessonReservations")
@@ -967,6 +1012,19 @@ exports.markPrivateReservationOutcome = onCall(
             throw new HttpsError(
                 "permission-denied",
                 "Student academy mismatch.",
+            );
+          }
+          const endMillis = getPrivateReservationEndMillis(reservation, slot);
+          if (endMillis === null) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Private reservation schedule is missing.",
+            );
+          }
+          if (Date.now() < endMillis) {
+            throw new HttpsError(
+                "failed-precondition",
+                "수업 종료 후에만 완료/노쇼 처리를 할 수 있습니다.",
             );
           }
 
@@ -1048,8 +1106,11 @@ exports.markPrivateReservationOutcome = onCall(
               packageData.status,
               remainingAfter,
           );
+          const deductionAttemptNumber =
+            normalizePositiveAttempt(reservation.deductionAttemptNumber) + 1;
           const creditTransactionId =
-            `privateReservationDeduction__${reservationId}`;
+            `privateReservationDeduction__${reservationId}__` +
+            `${deductionAttemptNumber}`;
           const creditRef = db
               .collection("creditTransactions")
               .doc(creditTransactionId);
@@ -1080,7 +1141,9 @@ exports.markPrivateReservationOutcome = onCall(
             deductionAppliedAt: now,
             deductionPackageId: packageRef.id,
             deductionCreditTransactionId: creditTransactionId,
+            deductionAttemptNumber,
             outcomeByUid: uid,
+            outcomeActorRole: outcomeActor.actorRole,
             updatedAt: now,
           });
           transaction.set(creditRef, {
@@ -1100,7 +1163,7 @@ exports.markPrivateReservationOutcome = onCall(
               `유연 1:1 예약 ${datePart}` :
               "유연 1:1 예약 차감",
             actorUid: uid,
-            actorRole: "admin",
+            actorRole: outcomeActor.actorRole,
             createdAt: now,
           }, {merge: false});
 
@@ -1109,6 +1172,216 @@ exports.markPrivateReservationOutcome = onCall(
             academyId,
             reservationId,
             outcome,
+            packageId: packageRef.id,
+            creditTransactionId,
+          };
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.reversePrivateReservationOutcome = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const reservationId = requireString(data, "reservationId");
+        const reason = requireString(data, "reason");
+        validateAcademyId(academyId);
+        if (reason.length < 2) {
+          throw new HttpsError(
+              "invalid-argument",
+              "취소 사유를 2자 이상 입력해 주세요.",
+          );
+        }
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const outcomeActor =
+          await canMarkPrivateReservationOutcome(db, academyId, uid);
+        const reservationRef = db
+            .collection("privateLessonReservations")
+            .doc(reservationId);
+
+        return await db.runTransaction(async (transaction) => {
+          const reservationSnap = await transaction.get(reservationRef);
+          if (!reservationSnap.exists) {
+            throw new HttpsError(
+                "not-found",
+                "Private reservation not found.",
+            );
+          }
+
+          const reservation = reservationSnap.data() || {};
+          if (normalizeId(reservation.academyId) !== academyId) {
+            throw new HttpsError(
+                "permission-denied",
+                "Private reservation academy mismatch.",
+            );
+          }
+
+          const previousOutcomeStatus = String(reservation.status || "")
+              .trim();
+          if (!["completed", "no_show"].includes(previousOutcomeStatus)) {
+            throw new HttpsError(
+                "failed-precondition",
+                "완료/노쇼 처리된 1:1 예약만 취소할 수 있습니다.",
+            );
+          }
+          const deductionPackageId = normalizeId(
+              reservation.deductionPackageId,
+          );
+          if (
+            reservation.deductionApplied !== true ||
+            !deductionPackageId
+          ) {
+            throw new HttpsError(
+                "failed-precondition",
+                "차감된 1:1 예약만 처리 취소할 수 있습니다.",
+            );
+          }
+
+          const studentId = normalizeId(reservation.studentId);
+          if (!studentId) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Private reservation is missing student linkage.",
+            );
+          }
+
+          const packageRef = db
+              .collection("studentPackages")
+              .doc(deductionPackageId);
+          const studentRef = db.collection("privateStudents").doc(studentId);
+          const slotId = normalizeId(reservation.slotId);
+          const slotRef = slotId ?
+            db.collection("privateLessonSlots").doc(slotId) :
+            null;
+          const [packageSnap, studentSnap, slotSnap] = await Promise.all([
+            transaction.get(packageRef),
+            transaction.get(studentRef),
+            slotRef ? transaction.get(slotRef) : Promise.resolve(null),
+          ]);
+          if (!packageSnap.exists) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Linked private package not found.",
+            );
+          }
+          const packageData = packageSnap.data() || {};
+          const student = studentSnap.exists ? studentSnap.data() || {} : null;
+          const slot = slotSnap && slotSnap.exists ?
+            slotSnap.data() || {} :
+            null;
+          if (normalizeId(packageData.academyId) !== academyId) {
+            throw new HttpsError(
+                "permission-denied",
+                "Package academy mismatch.",
+            );
+          }
+          if (normalizeId(packageData.studentId) !== studentId) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Linked private package does not match reservation.",
+            );
+          }
+          if (student && normalizeId(student.academyId) !== academyId) {
+            throw new HttpsError(
+                "permission-denied",
+                "Student academy mismatch.",
+            );
+          }
+          if (slot && normalizeId(slot.academyId) !== academyId) {
+            throw new HttpsError(
+                "permission-denied",
+                "Private lesson slot academy mismatch.",
+            );
+          }
+
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          const usedBefore = Number(packageData.usedCount || 0);
+          const remainingBefore = Number(packageData.remainingCount || 0);
+          const totalCount = Number(packageData.totalCount);
+          const usedAfter = Math.max(
+              0,
+              Number.isFinite(usedBefore) ? usedBefore - 1 : 0,
+          );
+          const restoredRemaining = (
+            Number.isFinite(remainingBefore) ? remainingBefore : 0
+          ) + 1;
+          const remainingAfter =
+            Number.isFinite(totalCount) && totalCount >= 0 ?
+              Math.min(totalCount, restoredRemaining) :
+              restoredRemaining;
+          const nextPackageStatus = getNextStudentPackageStatus(
+              packageData.status,
+              remainingAfter,
+          );
+          const reversalAttemptNumber =
+            normalizePositiveAttempt(reservation.reversalAttemptNumber) + 1;
+          const creditTransactionId =
+            `privateReservationDeductionReversal__${reservationId}__` +
+            `${reversalAttemptNumber}`;
+          const creditRef = db
+              .collection("creditTransactions")
+              .doc(creditTransactionId);
+          const teacher = getReservationTeacherKey(reservation, slot);
+          const studentName =
+            getOptionalStudentName({student, membership: null, reservation}) ||
+            studentId;
+          const actionType = previousOutcomeStatus === "completed" ?
+            "private_reservation_completed_deduct_reversal" :
+            "private_reservation_no_show_deduct_reversal";
+
+          transaction.update(packageRef, {
+            usedCount: usedAfter,
+            remainingCount: remainingAfter,
+            status: nextPackageStatus,
+            updatedAt: now,
+          });
+          transaction.update(reservationRef, {
+            status: "active",
+            deductionApplied: false,
+            outcomeReversedAt: now,
+            outcomeReversedByUid: uid,
+            outcomeReversalReason: reason,
+            previousOutcomeStatus,
+            reversalAttemptNumber,
+            reversalCreditTransactionId: creditTransactionId,
+            updatedAt: now,
+          });
+          transaction.set(creditRef, {
+            academyId,
+            studentId,
+            studentName,
+            teacher,
+            packageId: packageRef.id,
+            packageType: "private",
+            packageTitle: String(packageData.packageTitle || ""),
+            groupClassName: "",
+            sourceType: "privateReservation",
+            sourceId: reservationId,
+            actionType,
+            deltaCount: 1,
+            memo: `1:1 예약 처리 취소: ${reason}`,
+            actorUid: uid,
+            actorRole: outcomeActor.actorRole,
+            reversalReason: reason,
+            createdAt: now,
+          }, {merge: false});
+
+          return {
+            ok: true,
+            academyId,
+            reservationId,
+            previousOutcomeStatus,
             packageId: packageRef.id,
             creditTransactionId,
           };

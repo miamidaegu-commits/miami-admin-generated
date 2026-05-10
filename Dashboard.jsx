@@ -1414,7 +1414,7 @@ export default function Dashboard() {
         query(
           collection(db, 'privateLessonReservations'),
           where('academyId', '==', currentAcademyId),
-          where('status', '==', 'active')
+          where('status', 'in', ['active', 'completed', 'no_show'])
         ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
@@ -3267,6 +3267,39 @@ export default function Dashboard() {
     }
   }
 
+  async function reversePrivateReservationOutcome(reservation) {
+    if (!isAdmin) {
+      alert('예약 처리 취소 권한이 없습니다.')
+      return
+    }
+    if (!reservation?.id) return
+    const reason = window.prompt('완료/노쇼 처리를 취소하는 이유를 입력해 주세요.')
+    if (reason == null) return
+    const trimmedReason = String(reason || '').trim()
+    if (!trimmedReason) return
+    if (trimmedReason.length < 2) {
+      alert('취소 사유를 2자 이상 입력해 주세요.')
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(reservation, scopedAcademyId, '1:1 예약')
+      setBusyPrivateReservationOutcomeId(`${reservation.id}:reverse`)
+      const callable = httpsCallable(firebaseFunctions, 'reversePrivateReservationOutcome')
+      await callable({
+        academyId: scopedAcademyId,
+        reservationId: reservation.id,
+        reason: trimmedReason,
+      })
+    } catch (error) {
+      console.error('1:1 예약 처리 취소 실패:', error)
+      alert(`1:1 예약 처리 취소 실패: ${error.message || '알 수 없는 오류'}`)
+    } finally {
+      setBusyPrivateReservationOutcomeId('')
+    }
+  }
+
   const busyStudentId = busyDeletingStudentId || busyStudentFlowId
 
   const isStudentPackageModalSubmitting = busyStudentPackageSubmit
@@ -3362,6 +3395,7 @@ export default function Dashboard() {
       openPrivateLessonEditModal,
       handleDeletePrivateLesson,
       onMarkPrivateReservationOutcome: markPrivateReservationOutcome,
+      onReversePrivateReservationOutcome: reversePrivateReservationOutcome,
       canEditLesson,
       canDeleteLesson,
       onOpenCalendarGroupLessonAttendance: openCalendarGroupLessonAttendance,
