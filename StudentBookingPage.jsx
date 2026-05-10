@@ -3,7 +3,6 @@ import { signOut } from 'firebase/auth'
 import {
   collection,
   doc,
-  documentId,
   onSnapshot,
   query,
   runTransaction,
@@ -456,59 +455,83 @@ export default function StudentBookingPage() {
     setPrivateSlotsError('')
 
     const teacherChunks = chunkValues(allowedPrivateTeacherKeys, PRIVATE_TEACHER_QUERY_CHUNK_SIZE)
-    const slotChunks = chunkValues(allowedPrivateSlotIds, PRIVATE_TEACHER_QUERY_CHUNK_SIZE)
-    const chunks = [
+    const sources = [
       ...teacherChunks.map((values) => ({ type: 'teacher', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
-      { type: 'eligibleStudent', values: [scopedStudentId] },
-      { type: 'eligibleStudentAcademy', values: [scopedStudentId] },
-      { type: 'eligibleStudentFallback', values: [scopedStudentId] },
-      ...slotChunks.map((values) => ({ type: 'slot', values })),
+      ...allowedPrivateSlotIds.map((slotId) => ({ type: 'slot', slotId })),
     ]
-    const chunkMaps = new Map()
+    if (sources.length === 0) {
+      setPrivateSlots([])
+      setPrivateSlotsLoading(false)
+      return
+    }
+
+    const sourceMaps = new Map()
+    const sourceFailures = new Map()
     const unsubs = []
 
     const mergeRows = () => {
       const byId = new Map()
-      for (let i = 0; i < chunks.length; i += 1) {
-        const chunkMap = chunkMaps.get(i)
-        if (!chunkMap) continue
-        for (const row of chunkMap.values()) {
+      for (let i = 0; i < sources.length; i += 1) {
+        const sourceMap = sourceMaps.get(i)
+        if (!sourceMap) continue
+        for (const row of sourceMap.values()) {
           byId.set(row.id, row)
         }
       }
-      setPrivateSlots(Array.from(byId.values()))
+      const nextSlots = Array.from(byId.values())
+      const allSourcesSettled = sources.every((_, index) => sourceMaps.has(index))
+      setPrivateSlots(nextSlots)
+      setPrivateSlotsError(
+        nextSlots.length === 0 &&
+          allSourcesSettled &&
+          sourceFailures.size === sources.length
+          ? '예약 가능한 1:1 수업 시간을 불러오지 못했습니다.'
+          : ''
+      )
       setPrivateSlotsLoading(false)
     }
 
-    chunks.forEach((chunk, chunkIndex) => {
-      const privateSlotQuery =
-        chunk.type === 'slot'
-          ? query(collection(db, 'privateLessonSlots'), where(documentId(), 'in', chunk.values))
-          : chunk.type === 'eligibleStudent'
-            ? query(
-                collection(db, 'privateLessonSlots'),
-                where('academyId', '==', currentAcademyId),
-                where('status', '==', 'open'),
-                where('eligibleStudentIds', 'array-contains', scopedStudentId)
-              )
-          : chunk.type === 'eligibleStudentAcademy'
-            ? query(
-                collection(db, 'privateLessonSlots'),
-                where('academyId', '==', currentAcademyId),
-                where('eligibleStudentIds', 'array-contains', scopedStudentId)
-              )
-          : chunk.type === 'eligibleStudentFallback'
-            ? query(
-                collection(db, 'privateLessonSlots'),
-                where('eligibleStudentIds', 'array-contains', scopedStudentId)
-              )
-          : query(
-              collection(db, 'privateLessonSlots'),
-              where('academyId', '==', currentAcademyId),
-              where('status', '==', 'open'),
-              where(chunk.type, 'in', chunk.values)
-            )
+    sources.forEach((source, sourceIndex) => {
+      if (source.type === 'slot') {
+        const unsubscribe = onSnapshot(
+          doc(db, 'privateLessonSlots', source.slotId),
+          (snapshot) => {
+            const rows = new Map()
+            if (snapshot.exists()) {
+              const row = {
+                id: snapshot.id,
+                ...snapshot.data(),
+              }
+              if (
+                String(row.academyId || '').trim() === currentAcademyId &&
+                String(row.status || '').trim() === 'open'
+              ) {
+                rows.set(snapshot.id, row)
+              }
+            }
+            sourceMaps.set(sourceIndex, rows)
+            sourceFailures.delete(sourceIndex)
+            mergeRows()
+          },
+          (error) => {
+            console.error('student allowed privateLessonSlot 불러오기 실패:', error)
+            sourceMaps.set(sourceIndex, new Map())
+            sourceFailures.set(sourceIndex, error)
+            mergeRows()
+          }
+        )
+
+        unsubs.push(unsubscribe)
+        return
+      }
+
+      const privateSlotQuery = query(
+        collection(db, 'privateLessonSlots'),
+        where('academyId', '==', currentAcademyId),
+        where('status', '==', 'open'),
+        where(source.type, 'in', source.values)
+      )
       const unsubscribe = onSnapshot(
         privateSlotQuery,
         (snapshot) => {
@@ -525,23 +548,20 @@ export default function StudentBookingPage() {
               return
             }
             if (
-              chunk.type !== 'slot' &&
-              chunk.type !== 'eligibleStudent' &&
-              chunk.type !== 'eligibleStudentAcademy' &&
-              chunk.type !== 'eligibleStudentFallback' &&
               !slotMatchesPrivateTeacherAccess(row, allowedPrivateTeacherKeys)
             ) {
               return
             }
             rows.set(docItem.id, row)
           })
-          chunkMaps.set(chunkIndex, rows)
+          sourceMaps.set(sourceIndex, rows)
+          sourceFailures.delete(sourceIndex)
           mergeRows()
         },
         (error) => {
           console.error('student privateLessonSlots 불러오기 실패:', error)
-          chunkMaps.set(chunkIndex, new Map())
-          setPrivateSlotsError('예약 가능한 1:1 수업 시간을 불러오지 못했습니다.')
+          sourceMaps.set(sourceIndex, new Map())
+          sourceFailures.set(sourceIndex, error)
           mergeRows()
         }
       )
@@ -1689,13 +1709,14 @@ export default function StudentBookingPage() {
                       slot,
                       allowedPrivateTeacherKeys
                     )
+                    const hasActivePrivateReservation = reservation?.status === 'active'
                     const canReserve =
                       PRIVATE_SLOT_BOOKING_ENABLED &&
                       privateSlotBookingPilotEnabled &&
                       (isTeacherEligible || isSlotEligible) &&
-                      (!reservation || reservation.status !== 'active')
-                        ? !busyPrivateReservationId && slot.status === 'open'
-                        : false
+                      !hasActivePrivateReservation &&
+                      !busyPrivateReservationId &&
+                      slot.status === 'open'
 
                     return (
                       <article

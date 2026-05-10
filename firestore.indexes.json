@@ -233,14 +233,6 @@
       ]
     },
     {
-      "collectionGroup": "privateLessonSlots",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "academyId", "order": "ASCENDING" },
-        { "fieldPath": "eligibleStudentIds", "arrayConfig": "CONTAINS" }
-      ]
-    },
-    {
       "collectionGroup": "privateLessonReservations",
       "queryScope": "COLLECTION",
       "fields": [

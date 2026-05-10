@@ -288,6 +288,27 @@ service cloud.firestore {
         teacher in myPrivateTeacherKeys(academyId);
     }
 
+    function hasPrivateAllowedSlotAccess(academyId, slotId) {
+      let summaryPath = myStudentPrivateAccessSummaryPath(academyId);
+      let summary = get(summaryPath).data;
+      return hasStudentIdentity(academyId) &&
+        slotId is string &&
+        slotId != "" &&
+        exists(summaryPath) &&
+        summary.academyId == academyId &&
+        summary.studentId == myStudentId(academyId) &&
+        (
+          (
+            summary.allowedSlotIds is list &&
+            slotId in summary.allowedSlotIds
+          ) ||
+          (
+            summary.allowedPrivateLessonSlotIds is list &&
+            slotId in summary.allowedPrivateLessonSlotIds
+          )
+        );
+    }
+
     function privateSlotBelongsToTeacher(data) {
       return isAcademyTeacherOrStaff(data.academyId) &&
         data.teacher is string &&
@@ -1564,7 +1585,21 @@ service cloud.firestore {
     }
 
     match /privateLessonSlots/{slotId} {
-      allow read: if sameAcademyOnRead() && (
+      allow get: if (
+        sameAcademyOnRead() && (
+          isAcademyAdmin(resource.data.academyId) ||
+          privateSlotBelongsToTeacher(resource.data) ||
+          (
+            hasStudentIdentity(resource.data.academyId) &&
+            resource.data.reservedStudentId == myStudentId(resource.data.academyId)
+          )
+        )
+      ) || (
+        resource.data.status == "open" &&
+        hasPrivateAllowedSlotAccess(resource.data.academyId, slotId)
+      );
+
+      allow list: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
         privateSlotBelongsToTeacher(resource.data) ||
         (
@@ -1573,17 +1608,6 @@ service cloud.firestore {
             hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacher) ||
             hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacherName)
           )
-        ) ||
-        (
-          resource.data.academyId is string &&
-          resource.data.status == "open" &&
-          hasStudentIdentity(resource.data.academyId) &&
-          resource.data.eligibleStudentIds is list &&
-          myStudentId(resource.data.academyId) in resource.data.eligibleStudentIds
-        ) ||
-        (
-          hasStudentIdentity(resource.data.academyId) &&
-          resource.data.reservedStudentId == myStudentId(resource.data.academyId)
         )
       );
 

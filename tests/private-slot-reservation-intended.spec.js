@@ -94,6 +94,20 @@ async function expectSlotStatus(db, slotId, expected) {
     .toBe(expected);
 }
 
+async function expectPrivateSummaryAllowsSlot(db, studentId, slotId) {
+  await expect
+    .poll(async () => {
+      const snap = await db.collection('studentPrivateAccessSummary').doc(privateSummaryId(studentId)).get();
+      const summary = snap.exists ? snap.data() || {} : {};
+      const allowedSlotIds = Array.isArray(summary.allowedSlotIds) ? summary.allowedSlotIds : [];
+      const allowedPrivateLessonSlotIds = Array.isArray(summary.allowedPrivateLessonSlotIds)
+        ? summary.allowedPrivateLessonSlotIds
+        : [];
+      return `${allowedSlotIds.includes(slotId)}:${allowedPrivateLessonSlotIds.includes(slotId)}`;
+    }, { timeout: 15000 })
+    .toBe('true:true');
+}
+
 async function expectPrivateBookingStatsCount(db, studentId, expected) {
   await expect
     .poll(async () => {
@@ -824,7 +838,11 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
 
     await db.collection('privateLessonSlots').doc(fixture.slotId).set(
       {
+        status: 'open',
         eligibleStudentIds: [fixture.ineligibleStudent.studentId],
+        reservedStudentId: '',
+        reservationId: '',
+        reservedAt: null,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -833,12 +851,23 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       privateSummaryId(fixture.ineligibleStudent.studentId)
     ).set(
       {
-        allowedSlotIds: [],
-        allowedPrivateLessonSlotIds: [],
+        allowedSlotIds: [fixture.slotId],
+        allowedPrivateLessonSlotIds: [fixture.slotId],
         privateSlotBookingPilotEnabled: true,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
+    );
+    const legacySlotSnap = await db.collection('privateLessonSlots').doc(fixture.slotId).get();
+    const legacySlot = legacySlotSnap.data() || {};
+    expect(legacySlot.status).toBe('open');
+    expect(Array.isArray(legacySlot.eligibleStudentIds) ? legacySlot.eligibleStudentIds : []).toContain(
+      fixture.ineligibleStudent.studentId
+    );
+    await expectPrivateSummaryAllowsSlot(
+      db,
+      fixture.ineligibleStudent.studentId,
+      fixture.slotId
     );
     await secondPage.reload();
     await expect(studentSlotCard(secondPage, fixture.date)).toBeVisible({ timeout: 45000 });
