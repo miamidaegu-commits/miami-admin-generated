@@ -204,8 +204,11 @@ test.beforeAll(async () => {
   const auth = admin.auth();
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const today = todayInSeoul();
-  const pastPrivateReservationStartAt = admin.firestore.Timestamp.fromDate(
-    new Date(`${today}T00:10:00+09:00`)
+  const pastPrivateReservationStartAt = admin.firestore.Timestamp.fromMillis(
+    Date.now() - 2 * 60 * 60 * 1000
+  );
+  const notEndedPrivateReservationStartAt = admin.firestore.Timestamp.fromMillis(
+    Date.now() - 10 * 60 * 1000
   );
   const now = admin.firestore.FieldValue.serverTimestamp();
 
@@ -463,8 +466,8 @@ test.beforeAll(async () => {
       teacher: fixture.otherTeacherName,
       date: today,
       time: '15:10',
-      startAt: pastPrivateReservationStartAt,
-      durationMinutes: 50,
+      startAt: notEndedPrivateReservationStartAt,
+      durationMinutes: 120,
       subject: fixture.otherPrivateReservationTitle,
       status: 'reserved',
       reservedStudentId: fixture.otherStudentId,
@@ -492,8 +495,8 @@ test.beforeAll(async () => {
       teacher: fixture.otherTeacherName,
       date: today,
       time: '15:10',
-      startAt: pastPrivateReservationStartAt,
-      durationMinutes: 50,
+      startAt: notEndedPrivateReservationStartAt,
+      durationMinutes: 120,
       subject: fixture.otherPrivateReservationTitle,
       status: 'active',
       updatedAt: now,
@@ -572,6 +575,12 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
       .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
       .filter({ hasText: fixture.otherPrivateReservationTitle })
   ).toBeVisible();
+  const notEndedReservationRow = page
+    .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
+    .filter({ hasText: fixture.otherPrivateReservationTitle });
+  await expect(notEndedReservationRow.getByRole('button', { name: '수업 종료 후 처리' })).toBeVisible();
+  await expect(notEndedReservationRow.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
+  await expect(notEndedReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
   await expect(page.locator('main section button').filter({ hasText: '1:1 예약' }).first()).toBeVisible();
 
 });
