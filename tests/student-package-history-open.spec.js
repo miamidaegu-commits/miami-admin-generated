@@ -13,6 +13,7 @@ import {
 import {
   createAdminSeededPrivateLesson,
   createAdminSeededPrivateStudent,
+  createAdminSeededStudentPackage,
 } from './e2e-admin-helpers.js';
 
 function formatYmd(date) {
@@ -102,6 +103,64 @@ test('학생 관리 목록에 개인 수업 진행 요약이 표시된다', asyn
   await expect(progress).toContainText(/예정 \d+회/);
 });
 
+test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표시된다', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+
+  const suffix = Date.now();
+  const { studentId, studentName } = await createAdminSeededPrivateStudent({
+    studentId: `e2e-private-package-teacher-student-${suffix}`,
+    name: `E2E 개인수강권 ${suffix}`,
+    teacher: 'assigned-teacher',
+    paidLessons: 0,
+    attendanceCount: 0,
+  });
+
+  await Promise.all([
+    createAdminSeededStudentPackage({
+      packageId: `e2e-private-package-don1-${suffix}`,
+      studentId,
+      studentName,
+      title: 'E2E don1 개인 수강권',
+      packageType: 'private',
+      teacher: 'don1',
+      totalCount: 3,
+      usedCount: 0,
+      remainingCount: 3,
+      status: 'active',
+    }),
+    createAdminSeededStudentPackage({
+      packageId: `e2e-private-package-jenny-${suffix}`,
+      studentId,
+      studentName,
+      title: 'E2E jenny 개인 수강권',
+      packageType: 'private',
+      teacher: 'jenny',
+      totalCount: 5,
+      usedCount: 0,
+      remainingCount: 5,
+      status: 'active',
+    }),
+  ]);
+
+  await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+  await openDashboardSection(page, '학생 관리');
+
+  const studentSearchInput = getStudentSearchInput(page);
+  await studentSearchInput.fill(studentName);
+
+  const studentRow = getStudentRow(page, studentName);
+  await expect(studentRow).toBeVisible();
+
+  const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
+  await expect(privatePackageCell).toContainText('don1');
+  await expect(privatePackageCell).toContainText('남은 3/3');
+  await expect(privatePackageCell).toContainText('jenny');
+  await expect(privatePackageCell).toContainText('남은 5/5');
+});
+
 test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행 요약이 표시된다', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
@@ -158,5 +217,5 @@ test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행
   await expect(privatePackageCell).toContainText('총 8회');
   await expect(privatePackageCell).toContainText('지난 2회');
   await expect(privatePackageCell).toContainText('예정 6회');
-  await expect(privatePackageCell).not.toContainText('수강권 없음');
+  await expect(privatePackageCell).toContainText('개인 수강권 없음');
 });

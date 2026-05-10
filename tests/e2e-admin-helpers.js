@@ -75,6 +75,53 @@ export async function createAdminSeededPrivateStudent(params = {}) {
   };
 }
 
+export async function createAdminSeededStudentPackage(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const packageRef = params.packageId
+    ? db.collection('studentPackages').doc(String(params.packageId))
+    : db.collection('studentPackages').doc();
+  const now = timestampNow();
+  const packageType = String(params.packageType || 'private').trim();
+  const teacher = String(params.teacher || params.teacherName || 'teacher').trim();
+  const totalCount =
+    Number.isInteger(Number(params.totalCount)) && Number(params.totalCount) >= 0
+      ? Number(params.totalCount)
+      : 0;
+  const remainingCount =
+    Number.isInteger(Number(params.remainingCount)) && Number(params.remainingCount) >= 0
+      ? Number(params.remainingCount)
+      : totalCount;
+  const usedCount =
+    Number.isInteger(Number(params.usedCount)) && Number(params.usedCount) >= 0
+      ? Number(params.usedCount)
+      : Math.max(totalCount - remainingCount, 0);
+
+  await packageRef.set({
+    academyId,
+    studentId: String(params.studentId || '').trim(),
+    studentName: String(params.studentName || '').trim(),
+    title: String(params.title || `E2E ${packageType} package ${Date.now()}`).trim(),
+    packageType,
+    teacher,
+    teacherName: String(params.teacherName || teacher).trim(),
+    totalCount,
+    usedCount,
+    remainingCount,
+    status: String(params.status || 'active').trim(),
+    startDate: String(params.startDate || '').trim(),
+    expiresAt: String(params.expiresAt || '2099-01-01').trim(),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    packageId: packageRef.id,
+    studentId: String(params.studentId || '').trim(),
+    teacher,
+  };
+}
+
 export async function createAdminSeededLessonRequest(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();

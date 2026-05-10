@@ -66,6 +66,39 @@ function packageKindLabel(packageType) {
   return formatStudentPackageDetailTypeLabel(packageType)
 }
 
+function getPrivatePackageTeacherLabel(pkg) {
+  return cleanText(pkg?.teacher || pkg?.teacherName, '선생님 미지정')
+}
+
+function formatPrivatePackageTeacherSummary(packages) {
+  const privatePackages = (Array.isArray(packages) ? packages : []).filter(
+    (pkg) => String(pkg?.packageType || '').trim() === 'private'
+  )
+  if (privatePackages.length === 0) return []
+
+  const activeRemainingPackages = privatePackages.filter(
+    (pkg) => isStudentPackageRowActive(pkg) && toFiniteNumber(pkg.remainingCount) > 0
+  )
+  const displayPackages =
+    activeRemainingPackages.length > 0
+      ? activeRemainingPackages
+      : privatePackages.filter((pkg) => isStudentPackageRowActive(pkg)).length > 0
+        ? privatePackages.filter((pkg) => isStudentPackageRowActive(pkg))
+        : privatePackages
+
+  return displayPackages.map((pkg) => {
+    const remaining = toFiniteNumber(pkg.remainingCount)
+    const total = toFiniteNumber(pkg.totalCount ?? pkg.paidLessons ?? remaining)
+    const isActive = isStudentPackageRowActive(pkg)
+    return {
+      id: String(pkg.id || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}-${total}`),
+      text: `${getPrivatePackageTeacherLabel(pkg)} · 남은 ${remaining}/${total || remaining}`,
+      statusText: !isActive || remaining <= 0 ? '소진' : '',
+      muted: !isActive || remaining <= 0,
+    }
+  })
+}
+
 function PrivateLessonProgressSummary({ progress }) {
   if (!progress) return null
   return (
@@ -959,6 +992,13 @@ export default function StudentsSection({
             privateLessonProgressByStudentId.get(student.id)
           )
           const pkgListAll = studentPackagesSortedByStudentId.get(student.id) ?? []
+          const privatePackageTeacherSummary = formatPrivatePackageTeacherSummary(
+            pkgListAll.filter(
+              (pkg) =>
+                String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+                String(pkg.studentId || '').trim() === String(student.id || '').trim()
+            )
+          )
           const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
           const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
             hasRenewalNeeded: false,
@@ -1026,16 +1066,26 @@ export default function StudentsSection({
               <span>{formatStudentFirstRegisteredForTable(student.firstRegisteredAt)}</span>
               <span
                 data-testid="student-private-package-cell"
+                title="1:1 예약 가능 시간은 개인 수강권 선생님 기준으로 표시됩니다."
                 style={{ display: 'flex', flexDirection: 'column', gap: 2 }}
               >
-                {Number(pkgSum.privateCount) > 0 || !privateLessonProgress ? (
-                  <span>
-                    {formatStudentPackageCellSummary(
-                      pkgSum.privateCount,
-                      pkgSum.privateRemainingTotal
-                    )}
-                  </span>
-                ) : null}
+                {privatePackageTeacherSummary.length > 0 ? (
+                  privatePackageTeacherSummary.map((summary) => (
+                    <span
+                      key={summary.id}
+                      data-testid="student-private-package-teacher-summary"
+                      style={{
+                        opacity: summary.muted ? 0.62 : 1,
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {summary.text}
+                      {summary.statusText ? ` · ${summary.statusText}` : ''}
+                    </span>
+                  ))
+                ) : (
+                  <span>개인 수강권 없음</span>
+                )}
                 <PrivateLessonProgressSummary progress={privateLessonProgress} />
               </span>
               <span>
