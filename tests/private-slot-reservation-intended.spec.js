@@ -611,6 +611,15 @@ test('intended flexible private slot visibility honors teacher access and pilot 
     contexts.push(eligibleContext);
     const eligiblePage = await eligibleContext.newPage();
     await loginAsStudentWithPrivateBooking(eligiblePage, fixture.eligibleStudent.email);
+    await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
+      '예약은 수업 시작 6시간 전까지만 취소할 수 있습니다.'
+    );
+    await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
+      '학생 직접 취소는 최대 2회까지 가능합니다.'
+    );
+    await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
+      '2회를 초과하면 학원에 문의해 주세요.'
+    );
     await expect(studentSlotCard(eligiblePage, fixture.date)).toBeVisible({ timeout: 15000 });
     await expect(studentSlotCard(eligiblePage, fixture.date)).toContainText(fixture.time);
 
@@ -773,6 +782,9 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     const noRemainingContext = await browser.newContext();
     contexts.push(noRemainingContext);
     const noRemainingPage = await noRemainingContext.newPage();
+    noRemainingPage.on('dialog', async (dialog) => {
+      await dialog.accept();
+    });
     await loginAsStudentWithPrivateBooking(noRemainingPage, fixture.noRemainingStudent.email);
     const noRemainingSlotCard = studentSlotCard(noRemainingPage, fixture.noRemainingOpenDate);
     await expect(noRemainingSlotCard).toBeVisible({ timeout: 15000 });
@@ -787,6 +799,17 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     await expectSlotStatus(db, fixture.noRemainingOpenSlotId, 'reserved');
 
     await slotCard.getByTestId('student-private-slot-reserve-button').click();
+    await expect
+      .poll(
+        () =>
+          bookingDialogs.some(
+            (message) =>
+              message.includes('취소는 수업 시작 6시간 전까지만 가능') &&
+              message.includes('학생 직접 취소는 최대 2회')
+          ),
+        { timeout: 15000 }
+      )
+      .toBe(true);
     await eligiblePage.waitForTimeout(500);
 
     const expectedReservationId = reservationId(fixture.slotId, fixture.eligibleStudent.studentId);
@@ -832,6 +855,9 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     const secondContext = await browser.newContext();
     contexts.push(secondContext);
     const secondPage = await secondContext.newPage();
+    secondPage.on('dialog', async (dialog) => {
+      await dialog.accept();
+    });
     await loginAsStudentWithPrivateBooking(secondPage, fixture.ineligibleStudent.email);
     await expect(
       secondPage.locator('[data-testid="student-private-slot-card"]').filter({ hasText: fixture.date })
@@ -841,6 +867,17 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     const reservationCard = privateReservationCard(eligiblePage, fixture.date);
     await expect(reservationCard).toBeVisible({ timeout: 15000 });
     await reservationCard.getByTestId('student-private-reservation-cancel-button').click();
+    await expect
+      .poll(
+        () =>
+          bookingDialogs.some(
+            (message) =>
+              message.includes('학생 직접 취소는 최대 2회') &&
+              message.includes('이 취소도 횟수에 포함')
+          ),
+        { timeout: 15000 }
+      )
+      .toBe(true);
     await expectReservationStatus(
       db,
       fixture.slotId,

@@ -52,6 +52,12 @@ const PRIVATE_SLOT_BOOKING_ENABLED =
     typeof window !== 'undefined' &&
     new URLSearchParams(window.location.search).get('privateSlotBooking') === 'enabled')
 
+const PRIVATE_SLOT_RESERVE_CONFIRM_MESSAGE =
+  '1:1 수업을 예약하시겠습니까?\n\n취소는 수업 시작 6시간 전까지만 가능하며, 학생 직접 취소는 최대 2회까지 가능합니다.'
+
+const PRIVATE_RESERVATION_CANCEL_CONFIRM_MESSAGE =
+  '예약을 취소하시겠습니까?\n\n학생 직접 취소는 최대 2회까지 가능하며, 이 취소도 횟수에 포함됩니다.'
+
 function chunkValues(values, size) {
   const out = []
   for (let i = 0; i < values.length; i += size) {
@@ -1216,6 +1222,9 @@ export default function StudentBookingPage() {
       alert('이미 예약됨')
       return
     }
+    if (!window.confirm(PRIVATE_SLOT_RESERVE_CONFIRM_MESSAGE)) {
+      return
+    }
 
     try {
       setBusyPrivateReservationId(reservationId)
@@ -1339,6 +1348,9 @@ export default function StudentBookingPage() {
       slotId: reservation.slotId,
       studentId: scopedStudentId,
     })
+    if (!window.confirm(PRIVATE_RESERVATION_CANCEL_CONFIRM_MESSAGE)) {
+      return
+    }
 
     try {
       setBusyPrivateReservationId(reservationId)
@@ -1688,6 +1700,23 @@ export default function StudentBookingPage() {
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
                 내 개인 수강권 선생님의 예약 가능한 시간만 표시됩니다.
               </p>
+              <div
+                data-testid="student-private-booking-policy-notice"
+                style={{
+                  marginTop: 12,
+                  border: '1px solid #445066',
+                  borderRadius: 12,
+                  background: '#1b2536',
+                  padding: '12px 14px',
+                  color: 'white',
+                  fontSize: 14,
+                  lineHeight: 1.6,
+                }}
+              >
+                <div>예약은 수업 시작 6시간 전까지만 취소할 수 있습니다.</div>
+                <div>학생 직접 취소는 최대 2회까지 가능합니다.</div>
+                <div>2회를 초과하면 학원에 문의해 주세요.</div>
+              </div>
 
               {privateAccessError ? <p style={{ color: '#f4a7a7' }}>{privateAccessError}</p> : null}
               {privateSlotsError ? <p style={{ color: '#f4a7a7' }}>{privateSlotsError}</p> : null}
