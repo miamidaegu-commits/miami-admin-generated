@@ -565,8 +565,12 @@ export default function Dashboard() {
     time: '',
     durationMinutes: '50',
     eligibleStudentIds: [],
+    repeatWeekly: false,
+    repeatWeeks: '1',
+    repeatEndDate: '',
   })
   const [privateSlotFormErrors, setPrivateSlotFormErrors] = useState({})
+  const [privateSlotCreateResult, setPrivateSlotCreateResult] = useState(null)
   const [busyPrivateSlotActionId, setBusyPrivateSlotActionId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
@@ -3011,6 +3015,9 @@ export default function Dashboard() {
     const date = String(privateSlotForm.date || '').trim()
     const time = String(privateSlotForm.time || '').trim()
     const durationMinutes = Number.parseInt(String(privateSlotForm.durationMinutes || ''), 10)
+    const repeatWeekly = privateSlotForm.repeatWeekly === true
+    const repeatWeeks = Number.parseInt(String(privateSlotForm.repeatWeeks || ''), 10)
+    const repeatEndDate = String(privateSlotForm.repeatEndDate || '').trim()
 
     if (!teacher) errors.teacher = '선생님을 선택해주세요.'
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parseYmdToLocalDate(date)) {
@@ -3022,18 +3029,80 @@ export default function Dashboard() {
     if (!Number.isInteger(durationMinutes) || durationMinutes < 10 || durationMinutes > 240) {
       errors.durationMinutes = '10~240분 사이로 입력해주세요.'
     }
+    if (repeatWeekly) {
+      if (repeatEndDate) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(repeatEndDate) || !parseYmdToLocalDate(repeatEndDate)) {
+          errors.repeatEndDate = '반복 종료일을 선택해주세요.'
+        } else if (date && repeatEndDate < date) {
+          errors.repeatEndDate = '반복 종료일은 시작일 이후여야 합니다.'
+        }
+      } else if (!Number.isInteger(repeatWeeks) || repeatWeeks < 1 || repeatWeeks > 52) {
+        errors.repeatWeeks = '1~52주 사이로 입력해주세요.'
+      }
+    }
+
+    const dates =
+      Object.keys(errors).length === 0
+        ? buildWeeklyPrivateSlotDates({
+            date,
+            repeatWeekly,
+            repeatWeeks,
+            repeatEndDate,
+          })
+        : []
+    if (dates.length > 52) {
+      errors.repeatWeeks = '반복 생성은 최대 52개까지 가능합니다.'
+    }
 
     return {
       valid: Object.keys(errors).length === 0,
       errors,
       value: {
         teacher,
-        date,
+        dates,
         time,
         durationMinutes,
         eligibleStudentIds: [],
       },
     }
+  }
+
+  function addDaysToYmd(date, days) {
+    const base = parseYmdToLocalDate(date)
+    if (!base) return ''
+    base.setDate(base.getDate() + days)
+    return getStorageDateStringFromDate(base)
+  }
+
+  function buildWeeklyPrivateSlotDates({ date, repeatWeekly, repeatWeeks, repeatEndDate }) {
+    if (!repeatWeekly) return [date]
+    const dates = []
+    if (repeatEndDate) {
+      let nextDate = date
+      while (nextDate && nextDate <= repeatEndDate && dates.length <= 52) {
+        dates.push(nextDate)
+        nextDate = addDaysToYmd(nextDate, 7)
+      }
+      return dates
+    }
+    const totalWeeks = Number.isInteger(repeatWeeks) ? repeatWeeks : 1
+    for (let index = 0; index < totalWeeks; index += 1) {
+      dates.push(addDaysToYmd(date, index * 7))
+    }
+    return dates.filter(Boolean)
+  }
+
+  async function privateSlotExists({ academyId, teacher, date, time }) {
+    const snap = await getDocs(
+      query(
+        collection(db, 'privateLessonSlots'),
+        where('academyId', '==', academyId),
+        where('teacher', '==', teacher),
+        where('date', '==', date),
+        where('time', '==', time)
+      )
+    )
+    return !snap.empty
   }
 
   async function createPrivateSlot() {
@@ -3043,58 +3112,86 @@ export default function Dashboard() {
     }
     const result = validatePrivateSlotForm()
     setPrivateSlotFormErrors(result.errors)
+    setPrivateSlotCreateResult(null)
     if (!result.valid) return
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
-      const { teacher, date, time, durationMinutes, eligibleStudentIds } = result.value
-      const [year, month, day] = date.split('-').map(Number)
-      const [hour, minute] = time.split(':').map(Number)
-      const startAt = Timestamp.fromDate(new Date(year, month - 1, day, hour, minute))
+      const { teacher, dates, time, durationMinutes, eligibleStudentIds } = result.value
       const teacherOption = teacherSelectOptions.find((option) => option.value === teacher)
       const teacherName = String(teacherOption?.label || teacher).trim()
-
       setBusyPrivateSlotActionId('__add__')
-      const slotRef = doc(collection(db, 'privateLessonSlots'))
+      const existingFlags = await Promise.all(
+        dates.map((date) =>
+          privateSlotExists({
+            academyId: scopedAcademyId,
+            teacher,
+            date,
+            time,
+          })
+        )
+      )
+
       const batch = writeBatch(db)
-      const slotPayload = {
-        academyId: scopedAcademyId,
-        teacher,
-        teacherName,
-        date,
-        time,
-        subject: '1:1 수업',
-        capacity: 1,
-        reservedCount: 0,
-        startAt,
-        durationMinutes,
-        status: 'open',
-        reservedStudentId: '',
-        reservationId: '',
-        createdByUid: user?.uid || '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        reservedAt: null,
-        cancelledAt: null,
-      }
-      if (eligibleStudentIds.length > 0) {
-        slotPayload.eligibleStudentIds = eligibleStudentIds
-      }
-      batch.set(slotRef, slotPayload)
-      eligibleStudentIds.forEach((studentId) => {
-        addStudentPrivateSlotAccessBatch(batch, db, {
+      let createdCount = 0
+      let skippedDuplicateCount = 0
+      dates.forEach((date, index) => {
+        if (existingFlags[index]) {
+          skippedDuplicateCount += 1
+          return
+        }
+        const [year, month, day] = date.split('-').map(Number)
+        const [hour, minute] = time.split(':').map(Number)
+        const startAt = Timestamp.fromDate(new Date(year, month - 1, day, hour, minute))
+        const slotRef = doc(collection(db, 'privateLessonSlots'))
+        const slotPayload = {
           academyId: scopedAcademyId,
-          studentId,
-          slotId: slotRef.id,
+          teacher,
+          teacherName,
+          date,
+          time,
+          subject: '1:1 수업',
+          capacity: 1,
+          reservedCount: 0,
+          startAt,
+          durationMinutes,
+          status: 'open',
+          reservedStudentId: '',
+          reservationId: '',
+          createdByUid: user?.uid || '',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          reservedAt: null,
+          cancelledAt: null,
+        }
+        if (eligibleStudentIds.length > 0) {
+          slotPayload.eligibleStudentIds = eligibleStudentIds
+        }
+        batch.set(slotRef, slotPayload)
+        eligibleStudentIds.forEach((studentId) => {
+          addStudentPrivateSlotAccessBatch(batch, db, {
+            academyId: scopedAcademyId,
+            studentId,
+            slotId: slotRef.id,
+          })
         })
+        createdCount += 1
       })
-      await batch.commit()
+      if (createdCount > 0) await batch.commit()
+      setPrivateSlotCreateResult({
+        createdCount,
+        skippedDuplicateCount,
+        requestedCount: dates.length,
+      })
       setPrivateSlotForm((prev) => ({
         ...prev,
         date: '',
         time: '',
         durationMinutes: prev.durationMinutes || '50',
         eligibleStudentIds: [],
+        repeatWeekly: false,
+        repeatWeeks: prev.repeatWeeks || '1',
+        repeatEndDate: '',
       }))
     } catch (error) {
       console.error('1:1 수업 시간 생성 실패:', error)
@@ -3487,6 +3584,7 @@ export default function Dashboard() {
     privateSlotForm,
     setPrivateSlotForm,
     privateSlotFormErrors,
+    privateSlotCreateResult,
     privateStudents,
     createPrivateSlot,
     updatePrivateSlotEligibility,

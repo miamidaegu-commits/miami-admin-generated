@@ -18,8 +18,10 @@ setGlobalOptions({maxInstances: 10});
 
 const OWNER_EMAIL = "miamidaegu@gmail.com";
 const REGION = "us-central1";
-const STUDENT_PRIVATE_CANCEL_LIMIT = 4;
+const STUDENT_PRIVATE_CANCEL_LIMIT = 2;
 const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000;
+const PRIVATE_SLOT_AVAILABILITY_LIMIT = 100;
+const PRIVATE_SLOT_QUERY_CHUNK_SIZE = 10;
 const PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE =
   "1:1 예약 기능은 아직 선택된 학생에게만 제공됩니다.";
 const HOSTED_APP_URL_BY_PROJECT_ID = {
@@ -69,6 +71,12 @@ function isPrivateSlotReservationEnabled() {
 
   return isEnabledFlag(process.env.PRIVATE_SLOT_BOOKING_ENABLED);
 }
+
+function isPrivateSlotAvailabilityBookingEnabled() {
+  if (getRuntimeProjectId() === "miami-e2e") return true;
+  return isPrivateSlotReservationEnabled();
+}
+
 
 function isPrivateSlotReservationPilotRequired() {
   return getRuntimeProjectId() !== "miami-e2e";
@@ -277,6 +285,22 @@ function normalizeTeacherKeyList(value) {
     [];
 }
 
+function uniqueNormalizedIdList(...values) {
+  const ids = new Set();
+  values.forEach((value) => {
+    normalizeIdList(value).forEach((id) => ids.add(id));
+  });
+  return Array.from(ids.values());
+}
+
+function chunkValues(values, size) {
+  const chunks = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
 function privateReservationDocId({academyId, slotId, studentId}) {
   return `${academyId}__${slotId}__${studentId}`;
 }
@@ -448,6 +472,17 @@ function getPrivateSlotStartMillis(slot) {
   return getSeoulDateTimeMillis(slot && slot.date, slot && slot.time);
 }
 
+function getSeoulTodayDateString() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+}
+
 function getPrivateReservationStartMillis(reservation, slot) {
   const slotStartAtMillis = getTimestampMillis(slot && slot.startAt);
   if (slotStartAtMillis !== null) return slotStartAtMillis;
@@ -513,6 +548,155 @@ function createPrivateSlotNotification(transaction, db, {
 
   transaction.create(db.collection("notificationEvents").doc(), eventData);
 }
+
+function sanitizePrivateSlotAvailabilityRow({
+  slotId,
+  slot,
+  bookingEnabled,
+  pilotBookable,
+}) {
+  const status = String((slot && slot.status) || "").trim();
+  const isReserved = status === "reserved";
+  const isBookable = status === "open" && bookingEnabled && pilotBookable;
+  const durationMinutes = Number(slot && slot.durationMinutes);
+
+  return {
+    id: slotId,
+    academyId: normalizeId(slot && slot.academyId),
+    teacher: normalizeId(slot && slot.teacher),
+    teacherName: normalizeId(slot && slot.teacherName),
+    date: normalizeId(slot && slot.date),
+    time: normalizeId(slot && slot.time),
+    durationMinutes:
+      Number.isFinite(durationMinutes) && durationMinutes > 0 ?
+        Math.floor(durationMinutes) :
+        50,
+    subject: normalizeId(slot && slot.subject),
+    status,
+    statusLabel: isReserved ? "예약 완료" : "예약 가능",
+    isReserved,
+    isBookable,
+  };
+}
+
+exports.listPrivateLessonSlotAvailability = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const membershipSnap = await membershipRef.get();
+        const membership = requireActiveStudentMembership(membershipSnap);
+        const studentId = membership.studentId;
+        const summaryRef = db
+            .collection("studentPrivateAccessSummary")
+            .doc(`${academyId}__${studentId}`);
+        const summarySnap = await summaryRef.get();
+        const summary = summarySnap.exists ? summarySnap.data() || {} : null;
+
+        const teacherKeys = normalizeTeacherKeyList(
+            summary && summary.teacherKeys,
+        );
+        const activePackageIds = normalizeIdList(
+            summary && summary.activePackageIds,
+        );
+        const allowedSlotIds = uniqueNormalizedIdList(
+            summary && summary.allowedSlotIds,
+            summary && summary.allowedPrivateLessonSlotIds,
+        );
+        const hasTeacherPackageAccess =
+          activePackageIds.length > 0 && teacherKeys.length > 0;
+        const bookingEnabled = isPrivateSlotAvailabilityBookingEnabled();
+        const pilotBookable =
+          !isPrivateSlotReservationPilotRequired() ||
+          (summary && summary.privateSlotBookingPilotEnabled === true);
+        const today = getSeoulTodayDateString();
+        const byId = new Map();
+
+        const addVisibleSlot = (docSnap) => {
+          if (!docSnap.exists) return;
+          const slot = docSnap.data() || {};
+          const slotId = docSnap.id;
+          const status = String(slot.status || "").trim();
+          const date = normalizeId(slot.date);
+          if (normalizeId(slot.academyId) !== academyId) return;
+          if (!(status === "open" || status === "reserved")) return;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date < today) return;
+          if (!hasSlotAccess({slot, summary, slotId, studentId})) return;
+          byId.set(slotId, slot);
+        };
+
+        if (hasTeacherPackageAccess) {
+          const queryPromises = [];
+          ["open", "reserved"].forEach((status) => {
+            chunkValues(teacherKeys, PRIVATE_SLOT_QUERY_CHUNK_SIZE)
+                .forEach((chunk) => {
+                  queryPromises.push(
+                      db
+                          .collection("privateLessonSlots")
+                          .where("academyId", "==", academyId)
+                          .where("status", "==", status)
+                          .where("teacher", "in", chunk)
+                          .get(),
+                  );
+                  queryPromises.push(
+                      db
+                          .collection("privateLessonSlots")
+                          .where("academyId", "==", academyId)
+                          .where("status", "==", status)
+                          .where("teacherName", "in", chunk)
+                          .get(),
+                  );
+                });
+          });
+          const snaps = await Promise.all(queryPromises);
+          snaps.forEach((snap) => {
+            snap.docs.forEach((docSnap) => addVisibleSlot(docSnap));
+          });
+        }
+
+        if (allowedSlotIds.length > 0) {
+          const directSnaps = await Promise.all(
+              allowedSlotIds.map((slotId) =>
+                db.collection("privateLessonSlots").doc(slotId).get(),
+              ),
+          );
+          directSnaps.forEach((docSnap) => addVisibleSlot(docSnap));
+        }
+
+        const slots = Array.from(byId.entries())
+            .map(([slotId, slot]) =>
+              sanitizePrivateSlotAvailabilityRow({
+                slotId,
+                slot,
+                bookingEnabled,
+                pilotBookable,
+              }),
+            )
+            .sort((a, b) => {
+              const aKey = `${a.date || ""} ${a.time || ""} ${a.teacher || ""}`;
+              const bKey = `${b.date || ""} ${b.time || ""} ${b.teacher || ""}`;
+              return aKey.localeCompare(bKey, "ko");
+            })
+            .slice(0, PRIVATE_SLOT_AVAILABILITY_LIMIT);
+
+        return {ok: true, academyId, slots};
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
 
 exports.reservePrivateLessonSlot = onCall(
     {region: REGION, cors: true},
@@ -858,7 +1042,7 @@ exports.cancelPrivateLessonReservation = onCall(
           if (safeStudentCancelCount >= STUDENT_PRIVATE_CANCEL_LIMIT) {
             throw new HttpsError(
                 "failed-precondition",
-                "Student private reservation cancellation limit reached.",
+                "1:1 예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.",
             );
           }
 

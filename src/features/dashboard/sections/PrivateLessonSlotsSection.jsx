@@ -37,6 +37,7 @@ export default function PrivateLessonSlotsSection({
   privateSlotForm,
   setPrivateSlotForm,
   privateSlotFormErrors,
+  privateSlotCreateResult,
   privateStudents = [],
   createPrivateSlot,
   updatePrivateSlotEligibility,
@@ -180,6 +181,70 @@ export default function PrivateLessonSlotsSection({
               <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.durationMinutes}</span>
             ) : null}
           </label>
+          <label
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              fontSize: 13,
+              alignSelf: 'end',
+              minHeight: 40,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={privateSlotForm.repeatWeekly === true}
+              onChange={(event) =>
+                setPrivateSlotForm((prev) => ({
+                  ...prev,
+                  repeatWeekly: event.target.checked,
+                }))
+              }
+              aria-label="매주 반복 생성"
+            />
+            매주 반복
+          </label>
+          {privateSlotForm.repeatWeekly === true ? (
+            <>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                반복 주 수
+                <input
+                  type="number"
+                  min="1"
+                  max="52"
+                  step="1"
+                  value={privateSlotForm.repeatWeeks}
+                  onChange={(event) =>
+                    setPrivateSlotForm((prev) => ({
+                      ...prev,
+                      repeatWeeks: event.target.value,
+                    }))
+                  }
+                  aria-label="1:1 수업 반복 주 수"
+                />
+                {privateSlotFormErrors.repeatWeeks ? (
+                  <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.repeatWeeks}</span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                종료일
+                <input
+                  type="date"
+                  value={privateSlotForm.repeatEndDate}
+                  onChange={(event) =>
+                    setPrivateSlotForm((prev) => ({
+                      ...prev,
+                      repeatEndDate: event.target.value,
+                    }))
+                  }
+                  aria-label="1:1 수업 반복 종료일"
+                />
+                {privateSlotFormErrors.repeatEndDate ? (
+                  <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.repeatEndDate}</span>
+                ) : null}
+              </label>
+            </>
+          ) : null}
           <div style={{ display: 'flex', alignItems: 'end' }}>
             <button
               type="submit"
@@ -198,6 +263,21 @@ export default function PrivateLessonSlotsSection({
               {isPrivateSlotSubmitting ? '생성 중...' : '수업 시간 추가'}
             </button>
           </div>
+          {privateSlotCreateResult ? (
+            <div
+              data-testid="private-slot-create-result"
+              style={{
+                gridColumn: '1 / -1',
+                color: '#b8f7c0',
+                fontSize: 13,
+              }}
+            >
+              생성 {privateSlotCreateResult.createdCount}개
+              {privateSlotCreateResult.skippedDuplicateCount > 0
+                ? ` · 중복 ${privateSlotCreateResult.skippedDuplicateCount}개 건너뜀`
+                : ''}
+            </div>
+          ) : null}
         </form>
       ) : null}
 

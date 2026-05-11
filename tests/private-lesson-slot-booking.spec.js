@@ -82,6 +82,27 @@ function lessonId(prefix, unique) {
   return `${prefix}-${unique}`;
 }
 
+function formatYmd(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function addWeeksToYmd(date, weeks) {
+  const next = new Date(`${date}T00:00:00`);
+  next.setDate(next.getDate() + weeks * 7);
+  return formatYmd(next);
+}
+
+function futureTuesdayYmd(unique) {
+  const offsetWeeks = (Number.parseInt(String(unique).split('-')[0], 10) || Date.now()) % 400;
+  const date = new Date('2098-01-01T00:00:00');
+  while (date.getDay() !== 2) date.setDate(date.getDate() + 1);
+  date.setDate(date.getDate() + offsetWeeks * 7);
+  return formatYmd(date);
+}
+
 function privateSlotCard(page, text) {
   return page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: text }).first();
 }
@@ -109,6 +130,13 @@ async function queryMatchingSlots(db, { date, time }) {
     .where('time', '==', time)
     .get();
   return snap.docs.map((docSnap) => ({ id: docSnap.id, data: docSnap.data() || {} }));
+}
+
+async function deleteMatchingSlots(db, { dates, time }) {
+  const snaps = await Promise.all(dates.map((date) => queryMatchingSlots(db, { date, time })));
+  await Promise.all(
+    snaps.flat().map((slot) => db.collection('privateLessonSlots').doc(slot.id).delete())
+  );
 }
 
 async function queryCreatedSlot(db, { date, time, existingSlotIds }) {
@@ -663,5 +691,80 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     if (fixture) {
       await cleanupFixture(fixture).catch(() => {});
     }
+  }
+});
+
+test('admin can create repeated weekly private slots and skips duplicate Tuesday 15:00 slots', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private slot setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  initializeAdmin();
+  const db = admin.firestore();
+  const adminUser = await admin.auth().getUserByEmail(ADMIN_EMAIL);
+  const unique = `${Date.now()}-${testInfo.workerIndex}-weekly`;
+  const startDate = futureTuesdayYmd(unique);
+  const repeatedDates = [0, 1, 2, 3].map((index) => addWeeksToYmd(startDate, index));
+  const time = '15:00';
+  const duplicateDate = repeatedDates[1];
+  const duplicateSlotId = `e2e-private-weekly-duplicate-${unique}`;
+
+  try {
+    await deleteMatchingSlots(db, { dates: repeatedDates, time });
+    await db.collection('privateLessonSlots').doc(duplicateSlotId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: TEACHER_NAME,
+      teacherName: TEACHER_NAME,
+      date: duplicateDate,
+      time,
+      subject: '1:1 수업',
+      capacity: 1,
+      reservedCount: 0,
+      startAt: admin.firestore.Timestamp.fromDate(new Date(`${duplicateDate}T${time}:00`)),
+      durationMinutes: 50,
+      status: 'open',
+      reservedStudentId: '',
+      reservationId: '',
+      createdByUid: adminUser.uid,
+      createdAt: admin.firestore.Timestamp.now(),
+      updatedAt: admin.firestore.Timestamp.now(),
+      reservedAt: null,
+      cancelledAt: null,
+    });
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '1:1 예약 시간 관리');
+    await page.getByLabel('1:1 수업 선생님').selectOption(TEACHER_NAME);
+    await page.getByLabel('1:1 수업 날짜').fill(startDate);
+    await page.getByLabel('1:1 수업 시작 시간').fill(time);
+    await page.getByLabel('1:1 수업 진행 시간').fill('50');
+    await page.getByLabel('매주 반복 생성').check();
+    await page.getByLabel('1:1 수업 반복 주 수').fill('4');
+    await page.getByTestId('private-slot-create-button').click();
+
+    const result = page.getByTestId('private-slot-create-result');
+    await expect(result).toContainText('생성 3개', { timeout: 15000 });
+    await expect(result).toContainText('중복 1개 건너뜀');
+
+    await expect
+      .poll(async () => {
+        const counts = await Promise.all(
+          repeatedDates.map(async (date) => {
+            const docs = await queryMatchingSlots(db, { date, time });
+            return docs.length;
+          })
+        );
+        return counts.join(',');
+      }, { timeout: 15000 })
+      .toBe('1,1,1,1');
+
+    for (const date of repeatedDates) {
+      await expect(page.getByText(`${date} ${time}`).first()).toBeVisible({ timeout: 15000 });
+    }
+  } finally {
+    await deleteMatchingSlots(db, { dates: repeatedDates, time }).catch(() => {});
   }
 });

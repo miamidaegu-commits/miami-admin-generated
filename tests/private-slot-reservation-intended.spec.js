@@ -449,6 +449,7 @@ async function createFixture(unique) {
     pilotDisabledSlotId,
     pilotDisabledDate: `2099-08-${String(day).padStart(2, '0')}`,
     noRemainingExistingSlotId,
+    noRemainingExistingDate,
     noRemainingOpenSlotId,
     noRemainingOpenDate,
     noRemainingFixedLessonId,
@@ -564,6 +565,7 @@ test('private slot booking callable production gate is wired server-side', async
   expect(source).toContain('PRIVATE_SLOT_BOOKING_ENABLED');
   expect(source).toContain('"miami-e2e"');
   expect(source).toContain('"1:1 예약 기능은 아직 선택된 학생에게만 제공됩니다."');
+  expect(source).toContain('exports.listPrivateLessonSlotAvailability');
   expect(source).toContain('privateSlotBookingPilotEnabled');
   expect(source).toMatch(/function requirePrivateSlotBookingPilotEnabled\(summary\)/);
   expect(source).toMatch(/summary\.privateSlotBookingPilotEnabled === true/);
@@ -580,6 +582,13 @@ test('private slot booking callable production gate is wired server-side', async
   expect(source).toMatch(
     /exports\.cancelPrivateLessonReservation[\s\S]*requirePrivateSlotBookingPilotEnabled\(summary\)/
   );
+  const sanitizeSource = source.match(
+    /function sanitizePrivateSlotAvailabilityRow[\s\S]*?\n}\n/
+  )?.[0] || '';
+  expect(sanitizeSource).toContain('isReserved');
+  expect(sanitizeSource).toContain('isBookable');
+  expect(sanitizeSource).not.toContain('reservedStudentId');
+  expect(sanitizeSource).not.toContain('reservationId');
   expect(source).toMatch(/function hasSlotAccess[\s\S]*summary && summary\.teacherKeys/);
   expect(source).toMatch(/function hasSlotAccess[\s\S]*activePackageIds\.length > 0/);
 });
@@ -628,6 +637,47 @@ test('intended flexible private slot visibility honors teacher access and pilot 
     await expect(
       pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
     ).toHaveText('예약 중지');
+  } finally {
+    await Promise.all(contexts.map((context) => context.close().catch(() => {})));
+    await cleanupFixture(fixture).catch(() => {});
+  }
+});
+
+test('student sees matching open and reserved private slots without reserved student details', async ({
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private reservation setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  let fixture = null;
+  const contexts = [];
+
+  try {
+    fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-reserved-visible`);
+
+    const context = await browser.newContext();
+    contexts.push(context);
+    const page = await context.newPage();
+    await loginAsStudentWithPrivateBooking(page, fixture.eligibleStudent.email);
+
+    const openSlotCard = studentSlotCard(page, fixture.date);
+    await expect(openSlotCard).toBeVisible({ timeout: 15000 });
+    await expect(openSlotCard.getByTestId('student-private-slot-reserve-button')).toHaveText(
+      '1:1 수업 예약'
+    );
+
+    const reservedSlotCard = studentSlotCard(page, fixture.noRemainingExistingDate);
+    await expect(reservedSlotCard).toBeVisible({ timeout: 15000 });
+    await expect(reservedSlotCard).toContainText('예약 완료');
+    await expect(reservedSlotCard.getByTestId('student-private-slot-reserved-badge')).toBeVisible();
+    await expect(reservedSlotCard.getByTestId('student-private-slot-reserve-button')).toHaveCount(0);
+    await expect(reservedSlotCard).not.toContainText(fixture.noRemainingStudent.displayName);
+    await expect(reservedSlotCard).not.toContainText(fixture.noRemainingStudent.studentId);
+    await expect(reservedSlotCard).not.toContainText(
+      reservationId(fixture.noRemainingExistingSlotId, fixture.noRemainingStudent.studentId)
+    );
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));
     await cleanupFixture(fixture).catch(() => {});
@@ -973,7 +1023,7 @@ test('student flexible private cancellation cutoff blocks cancel within 6 hours'
   }
 });
 
-test('student flexible private cancellation limit allows 4 and blocks fifth', async ({
+test('student flexible private cancellation limit allows 2 and blocks third', async ({
   browser,
   browserName,
 }, testInfo) => {
@@ -998,7 +1048,7 @@ test('student flexible private cancellation limit allows 4 and blocks fifth', as
     await loginAsStudentWithPrivateBooking(page, fixture.eligibleStudent.email);
     const expectedReservationId = reservationId(fixture.slotId, fixture.eligibleStudent.studentId);
 
-    for (let index = 1; index <= 4; index += 1) {
+    for (let index = 1; index <= 2; index += 1) {
       const slotCard = studentSlotCard(page, fixture.date);
       await expect(slotCard).toBeVisible({ timeout: 15000 });
       await slotCard.getByTestId('student-private-slot-reserve-button').click();
@@ -1022,12 +1072,12 @@ test('student flexible private cancellation limit allows 4 and blocks fifth', as
     await reservationCard.getByTestId('student-private-reservation-cancel-button').click();
     await expect
       .poll(
-        () => dialogs.some((message) => message.includes('cancellation limit')),
+        () => dialogs.some((message) => message.includes('1:1 예약 취소 가능 횟수')),
         { timeout: 15000 }
       )
       .toBe(true);
     await expectReservationStatus(db, fixture.slotId, fixture.eligibleStudent.studentId, 'active');
-    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 4);
+    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 2);
     await expectNotificationEvent(db, {
       type: 'private_slot_reserved',
       slotId: fixture.slotId,

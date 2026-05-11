@@ -3,6 +3,8 @@ import { signOut } from 'firebase/auth'
 import {
   collection,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   query,
   runTransaction,
@@ -38,7 +40,6 @@ import {
 } from './src/features/private-booking/privateBookingModel.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
-const PRIVATE_TEACHER_QUERY_CHUNK_SIZE = 10
 function isEnabledFlag(value) {
   return ['1', 'true', 'yes', 'on', 'enabled'].includes(
     String(value || '').trim().toLowerCase()
@@ -189,6 +190,7 @@ export default function StudentBookingPage() {
   const [privateSlots, setPrivateSlots] = useState([])
   const [privateSlotsLoading, setPrivateSlotsLoading] = useState(false)
   const [privateSlotsError, setPrivateSlotsError] = useState('')
+  const [privateSlotsRefreshKey, setPrivateSlotsRefreshKey] = useState(0)
   const [privateReservations, setPrivateReservations] = useState([])
   const [privateReservationsLoading, setPrivateReservationsLoading] = useState(false)
   const [privateReservationsResolved, setPrivateReservationsResolved] = useState(false)
@@ -451,132 +453,136 @@ export default function StudentBookingPage() {
       setPrivateSlotsError('')
       return
     }
-    setPrivateSlotsLoading(true)
-    setPrivateSlotsError('')
-
-    const teacherChunks = chunkValues(allowedPrivateTeacherKeys, PRIVATE_TEACHER_QUERY_CHUNK_SIZE)
-    const sources = [
-      ...teacherChunks.map((values) => ({ type: 'teacher', values })),
-      ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
-      ...allowedPrivateSlotIds.map((slotId) => ({ type: 'slot', slotId })),
-    ]
-    if (sources.length === 0) {
+    if (!privateAccessResolved || privateAccessLoading) {
       setPrivateSlots([])
-      setPrivateSlotsLoading(false)
+      setPrivateSlotsLoading(true)
+      setPrivateSlotsError('')
       return
     }
 
-    const sourceMaps = new Map()
-    const sourceFailures = new Map()
-    const unsubs = []
+    setPrivateSlotsLoading(true)
+    setPrivateSlotsError('')
 
-    const mergeRows = () => {
+    let cancelled = false
+    async function loadDirectOpenPrivateSlotsFallback() {
       const byId = new Map()
-      for (let i = 0; i < sources.length; i += 1) {
-        const sourceMap = sourceMaps.get(i)
-        if (!sourceMap) continue
-        for (const row of sourceMap.values()) {
-          byId.set(row.id, row)
+      const teacherChunks = chunkValues(allowedPrivateTeacherKeys, GROUP_CLASS_QUERY_CHUNK_SIZE)
+      const querySpecs = [
+        ...teacherChunks.map((values) => ({ type: 'teacher', values })),
+        ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
+      ]
+
+      const addOpenRow = (id, data) => {
+        const row = { id, ...data, isReserved: false, isBookable: true }
+        if (
+          String(row.academyId || '').trim() !== currentAcademyId ||
+          String(row.status || '').trim() !== 'open'
+        ) {
+          return
         }
+        if (
+          !allowedPrivateSlotIds.includes(id) &&
+          !slotMatchesPrivateTeacherAccess(row, allowedPrivateTeacherKeys)
+        ) {
+          return
+        }
+        byId.set(id, row)
       }
-      const nextSlots = Array.from(byId.values())
-      const allSourcesSettled = sources.every((_, index) => sourceMaps.has(index))
-      setPrivateSlots(nextSlots)
-      setPrivateSlotsError(
-        nextSlots.length === 0 &&
-          allSourcesSettled &&
-          sourceFailures.size === sources.length
-          ? '예약 가능한 1:1 수업 시간을 불러오지 못했습니다.'
-          : ''
+
+      const queryResults = await Promise.allSettled(
+        querySpecs.map((source) =>
+          getDocs(
+            query(
+              collection(db, 'privateLessonSlots'),
+              where('academyId', '==', currentAcademyId),
+              where('status', '==', 'open'),
+              where(source.type, 'in', source.values)
+            )
+          )
+        )
       )
-      setPrivateSlotsLoading(false)
+      queryResults.forEach((result) => {
+        if (result.status !== 'fulfilled') return
+        result.value.docs.forEach((docItem) => addOpenRow(docItem.id, docItem.data()))
+      })
+
+      const directResults = await Promise.allSettled(
+        allowedPrivateSlotIds.map((slotId) => getDoc(doc(db, 'privateLessonSlots', slotId)))
+      )
+      directResults.forEach((result) => {
+        if (result.status !== 'fulfilled') return
+        const snapshot = result.value
+        if (snapshot.exists()) addOpenRow(snapshot.id, snapshot.data())
+      })
+
+      return Array.from(byId.values())
     }
 
-    sources.forEach((source, sourceIndex) => {
-      if (source.type === 'slot') {
-        const unsubscribe = onSnapshot(
-          doc(db, 'privateLessonSlots', source.slotId),
-          (snapshot) => {
-            const rows = new Map()
-            if (snapshot.exists()) {
-              const row = {
-                id: snapshot.id,
-                ...snapshot.data(),
-              }
-              if (
-                String(row.academyId || '').trim() === currentAcademyId &&
-                String(row.status || '').trim() === 'open'
-              ) {
-                rows.set(snapshot.id, row)
-              }
-            }
-            sourceMaps.set(sourceIndex, rows)
-            sourceFailures.delete(sourceIndex)
-            mergeRows()
-          },
-          (error) => {
-            console.error('student allowed privateLessonSlot 불러오기 실패:', error)
-            sourceMaps.set(sourceIndex, new Map())
-            sourceFailures.set(sourceIndex, error)
-            mergeRows()
-          }
+    async function loadPrivateSlotAvailability() {
+      let fallbackResolved = false
+      let fallbackFailed = false
+      let latestFallbackRows = null
+      const fallbackPromise = loadDirectOpenPrivateSlotsFallback()
+        .then((fallbackRows) => {
+          fallbackResolved = true
+          latestFallbackRows = fallbackRows
+          if (cancelled) return fallbackRows
+          setPrivateSlots(fallbackRows)
+          setPrivateSlotsLoading(false)
+          return fallbackRows
+        })
+        .catch((fallbackError) => {
+          fallbackResolved = true
+          fallbackFailed = true
+          console.error('student privateLessonSlots fallback 불러오기 실패:', fallbackError)
+          return null
+        })
+
+      try {
+        const listPrivateLessonSlotAvailability = httpsCallable(
+          firebaseFunctions,
+          'listPrivateLessonSlotAvailability'
         )
-
-        unsubs.push(unsubscribe)
-        return
-      }
-
-      const privateSlotQuery = query(
-        collection(db, 'privateLessonSlots'),
-        where('academyId', '==', currentAcademyId),
-        where('status', '==', 'open'),
-        where(source.type, 'in', source.values)
-      )
-      const unsubscribe = onSnapshot(
-        privateSlotQuery,
-        (snapshot) => {
-          const rows = new Map()
-          snapshot.docs.forEach((docItem) => {
-            const row = {
-              id: docItem.id,
-              ...docItem.data(),
-            }
-            if (
-              String(row.academyId || '').trim() !== currentAcademyId ||
-              String(row.status || '').trim() !== 'open'
-            ) {
-              return
-            }
-            if (
-              !slotMatchesPrivateTeacherAccess(row, allowedPrivateTeacherKeys)
-            ) {
-              return
-            }
-            rows.set(docItem.id, row)
-          })
-          sourceMaps.set(sourceIndex, rows)
-          sourceFailures.delete(sourceIndex)
-          mergeRows()
-        },
-        (error) => {
-          console.error('student privateLessonSlots 불러오기 실패:', error)
-          sourceMaps.set(sourceIndex, new Map())
-          sourceFailures.set(sourceIndex, error)
-          mergeRows()
+        const response = await listPrivateLessonSlotAvailability({
+          academyId: currentAcademyId,
+        })
+        if (cancelled) return
+        const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+        if (rows.length === 0 && Array.isArray(latestFallbackRows) && latestFallbackRows.length > 0) {
+          setPrivateSlots(latestFallbackRows)
+        } else {
+          setPrivateSlots(rows)
         }
-      )
+      } catch (error) {
+        if (cancelled) return
+        console.error('student privateLessonSlots availability 불러오기 실패:', error)
+        const fallbackRows = fallbackResolved ? latestFallbackRows : await fallbackPromise
+        if (cancelled) return
+        if (fallbackFailed || fallbackRows === null) {
+          setPrivateSlots([])
+          setPrivateSlotsError('예약 가능한 1:1 수업 시간을 불러오지 못했습니다.')
+        } else {
+          setPrivateSlotsError('')
+        }
+      } finally {
+        if (!cancelled) setPrivateSlotsLoading(false)
+      }
+    }
 
-      unsubs.push(unsubscribe)
-    })
+    loadPrivateSlotAvailability()
 
     return () => {
-      unsubs.forEach((unsubscribe) => unsubscribe())
+      cancelled = true
     }
   }, [
     allowedPrivateSlotIds,
     allowedPrivateTeacherKeys,
     currentAcademyId,
     hasOperationalAcademy,
+    privateAccessLoading,
+    privateAccessResolved,
+    privateSlotBookingPilotEnabled,
+    privateSlotsRefreshKey,
     role,
     scopedStudentId,
   ])
@@ -1186,11 +1192,12 @@ export default function StudentBookingPage() {
     const slotEligibleStudentIds = Array.isArray(slot.eligibleStudentIds)
       ? slot.eligibleStudentIds
       : []
+    const hasProjectedBookableAccess = slot.isBookable === true
     const hasSlotAccess =
       allowedPrivateSlotIds.includes(slot.id) ||
       slotEligibleStudentIds.some((value) => String(value || '').trim() === scopedStudentId)
     const hasTeacherAccess = slotMatchesPrivateTeacherAccess(slot, allowedPrivateTeacherKeys)
-    if (!hasTeacherAccess && !hasSlotAccess) {
+    if (!hasProjectedBookableAccess && !hasTeacherAccess && !hasSlotAccess) {
       alert('예약 가능한 선생님 권한이 없습니다.')
       return
     }
@@ -1225,6 +1232,7 @@ export default function StudentBookingPage() {
         slotId: slot.id,
         studentId: scopedStudentId,
       })
+      setPrivateSlotsRefreshKey((value) => value + 1)
     } catch (error) {
       console.error('학생 1:1 수업 예약 실패:', error)
       logStudentPrivateBookingEvent('reserve_failure', {
@@ -1347,6 +1355,7 @@ export default function StudentBookingPage() {
         slotId: reservation.slotId,
         studentId: scopedStudentId,
       })
+      setPrivateSlotsRefreshKey((value) => value + 1)
     } catch (error) {
       console.error('학생 1:1 수업 예약 취소 실패:', error)
       logStudentPrivateBookingEvent('cancel_failure', {
@@ -1698,22 +1707,13 @@ export default function StudentBookingPage() {
                       studentId: scopedStudentId,
                     })
                     const isBusy = busyPrivateReservationId === reservationId
-                    const slotEligibleStudentIds = Array.isArray(slot.eligibleStudentIds)
-                      ? slot.eligibleStudentIds
-                      : []
-                    const isSlotEligible =
-                      slotEligibleStudentIds.some(
-                        (value) => String(value || '').trim() === scopedStudentId
-                      ) || allowedPrivateSlotIds.includes(slot.id)
-                    const isTeacherEligible = slotMatchesPrivateTeacherAccess(
-                      slot,
-                      allowedPrivateTeacherKeys
-                    )
                     const hasActivePrivateReservation = reservation?.status === 'active'
+                    const isReservedByAnyone =
+                      slot.isReserved === true || String(slot.status || '').trim() === 'reserved'
                     const canReserve =
                       PRIVATE_SLOT_BOOKING_ENABLED &&
                       privateSlotBookingPilotEnabled &&
-                      (isTeacherEligible || isSlotEligible) &&
+                      slot.isBookable === true &&
                       !hasActivePrivateReservation &&
                       !busyPrivateReservationId &&
                       slot.status === 'open'
@@ -1747,22 +1747,40 @@ export default function StudentBookingPage() {
                               {Number(slot.durationMinutes || 0) || 50}분 · 오프라인 결제
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => reservePrivateSlot(slot)}
-                            disabled={!canReserve}
-                            data-testid="student-private-slot-reserve-button"
-                            style={{
-                              padding: '10px 14px',
-                              borderRadius: 10,
-                              border: '1px solid #48643a',
-                              background: '#20351f',
-                              color: 'white',
-                              cursor: canReserve ? 'pointer' : 'not-allowed',
-                            }}
-                          >
-                            {isBusy ? '예약 중...' : canReserve ? '1:1 수업 예약' : '예약 중지'}
-                          </button>
+                          {isReservedByAnyone ? (
+                            <span
+                              data-testid="student-private-slot-reserved-badge"
+                              style={{
+                                alignSelf: 'center',
+                                border: '1px solid #445066',
+                                borderRadius: 999,
+                                padding: '8px 12px',
+                                background: '#242b3a',
+                                color: 'white',
+                                fontSize: 14,
+                                fontWeight: 700,
+                              }}
+                            >
+                              예약 완료
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => reservePrivateSlot(slot)}
+                              disabled={!canReserve}
+                              data-testid="student-private-slot-reserve-button"
+                              style={{
+                                padding: '10px 14px',
+                                borderRadius: 10,
+                                border: '1px solid #48643a',
+                                background: '#20351f',
+                                color: 'white',
+                                cursor: canReserve ? 'pointer' : 'not-allowed',
+                              }}
+                            >
+                              {isBusy ? '예약 중...' : canReserve ? '1:1 수업 예약' : '예약 중지'}
+                            </button>
+                          )}
                         </div>
                       </article>
                     )
