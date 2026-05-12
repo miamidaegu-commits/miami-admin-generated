@@ -82,6 +82,10 @@ export async function getGroupPackageStartDate(page, params) {
   return runFirebaseTask(page, 'getGroupPackageStartDate', params);
 }
 
+export async function getStudentGroupAccessSummary(page, params) {
+  return runFirebaseTask(page, 'getStudentGroupAccessSummary', params);
+}
+
 export async function getLessonRequestApprovalState(page, params) {
   return runFirebaseTask(page, 'getLessonRequestApprovalState', params);
 }
@@ -133,6 +137,8 @@ async function runFirebaseTask(page, taskName, params) {
           return cleanupTempCalendarGroupLessonSetupTask({ db, firestore, params });
         case 'getGroupPackageStartDate':
           return getGroupPackageStartDateTask({ db, firestore, params });
+        case 'getStudentGroupAccessSummary':
+          return getStudentGroupAccessSummaryTask({ db, firestore, params });
         case 'getLessonRequestApprovalState':
           return getLessonRequestApprovalStateTask({ db, firestore, params });
         default:
@@ -816,6 +822,15 @@ async function runFirebaseTask(page, taskName, params) {
         }
 
         return earliestFutureLessonYmd;
+      }
+
+      async function getStudentGroupAccessSummaryTask({ db, firestore: firestoreModule, params }) {
+        const { doc, getDoc } = firestoreModule;
+        const academyId = getTaskAcademyId(params);
+        const studentId = String(params?.studentId || '').trim();
+        if (!studentId) return null;
+        const snap = await getDoc(doc(db, 'studentGroupAccessSummary', `${academyId}__${studentId}`));
+        return snap.exists() ? snap.data() : null;
       }
 
       async function getLessonRequestApprovalStateTask({ db, firestore: firestoreModule, params }) {

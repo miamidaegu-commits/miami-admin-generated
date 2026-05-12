@@ -23,6 +23,7 @@ import {
   buildStudentGroupAccessPayloadFromGroupStudent,
   updateStudentGroupAccessBatch,
 } from '../../group-booking/studentGroupAccessClient.js'
+import { syncStudentGroupCourseTypeAccessSummary } from '../../group-booking/studentGroupAccessSummaryClient.js'
 import { removeStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 
 const DEFAULT_STUDENT_PACKAGE_EDIT_FORM = {
@@ -220,6 +221,12 @@ export default function useStudentPackageAdminFlow({
         updates.expiresAt = result.expiresAt
       }
       await updateDoc(pkgRef, updates)
+      if (pkg.packageType === 'group' || pkg.packageType === 'openGroup') {
+        await syncStudentGroupCourseTypeAccessSummary(db, {
+          academyId: scopedAcademyId,
+          studentId: String(pkg.studentId || '').trim(),
+        })
+      }
 
       const oldTotalCount = Number(pkg.totalCount ?? 0)
       const diff = result.totalCount - oldTotalCount
@@ -342,6 +349,10 @@ export default function useStudentPackageAdminFlow({
           )
         })
         await batch.commit()
+        await syncStudentGroupCourseTypeAccessSummary(db, {
+          academyId: scopedAcademyId,
+          studentId: String(pkg.studentId || '').trim(),
+        })
       } else if (pt === 'private') {
         const studentId = String(pkg.studentId || '').trim()
         const teacher = normalizeText(pkg.teacher || '')

@@ -4,6 +4,12 @@ import {
   computePrivateRegularTotalCount,
   formatGroupStudentStartDate,
 } from '../dashboardViewUtils.js'
+import {
+  DEFAULT_GROUP_COURSE_TYPE,
+  GROUP_COURSE_TYPE_OPTIONS,
+  getGroupCourseTypeLabel,
+  normalizeGroupCourseType,
+} from '../../group-booking/groupCourseTypes.js'
 
 export default function StudentPackageModal({
   studentPackageModalStudent,
@@ -123,6 +129,11 @@ export default function StudentPackageModal({
                       packageType,
                       groupClassId:
                         packageType === 'private' ? '' : prev.groupClassId,
+                      groupCourseType:
+                        packageType === 'private'
+                          ? ''
+                          : normalizeGroupCourseType(prev.groupCourseType) ||
+                            DEFAULT_GROUP_COURSE_TYPE,
                       registrationStartDate:
                         packageType === 'private'
                           ? ''
@@ -395,9 +406,14 @@ export default function StudentPackageModal({
                       const nextGid = String(e.target.value || '').trim()
                       const nextStartDate =
                         nextGroupLessonDateByGroupId?.get(nextGid) || studentPackageForm.registrationStartDate
+                      const selectedGroup = sortedGroupClasses.find((g) => g.id === nextGid)
                       setStudentPackageForm((prev) => ({
                         ...prev,
                         groupClassId: nextGid,
+                        groupCourseType:
+                          normalizeGroupCourseType(selectedGroup?.groupCourseType) ||
+                          normalizeGroupCourseType(prev.groupCourseType) ||
+                          DEFAULT_GROUP_COURSE_TYPE,
                         registrationStartDate: nextGid ? nextStartDate || '' : '',
                         registrationWeeks: prev.registrationWeeks || '4',
                       }))
@@ -414,6 +430,9 @@ export default function StudentPackageModal({
                     {sortedGroupClasses.map((g) => (
                       <option key={g.id} value={g.id}>
                         {g.name || '-'} ({g.teacher || '-'})
+                        {getGroupCourseTypeLabel(g.groupCourseType)
+                          ? ` · ${getGroupCourseTypeLabel(g.groupCourseType)}`
+                          : ''}
                       </option>
                     ))}
                   </select>
@@ -427,6 +446,40 @@ export default function StudentPackageModal({
 
               {isGroupPackage ? (
                 <>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>코스 유형</span>
+                    <select
+                      value={
+                        normalizeGroupCourseType(studentPackageForm.groupCourseType) ||
+                        DEFAULT_GROUP_COURSE_TYPE
+                      }
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          groupCourseType: e.target.value,
+                        }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    >
+                      {GROUP_COURSE_TYPE_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                    {studentPackageFormErrors.groupCourseType ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.groupCourseType}
+                      </span>
+                    ) : null}
+                  </label>
+
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                     <span style={{ opacity: 0.85 }}>시작일</span>
                     <input
@@ -496,6 +549,9 @@ export default function StudentPackageModal({
                       {studentPackageGroupAutoSummary?.weekdayLabels
                         ? ` (${studentPackageGroupAutoSummary.weekdayLabels})`
                         : ''}
+                    </div>
+                    <div>
+                      코스 유형: {getGroupCourseTypeLabel(studentPackageForm.groupCourseType) || '-'}
                     </div>
                     <div>
                       주당 {studentPackageGroupAutoSummary?.weeklyClassCount ?? 1}회 ×{' '}

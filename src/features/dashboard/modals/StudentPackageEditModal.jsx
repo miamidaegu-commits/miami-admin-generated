@@ -1,4 +1,6 @@
 
+import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+
 export default function StudentPackageEditModal({
   studentPackageEditModalPackage,
   studentPackageEditForm,
@@ -57,6 +59,9 @@ export default function StudentPackageEditModal({
               <br />
               groupClassId: {studentPackageEditModalPackage.groupClassId || '-'} ·
               groupClassName: {studentPackageEditModalPackage.groupClassName || '-'}
+              <br />
+              groupCourseType:{' '}
+              {getGroupCourseTypeLabel(studentPackageEditModalPackage.groupCourseType) || '-'}
             </p>
             <p style={{ margin: '0 0 12px 0', fontSize: 13, opacity: 0.85 }}>
               사용 횟수(usedCount): {Number(studentPackageEditModalPackage.usedCount ?? 0)} (수정

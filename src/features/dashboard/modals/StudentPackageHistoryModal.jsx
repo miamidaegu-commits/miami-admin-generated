@@ -4,6 +4,7 @@ import {
   formatCreditTransactionDeltaCountDisplay,
   formatStudentPackageDetailTypeLabel,
 } from '../dashboardViewUtils.js'
+import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
 
 export default function StudentPackageHistoryModal({
   studentPackageHistoryModalPackage,
@@ -80,6 +81,10 @@ export default function StudentPackageHistoryModal({
                 String(studentPackageHistoryModalPackage.groupClassName).trim()
                   ? String(studentPackageHistoryModalPackage.groupClassName)
                   : '-'}
+              </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>코스 유형</span>{' '}
+                {getGroupCourseTypeLabel(studentPackageHistoryModalPackage.groupCourseType) || '-'}
               </div>
             </div>
 

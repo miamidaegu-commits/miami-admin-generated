@@ -123,6 +123,7 @@ async function createStudentAccessSummaryDocsIfMissing(db, { academyId, studentI
         academyId,
         studentId,
         groupClassIds: [],
+        groupCourseTypes: [],
         createdAt: now,
         updatedAt: now,
       })

@@ -17,6 +17,7 @@ import {
   parseYmdToLocalDate,
   validateLessonDateTimeSubject,
 } from '../dashboardViewUtils.js'
+import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
 
 const DEFAULT_GROUP_LESSON_FORM = {
   date: '',
@@ -250,6 +251,10 @@ export default function useGroupLessonManagementFlow({
           date: result.date,
           time: result.time,
           subject: result.subject,
+          ...(() => {
+            const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
+            return groupCourseType ? { groupCourseType } : {}
+          })(),
           completed: false,
           countedStudentIDs: [],
           attendanceAppliedAt: null,
@@ -292,6 +297,10 @@ export default function useGroupLessonManagementFlow({
         date: result.date,
         time: result.time,
         subject: result.subject,
+        ...(() => {
+          const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
+          return groupCourseType ? { groupCourseType } : {}
+        })(),
         capacity: result.capacity,
         isBookable: result.isBookable,
         updatedAt: serverTimestamp(),
@@ -373,6 +382,7 @@ export default function useGroupLessonManagementFlow({
         teacher: gc.teacher,
         time: gc.time,
         subject: gc.subject,
+        groupCourseType: gc.groupCourseType,
         weekdays: gc.weekdays,
         maxStudents: gc.maxStudents,
         startYmd: result.startDate,

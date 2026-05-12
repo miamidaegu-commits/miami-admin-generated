@@ -12,6 +12,10 @@ import {
   parseRequiredMinOneIntField,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
+import {
+  DEFAULT_GROUP_COURSE_TYPE,
+  normalizeGroupCourseType,
+} from '../../group-booking/groupCourseTypes.js'
 
 const DEFAULT_GROUP_FORM = {
   name: '',
@@ -20,6 +24,7 @@ const DEFAULT_GROUP_FORM = {
   startDate: '',
   time: '',
   subject: '',
+  groupCourseType: DEFAULT_GROUP_COURSE_TYPE,
   weekdays: [],
   recurrenceMode: 'fixedWeekdays',
   rebuildFutureLessons: false,
@@ -41,6 +46,7 @@ function isGroupEditScheduleAffected(group, validated) {
   const currentGroup = group || {}
   if (String(currentGroup.time || '').trim() !== validated.time) return true
   if (String(currentGroup.subject || '').trim() !== validated.subject) return true
+  if (normalizeGroupCourseType(currentGroup.groupCourseType) !== validated.groupCourseType) return true
   if (!areNormalizedGroupWeekdaysEqual(currentGroup.weekdays, validated.weekdays)) return true
   return false
 }
@@ -96,6 +102,8 @@ function validateGroupFormFields(form, options = {}) {
 
   const subject = String(form?.subject || '').trim()
   if (!subject) errors.subject = '과목을 입력해주세요.'
+  const normalizedGroupCourseType = normalizeGroupCourseType(form?.groupCourseType)
+  const groupCourseType = normalizedGroupCourseType || (forNewClass ? DEFAULT_GROUP_COURSE_TYPE : '')
 
   const weekdays = normalizeGroupWeekdaysFromDoc(
     Array.isArray(form?.weekdays) ? form.weekdays : []
@@ -132,6 +140,7 @@ function validateGroupFormFields(form, options = {}) {
     startDate: forNewClass ? startDate : '',
     time,
     subject,
+    groupCourseType,
     weekdays,
     recurrenceMode,
     rebuildFutureLessons,
@@ -253,6 +262,7 @@ export default function useGroupManagementFlow({
         maxStudents: groupMaxStudentsToFormString(group.maxStudents),
         time: String(group.time || '').trim(),
         subject: String(group.subject || '').trim(),
+        groupCourseType: normalizeGroupCourseType(group.groupCourseType),
         weekdays: normalizeGroupWeekdaysFromDoc(group.weekdays),
         rebuildFromDate: defaultRebuildFrom,
       })
@@ -293,6 +303,7 @@ export default function useGroupManagementFlow({
           maxStudents: result.maxStudents,
           time: result.time,
           subject: result.subject,
+          groupCourseType: result.groupCourseType,
           weekdays: result.weekdays,
           recurrenceMode: result.recurrenceMode,
           createdAt: serverTimestamp(),
@@ -317,6 +328,7 @@ export default function useGroupManagementFlow({
               teacher: teacherKey,
               time: result.time,
               subject: result.subject,
+              groupCourseType: result.groupCourseType,
               weekdays: result.weekdays,
               maxStudents: result.maxStudents,
               startYmd: result.startDate,
@@ -359,6 +371,7 @@ export default function useGroupManagementFlow({
         maxStudents: result.maxStudents,
         time: result.time,
         subject: result.subject,
+        groupCourseType: result.groupCourseType,
         weekdays: result.weekdays,
         recurrenceMode: result.recurrenceMode,
         updatedAt: serverTimestamp(),
@@ -379,6 +392,7 @@ export default function useGroupManagementFlow({
             oldWeekdays: normalizeGroupWeekdaysFromDoc(group.weekdays),
             newTime: result.time,
             newSubject: result.subject,
+            newGroupCourseType: result.groupCourseType,
             newWeekdays: result.weekdays,
             maxStudents: result.maxStudents,
             teacher: teacherKey,

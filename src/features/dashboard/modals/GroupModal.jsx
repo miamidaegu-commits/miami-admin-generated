@@ -1,4 +1,5 @@
 import { GROUP_RECURRENCE_WEEKDAY_TOGGLES } from '../dashboardViewUtils.js'
+import { GROUP_COURSE_TYPE_OPTIONS } from '../../group-booking/groupCourseTypes.js'
 
 export default function GroupModal({
   groupModal,
@@ -232,6 +233,30 @@ export default function GroupModal({
                     {groupFormErrors.subject}
                   </span>
                 ) : null}
+              </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>코스 유형</span>
+                <select
+                  value={groupForm.groupCourseType || ''}
+                  onChange={(e) =>
+                    setGroupForm((prev) => ({ ...prev, groupCourseType: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                >
+                  {groupModal.type === 'edit' ? <option value="">미지정</option> : null}
+                  {GROUP_COURSE_TYPE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
               </label>
             </div>
           </div>

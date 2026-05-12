@@ -58,6 +58,7 @@ function buildGroupSummaryData({ academyId, studentId }) {
     academyId,
     studentId,
     groupClassIds: [],
+    groupCourseTypes: [],
     createdAt: now,
     updatedAt: now,
   };

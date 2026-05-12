@@ -34,6 +34,11 @@ import {
   buildStudentGroupAccessPayloadFromGroupStudent,
   setStudentGroupAccessBatch,
 } from '../../group-booking/studentGroupAccessClient.js'
+import {
+  DEFAULT_GROUP_COURSE_TYPE,
+  normalizeGroupCourseType,
+} from '../../group-booking/groupCourseTypes.js'
+import { syncStudentGroupCourseTypeAccessSummary } from '../../group-booking/studentGroupAccessSummaryClient.js'
 import { addStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 
 const DEFAULT_STUDENT_PACKAGE_FORM = {
@@ -41,6 +46,7 @@ const DEFAULT_STUDENT_PACKAGE_FORM = {
   title: '',
   totalCount: '1',
   groupClassId: '',
+  groupCourseType: DEFAULT_GROUP_COURSE_TYPE,
   registrationStartDate: '',
   registrationWeeks: '4',
   weeklyFrequency: '1',
@@ -320,6 +326,10 @@ export default function useStudentPackageFlow({
         packageType === 'group' || packageType === 'openGroup'
           ? String(sourcePackage.groupClassId || '')
           : ''
+      const groupCourseType =
+        packageType === 'group' || packageType === 'openGroup'
+          ? normalizeGroupCourseType(sourcePackage.groupCourseType) || DEFAULT_GROUP_COURSE_TYPE
+          : ''
       const totalCount =
         sourcePackage.totalCount != null && String(sourcePackage.totalCount).trim() !== ''
           ? String(sourcePackage.totalCount)
@@ -350,6 +360,7 @@ export default function useStudentPackageFlow({
           title: String(sourcePackage.title || '').trim(),
           totalCount,
           groupClassId,
+          groupCourseType,
           registrationStartDate,
           registrationWeeks,
           weeklyFrequency,
@@ -402,10 +413,13 @@ export default function useStudentPackageFlow({
     let registrationStartDate = ''
     let registrationWeeks = null
     let weeklyFrequency = '1'
+    let groupCourseType = ''
     let outgoingTotalCount = totalParsed.ok ? totalParsed.value : 1
 
     if (packageType === 'group' || packageType === 'openGroup') {
       if (!groupClassId) errors.groupClassId = '그룹을 선택해주세요.'
+      groupCourseType = normalizeGroupCourseType(form.groupCourseType)
+      if (!groupCourseType) errors.groupCourseType = '코스 유형을 선택해주세요.'
       registrationStartDate = String(form.registrationStartDate || '').trim()
       if (!registrationStartDate) {
         errors.registrationStartDate = '시작일을 선택해주세요.'
@@ -511,6 +525,7 @@ export default function useStudentPackageFlow({
       totalCount: outgoingTotalCount,
       packageType,
       groupClassId,
+      groupCourseType,
       registrationStartDate,
       registrationWeeks,
       weeklyFrequency,
@@ -539,6 +554,7 @@ export default function useStudentPackageFlow({
     let teacher = ''
     let groupClassId = null
     let groupClassName = null
+    let groupCourseType = ''
     let computedTotalCount = result.totalCount
     let coverageEndDate = ''
     let registrationStartDateForSave = ''
@@ -563,6 +579,9 @@ export default function useStudentPackageFlow({
       teacher = normalizeText(groupClass.teacher || '')
       groupClassId = groupClass.id
       groupClassName = groupClass.name || null
+      groupCourseType =
+        normalizeGroupCourseType(result.groupCourseType) ||
+        normalizeGroupCourseType(groupClass.groupCourseType)
       const coverage = buildGroupPackageCoverageLessons({
         groupClassId: groupClass.id,
         registrationStartDate: result.registrationStartDate,
@@ -642,6 +661,9 @@ export default function useStudentPackageFlow({
         packageType: result.packageType,
         groupClassId,
         groupClassName,
+        ...((result.packageType === 'group' || result.packageType === 'openGroup') && groupCourseType
+          ? { groupCourseType }
+          : {}),
         title: saveTitle,
         totalCount: computedTotalCount,
         usedCount: 0,
@@ -676,6 +698,11 @@ export default function useStudentPackageFlow({
           packageId: docRef.id,
         })
         await accessBatch.commit()
+      } else if (result.packageType === 'group' || result.packageType === 'openGroup') {
+        await syncStudentGroupCourseTypeAccessSummary(db, {
+          academyId: scopedAcademyId,
+          studentId,
+        })
       }
       await addCreditTransaction({
         studentId,

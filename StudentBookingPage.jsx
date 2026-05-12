@@ -38,6 +38,10 @@ import {
   buildStudentPrivateAccessSummaryId,
   normalizePrivateTeacherKey,
 } from './src/features/private-booking/privateBookingModel.js'
+import {
+  getGroupCourseTypeLabel,
+  normalizeGroupCourseType,
+} from './src/features/group-booking/groupCourseTypes.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
 function isEnabledFlag(value) {
@@ -176,6 +180,7 @@ export default function StudentBookingPage() {
     user,
   } = useAuth()
   const [allowedGroupClassIds, setAllowedGroupClassIds] = useState([])
+  const [allowedGroupCourseTypes, setAllowedGroupCourseTypes] = useState([])
   const [accessLoading, setAccessLoading] = useState(false)
   const [accessResolved, setAccessResolved] = useState(false)
   const [accessError, setAccessError] = useState('')
@@ -219,6 +224,7 @@ export default function StudentBookingPage() {
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
       setAllowedGroupClassIds([])
+      setAllowedGroupCourseTypes([])
       setAccessLoading(false)
       setAccessResolved(false)
       setAccessError('')
@@ -251,13 +257,24 @@ export default function StudentBookingPage() {
           if (!groupClassId) return
           nextIds.add(groupClassId)
         })
+        const nextCourseTypes = new Set()
+        const rawCourseTypes = Array.isArray(summaryData?.groupCourseTypes)
+          ? summaryData.groupCourseTypes
+          : []
+        rawCourseTypes.forEach((value) => {
+          const groupCourseType = normalizeGroupCourseType(value)
+          if (!groupCourseType) return
+          nextCourseTypes.add(groupCourseType)
+        })
         setAllowedGroupClassIds(Array.from(nextIds.values()))
+        setAllowedGroupCourseTypes(Array.from(nextCourseTypes.values()))
         setAccessLoading(false)
         setAccessResolved(true)
       },
       (error) => {
         console.error('studentGroupAccessSummary 불러오기 실패:', error)
         setAllowedGroupClassIds([])
+        setAllowedGroupCourseTypes([])
         setAccessLoading(false)
         setAccessResolved(true)
         setAccessError('예약 가능한 반 권한을 확인할 수 없습니다.')
@@ -390,7 +407,7 @@ export default function StudentBookingPage() {
       setLessonsError('')
       return
     }
-    if (allowedGroupClassIds.length === 0) {
+    if (allowedGroupClassIds.length === 0 && allowedGroupCourseTypes.length === 0) {
       setLessons([])
       setLessonsLoading(false)
       setLessonsError('')
@@ -400,13 +417,22 @@ export default function StudentBookingPage() {
     setLessonsLoading(true)
     setLessonsError('')
 
-    const chunks = chunkValues(allowedGroupClassIds, GROUP_CLASS_QUERY_CHUNK_SIZE)
+    const querySpecs = [
+      ...chunkValues(allowedGroupClassIds, GROUP_CLASS_QUERY_CHUNK_SIZE).map((values) => ({
+        type: 'groupClassId',
+        values,
+      })),
+      ...chunkValues(allowedGroupCourseTypes, GROUP_CLASS_QUERY_CHUNK_SIZE).map((values) => ({
+        type: 'groupCourseType',
+        values,
+      })),
+    ]
     const chunkMaps = new Map()
     const unsubs = []
 
     const mergeRows = () => {
       const byId = new Map()
-      for (let i = 0; i < chunks.length; i += 1) {
+      for (let i = 0; i < querySpecs.length; i += 1) {
         const chunkMap = chunkMaps.get(i)
         if (!chunkMap) continue
         for (const row of chunkMap.values()) {
@@ -417,13 +443,13 @@ export default function StudentBookingPage() {
       setLessonsLoading(false)
     }
 
-    chunks.forEach((chunk, chunkIndex) => {
+    querySpecs.forEach((spec, chunkIndex) => {
       const unsubscribe = onSnapshot(
         query(
           collection(db, 'groupLessons'),
           where('academyId', '==', currentAcademyId),
           where('isBookable', '==', true),
-          where('groupClassId', 'in', chunk)
+          where(spec.type, 'in', spec.values)
         ),
         (snapshot) => {
           const rows = new Map()
@@ -450,7 +476,14 @@ export default function StudentBookingPage() {
     return () => {
       unsubs.forEach((unsubscribe) => unsubscribe())
     }
-  }, [allowedGroupClassIds, currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
+  }, [
+    allowedGroupClassIds,
+    allowedGroupCourseTypes,
+    currentAcademyId,
+    hasOperationalAcademy,
+    role,
+    scopedStudentId,
+  ])
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
@@ -1638,6 +1671,11 @@ export default function StudentBookingPage() {
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {[lesson.date, lesson.time].filter(Boolean).join(' · ') || lesson.id}
                             </div>
+                            {getGroupCourseTypeLabel(lesson.groupCourseType) ? (
+                              <div style={{ marginTop: 6, opacity: 0.7, fontSize: 13 }}>
+                                {getGroupCourseTypeLabel(lesson.groupCourseType)}
+                              </div>
+                            ) : null}
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               정원 {getLessonCapacityLabel(lesson)}
                               {isReserved ? ' · 예약 완료' : ''}
@@ -1883,6 +1921,9 @@ export default function StudentBookingPage() {
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               {getReservationStatusLabel(reservation)}
+                              {getGroupCourseTypeLabel(lesson?.groupCourseType)
+                                ? ` · ${getGroupCourseTypeLabel(lesson.groupCourseType)}`
+                                : ''}
                             </div>
                             {isActive ? (
                               <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>

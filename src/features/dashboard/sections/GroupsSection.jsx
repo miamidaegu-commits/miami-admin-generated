@@ -1,4 +1,5 @@
 import { formatGroupStudentStartDate, formatGroupWeekdaysDisplay } from '../dashboardViewUtils.js'
+import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
 
 function getLessonReservationStatusLabel(lesson) {
   if (lesson?.isBookable !== true) return '비활성'
@@ -157,11 +158,12 @@ export default function GroupsSection({
           <div
             className="table-head"
             style={{
-              gridTemplateColumns: '1.2fr 1.2fr 0.9fr minmax(140px, auto)',
+              gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr minmax(140px, auto)',
             }}
           >
             <span>이름</span>
             <span>선생님</span>
+            <span>코스 유형</span>
             <span>최대 인원</span>
             <span>작업</span>
           </div>
@@ -186,7 +188,7 @@ export default function GroupsSection({
                   }
                 }}
                 style={{
-                  gridTemplateColumns: '1.2fr 1.2fr 0.9fr minmax(140px, auto)',
+                  gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr minmax(140px, auto)',
                   cursor: 'pointer',
                   outline: isSelected ? '2px solid #6b8cff' : undefined,
                   outlineOffset: -2,
@@ -194,6 +196,7 @@ export default function GroupsSection({
               >
                 <span>{group.name || '-'}</span>
                 <span>{group.teacher || group.teacherName || '-'}</span>
+                <span>{getGroupCourseTypeLabel(group.groupCourseType) || '-'}</span>
                 <span>{group.maxStudents ?? '-'}</span>
                 <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {canManageGroupClasses ? (
@@ -269,7 +272,8 @@ export default function GroupsSection({
             <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
               기본 시간 {selectedGroupClass.time || '—'} · 과목{' '}
               {selectedGroupClass.subject || '—'} · 요일{' '}
-              {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'}
+              {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'} · 코스{' '}
+              {getGroupCourseTypeLabel(selectedGroupClass.groupCourseType) || '—'}
             </p>
 
             <div
@@ -523,12 +527,13 @@ export default function GroupsSection({
                   <div
                     className="table-head"
                     style={{
-                      gridTemplateColumns: '0.9fr 0.6fr 1fr 0.75fr 0.75fr minmax(260px, auto)',
+                      gridTemplateColumns: '0.9fr 0.6fr 1fr 1fr 0.75fr 0.75fr minmax(260px, auto)',
                     }}
                   >
                     <span>날짜</span>
                     <span>시간</span>
                     <span>과목</span>
+                    <span>코스 유형</span>
                     <span>정원</span>
                     <span>예약 상태</span>
                     <span>작업</span>
@@ -548,12 +553,13 @@ export default function GroupsSection({
                         data-lesson-time={gl.time || ''}
                         data-lesson-subject={gl.subject || ''}
                         style={{
-                          gridTemplateColumns: '0.9fr 0.6fr 1fr 0.75fr 0.75fr minmax(260px, auto)',
+                          gridTemplateColumns: '0.9fr 0.6fr 1fr 1fr 0.75fr 0.75fr minmax(260px, auto)',
                         }}
                       >
                         <span>{gl.date || '-'}</span>
                         <span>{gl.time || '-'}</span>
                         <span>{gl.subject || '-'}</span>
+                        <span>{getGroupCourseTypeLabel(gl.groupCourseType) || '-'}</span>
                         <span>{getLessonCapacityLabel(gl)}</span>
                         <span>{getLessonReservationStatusLabel(gl)}</span>
                         <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

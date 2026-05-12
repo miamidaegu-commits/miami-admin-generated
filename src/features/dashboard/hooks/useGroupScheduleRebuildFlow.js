@@ -170,6 +170,7 @@ export default function useGroupScheduleRebuildFlow({
         teacher: normalizeText(g.teacher || ''),
         time: String(g.time || '').trim(),
         subject: String(g.subject || '').trim(),
+        groupCourseType: g.groupCourseType,
         weekdays: g.weekdays,
         maxStudents: g.maxStudents,
         startYmd: effectiveFromYmd,

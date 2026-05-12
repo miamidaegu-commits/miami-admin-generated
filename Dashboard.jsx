@@ -108,6 +108,7 @@ import usePrivateLessonFlow, {
 import useStudentManagementFlow from './src/features/dashboard/hooks/useStudentManagementFlow.js'
 import useStudentPackageAdminFlow from './src/features/dashboard/hooks/useStudentPackageAdminFlow.js'
 import useStudentPackageFlow from './src/features/dashboard/hooks/useStudentPackageFlow.js'
+import { normalizeGroupCourseType } from './src/features/group-booking/groupCourseTypes.js'
 import {
   assertSameAcademy,
   isValidOperationalAcademyId,
@@ -383,6 +384,7 @@ async function createGroupLessonsInDateRange({
   teacher,
   time,
   subject,
+  groupCourseType,
   weekdays,
   maxStudents,
   startYmd,
@@ -393,6 +395,7 @@ async function createGroupLessonsInDateRange({
   const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(weekdays))
   const timeStr = String(time || '').trim()
   const subjectStr = String(subject || '').trim()
+  const courseType = normalizeGroupCourseType(groupCourseType)
   const teacherNorm = normalizeText(teacher || '')
   const capacity = Number(maxStudents)
   const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
@@ -427,6 +430,7 @@ async function createGroupLessonsInDateRange({
       date: dateStr,
       time: timeStr,
       subject: subjectStr,
+      ...(courseType ? { groupCourseType: courseType } : {}),
       completed: false,
       countedStudentIDs: [],
       attendanceAppliedAt: null,

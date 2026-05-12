@@ -124,6 +124,15 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "isBookable", "order": "ASCENDING" },
+        { "fieldPath": "groupCourseType", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "groupLessons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
         { "fieldPath": "groupClassID", "order": "ASCENDING" }
       ]
     },

@@ -229,6 +229,26 @@ service cloud.firestore {
         groupClassId in summary.groupClassIds;
     }
 
+    function isKnownGroupCourseType(groupCourseType) {
+      return groupCourseType in [
+        "free_talking",
+        "intermediate_conversation",
+        "beginner_conversation",
+        "general_conversation"
+      ];
+    }
+
+    function studentGroupAccessSummaryIncludesGroupCourseType(summaryPath, academyId, studentId, groupCourseType) {
+      let summary = get(summaryPath).data;
+      return exists(summaryPath) &&
+        summary.academyId == academyId &&
+        summary.studentId == studentId &&
+        groupCourseType is string &&
+        isKnownGroupCourseType(groupCourseType) &&
+        summary.groupCourseTypes is list &&
+        groupCourseType in summary.groupCourseTypes;
+    }
+
     function hasActiveStudentGroupAccessForStudent(academyId, studentId, groupClassId) {
       return isCurrentStudent(academyId, studentId) &&
         groupClassId is string &&
@@ -246,6 +266,33 @@ service cloud.firestore {
         academyId,
         myStudentId(academyId),
         groupClassId
+      );
+    }
+
+    function hasActiveStudentGroupCourseTypeAccessForStudent(academyId, studentId, groupCourseType) {
+      return isCurrentStudent(academyId, studentId) &&
+        studentGroupAccessSummaryIncludesGroupCourseType(
+          studentGroupAccessSummaryPath(academyId, studentId),
+          academyId,
+          studentId,
+          groupCourseType
+        );
+    }
+
+    function hasActiveStudentGroupLessonAccessForStudent(academyId, studentId, groupClassId, groupCourseType) {
+      return (
+        groupClassId is string &&
+        groupClassId != "" &&
+        hasActiveStudentGroupAccessForStudent(academyId, studentId, groupClassId)
+      ) || hasActiveStudentGroupCourseTypeAccessForStudent(academyId, studentId, groupCourseType);
+    }
+
+    function hasActiveStudentGroupLessonAccess(academyId, groupClassId, groupCourseType) {
+      return hasActiveStudentGroupLessonAccessForStudent(
+        academyId,
+        myStudentId(academyId),
+        groupClassId,
+        groupCourseType
       );
     }
 
@@ -355,6 +402,7 @@ service cloud.firestore {
           "subject",
           "weekdays",
           "recurrenceMode",
+          "groupCourseType",
           "createdAt",
           "updatedAt"
         ]) &&
@@ -375,6 +423,8 @@ service cloud.firestore {
         data.subject != "" &&
         data.weekdays is list &&
         data.weekdays.size() > 0 &&
+        (!("groupCourseType" in data.keys()) ||
+          (data.groupCourseType is string && isKnownGroupCourseType(data.groupCourseType))) &&
         (!("recurrenceMode" in data.keys()) || data.recurrenceMode == "fixedWeekdays") &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
@@ -410,10 +460,11 @@ service cloud.firestore {
         lesson.academyId == request.resource.data.academyId &&
         lesson.groupClassId == request.resource.data.groupClassId &&
         lesson.isBookable == true &&
-        hasActiveStudentGroupAccessForStudent(
+        hasActiveStudentGroupLessonAccessForStudent(
           request.resource.data.academyId,
           studentId,
-          request.resource.data.groupClassId
+          request.resource.data.groupClassId,
+          lesson.groupCourseType
         ) &&
         lessonAfter.bookedCount == lesson.bookedCount + 1;
     }
@@ -440,10 +491,11 @@ service cloud.firestore {
             request.resource.data.updatedAt == request.time &&
             request.resource.data.cancelledAt == null &&
             lesson.isBookable == true &&
-            hasActiveStudentGroupAccessForStudent(
+            hasActiveStudentGroupLessonAccessForStudent(
               resource.data.academyId,
               studentId,
-              resource.data.groupClassId
+              resource.data.groupClassId,
+              lesson.groupCourseType
             ) &&
             lessonAfter.bookedCount == lesson.bookedCount + 1
           ) ||
@@ -530,6 +582,7 @@ service cloud.firestore {
           "academyId",
           "studentId",
           "groupClassIds",
+          "groupCourseTypes",
           "createdAt",
           "updatedAt"
         ]) &&
@@ -537,7 +590,8 @@ service cloud.firestore {
         data.academyId != "" &&
         data.studentId is string &&
         data.studentId != "" &&
-        data.groupClassIds is list;
+        data.groupClassIds is list &&
+        (!("groupCourseTypes" in data.keys()) || data.groupCourseTypes is list);
     }
 
     function validStudentPrivateAccessSummaryShape(data) {
@@ -1700,10 +1754,19 @@ service cloud.firestore {
           )
         ) ||
         (
-          resource.data.groupClassId is string &&
-          resource.data.groupClassId != "" &&
           resource.data.isBookable == true &&
-          hasActiveStudentGroupAccess(resource.data.academyId, resource.data.groupClassId)
+          (
+            (
+              resource.data.groupClassId is string &&
+              resource.data.groupClassId != "" &&
+              hasActiveStudentGroupAccess(resource.data.academyId, resource.data.groupClassId)
+            ) ||
+            hasActiveStudentGroupCourseTypeAccessForStudent(
+              resource.data.academyId,
+              myStudentId(resource.data.academyId),
+              resource.data.groupCourseType
+            )
+          )
         )
       );
 

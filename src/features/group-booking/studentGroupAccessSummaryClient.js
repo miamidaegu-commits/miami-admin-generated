@@ -1,5 +1,17 @@
-import { arrayRemove, arrayUnion, doc, serverTimestamp } from 'firebase/firestore'
+import {
+  arrayRemove,
+  arrayUnion,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  serverTimestamp,
+  setDoc,
+  where,
+} from 'firebase/firestore'
 import { buildStudentGroupAccessSummaryId } from './bookingModel.js'
+import { normalizeGroupCourseType } from './groupCourseTypes.js'
 
 export function buildStudentGroupAccessSummaryRef(db, { academyId, studentId }) {
   return doc(
@@ -38,4 +50,50 @@ export function removeStudentGroupClassAccessBatch(batch, db, { academyId, stude
     { merge: true }
   )
   return summaryRef
+}
+
+function isActiveGroupPackageWithCourseType(pkg) {
+  const packageType = String(pkg?.packageType || '').trim()
+  if (packageType !== 'group' && packageType !== 'openGroup') return false
+  const status = String(pkg?.status ?? 'active').trim().toLowerCase()
+  if (status !== 'active') return false
+  return Boolean(normalizeGroupCourseType(pkg?.groupCourseType))
+}
+
+export async function syncStudentGroupCourseTypeAccessSummary(db, { academyId, studentId }) {
+  const scopedAcademyId = String(academyId || '').trim()
+  const scopedStudentId = String(studentId || '').trim()
+  if (!scopedAcademyId || !scopedStudentId) return []
+
+  const packagesSnap = await getDocs(
+    query(
+      collection(db, 'studentPackages'),
+      where('academyId', '==', scopedAcademyId),
+      where('studentId', '==', scopedStudentId)
+    )
+  )
+  const courseTypes = new Set()
+  packagesSnap.docs.forEach((docSnap) => {
+    const pkg = docSnap.data()
+    if (!isActiveGroupPackageWithCourseType(pkg)) return
+    courseTypes.add(normalizeGroupCourseType(pkg.groupCourseType))
+  })
+
+  const summaryRef = buildStudentGroupAccessSummaryRef(db, {
+    academyId: scopedAcademyId,
+    studentId: scopedStudentId,
+  })
+  const summarySnap = await getDoc(summaryRef)
+  const payload = {
+    academyId: scopedAcademyId,
+    studentId: scopedStudentId,
+    groupCourseTypes: Array.from(courseTypes.values()),
+    updatedAt: serverTimestamp(),
+  }
+  if (!summarySnap.exists()) {
+    payload.groupClassIds = []
+    payload.createdAt = serverTimestamp()
+  }
+  await setDoc(summaryRef, payload, { merge: true })
+  return payload.groupCourseTypes
 }

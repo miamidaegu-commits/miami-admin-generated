@@ -1,4 +1,5 @@
 import { formatGroupWeekdaysDisplay } from '../dashboardViewUtils.js'
+import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
 
 export default function GroupLessonSeriesModal({
   selectedGroupClass,
@@ -70,6 +71,7 @@ export default function GroupLessonSeriesModal({
           <div style={{ fontWeight: 600, marginBottom: 6 }}>이 반의 수업 정보 (읽기 전용)</div>
           <div>시간: {selectedGroupClass.time || '—'}</div>
           <div>과목: {selectedGroupClass.subject || '—'}</div>
+          <div>코스 유형: {getGroupCourseTypeLabel(selectedGroupClass.groupCourseType) || '—'}</div>
           <div>
             요일:{' '}
             {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'}

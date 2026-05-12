@@ -735,6 +735,277 @@ test('student lesson history shows own group lessons and hides another student r
   }
 });
 
+test('student group lesson visibility supports groupCourseTypes and legacy groupClassIds', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 student booking setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  initializeAdmin();
+  const db = admin.firestore();
+  const nowTs = admin.firestore.Timestamp.now();
+  const studentUser = await admin.auth().getUserByEmail(TEST_STUDENT_EMAIL);
+  const unique = `${Date.now()}-${testInfo.workerIndex}`;
+  const studentId = `e2e-course-visibility-student-${unique}`;
+  const freeClassId = `e2e-course-free-class-${unique}`;
+  const beginnerClassId = `e2e-course-beginner-class-${unique}`;
+  const legacyClassId = `e2e-course-legacy-class-${unique}`;
+  const freeLessonId = `e2e-course-free-lesson-${unique}`;
+  const beginnerLessonId = `e2e-course-beginner-lesson-${unique}`;
+  const legacyLessonId = `e2e-course-legacy-lesson-${unique}`;
+  const summaryRef = db.collection('studentGroupAccessSummary').doc(accessSummaryId({ studentId }));
+  const studentMembershipRef = db
+    .collection('academyMemberships')
+    .doc(`${DEFAULT_E2E_ACADEMY_ID}_${studentUser.uid}`);
+  const studentUserRef = db.collection('users').doc(studentUser.uid);
+  const originals = {
+    studentMembership: await readDoc(studentMembershipRef),
+    studentUser: await readDoc(studentUserRef),
+  };
+  const refsToDelete = [
+    db.collection('privateStudents').doc(studentId),
+    db.collection('groupClasses').doc(freeClassId),
+    db.collection('groupClasses').doc(beginnerClassId),
+    db.collection('groupClasses').doc(legacyClassId),
+    db.collection('groupLessons').doc(freeLessonId),
+    db.collection('groupLessons').doc(beginnerLessonId),
+    db.collection('groupLessons').doc(legacyLessonId),
+    db.collection('studentPackages').doc(`e2e-course-beginner-package-${unique}`),
+    db.collection('studentPackages').doc(`e2e-course-free-package-${unique}`),
+    db.collection('studentPackages').doc(`e2e-course-private-package-${unique}`),
+    summaryRef,
+  ];
+
+  try {
+    await Promise.all([
+      studentUserRef.set(
+        {
+          uid: studentUser.uid,
+          email: TEST_STUDENT_EMAIL,
+          role: 'student',
+          isActive: true,
+          lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
+          updatedAt: nowTs,
+        },
+        { merge: true }
+      ),
+      studentMembershipRef.set(
+        {
+          academyId: DEFAULT_E2E_ACADEMY_ID,
+          uid: studentUser.uid,
+          email: TEST_STUDENT_EMAIL,
+          displayName: 'Student E2E',
+          role: 'student',
+          studentId: '',
+          teacherName: '',
+          status: 'active',
+          permissions: {},
+          updatedAt: nowTs,
+        },
+        { merge: true }
+      ),
+      db.collection('privateStudents').doc(studentId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `코스학생 ${unique}`,
+        teacher: TEACHER_NAME,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupClasses').doc(freeClassId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `프리토킹 ${unique}`,
+        teacher: TEACHER_NAME,
+        teacherName: TEACHER_NAME,
+        maxStudents: 6,
+        time: '10:00',
+        subject: 'Course Free',
+        groupCourseType: 'free_talking',
+        weekdays: ['월'],
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupClasses').doc(beginnerClassId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `초급 ${unique}`,
+        teacher: TEACHER_NAME,
+        teacherName: TEACHER_NAME,
+        maxStudents: 6,
+        time: '11:00',
+        subject: 'Course Beginner',
+        groupCourseType: 'beginner_conversation',
+        weekdays: ['화'],
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupClasses').doc(legacyClassId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `레거시 ${unique}`,
+        teacher: TEACHER_NAME,
+        teacherName: TEACHER_NAME,
+        maxStudents: 6,
+        time: '12:00',
+        subject: 'Course Legacy',
+        weekdays: ['수'],
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(freeLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: freeClassId,
+        groupClassName: `프리토킹 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-01',
+        time: '10:00',
+        subject: 'Course Free Visible',
+        groupCourseType: 'free_talking',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(beginnerLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: beginnerClassId,
+        groupClassName: `초급 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-02',
+        time: '11:00',
+        subject: 'Course Beginner Only',
+        groupCourseType: 'beginner_conversation',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(legacyLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: legacyClassId,
+        groupClassName: `레거시 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-03',
+        time: '12:00',
+        subject: 'Course Legacy Visible',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPackages').doc(`e2e-course-beginner-package-${unique}`).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId,
+        studentName: `코스학생 ${unique}`,
+        teacher: TEACHER_NAME,
+        packageType: 'group',
+        groupClassId: beginnerClassId,
+        groupCourseType: 'beginner_conversation',
+        title: 'Beginner Course Package',
+        totalCount: 4,
+        usedCount: 0,
+        remainingCount: 4,
+        status: 'active',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPackages').doc(`e2e-course-private-package-${unique}`).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId,
+        studentName: `코스학생 ${unique}`,
+        teacher: TEACHER_NAME,
+        packageType: 'private',
+        groupCourseType: 'free_talking',
+        title: 'Private Package Must Not Grant Course',
+        totalCount: 4,
+        usedCount: 0,
+        remainingCount: 4,
+        status: 'active',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+    ]);
+
+    await summaryRef.set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId,
+      groupClassIds: [],
+      groupCourseTypes: ['beginner_conversation'],
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    });
+    await linkStudentAccountWithScript({ studentId });
+
+    // linkStudentAccountWithScript may rewrite membership/access summary.
+    // Re-apply the intended course-type access after linking, then wait for it.
+    await summaryRef.set(
+      {
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId,
+        groupClassIds: [],
+        groupCourseTypes: ['beginner_conversation'],
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    );
+
+    await expect
+      .poll(async () => {
+        const snap = await summaryRef.get();
+        const summary = snap.exists ? snap.data() || {} : {};
+        return Array.isArray(summary.groupCourseTypes) ? summary.groupCourseTypes : [];
+      }, { timeout: 15000 })
+      .toContain('beginner_conversation');
+
+    await loginAsStudent(page, TEST_STUDENT_EMAIL, TEST_STUDENT_PASSWORD);
+    const beginnerCard = getLessonCard(page, 'Course Beginner Only');
+    const groupLoadError = page.getByText('예약 가능한 수업을 불러오지 못했습니다.');
+
+    await expect
+      .poll(
+        async () => {
+          if (await beginnerCard.isVisible().catch(() => false)) return 'card';
+          if (await groupLoadError.isVisible().catch(() => false)) return 'error';
+          return 'waiting';
+        },
+        { timeout: 15000 }
+      )
+      .toBe('card');
+
+    await expect(page.getByText('Course Free Visible')).toHaveCount(0);
+    await summaryRef.set(
+      {
+        groupClassIds: [freeClassId, legacyClassId],
+        groupCourseTypes: ['beginner_conversation'],
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    );
+    await expect(getLessonCard(page, 'Course Free Visible')).toBeVisible({ timeout: 15000 });
+    await expect(getLessonCard(page, 'Course Legacy Visible')).toBeVisible({ timeout: 15000 });
+
+    await summaryRef.set(
+      {
+        groupClassIds: [legacyClassId],
+        groupCourseTypes: ['free_talking'],
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    );
+    await expect(getLessonCard(page, 'Course Free Visible')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('Course Beginner Only')).toHaveCount(0);
+    await expect(getLessonCard(page, 'Course Legacy Visible')).toBeVisible({ timeout: 15000 });
+  } finally {
+    await Promise.all(refsToDelete.map((ref) => ref.delete().catch(() => {})));
+    await Promise.all([
+      restoreDoc(studentMembershipRef, originals.studentMembership),
+      restoreDoc(studentUserRef, originals.studentUser),
+    ]);
+  }
+});
+
 test('student booking page fails closed when membership is not linked to a studentId', async ({
   page,
   browserName,

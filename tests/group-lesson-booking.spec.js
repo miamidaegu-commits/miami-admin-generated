@@ -53,6 +53,33 @@ function getLessonRow(page, subject) {
     .first();
 }
 
+function formatLocalYmd(date) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function nextWeekdayYmd(targetDay) {
+  const date = new Date();
+  date.setDate(date.getDate() + 7);
+  while (date.getDay() !== targetDay) {
+    date.setDate(date.getDate() + 1);
+  }
+  return formatLocalYmd(date);
+}
+
+async function deleteGroupClassLessons(db, groupClassId) {
+  if (!groupClassId) return;
+  const snap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+    .where('groupClassId', '==', groupClassId)
+    .get();
+  await Promise.all(snap.docs.map((docSnap) => docSnap.ref.delete().catch(() => {})));
+}
+
 async function openReservationAdd(row) {
   await row.getByTestId('group-lesson-reserve-add-button').click();
   return row.page().getByTestId('group-reservation-modal');
@@ -84,6 +111,84 @@ async function clickExpectingNoDialog(page, locator) {
   await locator.click();
   await dialogPromise;
 }
+
+test('admin can create a free_talking group class and generated lessons inherit groupCourseType', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 group course type setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  initializeAdmin();
+  const db = admin.firestore();
+  const groupName = `E2E 프리토킹반 ${Date.now()}-${testInfo.workerIndex}`;
+  let groupClassId = '';
+
+  page.on('dialog', async (dialog) => {
+    await dialog.accept();
+  });
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
+    await page.getByRole('button', { name: '정규반 만들기' }).click();
+
+    const dialog = page.getByRole('dialog', { name: '정규반 만들기' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel('반 이름').fill(groupName);
+    await dialog.getByLabel('담당 선생님').selectOption(TEACHER_NAME);
+    await dialog.getByLabel('정원 (명)').fill('3');
+    await dialog.getByLabel('수업 시작일 (자동 일정 기준)').fill(nextWeekdayYmd(0));
+    await dialog.getByLabel('기본 시간 (HH:mm)').fill('10:30');
+    await dialog.getByLabel('과목').fill('E2E Course Type');
+    await dialog.getByLabel('코스 유형').selectOption('free_talking');
+    await dialog.getByRole('button', { name: '일', exact: true }).click();
+    await dialog.getByRole('button', { name: '저장' }).click();
+    await expect(dialog).toBeHidden({ timeout: 60000 });
+
+    await expect
+      .poll(async () => {
+        const snap = await db
+          .collection('groupClasses')
+          .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+          .where('name', '==', groupName)
+          .limit(1)
+          .get();
+        return snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+      })
+      .toHaveLength(1);
+
+    const createdGroupSnap = await db
+      .collection('groupClasses')
+      .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+      .where('name', '==', groupName)
+      .limit(1)
+      .get();
+    const createdGroup = createdGroupSnap.docs[0];
+    groupClassId = createdGroup.id;
+    expect(createdGroup.data().groupCourseType).toBe('free_talking');
+
+    await expect
+      .poll(async () => {
+        const snap = await db
+          .collection('groupLessons')
+          .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+          .where('groupClassId', '==', groupClassId)
+          .limit(3)
+          .get();
+        return snap.docs.map((docSnap) => docSnap.data().groupCourseType);
+      })
+      .toContain('free_talking');
+
+    await expect(getGroupRow(page, groupName)).toContainText('프리토킹');
+  } finally {
+    await deleteGroupClassLessons(db, groupClassId).catch(() => {});
+    if (groupClassId) {
+      await db.collection('groupClasses').doc(groupClassId).delete().catch(() => {});
+    }
+  }
+});
 
 function reservationId({ lessonId, studentId }) {
   return `${DEFAULT_E2E_ACADEMY_ID}__${lessonId}__${studentId}`;

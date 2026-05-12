@@ -8,6 +8,8 @@ import {
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
+  DEFAULT_E2E_ACADEMY_ID,
+  TEST_GROUP_NAME,
   TEST_STUDENT_NAME,
 } from './fixtures/test-data.js';
 import {
@@ -15,6 +17,12 @@ import {
   createAdminSeededPrivateStudent,
   createAdminSeededStudentPackage,
 } from './e2e-admin-helpers.js';
+import {
+  cleanupTempStudentData,
+  createTempStudent,
+  getGroupPackageStartDate,
+  getStudentGroupAccessSummary,
+} from './e2e-firebase-helpers.js';
 
 function formatYmd(date) {
   return [
@@ -28,6 +36,62 @@ function addDays(date, days) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+function getFirebaseConfigFromEnv() {
+  return {
+    apiKey: process.env.VITE_FIREBASE_API_KEY,
+    authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.VITE_FIREBASE_APP_ID,
+  };
+}
+
+async function ensureStudentGroupAccessSummary(page, { studentId }) {
+  await page.evaluate(
+    async ({ academyId, firebaseConfig, studentId }) => {
+      const [{ getApp, getApps, initializeApp }, { getAuth, onAuthStateChanged }, firestore] =
+        await Promise.all([
+          import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
+          import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
+          import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'),
+        ]);
+
+      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      if (!auth.currentUser) {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Auth user not ready.')), 30000);
+          const unsubscribe = onAuthStateChanged(auth, (user) => {
+            if (!user) return;
+            clearTimeout(timeout);
+            unsubscribe();
+            resolve();
+          });
+        });
+      }
+
+      const db = firestore.getFirestore(app);
+      await firestore.setDoc(
+        firestore.doc(db, 'studentGroupAccessSummary', `${academyId}__${studentId}`),
+        {
+          academyId,
+          studentId,
+          groupClassIds: [],
+          createdAt: firestore.serverTimestamp(),
+          updatedAt: firestore.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    },
+    {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      firebaseConfig: getFirebaseConfigFromEnv(),
+      studentId,
+    }
+  );
 }
 
 async function openStudentPackageHistory(page) {
@@ -218,4 +282,86 @@ test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행
   await expect(privatePackageCell).toContainText('지난 2회');
   await expect(privatePackageCell).toContainText('예정 6회');
   await expect(privatePackageCell).toContainText('개인 수강권 없음');
+});
+
+test('관리자가 프리토킹 그룹 수강권을 만들면 summary에 groupCourseTypes가 반영된다', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
+
+  page.on('dialog', async (dialog) => {
+    await dialog.accept();
+  });
+
+  const uniqueToken = Date.now();
+  const tempStudentName = `E2E 코스타입수강권 ${uniqueToken}`;
+  let tempStudent = null;
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    tempStudent = await createTempStudent(page, {
+      studentName: tempStudentName,
+      note: 'E2E temporary student for groupCourseType package projection',
+    });
+    await ensureStudentGroupAccessSummary(page, { studentId: tempStudent.studentId });
+
+    await openDashboardSection(page, '학생 관리');
+    await getStudentSearchInput(page).fill(tempStudentName);
+    const studentRow = getStudentRow(page, tempStudentName);
+    await expect(studentRow).toBeVisible();
+    await studentRow.getByRole('button', { name: '수강권 추가' }).click();
+
+    const packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+    await expect(packageDialog).toBeVisible();
+    await packageDialog.getByLabel('수강권 유형').selectOption('group');
+
+    const groupSelect = packageDialog.getByLabel('그룹 수업');
+    await expect.poll(async () => await groupSelect.locator('option').count()).toBeGreaterThan(1);
+    const groupValue = await groupSelect.locator('option').evaluateAll((options, groupName) => {
+      const matched = options.find((option) => option.textContent?.includes(String(groupName)));
+      return matched?.getAttribute('value') || '';
+    }, TEST_GROUP_NAME);
+    expect(groupValue).not.toBe('');
+    await groupSelect.selectOption(groupValue);
+    await packageDialog.getByLabel('코스 유형').selectOption('free_talking');
+    await packageDialog.getByLabel('시작일').fill(
+      await getGroupPackageStartDate(page, { groupName: TEST_GROUP_NAME })
+    );
+    await packageDialog.getByLabel('등록 주수').fill('4');
+    const saveButton = packageDialog.getByRole('button', { name: '저장', exact: true });
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+
+    await expect
+      .poll(async () => {
+        const summary = await getStudentGroupAccessSummary(page, {
+          studentId: tempStudent.studentId,
+        }).catch(() => null);
+        return Array.isArray(summary?.groupCourseTypes) ? summary.groupCourseTypes : [];
+      }, { timeout: 30000 })
+      .toContain('free_talking');
+
+    const postEnrollDialog = page.getByRole('dialog', { name: '이 반에 바로 등록할까요?' });
+    if (await postEnrollDialog.isVisible().catch(() => false)) {
+      await postEnrollDialog.getByRole('button', { name: '나중에 등록' }).click();
+      await expect(postEnrollDialog).toBeHidden();
+    }
+
+    if (await packageDialog.isVisible().catch(() => false)) {
+      await packageDialog.getByRole('button', { name: '취소' }).click();
+      await expect(packageDialog).toBeHidden();
+    }
+
+    await studentRow.getByRole('button', { name: '수강권 보기', exact: true }).click();
+    const packageCard = page.locator('[data-testid="student-package-card"]').filter({
+      hasText: '프리토킹',
+    });
+    await expect(packageCard.first()).toBeVisible();
+  } finally {
+    if (tempStudent) {
+      await cleanupTempStudentData(page, tempStudent).catch(() => {});
+    }
+  }
 });

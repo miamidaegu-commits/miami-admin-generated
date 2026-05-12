@@ -27,6 +27,7 @@ import {
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
 import { setStudentPrivateSlotBookingPilotEnabled } from '../../private-booking/studentPrivateAccessSummaryClient.js'
+import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
 
 function cleanText(value, fallback = '-') {
   const text = String(value ?? '').trim()
@@ -1696,6 +1697,8 @@ export default function StudentsSection({
                               ? String(pkg.groupClassName)
                               : '-'}
                           </span>
+                          <span style={{ opacity: 0.72 }}>코스 유형</span>
+                          <span>{getGroupCourseTypeLabel(pkg.groupCourseType) || '-'}</span>
                           <span style={{ opacity: 0.72 }}>총 횟수</span>
                           <span>
                             {pkg.totalCount != null && pkg.totalCount !== ''
@@ -1997,7 +2000,14 @@ export default function StudentsSection({
                       }}
                     >
                       <span>{cleanText(pkg.title, '수강권')}</span>
-                      <span>{packageKindLabel(pkg.packageType)}</span>
+                      <span>
+                        {[
+                          packageKindLabel(pkg.packageType),
+                          getGroupCourseTypeLabel(pkg.groupCourseType),
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </span>
                       <span>{cleanText(pkg.teacher)}</span>
                       <span>총 {cleanText(pkg.totalCount ?? pkg.paidLessons)}</span>
                       <span>사용 {cleanText(pkg.usedCount ?? pkg.attendanceCount)}</span>
