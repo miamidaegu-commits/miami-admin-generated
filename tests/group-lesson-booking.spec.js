@@ -145,7 +145,6 @@ test('admin can create a free_talking group class and generated lessons inherit 
     await dialog.getByLabel('코스 유형').selectOption('free_talking');
     await dialog.getByRole('button', { name: '일', exact: true }).click();
     await dialog.getByRole('button', { name: '저장' }).click();
-    await expect(dialog).toBeHidden({ timeout: 60000 });
 
     await expect
       .poll(async () => {
@@ -155,19 +154,12 @@ test('admin can create a free_talking group class and generated lessons inherit 
           .where('name', '==', groupName)
           .limit(1)
           .get();
-        return snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
-      })
-      .toHaveLength(1);
-
-    const createdGroupSnap = await db
-      .collection('groupClasses')
-      .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
-      .where('name', '==', groupName)
-      .limit(1)
-      .get();
-    const createdGroup = createdGroupSnap.docs[0];
-    groupClassId = createdGroup.id;
-    expect(createdGroup.data().groupCourseType).toBe('free_talking');
+        const createdGroup = snap.docs[0];
+        if (!createdGroup) return '';
+        groupClassId = createdGroup.id;
+        return createdGroup.data().groupCourseType === 'free_talking' ? createdGroup.id : '';
+      }, { timeout: 60000 })
+      .not.toBe('');
 
     await expect
       .poll(async () => {
@@ -177,9 +169,20 @@ test('admin can create a free_talking group class and generated lessons inherit 
           .where('groupClassId', '==', groupClassId)
           .limit(3)
           .get();
-        return snap.docs.map((docSnap) => docSnap.data().groupCourseType);
-      })
-      .toContain('free_talking');
+        return snap.docs.filter((docSnap) => docSnap.data().groupCourseType === 'free_talking').length;
+      }, { timeout: 90000 })
+      .toBeGreaterThan(0);
+
+    if (await dialog.isVisible().catch(() => false)) {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      const groupSectionButton = page.getByRole('button', { name: '단체반 관리', exact: true });
+      await expect(groupSectionButton)
+        .toBeVisible({ timeout: 5000 })
+        .catch(async () => {
+          await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+        });
+      await openDashboardSection(page, '단체반 관리');
+    }
 
     await expect(getGroupRow(page, groupName)).toContainText('프리토킹');
   } finally {

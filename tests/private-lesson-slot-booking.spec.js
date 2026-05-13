@@ -11,7 +11,6 @@ import {
   ADMIN_PASSWORD,
   DEFAULT_E2E_ACADEMY_ID,
   DEFAULT_E2E_ACADEMY_NAME,
-  TEST_STUDENT_EMAIL,
   TEST_STUDENT_PASSWORD,
   TEST_TEACHER_EMAIL,
 } from './fixtures/test-data.js';
@@ -39,12 +38,27 @@ async function readDoc(ref) {
   return snap.exists ? snap.data() : null;
 }
 
-async function restoreDoc(ref, data) {
-  if (data) {
-    await ref.set(data);
-  } else {
-    await ref.delete().catch(() => {});
+async function createOrGetStudentAuthUser({ email, displayName }) {
+  try {
+    const existingUser = await admin.auth().getUserByEmail(email);
+    const updatedUser = await admin.auth().updateUser(existingUser.uid, {
+      email,
+      password: TEST_STUDENT_PASSWORD,
+      displayName,
+      disabled: false,
+    });
+    return { user: updatedUser, created: false };
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') throw error;
   }
+
+  const user = await admin.auth().createUser({
+    email,
+    password: TEST_STUDENT_PASSWORD,
+    displayName,
+    disabled: false,
+  });
+  return { user, created: true };
 }
 
 async function linkStudentAccountWithScript({ studentId, email, displayName }) {
@@ -196,7 +210,13 @@ async function createFixture(unique) {
   const nowTs = admin.firestore.Timestamp.now();
   const adminUser = await admin.auth().getUserByEmail(ADMIN_EMAIL);
   const teacherUser = await admin.auth().getUserByEmail(TEST_TEACHER_EMAIL);
-  const firstStudentUser = await admin.auth().getUserByEmail(TEST_STUDENT_EMAIL);
+  const firstEmail = `private-slot-mvp-${unique}@example.com`;
+  const firstDisplayName = `Private Slot First ${unique}`;
+  const { user: firstStudentUser, created: firstStudentAuthCreated } =
+    await createOrGetStudentAuthUser({
+      email: firstEmail,
+      displayName: firstDisplayName,
+    });
   const secondEmail = `private-slot-${unique}@example.com`;
   const secondUser = await admin.auth().createUser({
     email: secondEmail,
@@ -232,10 +252,6 @@ async function createFixture(unique) {
     .collection('academyMemberships')
     .doc(`${DEFAULT_E2E_ACADEMY_ID}_${firstStudentUser.uid}`);
   const firstUserRef = db.collection('users').doc(firstStudentUser.uid);
-  const originals = {
-    firstMembership: await readDoc(firstMembershipRef),
-    firstUser: await readDoc(firstUserRef),
-  };
 
   const permissionDefaults = {
     canManageAttendance: true,
@@ -287,8 +303,8 @@ async function createFixture(unique) {
     firstUserRef.set(
       {
         uid: firstStudentUser.uid,
-        email: TEST_STUDENT_EMAIL,
-        displayName: 'Student E2E',
+        email: firstEmail,
+        displayName: firstDisplayName,
         role: 'student',
         isActive: true,
         lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
@@ -300,8 +316,8 @@ async function createFixture(unique) {
       {
         academyId: DEFAULT_E2E_ACADEMY_ID,
         uid: firstStudentUser.uid,
-        email: TEST_STUDENT_EMAIL,
-        displayName: 'Student E2E',
+        email: firstEmail,
+        displayName: firstDisplayName,
         role: 'student',
         studentId: '',
         teacherName: '',
@@ -504,11 +520,14 @@ async function createFixture(unique) {
 
   await linkStudentAccountWithScript({
     studentId: firstStudentId,
-    email: TEST_STUDENT_EMAIL,
-    displayName: 'Student E2E',
+    email: firstEmail,
+    displayName: firstDisplayName,
   });
 
   return {
+    firstEmail,
+    firstUid: firstStudentUser.uid,
+    firstAuthCreated: firstStudentAuthCreated,
     secondEmail,
     secondUid: secondUser.uid,
     firstStudentId,
@@ -530,7 +549,6 @@ async function createFixture(unique) {
     pastApprovedLessonId,
     hiddenSlotId,
     otherAcademySlotId,
-    originals,
   };
 }
 
@@ -547,6 +565,8 @@ async function cleanupFixture(fixture) {
     db.collection('lessons').doc(fixture.approvedLessonId),
     db.collection('lessons').doc(fixture.hiddenApprovedLessonId),
     db.collection('lessons').doc(fixture.pastApprovedLessonId),
+    db.collection('users').doc(fixture.firstUid),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.firstUid}`),
     db.collection('users').doc(fixture.secondUid),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.secondUid}`),
   ];
@@ -562,18 +582,9 @@ async function cleanupFixture(fixture) {
 
   await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
   await Promise.all([
-    restoreDoc(
-      db
-        .collection('academyMemberships')
-        .doc(`${DEFAULT_E2E_ACADEMY_ID}_${(await admin.auth().getUserByEmail(TEST_STUDENT_EMAIL)).uid}`),
-      fixture.originals.firstMembership
-    ),
-    restoreDoc(
-      db
-        .collection('users')
-        .doc((await admin.auth().getUserByEmail(TEST_STUDENT_EMAIL)).uid),
-      fixture.originals.firstUser
-    ),
+    fixture.firstAuthCreated
+      ? admin.auth().deleteUser(fixture.firstUid).catch(() => {})
+      : Promise.resolve(),
     admin.auth().deleteUser(fixture.secondUid).catch(() => {}),
   ]);
 }
@@ -650,7 +661,7 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     const studentContext = await browser.newContext();
     contexts.push(studentContext);
     const studentPage = await studentContext.newPage();
-    await loginAsStudent(studentPage, TEST_STUDENT_EMAIL, TEST_STUDENT_PASSWORD);
+    await loginAsStudent(studentPage, fixture.firstEmail, TEST_STUDENT_PASSWORD);
     const approvedLessonCard = studentPage
       .locator('[data-testid="student-upcoming-private-lesson-card"]')
       .filter({ hasText: fixture.approvedLessonSubject })
