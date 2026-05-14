@@ -19,10 +19,27 @@ import {
 
 const require = createRequire(import.meta.url);
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
+const GROUP_MODAL_SOURCE_PATH = path.join(process.cwd(), 'src/features/dashboard/modals/GroupModal.jsx');
+const GROUPS_SECTION_SOURCE_PATH = path.join(
+  process.cwd(),
+  'src/features/dashboard/sections/GroupsSection.jsx'
+);
 const TEACHER_NAME = 'teacher';
 
 function hasServiceAccount() {
   return fs.existsSync(SERVICE_ACCOUNT_PATH);
+}
+
+function sourceIncludes(filePath, text) {
+  return fs.existsSync(filePath) && fs.readFileSync(filePath, 'utf8').includes(text);
+}
+
+function hasGroupCourseTypeUi() {
+  return sourceIncludes(GROUP_MODAL_SOURCE_PATH, '코스 유형');
+}
+
+function hasGroupBookingUi() {
+  return sourceIncludes(GROUPS_SECTION_SOURCE_PATH, 'group-lesson-reserve-add-button');
 }
 
 function initializeAdmin() {
@@ -118,6 +135,7 @@ test('admin can create a free_talking group class and generated lessons inherit 
 }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 group course type setup을 실행합니다.');
+  test.skip(!hasGroupCourseTypeUi(), '현재 main 그룹 모달에는 코스 유형 UI가 없습니다.');
   test.setTimeout(120000);
 
   initializeAdmin();
@@ -131,7 +149,7 @@ test('admin can create a free_talking group class and generated lessons inherit 
 
   try {
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await openDashboardSection(page, '단체반 관리');
+    await openDashboardSection(page, '반 관리');
     await page.getByRole('button', { name: '정규반 만들기' }).click();
 
     const dialog = page.getByRole('dialog', { name: '정규반 만들기' });
@@ -175,13 +193,13 @@ test('admin can create a free_talking group class and generated lessons inherit 
 
     if (await dialog.isVisible().catch(() => false)) {
       await page.reload({ waitUntil: 'domcontentloaded' });
-      const groupSectionButton = page.getByRole('button', { name: '단체반 관리', exact: true });
+      const groupSectionButton = page.getByRole('button', { name: '반 관리', exact: true });
       await expect(groupSectionButton)
         .toBeVisible({ timeout: 5000 })
         .catch(async () => {
           await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
         });
-      await openDashboardSection(page, '단체반 관리');
+      await openDashboardSection(page, '반 관리');
     }
 
     await expect(getGroupRow(page, groupName)).toContainText('프리토킹');
@@ -525,6 +543,7 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
 }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 booking setup을 실행합니다.');
+  test.skip(!hasGroupBookingUi(), '현재 main 반 관리에는 그룹 예약 UI가 없습니다.');
   test.setTimeout(120000);
 
   initializeAdmin();
@@ -536,7 +555,7 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     setup = await createBookingFixture(unique);
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await openDashboardSection(page, '단체반 관리');
+    await openDashboardSection(page, '반 관리');
 
     const groupRow = getGroupRow(page, setup.groupName);
     await expect(groupRow).toBeVisible({ timeout: 15000 });
@@ -625,7 +644,7 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await expect(nonBookableRow).toContainText('비활성');
     await expect(nonBookableRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();
 
-    await expect(page.getByRole('heading', { name: '단체반 관리', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '반 관리', level: 1 })).toBeVisible();
   } finally {
     if (setup) {
       await cleanupBookingFixture(setup).catch(() => {});

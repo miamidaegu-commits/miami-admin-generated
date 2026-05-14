@@ -17,6 +17,29 @@ export async function loginAsAdmin(page, email, password) {
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible();
 }
 
+export async function loginAsStudent(page, email, password) {
+  await page.goto(BASE_URL);
+
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign In' }).click();
+
+  await expect(page).not.toHaveURL(/\/unauthorized/);
+  await expect(
+    page
+      .locator(
+        [
+          '[data-testid="student-dashboard"]',
+          '[data-testid="student-upcoming-private-lesson-card"]',
+          '[data-testid="student-private-slot-card"]',
+          '[data-testid="student-private-reservation-card"]',
+          '[data-testid="student-lesson-history-card"]',
+        ].join(', ')
+      )
+      .first()
+  ).toBeVisible({ timeout: 15000 });
+}
+
 export async function openDashboardSection(page, sectionName) {
   await page.getByRole('button', { name: sectionName, exact: true }).click();
   await expect(page.getByRole('heading', { name: sectionName, level: 1 })).toBeVisible();
