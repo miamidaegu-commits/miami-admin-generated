@@ -26,6 +26,7 @@ const DEFAULT_GROUP_LESSON_FORM = {
 const DEFAULT_GROUP_LESSON_SERIES_FORM = {
   startDate: '',
   endDate: '',
+  weekdays: [],
 }
 
 function createDefaultGroupLessonForm(overrides = {}) {
@@ -56,6 +57,7 @@ export function validateGroupLessonSeriesFormFields(form) {
   const errors = {}
   const startDate = String(form.startDate || '').trim()
   const endDate = String(form.endDate || '').trim()
+  const weekdays = normalizeGroupWeekdaysFromDoc(form.weekdays)
 
   if (!startDate) errors.startDate = '시작일을 선택해주세요.'
   else if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) errors.startDate = '시작일 형식이 올바르지 않습니다.'
@@ -73,11 +75,14 @@ export function validateGroupLessonSeriesFormFields(form) {
     }
   }
 
+  if (weekdays.length === 0) errors.weekdays = '생성할 요일을 1개 이상 선택해주세요.'
+
   return {
     valid: Object.keys(errors).length === 0,
     errors,
     startDate,
     endDate,
+    weekdays,
   }
 }
 
@@ -326,7 +331,7 @@ export default function useGroupLessonManagementFlow({
       return
     }
 
-    setGroupLessonSeriesForm(createDefaultGroupLessonSeriesForm())
+    setGroupLessonSeriesForm(createDefaultGroupLessonSeriesForm({ weekdays: wd }))
     setGroupLessonSeriesFormErrors({})
     setGroupLessonSeriesModalOpen(true)
   }
@@ -347,11 +352,15 @@ export default function useGroupLessonManagementFlow({
     if (!result.valid) return
 
     const gc = selectedGroupClass
-    const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(gc.weekdays))
+    const weekdaySet = new Set(result.weekdays)
     const timeStr = String(gc.time || '').trim()
     const subjectStr = String(gc.subject || '').trim()
     if (weekdaySet.size === 0 || !timeStr || !subjectStr) {
-      alert('반 설정(요일·시간·과목)을 확인해주세요.')
+      alert(
+        weekdaySet.size === 0
+          ? '생성할 요일을 1개 이상 선택해주세요.'
+          : '반 설정(시간·과목)을 확인해주세요.'
+      )
       return
     }
 
@@ -366,7 +375,7 @@ export default function useGroupLessonManagementFlow({
         teacher: gc.teacher,
         time: gc.time,
         subject: gc.subject,
-        weekdays: gc.weekdays,
+        weekdays: result.weekdays,
         maxStudents: gc.maxStudents,
         startYmd: result.startDate,
         endYmd: result.endDate,

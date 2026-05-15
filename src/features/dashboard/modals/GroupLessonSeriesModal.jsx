@@ -1,4 +1,8 @@
-import { formatGroupWeekdaysDisplay } from '../dashboardViewUtils.js'
+import {
+  formatGroupWeekdaysDisplay,
+  GROUP_RECURRENCE_WEEKDAY_TOGGLES,
+  normalizeGroupWeekdaysFromDoc,
+} from '../dashboardViewUtils.js'
 
 export default function GroupLessonSeriesModal({
   selectedGroupClass,
@@ -10,6 +14,19 @@ export default function GroupLessonSeriesModal({
   submitGroupLessonSeriesModal,
   isGroupLessonSeriesSubmitting,
 }) {
+  const selectedWeekdays = normalizeGroupWeekdaysFromDoc(groupLessonSeriesForm.weekdays)
+  const selectedWeekdaySet = new Set(selectedWeekdays)
+
+  function toggleWeekday(value) {
+    const next = selectedWeekdaySet.has(value)
+      ? selectedWeekdays.filter((weekday) => weekday !== value)
+      : [...selectedWeekdays, value]
+    setGroupLessonSeriesForm((prev) => ({
+      ...prev,
+      weekdays: normalizeGroupWeekdaysFromDoc(next),
+    }))
+  }
+
   return (
     <div
       role="dialog"
@@ -128,6 +145,56 @@ export default function GroupLessonSeriesModal({
               </span>
             ) : null}
           </label>
+
+          <fieldset
+            style={{
+              margin: 0,
+              padding: 0,
+              border: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <legend style={{ padding: 0, fontSize: 13, opacity: 0.85 }}>생성 요일</legend>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {GROUP_RECURRENCE_WEEKDAY_TOGGLES.map((weekday) => {
+                const checked = selectedWeekdaySet.has(weekday.value)
+                return (
+                  <label
+                    key={weekday.value}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      minWidth: 48,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: checked ? '1px solid #6b8cff' : '1px solid #444',
+                      background: checked ? '#243257' : '#1f1f1f',
+                      color: 'white',
+                      fontSize: 13,
+                      cursor: isGroupLessonSeriesSubmitting ? 'not-allowed' : 'pointer',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={isGroupLessonSeriesSubmitting}
+                      onChange={() => toggleWeekday(weekday.value)}
+                    />
+                    <span>{weekday.label}</span>
+                  </label>
+                )
+              })}
+            </div>
+            {groupLessonSeriesFormErrors.weekdays ? (
+              <span style={{ color: '#f08080', fontSize: 12 }}>
+                {groupLessonSeriesFormErrors.weekdays}
+              </span>
+            ) : null}
+          </fieldset>
 
           {groupLessonSeriesPlannedCount != null ? (
             <p style={{ margin: 0, fontSize: 12, opacity: 0.8 }}>

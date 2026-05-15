@@ -55,7 +55,7 @@ export default function useGroupsSectionViewModel({
 
   const groupLessonSeriesPlannedCount = useMemo(() => {
     if (!groupLessonSeriesModalOpen || !selectedGroupClass) return null
-    const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(selectedGroupClass.weekdays))
+    const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(groupLessonSeriesForm.weekdays))
     if (weekdaySet.size === 0) return null
     const s = String(groupLessonSeriesForm.startDate || '').trim()
     const e = String(groupLessonSeriesForm.endDate || '').trim()
@@ -70,6 +70,7 @@ export default function useGroupsSectionViewModel({
     selectedGroupClass,
     groupLessonSeriesForm.startDate,
     groupLessonSeriesForm.endDate,
+    groupLessonSeriesForm.weekdays,
   ])
 
   const sortedGroupClasses = useMemo(() => {
