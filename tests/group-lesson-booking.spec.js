@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
+import path from 'node:path';
 import admin from 'firebase-admin';
 import { ADMIN_STORAGE_STATE } from './global-setup.js';
 import { BASE_URL, getGroupRow, loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
@@ -13,9 +15,18 @@ import {
 test.use({ storageState: ADMIN_STORAGE_STATE });
 
 const require = createRequire(import.meta.url);
-const serviceAccount = require('../serviceAccountKey.json');
+const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
+
+function hasServiceAccount() {
+  return fs.existsSync(SERVICE_ACCOUNT_PATH);
+}
 
 function getAdminDb() {
+  if (!hasServiceAccount()) {
+    throw new Error('serviceAccountKey.json is required for cross-academy admin fixture tests.');
+  }
+
+  const serviceAccount = require(SERVICE_ACCOUNT_PATH);
   if (!admin.apps.length) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
@@ -148,6 +159,8 @@ test('정원 5명, 고정 학생 3명일 때 예약 2명만 성공하고 3번째
 });
 
 test('다른 academy의 수업은 보이거나 예약 수정되지 않는다', async ({ page }) => {
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 없어서 cross-academy admin fixture test를 건너뜁니다.');
+
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   const setup = await createTempGroupBookingSetup(page, {
     token: token(),
