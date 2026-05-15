@@ -170,7 +170,8 @@ async function recomputePrivatePackageUsage(packageId) {
 
 
 /**
- * groupClassId + date + time 기준 중복은 건너뜀. Firestore addDoc 순차 호출.
+ * academyId + groupClassId/groupClassID + date + time 기준 중복은 건너뜀.
+ * Firestore addDoc 순차 호출.
  */
 async function createGroupLessonsInDateRange({
   groupClassId,
@@ -198,25 +199,29 @@ async function createGroupLessonsInDateRange({
 
   if (weekdaySet.size === 0 || !timeStr || !subjectStr) return { created, skippedDup }
 
-  const prior = Array.isArray(existingLessons) ? existingLessons : []
+  const prior = Array.isArray(existingLessons) ? [...existingLessons] : []
 
   for (const dateStr of iterateYmdRangeInclusive(startYmd, endYmd)) {
     const dt = parseYmdToLocalDate(dateStr)
     if (!dt || !weekdaySet.has(jsDateToGroupWeekdayCode(dt))) continue
 
-    const dup = prior.some(
-      (gl) =>
+    const dup = prior.some((gl) => {
+      const lessonAcademyId = String(gl?.academyId || '').trim()
+      return (
+        (!academyIdValue || !lessonAcademyId || lessonAcademyId === academyIdValue) &&
         getGroupLessonGroupId(gl) === String(groupClassId) &&
         String(gl.date || '') === dateStr &&
         String(gl.time || '').trim() === timeStr
-    )
+      )
+    })
     if (dup) {
       skippedDup += 1
       continue
     }
 
-    await addDoc(collection(db, 'groupLessons'), {
+    const lessonData = {
       groupClassId,
+      groupClassID: groupClassId,
       academyId: academyIdValue,
       groupClassName: groupClassName || '',
       teacher: teacherNorm,
@@ -233,7 +238,10 @@ async function createGroupLessonsInDateRange({
       generationKind: 'recurring',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-    })
+    }
+
+    await addDoc(collection(db, 'groupLessons'), lessonData)
+    prior.push(lessonData)
     created += 1
   }
 
