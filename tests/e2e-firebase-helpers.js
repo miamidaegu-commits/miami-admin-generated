@@ -76,6 +76,10 @@ export async function getGroupPackageStartDate(page, params) {
   return runFirebaseTask(page, 'getGroupPackageStartDate', params);
 }
 
+export async function getActiveGroupStudentEnrollment(page, params) {
+  return runFirebaseTask(page, 'getActiveGroupStudentEnrollment', params);
+}
+
 export async function createTempGroupBookingSetup(page, params) {
   return runFirebaseTask(page, 'createTempGroupBookingSetup', params);
 }
@@ -167,6 +171,8 @@ async function runFirebaseTask(page, taskName, params) {
           return cleanupTempCalendarGroupLessonSetupTask({ db, firestore, params });
         case 'getGroupPackageStartDate':
           return getGroupPackageStartDateTask({ db, firestore, params });
+        case 'getActiveGroupStudentEnrollment':
+          return getActiveGroupStudentEnrollmentTask({ db, firestore, params });
         case 'createTempGroupBookingSetup':
           return createTempGroupBookingSetupTask({ db, firestore, params });
         case 'cleanupTempGroupBookingSetup':
@@ -247,6 +253,35 @@ async function runFirebaseTask(page, taskName, params) {
         }
 
         return lessons;
+      }
+
+      async function getActiveGroupStudentEnrollmentTask({ db, firestore: firestoreModule, params }) {
+        const { collection, getDocs, query, where } = firestoreModule;
+        const studentId = String(params?.studentId || '').trim();
+        const groupClassId = String(params?.groupClassId || '').trim();
+        if (!studentId || !groupClassId) return null;
+
+        const snap = await getDocs(
+          query(
+            collection(db, 'groupStudents'),
+            where('academyId', '==', academyId),
+            where('studentId', '==', studentId),
+            where('groupClassId', '==', groupClassId),
+            where('status', '==', 'active')
+          )
+        );
+        if (snap.empty) return null;
+
+        const docItem = snap.docs[0];
+        const row = docItem.data() || {};
+        return {
+          id: docItem.id,
+          studentId: String(row.studentId || ''),
+          studentName: String(row.studentName || row.name || ''),
+          groupClassId: String(row.groupClassId || ''),
+          packageId: String(row.packageId || ''),
+          status: String(row.status || ''),
+        };
       }
 
       async function createTempGroupStudentAddPackageTask({ db, firestore: firestoreModule, params }) {

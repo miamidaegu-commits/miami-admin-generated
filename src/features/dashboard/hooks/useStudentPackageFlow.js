@@ -725,6 +725,7 @@ export default function useStudentPackageFlow({
           newPackageId: docRef.id,
           newPackageType: result.packageType,
           isReenrollFlow: false,
+          academyId: String(userProfile?.academyId || '').trim(),
           studentId,
           studentName,
           teacher,
@@ -805,12 +806,17 @@ export default function useStudentPackageFlow({
     const startTimestamp = Timestamp.fromDate(new Date(y, mo - 1, d))
     const enrollStudentId = String(data.studentId || '').trim()
     const teacherNorm = normalizeText(data.teacher || '')
+    const academyId = String(data.academyId || userProfile?.academyId || '').trim()
 
     try {
       setBusyPostGroupReEnroll(true)
 
       const snap = await getDocs(
-        query(collection(db, 'groupStudents'), where('studentId', '==', enrollStudentId))
+        query(
+          collection(db, 'groupStudents'),
+          where('academyId', '==', academyId),
+          where('studentId', '==', enrollStudentId)
+        )
       )
 
       const batch = writeBatch(db)
@@ -827,7 +833,7 @@ export default function useStudentPackageFlow({
       const newGroupStudentRef = doc(collection(db, 'groupStudents'))
       batch.set(newGroupStudentRef, {
         groupClassId,
-        academyId: String(data.academyId || userProfile?.academyId || '').trim(),
+        academyId,
         classID: groupClassId,
         studentId: enrollStudentId,
         studentName: String(data.studentName || '').trim() || '-',
