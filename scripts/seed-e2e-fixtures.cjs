@@ -12,6 +12,7 @@ const EXPECTED_PROJECT_ID =
   process.env.VITE_FIREBASE_PROJECT_ID ||
   "miami-e2e";
 const SCHOOL_TIME_ZONE = "Asia/Seoul";
+const E2E_ACADEMY_ID = process.env.E2E_ACADEMY_ID || "academy_e2e_default";
 
 const IDS = {
   student: "e2e-baseline-student-inagyumi",
@@ -166,6 +167,7 @@ async function run() {
   const groupCoverageEndDate = groupLessonDates[groupLessonDates.length - 1];
 
   await upsertDoc("privateStudents", IDS.student, {
+    academyId: E2E_ACADEMY_ID,
     name: FIXTURE.studentName,
     teacher: FIXTURE.teacherName,
     phone: "010-0000-0000",
@@ -178,6 +180,7 @@ async function run() {
   });
 
   await upsertDoc("groupClasses", IDS.groupClass, {
+    academyId: E2E_ACADEMY_ID,
     name: FIXTURE.groupName,
     teacher: FIXTURE.teacherName,
     maxStudents: 8,
@@ -187,6 +190,7 @@ async function run() {
   });
 
   await upsertDoc("studentPackages", IDS.privatePackage, {
+    academyId: E2E_ACADEMY_ID,
     studentId: IDS.student,
     studentName: FIXTURE.studentName,
     teacher: FIXTURE.teacherName,
@@ -207,6 +211,7 @@ async function run() {
   });
 
   await upsertDoc("studentPackages", IDS.groupPackage, {
+    academyId: E2E_ACADEMY_ID,
     studentId: IDS.student,
     studentName: FIXTURE.studentName,
     teacher: FIXTURE.teacherName,
@@ -228,6 +233,7 @@ async function run() {
   });
 
   await upsertDoc("groupStudents", IDS.groupStudent, {
+    academyId: E2E_ACADEMY_ID,
     groupClassId: IDS.groupClass,
     groupClassID: IDS.groupClass,
     classID: IDS.groupClass,
@@ -276,6 +282,7 @@ async function run() {
 
   for (const lesson of groupLessonDocs) {
     await upsertDoc("groupLessons", lesson.id, {
+      academyId: E2E_ACADEMY_ID,
       groupClassId: IDS.groupClass,
       groupClassID: IDS.groupClass,
       groupClassName: FIXTURE.groupName,
@@ -295,6 +302,7 @@ async function run() {
   }
 
   await upsertDoc("lessons", IDS.privateLesson1, {
+    academyId: E2E_ACADEMY_ID,
     studentId: IDS.student,
     studentName: FIXTURE.studentName,
     student: FIXTURE.studentName,
@@ -311,6 +319,7 @@ async function run() {
   });
 
   await upsertDoc("lessons", IDS.privateLesson2, {
+    academyId: E2E_ACADEMY_ID,
     studentId: IDS.student,
     studentName: FIXTURE.studentName,
     student: FIXTURE.studentName,
@@ -327,6 +336,7 @@ async function run() {
   });
 
   await upsertDoc("creditTransactions", IDS.creditPrivateCreated, {
+    academyId: E2E_ACADEMY_ID,
     studentId: IDS.student,
     studentName: FIXTURE.studentName,
     teacher: FIXTURE.teacherName,
@@ -344,6 +354,7 @@ async function run() {
   });
 
   await upsertDoc("creditTransactions", IDS.creditGroupCreated, {
+    academyId: E2E_ACADEMY_ID,
     studentId: IDS.student,
     studentName: FIXTURE.studentName,
     teacher: FIXTURE.teacherName,

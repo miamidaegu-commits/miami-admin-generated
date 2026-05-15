@@ -9,12 +9,24 @@ export function escapeRegExp(value) {
 export async function loginAsAdmin(page, email, password) {
   await page.goto(BASE_URL);
 
+  const studentManagementButton = page.getByRole('button', { name: '학생 관리', exact: true });
+  await Promise.race([
+    page.waitForURL(/\/dashboard/, { timeout: 2000 }).catch(() => null),
+    studentManagementButton.waitFor({ state: 'visible', timeout: 2000 }).catch(() => null),
+    page.getByLabel('Email').waitFor({ state: 'visible', timeout: 2000 }).catch(() => null),
+  ]);
+
+  if (/\/dashboard/.test(page.url()) || (await studentManagementButton.isVisible().catch(() => false))) {
+    await expect(studentManagementButton).toBeVisible();
+    return;
+  }
+
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign In' }).click();
 
   await expect(page).toHaveURL(/\/dashboard/);
-  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible();
+  await expect(studentManagementButton).toBeVisible();
 }
 
 export async function openDashboardSection(page, sectionName) {

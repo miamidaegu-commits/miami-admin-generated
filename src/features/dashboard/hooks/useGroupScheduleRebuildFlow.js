@@ -169,6 +169,7 @@ export default function useGroupScheduleRebuildFlow({
         startYmd: effectiveFromYmd,
         endYmd,
         existingLessons: existingAfterDelete,
+        academyId: g.academyId || userProfile?.academyId,
       })
 
       closePostGroupScheduleRebuildModal({ force: true })

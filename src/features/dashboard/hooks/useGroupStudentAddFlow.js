@@ -244,6 +244,7 @@ export default function useGroupStudentAddFlow({
       setBusyGroupStudentId('__add__')
       await addDoc(collection(db, 'groupStudents'), {
         groupClassId: selectedGroupClass.id,
+        academyId: String(selectedGroupClass.academyId || userProfile?.academyId || '').trim(),
         classID: selectedGroupClass.id,
         studentId,
         studentName,
