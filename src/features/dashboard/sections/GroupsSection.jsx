@@ -32,6 +32,7 @@ export default function GroupsSection({
   openGroupLessonAttendanceModal,
   canEditLesson,
   openGroupLessonEditModal,
+  updateGroupLessonBookingSettings,
   canDeleteLesson,
   handleDeleteGroupLesson,
   getGroupStudentDisplayName,
@@ -456,12 +457,13 @@ export default function GroupsSection({
                   <div
                     className="table-head"
                     style={{
-                      gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
+                      gridTemplateColumns: '0.9fr 0.6fr 1fr 1.2fr minmax(240px, auto)',
                     }}
                   >
                     <span>날짜</span>
                     <span>시간</span>
                     <span>과목</span>
+                    <span>예약</span>
                     <span>작업</span>
                   </div>
 
@@ -479,13 +481,87 @@ export default function GroupsSection({
                         data-lesson-time={gl.time || ''}
                         data-lesson-subject={gl.subject || ''}
                         style={{
-                          gridTemplateColumns: '1fr 0.7fr 1.2fr minmax(200px, auto)',
+                          gridTemplateColumns: '0.9fr 0.6fr 1fr 1.2fr minmax(240px, auto)',
                         }}
                       >
                         <span>{gl.date || '-'}</span>
                         <span>{gl.time || '-'}</span>
                         <span>{gl.subject || '-'}</span>
+                        <span style={{ fontSize: 12, lineHeight: 1.45 }}>
+                          <strong>{gl.isBookable ? '예약 가능' : '비활성'}</strong>
+                          <br />
+                          정원 {Number(gl.capacity ?? 0)} · 고정 {Number(gl.fixedStudentCount ?? 0)} · 예약{' '}
+                          {Number(gl.activeReservationCount ?? gl.bookedCount ?? 0)}
+                          <br />
+                          잔여 {Number(gl.remainingSeats ?? 0)}
+                        </span>
                         <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {isAdmin ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                updateGroupLessonBookingSettings(gl, {
+                                  isBookable: !gl.isBookable,
+                                })
+                              }
+                              disabled={
+                                rowBusy ||
+                                busyGroupLessonId === '__add__' ||
+                                busyGroupId === '__add__' ||
+                                busyGroupId === selectedGroupClass.id
+                              }
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #445566',
+                                background: gl.isBookable ? '#302a1f' : '#1f2a44',
+                                color: 'white',
+                                cursor:
+                                  rowBusy ||
+                                  busyGroupLessonId === '__add__' ||
+                                  busyGroupId === '__add__' ||
+                                  busyGroupId === selectedGroupClass.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                              }}
+                            >
+                              {gl.isBookable ? '예약 닫기' : '예약 열기'}
+                            </button>
+                          ) : null}
+                          {isAdmin ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const input = window.prompt(
+                                  '수업 정원을 입력하세요.',
+                                  String(gl.capacity ?? selectedGroupClass.maxStudents ?? '')
+                                )
+                                if (input === null) return
+                                updateGroupLessonBookingSettings(gl, { capacity: input })
+                              }}
+                              disabled={
+                                rowBusy ||
+                                busyGroupLessonId === '__add__' ||
+                                busyGroupId === '__add__' ||
+                                busyGroupId === selectedGroupClass.id
+                              }
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #555',
+                                background: '#1f2a44',
+                                color: 'white',
+                                cursor:
+                                  rowBusy ||
+                                  busyGroupLessonId === '__add__' ||
+                                  busyGroupId === selectedGroupClass.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                              }}
+                            >
+                              정원 수정
+                            </button>
+                          ) : null}
                           {canManageAttendance ? (
                             <button
                               type="button"

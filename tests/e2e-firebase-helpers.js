@@ -76,6 +76,59 @@ export async function getGroupPackageStartDate(page, params) {
   return runFirebaseTask(page, 'getGroupPackageStartDate', params);
 }
 
+export async function createTempGroupBookingSetup(page, params) {
+  return runFirebaseTask(page, 'createTempGroupBookingSetup', params);
+}
+
+export async function cleanupTempGroupBookingSetup(page, params) {
+  if (!params?.token && !params?.groupClassId && !params?.groupLessonId) return;
+  await runFirebaseTask(page, 'cleanupTempGroupBookingSetup', params);
+}
+
+export async function callGroupBookingFunction(page, functionName, payload) {
+  const firebaseConfig = getFirebaseConfigFromEnv(process.env);
+
+  return page.evaluate(
+    async ({ firebaseConfig, firebaseVersion, functionName, payload }) => {
+      const [
+        { getApp, getApps, initializeApp },
+        { getAuth, onAuthStateChanged },
+        { getFunctions, httpsCallable },
+      ] =
+        await Promise.all([
+          import(`https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-app.js`),
+          import(`https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-auth.js`),
+          import(`https://www.gstatic.com/firebasejs/${firebaseVersion}/firebase-functions.js`),
+        ]);
+      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const auth = getAuth(app);
+      if (!auth.currentUser) {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Auth user not ready for callable.')), 30000);
+          const unsub = onAuthStateChanged(auth, (user) => {
+            if (!user) return;
+            clearTimeout(timeout);
+            unsub();
+            resolve();
+          });
+        });
+      }
+      const fn = httpsCallable(getFunctions(app, 'us-central1'), functionName);
+      try {
+        const result = await fn(payload || {});
+        return { ok: true, data: result.data || null };
+      } catch (error) {
+        return {
+          ok: false,
+          code: error?.code || '',
+          message: error?.message || String(error),
+        };
+      }
+    },
+    { firebaseConfig, firebaseVersion: FIREBASE_VERSION, functionName, payload }
+  );
+}
+
 async function runFirebaseTask(page, taskName, params) {
   const firebaseConfig = getFirebaseConfigFromEnv(process.env)
 
@@ -114,6 +167,10 @@ async function runFirebaseTask(page, taskName, params) {
           return cleanupTempCalendarGroupLessonSetupTask({ db, firestore, params });
         case 'getGroupPackageStartDate':
           return getGroupPackageStartDateTask({ db, firestore, params });
+        case 'createTempGroupBookingSetup':
+          return createTempGroupBookingSetupTask({ db, firestore, params });
+        case 'cleanupTempGroupBookingSetup':
+          return cleanupTempGroupBookingSetupTask({ db, firestore, params });
         default:
           throw new Error(`Unknown Firebase helper task: ${taskName}`);
       }
@@ -584,6 +641,226 @@ async function runFirebaseTask(page, taskName, params) {
         }
 
         return earliestFutureLessonYmd;
+      }
+
+      async function createTempGroupBookingSetupTask({ db, firestore: firestoreModule, params }) {
+        const { Timestamp, collection, doc, setDoc } = firestoreModule;
+        const {
+          token,
+          capacity = 5,
+          fixedCount = 0,
+          bookable = true,
+          lessonDate,
+          otherAcademy = false,
+        } = params;
+        const academyIdForDocs = otherAcademy ? `academy_other_${token}` : academyId;
+        const nowTs = Timestamp.now();
+        const normalizedToken = String(token || Date.now()).trim();
+        const groupClassRef = doc(collection(db, 'groupClasses'));
+        const groupLessonRef = doc(collection(db, 'groupLessons'));
+        const groupName = `E2E 예약반 ${normalizedToken}`;
+        const lessonDateValue = String(lessonDate || getFutureYmd(14)).trim();
+        const teacher = `booking-teacher-${normalizedToken}`.toLowerCase();
+
+        await setDoc(groupClassRef, {
+          academyId: academyIdForDocs,
+          name: groupName,
+          teacher,
+          maxStudents: Number(capacity),
+          time: '18:30',
+          subject: 'Booking',
+          weekdays: [],
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+        await setDoc(groupLessonRef, {
+          academyId: academyIdForDocs,
+          groupClassId: groupClassRef.id,
+          groupClassID: groupClassRef.id,
+          groupClassName: groupName,
+          teacher,
+          date: lessonDateValue,
+          time: '18:30',
+          subject: 'Booking',
+          completed: false,
+          countedStudentIDs: [],
+          attendanceAppliedAt: null,
+          bookingMode: bookable ? 'hybrid' : 'fixed',
+          capacity: Number(capacity),
+          bookedCount: 0,
+          isBookable: bookable === true,
+          generationKind: 'manual',
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        });
+
+        const fixedStudents = [];
+        for (let i = 0; i < Number(fixedCount || 0); i += 1) {
+          const studentRef = doc(collection(db, 'privateStudents'));
+          const packageRef = doc(collection(db, 'studentPackages'));
+          const groupStudentRef = doc(collection(db, 'groupStudents'));
+          const studentName = `E2E 고정 ${normalizedToken} ${i + 1}`;
+          await setDoc(studentRef, {
+            academyId: academyIdForDocs,
+            name: studentName,
+            teacher,
+            createdAt: nowTs,
+            updatedAt: nowTs,
+          });
+          await setDoc(packageRef, {
+            academyId: academyIdForDocs,
+            studentId: studentRef.id,
+            studentName,
+            teacher,
+            packageType: 'group',
+            groupClassId: groupClassRef.id,
+            groupClassName: groupName,
+            title: `E2E 고정권 ${normalizedToken} ${i + 1}`,
+            totalCount: 4,
+            usedCount: 0,
+            remainingCount: 4,
+            status: 'active',
+            registrationStartDate: lessonDateValue,
+            createdAt: nowTs,
+            updatedAt: nowTs,
+          });
+          await setDoc(groupStudentRef, {
+            academyId: academyIdForDocs,
+            groupClassId: groupClassRef.id,
+            classID: groupClassRef.id,
+            studentId: studentRef.id,
+            studentName,
+            name: studentName,
+            teacher,
+            packageId: packageRef.id,
+            packageType: 'group',
+            paidLessons: 4,
+            attendanceCount: 0,
+            startDate: Timestamp.fromDate(new Date(`${lessonDateValue}T00:00:00`)),
+            status: 'active',
+            studentStatus: 'active',
+            excludedDates: [],
+            createdAt: nowTs,
+            updatedAt: nowTs,
+          });
+          fixedStudents.push({
+            studentId: studentRef.id,
+            studentName,
+            packageId: packageRef.id,
+            groupStudentId: groupStudentRef.id,
+          });
+        }
+
+        const bookingStudents = [];
+        for (let i = 0; i < 5; i += 1) {
+          const studentRef = doc(collection(db, 'privateStudents'));
+          const packageRef = doc(collection(db, 'studentPackages'));
+          const studentName = `E2E 예약학생 ${normalizedToken} ${i + 1}`;
+          await setDoc(studentRef, {
+            academyId: academyIdForDocs,
+            name: studentName,
+            teacher,
+            createdAt: nowTs,
+            updatedAt: nowTs,
+          });
+          await setDoc(packageRef, {
+            academyId: academyIdForDocs,
+            studentId: studentRef.id,
+            studentName,
+            teacher,
+            packageType: 'group',
+            groupClassId: groupClassRef.id,
+            groupClassName: groupName,
+            title: `E2E 예약권 ${normalizedToken} ${i + 1}`,
+            totalCount: 4,
+            usedCount: 0,
+            remainingCount: 4,
+            status: 'active',
+            registrationStartDate: lessonDateValue,
+            createdAt: nowTs,
+            updatedAt: nowTs,
+          });
+          bookingStudents.push({
+            studentId: studentRef.id,
+            studentName,
+            packageId: packageRef.id,
+          });
+        }
+
+        return {
+          token: normalizedToken,
+          academyId: academyIdForDocs,
+          groupClassId: groupClassRef.id,
+          groupLessonId: groupLessonRef.id,
+          groupName,
+          lessonDate: lessonDateValue,
+          fixedStudents,
+          bookingStudents,
+        };
+      }
+
+      async function cleanupTempGroupBookingSetupTask({ db, firestore: firestoreModule, params }) {
+        const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
+        const { token, groupClassId, groupLessonId, bookingStudents = [], fixedStudents = [] } = params;
+        const docIds = {
+          privateStudents: new Set(),
+          studentPackages: new Set(),
+          groupStudents: new Set(),
+          groupLessonReservations: new Set(),
+          groupLessonCancelUsage: new Set(),
+        };
+
+        if (groupLessonId) {
+          try {
+            const reservationSnap = await getDocs(
+              query(
+                collection(db, 'groupLessonReservations'),
+                where('academyId', '==', academyId),
+                where('lessonId', '==', groupLessonId)
+              )
+            );
+            reservationSnap.docs.forEach((item) => docIds.groupLessonReservations.add(item.id));
+          } catch (_) {
+            // Older deployed rules may not expose the new reservation collection yet.
+          }
+        }
+        if (groupClassId) {
+          const [packageSnap, groupStudentSnap] = await Promise.all([
+            getDocs(query(collection(db, 'studentPackages'), where('academyId', '==', academyId), where('groupClassId', '==', groupClassId))),
+            getDocs(query(collection(db, 'groupStudents'), where('academyId', '==', academyId), where('groupClassId', '==', groupClassId))),
+          ]);
+          packageSnap.docs.forEach((item) => docIds.studentPackages.add(item.id));
+          groupStudentSnap.docs.forEach((item) => docIds.groupStudents.add(item.id));
+        }
+        if (token) {
+          const studentSnap = await getDocs(query(collection(db, 'privateStudents'), where('academyId', '==', academyId), where('teacher', '==', `booking-teacher-${token}`.toLowerCase())));
+          studentSnap.docs.forEach((item) => docIds.privateStudents.add(item.id));
+        }
+        for (const student of [...bookingStudents, ...fixedStudents]) {
+          const studentId = String(student?.studentId || '').trim();
+          if (!studentId) continue;
+          try {
+            const usageSnap = await getDocs(query(collection(db, 'groupLessonCancelUsage'), where('academyId', '==', academyId), where('studentId', '==', studentId)));
+            usageSnap.docs.forEach((item) => docIds.groupLessonCancelUsage.add(item.id));
+          } catch (_) {
+            // Older deployed rules may not expose the new usage collection yet.
+          }
+        }
+
+        await Promise.all([
+          ...Array.from(docIds.groupLessonReservations).map((id) => deleteDoc(doc(db, 'groupLessonReservations', id)).catch(() => {})),
+          ...Array.from(docIds.groupLessonCancelUsage).map((id) => deleteDoc(doc(db, 'groupLessonCancelUsage', id)).catch(() => {})),
+          ...Array.from(docIds.groupStudents).map((id) => deleteDoc(doc(db, 'groupStudents', id)).catch(() => {})),
+          ...Array.from(docIds.studentPackages).map((id) => deleteDoc(doc(db, 'studentPackages', id)).catch(() => {})),
+          ...Array.from(docIds.privateStudents).map((id) => deleteDoc(doc(db, 'privateStudents', id)).catch(() => {})),
+          groupLessonId ? deleteDoc(doc(db, 'groupLessons', groupLessonId)).catch(() => {}) : Promise.resolve(),
+          groupClassId ? deleteDoc(doc(db, 'groupClasses', groupClassId)).catch(() => {}) : Promise.resolve(),
+        ]);
+      }
+
+      function getFutureYmd(offsetDays) {
+        const now = new Date();
+        return formatYmdFromDate(new Date(now.getFullYear(), now.getMonth(), now.getDate() + offsetDays));
       }
 
       function formatYmdFromDate(date) {

@@ -1,8 +1,9 @@
 // src/pages/Login.jsx
 import { useState } from 'react'
 import { signInWithEmailAndPassword } from 'firebase/auth'
+import { doc, getDoc } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
-import { auth } from './firebase'
+import { auth, db } from './firebase'
 
 export default function Login() {
   const [email, setEmail] = useState('')
@@ -16,8 +17,10 @@ export default function Login() {
     setError('')
     setLoading(true)
     try {
-      await signInWithEmailAndPassword(auth, email, password)
-      navigate('/dashboard')
+      const credential = await signInWithEmailAndPassword(auth, email, password)
+      const profileSnap = await getDoc(doc(db, 'users', credential.user.uid))
+      const role = profileSnap.exists() ? String(profileSnap.data()?.role || '') : ''
+      navigate(role === 'student' ? '/student/bookings' : '/dashboard')
     } catch (err) {
       setError(getFriendlyError(err.code))
     } finally {

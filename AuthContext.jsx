@@ -21,6 +21,9 @@ const emptyState = {
   canDeleteStudent: false,
   canCreateLessonDirectly: false,
   requiresLessonApproval: false,
+  academyId: '',
+  studentId: '',
+  studentName: '',
 }
 
 export function AuthProvider({ children }) {
@@ -38,6 +41,9 @@ export function AuthProvider({ children }) {
   const [canDeleteStudent, setCanDeleteStudent] = useState(emptyState.canDeleteStudent)
   const [canCreateLessonDirectly, setCanCreateLessonDirectly] = useState(emptyState.canCreateLessonDirectly)
   const [requiresLessonApproval, setRequiresLessonApproval] = useState(emptyState.requiresLessonApproval)
+  const [academyId, setAcademyId] = useState(emptyState.academyId)
+  const [studentId, setStudentId] = useState(emptyState.studentId)
+  const [studentName, setStudentName] = useState(emptyState.studentName)
 
   const resetSession = () => {
     setUser(null)
@@ -53,6 +59,9 @@ export function AuthProvider({ children }) {
     setCanDeleteStudent(false)
     setCanCreateLessonDirectly(false)
     setRequiresLessonApproval(false)
+    setAcademyId('')
+    setStudentId('')
+    setStudentName('')
   }
 
   useEffect(() => {
@@ -84,6 +93,12 @@ export function AuthProvider({ children }) {
           typeof data.teacherName === 'string'
             ? data.teacherName.trim().toLowerCase()
             : ''
+        const normalizedAcademyId =
+          typeof data.academyId === 'string' ? data.academyId.trim() : ''
+        const normalizedStudentId =
+          typeof data.studentId === 'string' ? data.studentId.trim() : ''
+        const normalizedStudentName =
+          typeof data.studentName === 'string' ? data.studentName.trim() : ''
 
         console.log('[AuthContext] uid=', firebaseUser.uid)
         console.log('[AuthContext] email=', firebaseUser.email)
@@ -105,6 +120,9 @@ export function AuthProvider({ children }) {
         setIsAdmin(admin)
         setIsActive(active)
         setTeacherName(normalizedTeacherName)
+        setAcademyId(normalizedAcademyId)
+        setStudentId(normalizedStudentId)
+        setStudentName(normalizedStudentName)
 
         setCanAddStudent(admin || data.canAddStudent === true)
         setCanEditLesson(admin || data.canEditLesson === true)
@@ -141,6 +159,9 @@ export function AuthProvider({ children }) {
       canDeleteStudent,
       canCreateLessonDirectly,
       requiresLessonApproval,
+      academyId,
+      studentId,
+      studentName,
     }),
     [
       user,
@@ -157,6 +178,9 @@ export function AuthProvider({ children }) {
       canDeleteStudent,
       canCreateLessonDirectly,
       requiresLessonApproval,
+      academyId,
+      studentId,
+      studentName,
     ]
   )
 

@@ -334,6 +334,7 @@ export default function Dashboard() {
   const [groupStudentsLoading, setGroupStudentsLoading] = useState(false)
   const [busyRemovingGroupStudentId, setBusyRemovingGroupStudentId] = useState(null)
   const [groupLessons, setGroupLessons] = useState([])
+  const [groupLessonReservations, setGroupLessonReservations] = useState([])
 
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
@@ -432,8 +433,15 @@ export default function Dashboard() {
     let unsubscribeStudents = () => {}
 
     if (roleKey === 'admin') {
+      const academyId = String(userProfile.academyId || '').trim()
+      const lessonsRef = academyId
+        ? query(collection(db, 'lessons'), where('academyId', '==', academyId))
+        : collection(db, 'lessons')
+      const privateStudentsRef = academyId
+        ? query(collection(db, 'privateStudents'), where('academyId', '==', academyId))
+        : collection(db, 'privateStudents')
       unsubscribeLessons = onSnapshot(
-        collection(db, 'lessons'),
+        lessonsRef,
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -450,7 +458,7 @@ export default function Dashboard() {
       )
 
       unsubscribeStudents = onSnapshot(
-        collection(db, 'privateStudents'),
+        privateStudentsRef,
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -537,7 +545,7 @@ export default function Dashboard() {
       unsubscribeLessonsLegacy()
       unsubscribeStudents()
     }
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [user?.uid, userProfile?.role, userProfile?.teacherName, userProfile?.academyId])
 
   useEffect(() => {
     if (!user?.uid) {
@@ -552,7 +560,10 @@ export default function Dashboard() {
 
     let ref
     if (role === 'admin') {
-      ref = collection(db, 'groupClasses')
+      const academyId = String(userProfile.academyId || '').trim()
+      ref = academyId
+        ? query(collection(db, 'groupClasses'), where('academyId', '==', academyId))
+        : collection(db, 'groupClasses')
     } else if (role === 'teacher' && teacherName) {
       ref = query(collection(db, 'groupClasses'), where('teacher', '==', teacherName))
     } else {
@@ -578,7 +589,7 @@ export default function Dashboard() {
       }
     )
     return () => unsubscribe()
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [user?.uid, userProfile?.role, userProfile?.teacherName, userProfile?.academyId])
 
   useEffect(() => {
     if (!user?.uid) {
@@ -591,8 +602,12 @@ export default function Dashboard() {
     }
 
     if (userProfile.role === 'admin') {
+      const academyId = String(userProfile.academyId || '').trim()
+      const ref = academyId
+        ? query(collection(db, 'studentPackages'), where('academyId', '==', academyId))
+        : collection(db, 'studentPackages')
       const unsubscribe = onSnapshot(
-        collection(db, 'studentPackages'),
+        ref,
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -636,7 +651,7 @@ export default function Dashboard() {
     }
 
     setStudentPackages([])
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [user?.uid, userProfile?.role, userProfile?.teacherName, userProfile?.academyId])
 
   useEffect(() => {
     if (activeSection !== 'groups') {
@@ -653,9 +668,11 @@ export default function Dashboard() {
 
     setGroupStudentsLoading(true)
     const groupClassId = selectedGroupClass.id
+    const academyId = String(selectedGroupClass.academyId || userProfile?.academyId || '').trim()
     const q = query(
       collection(db, 'groupStudents'),
-      where('groupClassId', '==', groupClassId)
+      where('groupClassId', '==', groupClassId),
+      where('academyId', '==', academyId)
     )
 
     const unsubscribe = onSnapshot(
@@ -676,7 +693,7 @@ export default function Dashboard() {
     )
 
     return () => unsubscribe()
-  }, [selectedGroupClass?.id])
+  }, [selectedGroupClass?.id, selectedGroupClass?.academyId, userProfile?.academyId])
 
   useEffect(() => {
     if (!selectedGroupClass?.id) return
@@ -693,30 +710,96 @@ export default function Dashboard() {
 
     setGroupLessonsLoading(true)
     const groupClassId = selectedGroupClass.id
-    const q = query(
+    const academyId = String(selectedGroupClass.academyId || userProfile?.academyId || '').trim()
+    const qA = query(
       collection(db, 'groupLessons'),
-      or(where('groupClassId', '==', groupClassId), where('groupClassID', '==', groupClassId))
+      where('groupClassId', '==', groupClassId),
+      where('academyId', '==', academyId)
+    )
+    const qB = query(
+      collection(db, 'groupLessons'),
+      where('groupClassID', '==', groupClassId),
+      where('academyId', '==', academyId)
+    )
+    const maps = [new Map(), new Map()]
+    const mergeRows = () => {
+      const byId = new Map()
+      maps.forEach((m) => {
+        m.forEach((value, key) => byId.set(key, value))
+      })
+      setGroupLessons(Array.from(byId.values()))
+      setGroupLessonsLoading(false)
+    }
+
+    const unsubA = onSnapshot(
+      qA,
+      (snapshot) => {
+        maps[0] = new Map(snapshot.docs.map((docItem) => [
+          docItem.id,
+          { id: docItem.id, ...docItem.data() },
+        ]))
+        mergeRows()
+      },
+      (error) => {
+        console.error('groupLessons 불러오기 실패:', error)
+        maps[0] = new Map()
+        mergeRows()
+      }
+    )
+    const unsubB = onSnapshot(
+      qB,
+      (snapshot) => {
+        maps[1] = new Map(snapshot.docs.map((docItem) => [
+          docItem.id,
+          { id: docItem.id, ...docItem.data() },
+        ]))
+        mergeRows()
+      },
+      (error) => {
+        console.error('groupLessons legacy 불러오기 실패:', error)
+        maps[1] = new Map()
+        setGroupLessonsLoading(false)
+      }
+    )
+
+    return () => {
+      unsubA()
+      unsubB()
+    }
+  }, [selectedGroupClass?.id, selectedGroupClass?.academyId, userProfile?.academyId])
+
+  useEffect(() => {
+    if (!selectedGroupClass?.id) {
+      setGroupLessonReservations([])
+      return
+    }
+
+    const academyId = String(selectedGroupClass.academyId || userProfile?.academyId || '').trim()
+    if (!academyId) {
+      setGroupLessonReservations([])
+      return
+    }
+
+    const q = query(
+      collection(db, 'groupLessonReservations'),
+      where('academyId', '==', academyId),
+      where('groupClassId', '==', selectedGroupClass.id)
     )
 
     const unsubscribe = onSnapshot(
       q,
       (snapshot) => {
-        const rows = snapshot.docs.map((docItem) => ({
-          id: docItem.id,
-          ...docItem.data(),
-        }))
-        setGroupLessons(rows)
-        setGroupLessonsLoading(false)
+        setGroupLessonReservations(
+          snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+        )
       },
       (error) => {
-        console.error('groupLessons 불러오기 실패:', error)
-        setGroupLessons([])
-        setGroupLessonsLoading(false)
+        console.error('groupLessonReservations 불러오기 실패:', error)
+        setGroupLessonReservations([])
       }
     )
-
     return () => unsubscribe()
-  }, [selectedGroupClass?.id])
+  }, [selectedGroupClass?.id, selectedGroupClass?.academyId, userProfile?.academyId])
 
   useEffect(() => {
     if (!user?.uid) {
@@ -734,8 +817,15 @@ export default function Dashboard() {
     const teacherName = String(userProfile.teacherName ?? '').trim()
 
     if (role === 'admin') {
+      const academyId = String(userProfile.academyId || '').trim()
+      const groupStudentsRef = academyId
+        ? query(collection(db, 'groupStudents'), where('academyId', '==', academyId))
+        : collection(db, 'groupStudents')
+      const groupLessonsRef = academyId
+        ? query(collection(db, 'groupLessons'), where('academyId', '==', academyId))
+        : collection(db, 'groupLessons')
       const unsubGs = onSnapshot(
-        collection(db, 'groupStudents'),
+        groupStudentsRef,
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -749,7 +839,7 @@ export default function Dashboard() {
         }
       )
       const unsubGl = onSnapshot(
-        collection(db, 'groupLessons'),
+        groupLessonsRef,
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
@@ -865,7 +955,7 @@ export default function Dashboard() {
 
     setStudentSummaryGroupStudents([])
     setStudentSummaryGroupLessons([])
-  }, [user?.uid, userProfile?.role, userProfile?.teacherName, groupClasses])
+  }, [user?.uid, userProfile?.role, userProfile?.teacherName, userProfile?.academyId, groupClasses])
 
   const studentIdLookup = useMemo(() => {
     const map = new Map()
@@ -914,6 +1004,7 @@ export default function Dashboard() {
     busyGroupLessonPurge,
     openGroupLessonAddModal,
     openGroupLessonEditModal,
+    updateGroupLessonBookingSettings,
     closeGroupLessonModal,
     submitGroupLessonModal,
     openGroupLessonSeriesModal,
@@ -1001,6 +1092,7 @@ export default function Dashboard() {
     groupClasses,
     groupStudents,
     groupLessons,
+    groupLessonReservations,
     selectedGroupClass,
     studentPackages,
     groupLessonSeriesForm,
@@ -1936,6 +2028,7 @@ export default function Dashboard() {
     openGroupLessonAttendanceModal,
     canEditLesson,
     openGroupLessonEditModal,
+    updateGroupLessonBookingSettings,
     canDeleteLesson,
     handleDeleteGroupLesson,
     getGroupStudentDisplayName,
