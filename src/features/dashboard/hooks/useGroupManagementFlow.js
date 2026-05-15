@@ -253,6 +253,7 @@ export default function useGroupManagementFlow({
       try {
         setBusyGroupId('__add__')
         const docRef = await addDoc(collection(db, 'groupClasses'), {
+          academyId: String(userProfile?.academyId || '').trim(),
           name: result.name,
           teacher: teacherKey,
           maxStudents: result.maxStudents,
@@ -286,6 +287,7 @@ export default function useGroupManagementFlow({
               startYmd: result.startDate,
               endYmd,
               existingLessons: groupLessons,
+              academyId: userProfile?.academyId,
             })
             if (created > 0 || skippedDup > 0) {
               alert(

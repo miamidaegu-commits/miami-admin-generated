@@ -7,6 +7,7 @@ const expectedProjectId =
   process.env.E2E_FIREBASE_PROJECT_ID ||
   process.env.VITE_FIREBASE_PROJECT_ID ||
   "miami-e2e";
+const E2E_ACADEMY_ID = process.env.E2E_ACADEMY_ID || "academy_e2e_default";
 
 if (!fs.existsSync(serviceAccountPath)) {
   throw new Error(`Missing service account key: ${serviceAccountPath}`);
@@ -41,11 +42,12 @@ const USERS = [
     email: "admin@example.com",
     password: "123456",
     displayName: "Admin E2E",
-    claims: { role: "admin" },
+    claims: { role: "admin", academyId: E2E_ACADEMY_ID },
     firestoreData: {
       email: "admin@example.com",
       displayName: "Admin E2E",
       role: "admin",
+      academyId: E2E_ACADEMY_ID,
       isActive: true,
       teacherName: "",
       canManageAttendance: true,
@@ -61,11 +63,12 @@ const USERS = [
     email: "teacher@example.com",
     password: "123456",
     displayName: "Teacher E2E",
-    claims: { role: "teacher" },
+    claims: { role: "teacher", academyId: E2E_ACADEMY_ID },
     firestoreData: {
       email: "teacher@example.com",
       displayName: "Teacher E2E",
       role: "teacher",
+      academyId: E2E_ACADEMY_ID,
       isActive: true,
       teacherName: "teacher",
       canManageAttendance: false,

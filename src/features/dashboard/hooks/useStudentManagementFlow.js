@@ -226,6 +226,7 @@ export default function useStudentManagementFlow({
     try {
       setBusyStudentSubmit(true)
       const docRef = await addDoc(collection(db, 'privateStudents'), {
+        academyId: String(userProfile?.academyId || '').trim(),
         name: result.name,
         teacher: teacherStored,
         phone: result.phone,

@@ -626,6 +626,7 @@ export default function useStudentPackageFlow({
       setBusyStudentPackageSubmit(true)
 
       const newStudentPackagePayload = {
+        academyId: String(student?.academyId || userProfile?.academyId || '').trim(),
         studentId,
         studentName,
         teacher,
@@ -826,6 +827,7 @@ export default function useStudentPackageFlow({
       const newGroupStudentRef = doc(collection(db, 'groupStudents'))
       batch.set(newGroupStudentRef, {
         groupClassId,
+        academyId: String(data.academyId || userProfile?.academyId || '').trim(),
         classID: groupClassId,
         studentId: enrollStudentId,
         studentName: String(data.studentName || '').trim() || '-',
@@ -949,6 +951,7 @@ export default function useStudentPackageFlow({
 
       const lessonRef = doc(collection(db, 'lessons'))
       batch.set(lessonRef, {
+        academyId: String(student?.academyId || userProfile?.academyId || '').trim(),
         studentId: student.id,
         studentName,
         teacherName: teacherKey,

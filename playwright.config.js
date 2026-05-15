@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig, devices } from '@playwright/test';
 import { loadEnv } from 'vite';
+import { ADMIN_STORAGE_STATE } from './tests/global-setup.js';
 
 const FIREBASE_ENV_KEYS = [
   'VITE_FIREBASE_API_KEY',
@@ -54,14 +55,15 @@ if (
  */
 export default defineConfig({
   testDir: './tests',
+  globalSetup: './tests/global-setup.js',
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
   forbidOnly: !!process.env.CI,
   /* Retry on CI only */
   retries: process.env.CI ? 2 : 0,
-  /* Opt out of parallel tests on CI. */
-  workers: process.env.CI ? 1 : undefined,
+  /* Remote Firebase E2E tests share fixtures, so keep them serialized. */
+  workers: playwrightFirebaseMode === 'e2e' || process.env.CI ? 1 : undefined,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
   reporter: 'html',
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
@@ -71,6 +73,7 @@ export default defineConfig({
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: 'on-first-retry',
+    storageState: ADMIN_STORAGE_STATE,
   },
 
   /* Configure projects for major browsers */

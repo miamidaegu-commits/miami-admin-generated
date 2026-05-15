@@ -215,6 +215,7 @@ export default function useGroupLessonManagementFlow({
         setBusyGroupLessonId('__add__')
         await addDoc(collection(db, 'groupLessons'), {
           groupClassId: selectedGroupClass.id,
+          academyId: String(selectedGroupClass.academyId || userProfile?.academyId || '').trim(),
           groupClassName: selectedGroupClass.name || '',
           teacher: normalizeText(selectedGroupClass.teacher || ''),
           date: result.date,
@@ -334,6 +335,7 @@ export default function useGroupLessonManagementFlow({
         startYmd: result.startDate,
         endYmd: result.endDate,
         existingLessons: groupLessons,
+        academyId: selectedGroupClass.academyId || userProfile?.academyId,
       })
       created = batchResult.created
       skippedDup = batchResult.skippedDup

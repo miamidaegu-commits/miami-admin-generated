@@ -5,6 +5,8 @@ import {
   TEST_TEACHER_PASSWORD,
 } from './fixtures/test-data.js';
 
+test.use({ storageState: { cookies: [], origins: [] } });
+
 async function loginAsTeacher(page) {
   await page.goto(BASE_URL);
 

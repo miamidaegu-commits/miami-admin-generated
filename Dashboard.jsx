@@ -183,6 +183,7 @@ async function createGroupLessonsInDateRange({
   startYmd,
   endYmd,
   existingLessons,
+  academyId,
 }) {
   const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(weekdays))
   const timeStr = String(time || '').trim()
@@ -190,6 +191,7 @@ async function createGroupLessonsInDateRange({
   const teacherNorm = normalizeText(teacher || '')
   const capacity = Number(maxStudents)
   const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
+  const academyIdValue = String(academyId || '').trim()
 
   let created = 0
   let skippedDup = 0
@@ -215,6 +217,7 @@ async function createGroupLessonsInDateRange({
 
     await addDoc(collection(db, 'groupLessons'), {
       groupClassId,
+      academyId: academyIdValue,
       groupClassName: groupClassName || '',
       teacher: teacherNorm,
       date: dateStr,
@@ -1643,6 +1646,7 @@ export default function Dashboard() {
   async function addCreditTransaction(payload) {
     try {
       await addDoc(collection(db, 'creditTransactions'), {
+        academyId: String(payload.academyId || userProfile?.academyId || '').trim(),
         studentId: String(payload.studentId ?? ''),
         studentName: String(payload.studentName ?? ''),
         teacher: String(payload.teacher ?? ''),
