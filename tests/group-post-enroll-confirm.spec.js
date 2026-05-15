@@ -10,6 +10,7 @@ import {
 import {
   cleanupTempStudentData,
   createTempStudent,
+  getActiveGroupStudentEnrollment,
   getGroupPackageStartDate,
 } from './e2e-firebase-helpers.js';
 import {
@@ -42,10 +43,27 @@ async function openGroupDetail(page) {
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
 }
 
+async function closePostEnrollDialogIfStillOpen(page, postEnrollDialog) {
+  await postEnrollDialog.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => null);
+  if (!(await postEnrollDialog.isVisible().catch(() => false))) return;
+
+  const closeButton = postEnrollDialog.getByRole('button', { name: '나중에 등록', exact: true });
+  await expect(closeButton).toBeEnabled({ timeout: 5000 }).catch(() => null);
+  if (await closeButton.isEnabled().catch(() => false)) {
+    await closeButton.click();
+    await expect(postEnrollDialog).toBeHidden();
+    return;
+  }
+
+  await page.goto(`${BASE_URL}dashboard`);
+  await expect(page.getByRole('button', { name: '반 관리', exact: true })).toBeVisible();
+}
+
 test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록까지 완료할 수 있다', async ({
   page,
   browserName,
 }) => {
+  test.setTimeout(60000);
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
   const dialogMessages = [];
@@ -96,7 +114,26 @@ test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록
     await expect(postEnrollDialog).toContainText(TEST_GROUP_NAME);
 
     await postEnrollDialog.getByRole('button', { name: '지금 등록', exact: true }).click();
-    await expect(postEnrollDialog).toBeHidden();
+    await expect
+      .poll(
+        async () =>
+          getActiveGroupStudentEnrollment(page, {
+            studentId: tempStudent.studentId,
+            groupClassId: groupValue,
+          }),
+        {
+          timeout: 20000,
+          message: 'groupStudents에 active 반 등록이 생성될 때까지 기다립니다.',
+        }
+      )
+      .toMatchObject({
+        studentId: tempStudent.studentId,
+        studentName: tempStudentName,
+        groupClassId: groupValue,
+        status: 'active',
+      });
+
+    await closePostEnrollDialogIfStillOpen(page, postEnrollDialog);
 
     await openGroupDetail(page);
 

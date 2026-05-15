@@ -173,11 +173,18 @@ export default function useGroupAttendanceFlow({
         const adminUi = userProfile?.role === 'admin'
         const lessonRef = doc(db, 'groupLessons', lesson.id)
         const pkgRef = doc(db, 'studentPackages', pkgId)
-        const gsRef = doc(db, 'groupStudents', groupStudentRow.id)
+        const reservationMode = groupStudentRow.isReservation === true
+        const reservationId = String(groupStudentRow.reservationId || '').trim()
+        const gsRef = reservationMode ? null : doc(db, 'groupStudents', groupStudentRow.id)
+        const reservationRef =
+          reservationMode && reservationId
+            ? doc(db, 'groupLessonReservations', reservationId)
+            : null
 
         const lessonSnap = await transaction.get(lessonRef)
         const pkgSnap = await transaction.get(pkgRef)
-        const gsSnap = await transaction.get(gsRef)
+        const gsSnap = gsRef ? await transaction.get(gsRef) : null
+        const reservationSnap = reservationRef ? await transaction.get(reservationRef) : null
 
         if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
         if (!pkgSnap.exists()) {
@@ -185,7 +192,8 @@ export default function useGroupAttendanceFlow({
             adminUi ? '수강권을 찾을 수 없습니다.' : '등록 정보를 찾을 수 없습니다.'
           )
         }
-        if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
+        if (!reservationMode && !gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
+        if (reservationMode && !reservationSnap?.exists()) throw new Error('예약 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
         if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
@@ -213,11 +221,30 @@ export default function useGroupAttendanceFlow({
 
         const used = Number(pData.usedCount ?? 0)
 
-        const gsData = gsSnap.data()
-        if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
-        if (String(gsData.status || 'active') !== 'active') throw new Error('비활성 학생입니다.')
-
-        const att = Number(gsData.attendanceCount ?? 0)
+        let att = 0
+        if (reservationMode) {
+          const reservation = reservationSnap.data()
+          if (String(reservation.academyId || '') !== String(lData.academyId || '')) {
+            throw new Error('다른 academy 예약입니다.')
+          }
+          if (String(reservation.lessonId || '') !== String(lesson.id)) {
+            throw new Error('다른 수업 예약입니다.')
+          }
+          if (String(reservation.groupClassId || '') !== String(gid)) {
+            throw new Error('다른 반 예약입니다.')
+          }
+          if (String(reservation.studentId || '').trim() !== studentId) {
+            throw new Error('학생과 예약 정보가 일치하지 않습니다.')
+          }
+          if (String(reservation.status || '') !== 'active') {
+            throw new Error('활성 예약이 아닙니다.')
+          }
+        } else {
+          const gsData = gsSnap.data()
+          if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
+          if (String(gsData.status || 'active') !== 'active') throw new Error('비활성 학생입니다.')
+          att = Number(gsData.attendanceCount ?? 0)
+        }
 
         const newUsed = used + 1
         const newRem = rem - 1
@@ -229,10 +256,12 @@ export default function useGroupAttendanceFlow({
           status,
           updatedAt: serverTimestamp(),
         })
-        transaction.update(gsRef, {
-          attendanceCount: att + 1,
-          updatedAt: serverTimestamp(),
-        })
+        if (gsRef) {
+          transaction.update(gsRef, {
+            attendanceCount: att + 1,
+            updatedAt: serverTimestamp(),
+          })
+        }
         transaction.update(lessonRef, {
           countedStudentIDs: arrayUnion(studentId),
           attendanceAppliedAt: serverTimestamp(),
@@ -295,11 +324,18 @@ export default function useGroupAttendanceFlow({
         const adminUi = userProfile?.role === 'admin'
         const lessonRef = doc(db, 'groupLessons', lesson.id)
         const pkgRef = doc(db, 'studentPackages', pkgId)
-        const gsRef = doc(db, 'groupStudents', groupStudentRow.id)
+        const reservationMode = groupStudentRow.isReservation === true
+        const reservationId = String(groupStudentRow.reservationId || '').trim()
+        const gsRef = reservationMode ? null : doc(db, 'groupStudents', groupStudentRow.id)
+        const reservationRef =
+          reservationMode && reservationId
+            ? doc(db, 'groupLessonReservations', reservationId)
+            : null
 
         const lessonSnap = await transaction.get(lessonRef)
         const pkgSnap = await transaction.get(pkgRef)
-        const gsSnap = await transaction.get(gsRef)
+        const gsSnap = gsRef ? await transaction.get(gsRef) : null
+        const reservationSnap = reservationRef ? await transaction.get(reservationRef) : null
 
         if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
         if (!pkgSnap.exists()) {
@@ -307,7 +343,8 @@ export default function useGroupAttendanceFlow({
             adminUi ? '수강권을 찾을 수 없습니다.' : '등록 정보를 찾을 수 없습니다.'
           )
         }
-        if (!gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
+        if (!reservationMode && !gsSnap.exists()) throw new Error('반 학생 정보를 찾을 수 없습니다.')
+        if (reservationMode && !reservationSnap?.exists()) throw new Error('예약 정보를 찾을 수 없습니다.')
 
         const lData = lessonSnap.data()
         if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
@@ -335,11 +372,27 @@ export default function useGroupAttendanceFlow({
 
         const rem = Number(pData.remainingCount ?? 0)
 
-        const gsData = gsSnap.data()
-        if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
-
-        const att = Number(gsData.attendanceCount ?? 0)
-        if (att <= 0) throw new Error('출석 횟수를 더 줄일 수 없습니다.')
+        let att = 0
+        if (reservationMode) {
+          const reservation = reservationSnap.data()
+          if (String(reservation.academyId || '') !== String(lData.academyId || '')) {
+            throw new Error('다른 academy 예약입니다.')
+          }
+          if (String(reservation.lessonId || '') !== String(lesson.id)) {
+            throw new Error('다른 수업 예약입니다.')
+          }
+          if (String(reservation.groupClassId || '') !== String(gid)) {
+            throw new Error('다른 반 예약입니다.')
+          }
+          if (String(reservation.studentId || '').trim() !== studentId) {
+            throw new Error('학생과 예약 정보가 일치하지 않습니다.')
+          }
+        } else {
+          const gsData = gsSnap.data()
+          if (String(gsData.groupClassId || '') !== String(gid)) throw new Error('다른 반 학생입니다.')
+          att = Number(gsData.attendanceCount ?? 0)
+          if (att <= 0) throw new Error('출석 횟수를 더 줄일 수 없습니다.')
+        }
 
         const newUsed = used - 1
         const newRem = rem + 1
@@ -351,10 +404,12 @@ export default function useGroupAttendanceFlow({
           status,
           updatedAt: serverTimestamp(),
         })
-        transaction.update(gsRef, {
-          attendanceCount: att - 1,
-          updatedAt: serverTimestamp(),
-        })
+        if (gsRef) {
+          transaction.update(gsRef, {
+            attendanceCount: att - 1,
+            updatedAt: serverTimestamp(),
+          })
+        }
         transaction.update(lessonRef, {
           countedStudentIDs: arrayRemove(studentId),
           attendanceAppliedAt: serverTimestamp(),

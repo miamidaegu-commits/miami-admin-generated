@@ -192,6 +192,42 @@ export default function useGroupLessonManagementFlow({
     setGroupLessonModal({ type: 'edit', lesson })
   }
 
+  async function updateGroupLessonBookingSettings(lesson, patch) {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 예약 설정을 변경할 수 있습니다.')
+      return
+    }
+    if (!lesson?.id) return
+
+    const next = {}
+    if (Object.prototype.hasOwnProperty.call(patch, 'isBookable')) {
+      next.isBookable = patch.isBookable === true
+      next.bookingMode = patch.isBookable === true ? 'hybrid' : 'fixed'
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, 'capacity')) {
+      const capacity = Number.parseInt(String(patch.capacity ?? '').trim(), 10)
+      if (!Number.isInteger(capacity) || capacity < 1) {
+        alert('정원은 1 이상의 정수여야 합니다.')
+        return
+      }
+      next.capacity = capacity
+    }
+    if (Object.keys(next).length === 0) return
+
+    try {
+      setBusyGroupLessonId(lesson.id)
+      await updateDoc(doc(db, 'groupLessons', lesson.id), {
+        ...next,
+        updatedAt: serverTimestamp(),
+      })
+    } catch (error) {
+      console.error('예약 설정 변경 실패:', error)
+      alert(`예약 설정 변경 실패: ${error.message}`)
+    } finally {
+      setBusyGroupLessonId(null)
+    }
+  }
+
   async function submitGroupLessonModal() {
     if (!selectedGroupClass?.id) return
     if (!groupLessonModal) return
@@ -452,6 +488,7 @@ export default function useGroupLessonManagementFlow({
     busyGroupLessonPurge,
     openGroupLessonAddModal,
     openGroupLessonEditModal,
+    updateGroupLessonBookingSettings,
     closeGroupLessonModal,
     submitGroupLessonModal,
     openGroupLessonSeriesModal,

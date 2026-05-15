@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import {
   countWeekdayHitsInRange,
+  getGroupLessonGroupId,
   isGroupStudentOperationallyEligibleOnYmd,
   normalizeGroupWeekdaysFromDoc,
   parseYmdToLocalDate,
@@ -14,6 +15,7 @@ export default function useGroupsSectionViewModel({
   groupClasses,
   groupStudents,
   groupLessons,
+  groupLessonReservations,
   selectedGroupClass,
   studentPackages,
   groupLessonSeriesForm,
@@ -21,12 +23,35 @@ export default function useGroupsSectionViewModel({
   groupLessonAttendanceModal,
 }) {
   const sortedGroupLessonsForSelectedClass = useMemo(() => {
-    return [...groupLessons].sort((a, b) => {
+    const reservations = Array.isArray(groupLessonReservations) ? groupLessonReservations : []
+    return [...groupLessons].map((lesson) => {
+      const lessonDate = String(lesson.date || '').trim()
+      const gid = getGroupLessonGroupId(lesson)
+      const fixedCount = groupStudents.filter((gs) => {
+        if (String(gs.groupClassId || gs.classID || '') !== String(gid)) return false
+        return isGroupStudentOperationallyEligibleOnYmd(gs, lessonDate)
+      }).length
+      const activeBookedCount = reservations.filter(
+        (reservation) =>
+          String(reservation.lessonId || '') === String(lesson.id) &&
+          String(reservation.status || '') === 'active'
+      ).length
+      const capacity = Number(lesson.capacity ?? 0)
+      const remainingSeats = Number.isFinite(capacity)
+        ? Math.max(0, capacity - fixedCount - activeBookedCount)
+        : 0
+      return {
+        ...lesson,
+        fixedStudentCount: fixedCount,
+        activeReservationCount: activeBookedCount,
+        remainingSeats,
+      }
+    }).sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || ''}`
       const bKey = `${b.date || ''} ${b.time || ''}`
       return aKey.localeCompare(bKey)
     })
-  }, [groupLessons])
+  }, [groupLessons, groupStudents, groupLessonReservations])
 
   const groupLessonSeriesPlannedCount = useMemo(() => {
     if (!groupLessonSeriesModalOpen || !selectedGroupClass) return null
@@ -80,7 +105,7 @@ export default function useGroupsSectionViewModel({
       Array.isArray(countedRaw) ? countedRaw.map((id) => String(id || '').trim()) : []
     )
 
-    const eligible = groupStudents.filter((gs) => {
+    const fixedEligible = groupStudents.filter((gs) => {
       if (String(gs.groupClassId || '') !== String(gid)) return false
       const pkgId = String(gs.packageId || '').trim()
       if (!pkgId) return false
@@ -96,7 +121,7 @@ export default function useGroupsSectionViewModel({
       return true
     })
 
-    return [...eligible]
+    const fixedRows = [...fixedEligible]
       .sort((a, b) =>
         String(a.studentName || a.name || '').localeCompare(
           String(b.studentName || b.name || ''),
@@ -134,11 +159,65 @@ export default function useGroupsSectionViewModel({
           canUndo: pkgOk && isCounted && used > 0,
         }
       })
+
+    const fixedStudentIds = new Set(
+      fixedRows.map((row) => String(row.studentId || '').trim()).filter(Boolean)
+    )
+    const reservations = Array.isArray(groupLessonReservations) ? groupLessonReservations : []
+    const reservationRows = reservations
+      .filter((reservation) => {
+        if (String(reservation.lessonId || '') !== String(lesson.id)) return false
+        if (String(reservation.status || '') !== 'active') return false
+        const sid = String(reservation.studentId || '').trim()
+        if (!sid || fixedStudentIds.has(sid)) return false
+        return true
+      })
+      .sort((a, b) =>
+        String(a.studentName || '').localeCompare(String(b.studentName || ''), 'ko')
+      )
+      .map((reservation) => {
+        const studentId = String(reservation.studentId || '').trim()
+        const pkg = studentPackages.find(
+          (p) =>
+            String(p.studentId || '').trim() === studentId &&
+            p.packageType === 'group' &&
+            String(p.groupClassId || '') === String(gid) &&
+            String(p.status || 'active') === 'active'
+        )
+        const pkgOk = Boolean(pkg)
+        const remaining = pkgOk ? Number(pkg.remainingCount ?? 0) : 0
+        const used = pkgOk ? Number(pkg.usedCount ?? 0) : 0
+        const isCounted = Boolean(studentId && countedSet.has(studentId))
+        return {
+          groupStudent: {
+            id: `reservation:${reservation.id}`,
+            reservationId: reservation.id,
+            isReservation: true,
+            groupClassId: gid,
+            studentId,
+            studentName: String(reservation.studentName || '').trim() || '-',
+            name: String(reservation.studentName || '').trim() || '-',
+            packageId: pkg?.id || '',
+          },
+          studentId,
+          packageDoc: pkgOk ? pkg : null,
+          packageTitle: pkgOk ? String(pkg.title || '').trim() || '—' : '수강권 없음',
+          remainingCount: remaining,
+          usedCount: used,
+          isCounted,
+          statusLabel: isCounted ? '차감됨' : remaining <= 0 ? '남은 횟수 없음' : '예약',
+          canDeduct: pkgOk && !isCounted && remaining > 0,
+          canUndo: pkgOk && isCounted && used > 0,
+        }
+      })
+
+    return [...fixedRows, ...reservationRows]
   }, [
     groupLessonAttendanceModal,
     groupLessons,
     selectedGroupClass?.id,
     groupStudents,
+    groupLessonReservations,
     studentPackages,
   ])
 

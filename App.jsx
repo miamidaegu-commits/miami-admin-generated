@@ -7,6 +7,7 @@ import Dashboard from "./Dashboard";
 import Unauthorized from "./Unauthorized";
 import ProtectedRoute from "./ProtectedRoute";
 import { auth, functions } from "./firebase";
+import StudentGroupBookingPage from "./src/features/student/StudentGroupBookingPage.jsx";
 
 /** 운영에서는 false 유지. 개발 중에만 선생님 생성 툴바(uid / teacherName / Create Teacher)를 표시합니다. */
 const ENABLE_DEV_TEACHER_TOOLBAR = false
@@ -99,6 +100,14 @@ export default function App() {
             element={
               <ProtectedRoute allowedRoles={['admin', 'teacher']}>
                 <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/student/bookings"
+            element={
+              <ProtectedRoute allowedRoles={['student']}>
+                <StudentGroupBookingPage />
               </ProtectedRoute>
             }
           />
