@@ -220,9 +220,9 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
 
   const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
   await expect(privatePackageCell).toContainText('don1');
-  await expect(privatePackageCell).toContainText('남은 3/3');
+  await expect(privatePackageCell).toContainText('잔여 3회 / 총 3회 · 사용 0회');
   await expect(privatePackageCell).toContainText('jenny');
-  await expect(privatePackageCell).toContainText('남은 5/5');
+  await expect(privatePackageCell).toContainText('잔여 5회 / 총 5회 · 사용 0회');
 });
 
 test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행 요약이 표시된다', async ({ page, browserName }) => {

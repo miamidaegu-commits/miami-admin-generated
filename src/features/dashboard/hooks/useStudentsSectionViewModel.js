@@ -22,6 +22,29 @@ function toPositiveInteger(value) {
   return Math.floor(n)
 }
 
+function ymdToLocalDate(ymd) {
+  const text = String(ymd || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null
+  const [year, month, day] = text.split('-').map(Number)
+  const date = new Date(year, month - 1, day)
+  return Number.isFinite(date.getTime()) ? date : null
+}
+
+function daysBetweenYmd(startYmd, endYmd) {
+  const start = ymdToLocalDate(startYmd)
+  const end = ymdToLocalDate(endYmd)
+  if (!start || !end) return null
+  const dayMs = 24 * 60 * 60 * 1000
+  return Math.round((end.getTime() - start.getTime()) / dayMs)
+}
+
+function privatePackageExpiryBadgeLabel(daysLeft) {
+  if (!Number.isInteger(daysLeft)) return '만료 임박'
+  if (daysLeft < 0) return '만료됨'
+  if (daysLeft === 0) return '오늘 만료'
+  return `만료 D-${daysLeft}`
+}
+
 function isApprovedPrivateLessonForStudentProgress(lesson) {
   const status = String(lesson?.status || '').trim().toLowerCase()
   const approvalStatus = String(lesson?.approvalStatus || '').trim().toLowerCase()
@@ -345,6 +368,7 @@ export default function useStudentsSectionViewModel({
     /** sid -> scope -> { hasActive, activeLowRem, hasExhausted } */
     const scopeAgg = new Map()
     const expiringBySid = new Set()
+    const expiringDaysBySid = new Map()
 
     for (const p of studentPackages) {
       const sid = String(p.studentId || '').trim()
@@ -374,6 +398,13 @@ export default function useStudentsSectionViewModel({
         const expYmd = studentPackageExpiresAtToYmd(p.expiresAt)
         if (expYmd && /^\d{4}-\d{2}-\d{2}$/.test(expYmd) && expYmd >= today && expYmd <= limitYmd) {
           expiringBySid.add(sid)
+          const daysLeft = daysBetweenYmd(today, expYmd)
+          if (
+            Number.isInteger(daysLeft) &&
+            (!expiringDaysBySid.has(sid) || daysLeft < expiringDaysBySid.get(sid))
+          ) {
+            expiringDaysBySid.set(sid, daysLeft)
+          }
         }
       } else if (st === 'exhausted') {
         const scope = studentPackageAttentionScope(p)
@@ -403,12 +434,19 @@ export default function useStudentsSectionViewModel({
       map.set(sid, {
         hasRenewalNeeded,
         hasExpiringSoon: expiringBySid.has(sid),
+        expiringSoonLabel: expiringBySid.has(sid)
+          ? privatePackageExpiryBadgeLabel(expiringDaysBySid.get(sid))
+          : '',
       })
     }
 
     for (const sid of expiringBySid) {
       if (map.has(sid)) continue
-      map.set(sid, { hasRenewalNeeded: false, hasExpiringSoon: true })
+      map.set(sid, {
+        hasRenewalNeeded: false,
+        hasExpiringSoon: true,
+        expiringSoonLabel: privatePackageExpiryBadgeLabel(expiringDaysBySid.get(sid)),
+      })
     }
 
     return map

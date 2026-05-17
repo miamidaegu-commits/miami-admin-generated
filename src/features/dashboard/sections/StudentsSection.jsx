@@ -71,6 +71,16 @@ function getPrivatePackageTeacherLabel(pkg) {
   return cleanText(pkg?.teacher || pkg?.teacherName, '선생님 미지정')
 }
 
+function formatPrivatePackageUsageSummary(pkg) {
+  const remaining = toFiniteNumber(pkg?.remainingCount)
+  const total = toFiniteNumber(pkg?.totalCount)
+  const usedFallback = Math.max(total - remaining, 0)
+  const used = pkg?.usedCount != null && String(pkg.usedCount).trim() !== ''
+    ? toFiniteNumber(pkg.usedCount)
+    : usedFallback
+  return `잔여 ${remaining}회 / 총 ${total}회 · 사용 ${used}회`
+}
+
 function formatPrivatePackageTeacherSummary(packages) {
   const privatePackages = (Array.isArray(packages) ? packages : []).filter(
     (pkg) => String(pkg?.packageType || '').trim() === 'private'
@@ -89,11 +99,10 @@ function formatPrivatePackageTeacherSummary(packages) {
 
   return displayPackages.map((pkg) => {
     const remaining = toFiniteNumber(pkg.remainingCount)
-    const total = toFiniteNumber(pkg.totalCount ?? pkg.paidLessons ?? remaining)
     const isActive = isStudentPackageRowActive(pkg)
     return {
-      id: String(pkg.id || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}-${total}`),
-      text: `${getPrivatePackageTeacherLabel(pkg)} · 남은 ${remaining}/${total || remaining}`,
+      id: String(pkg.id || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}`),
+      text: `${getPrivatePackageTeacherLabel(pkg)} · ${formatPrivatePackageUsageSummary(pkg)}`,
       statusText: !isActive || remaining <= 0 ? '소진' : '',
       muted: !isActive || remaining <= 0,
     }
@@ -160,6 +169,27 @@ function reservationStatusLabel(row, startsAtMs) {
   if (row?.status !== 'active') return '예약 취소'
   if (startsAtMs !== null && startsAtMs < Date.now()) return '지난 수업'
   return '예약 완료'
+}
+
+function privateReservationStatusLabel(row, startsAtMs) {
+  const status = String(row?.status || '').trim()
+  const isPast = startsAtMs !== null && startsAtMs < Date.now()
+  const wasDeducted =
+    row?.deductionApplied === true ||
+    Boolean(row?.deductionCreditTransactionId) ||
+    status === 'completed' ||
+    status === 'no_show'
+  const wasReversed =
+    Boolean(row?.outcomeReversedAt) ||
+    Boolean(row?.reversalCreditTransactionId) ||
+    Boolean(row?.previousOutcomeStatus)
+
+  if (status === 'cancelled' || status === 'canceled') return '예약 취소'
+  if (wasReversed) return isPast ? '지난 수업 · 차감 취소' : '차감 취소'
+  if (wasDeducted) return isPast ? '지난 수업 · 차감 완료' : '차감 완료'
+  if (status === 'active' && isPast) return '지난 수업 · 미차감'
+  if (status === 'active') return '예약 완료'
+  return cleanText(status, '-')
 }
 
 function creditTransactionHistoryStatus(row) {
@@ -445,7 +475,7 @@ export default function StudentsSection({
         type: '1:1 수업',
         teacher: cleanText(reservation.teacher),
         title: '1:1 수업',
-        status: reservationStatusLabel(reservation, startsAtMs),
+        status: privateReservationStatusLabel(reservation, startsAtMs),
         packageTitle: cleanText(reservation.packageTitle || pkg?.title, '-'),
         sortMs: startsAtMs ?? docDateToMillis(reservation.updatedAt),
       }
@@ -1004,6 +1034,7 @@ export default function StudentsSection({
           const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
             hasRenewalNeeded: false,
             hasExpiringSoon: false,
+            expiringSoonLabel: '',
           }
           const privateAccessSummary = studentPrivateAccessSummaryByStudentId.get(student.id) || null
           const privateSlotBookingPilotEnabled =
@@ -1054,17 +1085,21 @@ export default function StudentsSection({
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        만료 임박
+                        {att.expiringSoonLabel || '만료 임박'}
                       </span>
                     ) : null}
                   </span>
                 ) : null}
               </span>
               <span>{student.teacher || '-'}</span>
-              <span>
-                {studentPhoneTrim ? studentPhoneTrim : '-'}
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ opacity: 0.62, fontSize: 11 }}>전화</span>
+                <span>{studentPhoneTrim ? studentPhoneTrim : '-'}</span>
               </span>
-              <span>{formatStudentFirstRegisteredForTable(student.firstRegisteredAt)}</span>
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ opacity: 0.62, fontSize: 11 }}>첫 등록</span>
+                <span>{formatStudentFirstRegisteredForTable(student.firstRegisteredAt)}</span>
+              </span>
               <span
                 data-testid="student-private-package-cell"
                 title="1:1 예약 가능 시간은 개인 수강권 선생님 기준으로 표시됩니다."
