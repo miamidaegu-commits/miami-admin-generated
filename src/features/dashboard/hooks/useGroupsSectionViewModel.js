@@ -157,7 +157,7 @@ export default function useGroupsSectionViewModel({
           isCounted,
           statusLabel,
           canDeduct: pkgOk && !isCounted && remaining > 0,
-          canUndo: pkgOk && isCounted,
+          canUndo: pkgOk && isCounted && used > 0,
         }
       })
 
@@ -208,7 +208,7 @@ export default function useGroupsSectionViewModel({
           isCounted,
           statusLabel: isCounted ? '차감됨' : remaining <= 0 ? '남은 횟수 없음' : '예약',
           canDeduct: pkgOk && !isCounted && remaining > 0,
-          canUndo: pkgOk && isCounted,
+          canUndo: pkgOk && isCounted && used > 0,
         }
       })
 
