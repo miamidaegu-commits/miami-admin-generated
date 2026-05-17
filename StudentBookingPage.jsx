@@ -512,7 +512,13 @@ export default function StudentBookingPage() {
       ]
 
       const addOpenRow = (id, data) => {
-        const row = { id, ...data, isReserved: false, isBookable: true }
+        const {
+          fixedStudentId: _fixedStudentId,
+          fixedStudentName: _fixedStudentName,
+          releasedByStudentId: _releasedByStudentId,
+          ...safeData
+        } = data || {}
+        const row = { id, ...safeData, isReserved: false, isBookable: true }
         if (
           String(row.academyId || '').trim() !== currentAcademyId ||
           String(row.status || '').trim() !== 'open'
@@ -1813,6 +1819,12 @@ export default function StudentBookingPage() {
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               {Number(slot.durationMinutes || 0) || 50}분 · 오프라인 결제
                             </div>
+                            {slot.releasedFromFixed === true ||
+                            String(slot.slotType || '').trim() === 'released_fixed' ? (
+                              <div style={{ marginTop: 6, opacity: 0.78, fontSize: 13 }}>
+                                예약 가능 1:1 시간
+                              </div>
+                            ) : null}
                           </div>
                           {isReservedByAnyone ? (
                             <span
