@@ -7,26 +7,71 @@ export function escapeRegExp(value) {
 }
 
 async function loginAndExpectPath(page, email, password, pathPattern) {
+  const consoleMessages = [];
+  const pageErrors = [];
+  const onConsole = (message) => {
+    consoleMessages.push(`${message.type()}: ${message.text()}`);
+  };
+  const onPageError = (error) => {
+    pageErrors.push(error?.message || String(error));
+  };
+  page.on('console', onConsole);
+  page.on('pageerror', onPageError);
+
   await page.goto(`${BASE_URL}login/`);
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const emailInput = page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first();
-    const passwordInput = page
-      .getByLabel(/Password|비밀번호/i)
-      .or(page.locator('input[type="password"]'))
-      .first();
+  try {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      const emailInput = page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first();
+      const passwordInput = page
+        .getByLabel(/Password|비밀번호/i)
+        .or(page.locator('input[type="password"]'))
+        .first();
 
-    await emailInput.fill(email);
-    await passwordInput.fill(password);
-    await page.getByRole('button', { name: /Sign In|로그인/i }).click();
+      await emailInput.fill(email);
+      await passwordInput.fill(password);
+      await page.getByRole('button', { name: /Sign In|로그인/i }).click();
 
-    try {
-      await expect(page).toHaveURL(pathPattern, { timeout: 10000 });
-      break;
-    } catch (error) {
-      if (attempt === 3) throw error;
-      await page.waitForTimeout(1000);
+      try {
+        await expect(page).toHaveURL(pathPattern, { timeout: 15000 });
+        break;
+      } catch (error) {
+        if (attempt === 3) {
+          const [bodyText, alertText, storageState] = await Promise.all([
+            page.locator('body').innerText().catch(() => ''),
+            page
+              .locator('[role="alert"], .error-msg, .error, [data-testid*="error"]')
+              .allInnerTexts()
+              .catch(() => []),
+            page
+              .evaluate(() => ({
+                localStorageKeys: Object.keys(window.localStorage || {}),
+                sessionStorageKeys: Object.keys(window.sessionStorage || {}),
+              }))
+              .catch(() => null),
+          ]);
+          throw new Error(
+            [
+              `Login did not redirect to ${pathPattern}.`,
+              `Current URL: ${page.url()}`,
+              `Email used: ${email}`,
+              `Visible alert/error text: ${alertText.filter(Boolean).join(' | ') || '-'}`,
+              `Storage state: ${JSON.stringify(storageState)}`,
+              `Console messages: ${consoleMessages.slice(-20).join(' || ') || '-'}`,
+              `Page errors: ${pageErrors.slice(-10).join(' || ') || '-'}`,
+              'Visible page text:',
+              bodyText.slice(0, 1500),
+              '',
+              `Original error: ${error.message}`,
+            ].join('\n')
+          );
+        }
+        await page.waitForTimeout(1000);
+      }
     }
+  } finally {
+    page.off('console', onConsole);
+    page.off('pageerror', onPageError);
   }
 }
 

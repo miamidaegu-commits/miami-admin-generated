@@ -174,10 +174,16 @@ async function createStudentFixture(db, auth, {
   const nowTs = admin.firestore.Timestamp.now();
   const email = `private-reservation-${roleName}-${unique}@example.com`;
   const displayName = `Private Reservation ${roleName} ${unique}`;
+  const packageId = `pkg-private-reservation-${roleName}-${unique}`;
   const user = await auth.createUser({
     email,
     password: TEST_STUDENT_PASSWORD,
     displayName,
+  });
+  await auth.setCustomUserClaims(user.uid, {
+    role: 'student',
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    studentId,
   });
 
   await Promise.all([
@@ -215,15 +221,32 @@ async function createStudentFixture(db, auth, {
       academyId: DEFAULT_E2E_ACADEMY_ID,
       name: displayName,
       teacher: teacherKey,
+      status: 'active',
       paidLessons,
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
+    teacherAccess
+      ? db.collection('studentPackages').doc(packageId).set({
+          academyId: DEFAULT_E2E_ACADEMY_ID,
+          studentId,
+          title: `E2E Private Package ${roleName} ${unique}`,
+          packageType: 'private',
+          teacher: teacherKey,
+          teacherName: teacherKey,
+          status: 'active',
+          totalCount: Math.max(Number(paidLessons || 0), 1),
+          usedCount: 0,
+          remainingCount: Math.max(Number(paidLessons || 0), 1),
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        })
+      : Promise.resolve(),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(studentId)).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       studentId,
       teacherKeys: teacherAccess ? [teacherKey] : [],
-      activePackageIds: teacherAccess ? [`pkg-private-reservation-${roleName}-${unique}`] : [],
+      activePackageIds: teacherAccess ? [packageId] : [],
       allowedSlotIds,
       allowedPrivateLessonSlotIds: allowedSlotIds,
       privateSlotBookingPilotEnabled,
@@ -232,7 +255,7 @@ async function createStudentFixture(db, auth, {
     }),
   ]);
 
-  return { uid: user.uid, email, studentId, displayName };
+  return { uid: user.uid, email, studentId, displayName, packageId };
 }
 
 async function createFixture(unique) {
@@ -507,6 +530,14 @@ async function cleanupFixture(fixture) {
       `${DEFAULT_E2E_ACADEMY_ID}_${pilotDisabledStudent.uid}`
     ),
   ];
+  [
+    eligibleStudent.packageId,
+    noRemainingStudent.packageId,
+    ineligibleStudent.packageId,
+    pilotDisabledStudent.packageId,
+  ]
+    .filter(Boolean)
+    .forEach((packageId) => refs.push(db.collection('studentPackages').doc(packageId)));
   (fixture.extraSlotIds || []).forEach((id) => refs.push(db.collection('privateLessonSlots').doc(id)));
   (fixture.extraLessonIds || []).forEach((id) => refs.push(db.collection('lessons').doc(id)));
   (fixture.extraReservationIds || []).forEach((id) =>
@@ -531,6 +562,7 @@ async function cleanupFixture(fixture) {
     auth.deleteUser(eligibleStudent.uid).catch(() => {}),
     auth.deleteUser(noRemainingStudent.uid).catch(() => {}),
     auth.deleteUser(ineligibleStudent.uid).catch(() => {}),
+    auth.deleteUser(pilotDisabledStudent.uid).catch(() => {}),
   ]);
 }
 
@@ -591,6 +623,28 @@ test('private slot booking callable production gate is wired server-side', async
   expect(sanitizeSource).not.toContain('reservationId');
   expect(source).toMatch(/function hasSlotAccess[\s\S]*summary && summary\.teacherKeys/);
   expect(source).toMatch(/function hasSlotAccess[\s\S]*activePackageIds\.length > 0/);
+});
+
+test('released fixed private slot behavior is wired server-side', async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  expect(source).toContain('function findActivePrivatePackageForTeacher');
+  expect(source).toMatch(/Number\(pkg\.remainingCount \|\| 0\)[\s\S]*<= 0/);
+  expect(source).toMatch(
+    /function getReservationTeacherKey[\s\S]*reservation && reservation\.teacher[\s\S]*slot && slot\.teacher/
+  );
+  expect(source).toContain('slotType: "released_fixed"');
+  expect(source).toContain('releasedFromFixed: true');
+  expect(source).toContain('releasedByStudentId: studentId');
+  expect(source).toContain('releaseReason: "fixed_student_cancelled"');
+  expect(source).toContain('exports.adminCancelPrivateLessonReservation');
+  expect(source).toMatch(
+    /exports\.reservePrivateLessonSlot[\s\S]*findActivePrivatePackageForTeacher/
+  );
+  const sanitizeSource = source.match(
+    /function sanitizePrivateSlotAvailabilityRow[\s\S]*?\n}\n/
+  )?.[0] || '';
+  expect(sanitizeSource).toContain('isReleasedFixedSlot');
+  expect(sanitizeSource).not.toContain('fixedStudentName');
 });
 
 test('intended flexible private slot visibility honors teacher access and pilot gate', async ({
