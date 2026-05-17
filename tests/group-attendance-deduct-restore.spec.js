@@ -7,13 +7,14 @@ import {
 } from './e2e-helpers.js';
 import {
   cleanupTempGroupAttendanceSetup,
+  cleanupTempStudentData,
   createTempGroupAttendanceSetup,
+  createTempStudent,
 } from './e2e-firebase-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
   TEST_GROUP_NAME,
-  TEST_STUDENT_NAME,
 } from './fixtures/test-data.js';
 
 function formatYmd(date) {
@@ -63,16 +64,23 @@ test('관리자가 그룹 출결 모달에서 실제 차감 후 다시 복구할
   const uniqueToken = Date.now();
   const lessonSubject = `E2E 그룹출결 ${uniqueToken}`;
   const tempPackageTitle = `E2E 그룹출결 수강권 ${uniqueToken}`;
+  const tempStudentName = `E2E 그룹출결 학생 ${uniqueToken}`;
 
   let lessonCreated = false;
   let attendanceDialog = null;
   let tempSetup = null;
+  let tempStudent = null;
 
   try {
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    tempStudent = await createTempStudent(page, {
+      studentName: tempStudentName,
+      note: 'E2E temporary student for group attendance deduct restore test',
+    });
+
     tempSetup = await createTempGroupAttendanceSetup(page, {
       groupName: TEST_GROUP_NAME,
-      studentName: TEST_STUDENT_NAME,
+      studentName: tempStudentName,
       lessonDate,
       tempPackageTitle,
     });
@@ -123,58 +131,35 @@ test('관리자가 그룹 출결 모달에서 실제 차감 후 다시 복구할
 
     const tempStudentRow = attendanceDialog
       .locator('.table-row')
-      .filter({ hasText: TEST_STUDENT_NAME })
-      .filter({ hasText: tempPackageTitle })
-      .first();
+      .filter({ hasText: tempStudentName })
+      .filter({ hasText: tempPackageTitle });
 
+    await expect(tempStudentRow).toHaveCount(1);
     await expect(tempStudentRow).toBeVisible();
-
-    const getStatusText = async () =>
-      ((await tempStudentRow.locator('span').nth(3).textContent()) || '').trim();
 
     const restoreButton = tempStudentRow.getByRole('button', { name: '차감복구', exact: true });
     const deductButton = tempStudentRow.getByRole('button', { name: '차감', exact: true });
+    const restoreInitiallyEnabled = await restoreButton.isEnabled().catch(() => false);
 
-    if ((await restoreButton.count()) > 0) {
-      await expect(restoreButton).toBeEnabled();
+    if (restoreInitiallyEnabled) {
       await restoreButton.click();
-
-      await expect.poll(getStatusText, { timeout: 10000 }).toBe('차감취소됨');
-
-      await expect(deductButton).toBeVisible();
-      await expect(deductButton).toBeEnabled();
-      await deductButton.click();
-
-      await expect.poll(getStatusText, { timeout: 10000 }).toBe('차감됨');
-
-      const secondRestoreButton = tempStudentRow.getByRole('button', {
-        name: '차감복구',
-        exact: true,
-      });
-      await expect(secondRestoreButton).toBeVisible();
-      await expect(secondRestoreButton).toBeEnabled();
-      await secondRestoreButton.click();
-
-      await expect.poll(getStatusText, { timeout: 10000 }).toBe('차감취소됨');
-    } else {
-      await expect(deductButton).toBeVisible();
-      await expect(deductButton).toBeEnabled();
-      await deductButton.click();
-
-      await expect.poll(getStatusText, { timeout: 10000 }).toBe('차감됨');
-
-      const visibleRestoreButton = tempStudentRow.getByRole('button', {
-        name: '차감복구',
-        exact: true,
-      });
-      await expect(visibleRestoreButton).toBeVisible();
-      await expect(visibleRestoreButton).toBeEnabled();
-      await visibleRestoreButton.click();
-
-      await expect.poll(getStatusText, { timeout: 10000 }).toBe('차감취소됨');
+      await expect(tempStudentRow).toContainText('차감취소됨', { timeout: 10000 });
     }
 
-    await expect(tempStudentRow.getByRole('button', { name: '차감', exact: true })).toBeVisible();
+    await expect(deductButton).toBeVisible();
+    await expect(deductButton).toBeEnabled();
+    await deductButton.click();
+
+    await expect(tempStudentRow).toContainText('차감됨', { timeout: 10000 });
+
+    await expect(restoreButton).toBeVisible();
+    await expect(restoreButton).toBeEnabled();
+    await restoreButton.click();
+
+    await expect(tempStudentRow).toContainText('차감취소됨', { timeout: 10000 });
+
+    await expect(deductButton).toBeVisible();
+    await expect(deductButton).toBeEnabled();
   } finally {
     if (attendanceDialog && (await attendanceDialog.isVisible().catch(() => false))) {
       await attendanceDialog.getByRole('button', { name: '닫기', exact: true }).click();
@@ -201,6 +186,13 @@ test('관리자가 그룹 출결 모달에서 실제 차감 후 다시 복구할
 
     if (tempSetup) {
       await cleanupTempGroupAttendanceSetup(page, tempSetup);
+    }
+
+    if (tempStudent) {
+      await cleanupTempStudentData(page, {
+        studentId: tempStudent.studentId,
+        studentName: tempStudentName,
+      });
     }
   }
 });
