@@ -80,3 +80,5 @@ node_modules/
 /playwright/.cache/
 /playwright/.auth/
 serviceAccountKey*.json
+
+backups/
