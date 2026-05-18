@@ -96,7 +96,6 @@ export default function useStudentPackageFlow({
   studentSummaryGroupLessons,
   buildGroupPackageCoverageLessons,
   addCreditTransaction,
-  getNextGroupLessonDateYmd,
   recomputePrivatePackageUsage,
   validatePrivateLessonFormFields,
 }) {
@@ -698,11 +697,6 @@ export default function useStudentPackageFlow({
           packageId: docRef.id,
         })
         await accessBatch.commit()
-      } else if (result.packageType === 'group' || result.packageType === 'openGroup') {
-        await syncStudentGroupCourseTypeAccessSummary(db, {
-          academyId: scopedAcademyId,
-          studentId,
-        })
       }
       await addCreditTransaction({
         studentId,
@@ -760,8 +754,13 @@ export default function useStudentPackageFlow({
         (result.packageType === 'group' || result.packageType === 'openGroup') &&
         groupClassId
       ) {
-        const nextStartYmd = await getNextGroupLessonDateYmd(groupClassId)
         const todayYmd = getTodayStorageDateString()
+        const nextStartYmd =
+          getEarliestFutureGroupLessonYmdFromLessons({
+            groupClassId,
+            groupLessons: studentSummaryGroupLessons,
+            todayYmd,
+          }) || todayYmd
         const defaultPostGroupReEnrollStartDate =
           /^\d{4}-\d{2}-\d{2}$/.test(nextStartYmd) &&
           nextStartYmd > registrationStartDateForSave
@@ -785,6 +784,12 @@ export default function useStudentPackageFlow({
         })
         setPostGroupReEnrollStartDate(defaultPostGroupReEnrollStartDate)
         setPostGroupReEnrollErrors({})
+        void syncStudentGroupCourseTypeAccessSummary(db, {
+          academyId: scopedAcademyId,
+          studentId,
+        }).catch((error) => {
+          console.warn('그룹 수강권 접근 요약 동기화 실패:', error)
+        })
       }
     } catch (error) {
       console.error('학생 수강권 추가 실패:', error)

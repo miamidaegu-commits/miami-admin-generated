@@ -6,6 +6,16 @@ function slotStatusLabel(status) {
   return '예약 가능한 시간'
 }
 
+function privateSlotStatusLabel(slot) {
+  if (
+    slot?.releasedFromFixed === true ||
+    String(slot?.slotType || '').trim() === 'released_fixed'
+  ) {
+    return '고정 취소로 오픈됨'
+  }
+  return slotStatusLabel(slot?.status)
+}
+
 function reservationStatusLabel(status) {
   return status === 'active' ? '예약 완료' : '예약 취소됨'
 }
@@ -319,7 +329,16 @@ export default function PrivateLessonSlotsSection({
               >
                 <span>{[slot.date, slot.time].filter(Boolean).join(' ') || slot.id}</span>
                 <span>{slot.teacherName || slot.teacher || '-'}</span>
-                <span>{slotStatusLabel(slot.status)}</span>
+                <span>
+                  {privateSlotStatusLabel(slot)}
+                  {isAdmin &&
+                  (slot.releasedFromFixed === true ||
+                    String(slot.slotType || '').trim() === 'released_fixed') ? (
+                    <span style={{ display: 'block', opacity: 0.75, fontSize: 12, marginTop: 4 }}>
+                      원래 학생: {slot.fixedStudentName || slot.fixedStudentId || '-'}
+                    </span>
+                  ) : null}
+                </span>
                 <span data-testid="private-slot-eligible-students">
                   {eligibleStudentLabels.length > 0
                     ? `특정 학생 제한: ${eligibleStudentLabels.join(', ')}`

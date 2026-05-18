@@ -13,7 +13,6 @@ import {
   onSnapshot,
   orderBy,
   query,
-  runTransaction,
   startAfter,
   serverTimestamp,
   Timestamp,
@@ -2248,7 +2247,6 @@ export default function Dashboard() {
     studentSummaryGroupLessons,
     buildGroupPackageCoverageLessons,
     addCreditTransaction,
-    getNextGroupLessonDateYmd,
     recomputePrivatePackageUsage,
     validatePrivateLessonFormFields: (form) =>
       validatePrivateLessonFormFieldsShared(form, { isAdmin }),
@@ -2837,30 +2835,6 @@ export default function Dashboard() {
     return Array.from(byId.values())
   }
 
-  async function getNextGroupLessonDateYmd(groupClassId) {
-    const gid = String(groupClassId || '').trim()
-    if (!gid) return formatLocalYmd(new Date())
-
-    const today = getTodayStorageDateString()
-
-    try {
-      const rows = await fetchGroupLessonsForClassIdMerge(gid)
-      let best = null
-      for (const gl of rows) {
-        if (getGroupLessonGroupId(gl) !== gid) continue
-        const dateStr = String(gl.date || '').trim()
-        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
-        if (dateStr < today) continue
-        if (best === null || dateStr < best) best = dateStr
-      }
-      if (best) return best
-    } catch (error) {
-      console.error('다음 수업일 조회 실패:', error)
-    }
-
-    return formatLocalYmd(new Date())
-  }
-
   async function addCreditTransaction(payload) {
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
@@ -3271,44 +3245,13 @@ export default function Dashboard() {
       setBusyPrivateSlotActionId(slot.id)
 
       if (reservation?.id) {
-        const reservationId = buildPrivateLessonReservationId({
+        const studentId = String(reservation.studentId || '').trim()
+        if (!studentId) throw new Error('예약 학생 정보가 없습니다.')
+        const callable = httpsCallable(firebaseFunctions, 'adminCancelPrivateLessonReservation')
+        await callable({
           academyId: scopedAcademyId,
           slotId: slot.id,
-          studentId: String(reservation.studentId || '').trim(),
-        })
-        await runTransaction(db, async (transaction) => {
-          const slotRef = doc(db, 'privateLessonSlots', slot.id)
-          const reservationRef = doc(db, 'privateLessonReservations', reservationId)
-          const [slotSnap, reservationSnap] = await Promise.all([
-            transaction.get(slotRef),
-            transaction.get(reservationRef),
-          ])
-          if (!slotSnap.exists()) throw new Error('1:1 수업 시간을 찾을 수 없습니다.')
-          if (!reservationSnap.exists()) throw new Error('1:1 수업 예약을 찾을 수 없습니다.')
-          const slotData = { id: slotSnap.id, ...slotSnap.data() }
-          const reservationData = reservationSnap.data()
-          assertSameAcademy(slotData, scopedAcademyId, '1:1 수업 시간')
-          assertSameAcademy(reservationData, scopedAcademyId, '1:1 수업 예약')
-          if (
-            slotData.status !== 'reserved' ||
-            reservationData.status !== 'active' ||
-            slotData.reservationId !== reservationId ||
-            reservationData.slotId !== slot.id
-          ) {
-            throw new Error('활성 예약 상태가 아닙니다.')
-          }
-          transaction.update(reservationRef, {
-            status: 'cancelled',
-            cancelledAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-          })
-          transaction.update(slotRef, {
-            status: 'open',
-            reservedStudentId: '',
-            reservationId: '',
-            reservedAt: null,
-            updatedAt: serverTimestamp(),
-          })
+          studentId,
         })
       } else {
         const slotRef = doc(db, 'privateLessonSlots', slot.id)

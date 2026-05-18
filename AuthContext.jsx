@@ -139,7 +139,39 @@ function buildUserProfileAdapter({
   }
 }
 
-async function loadActiveMemberships(uid) {
+function getCandidateAcademyIds(userData) {
+  return [
+    userData?.lastSelectedAcademyId,
+    userData?.currentAcademyId,
+    userData?.academyId,
+  ]
+    .map(normalizeAcademyId)
+    .filter((academyId, index, academyIds) =>
+      isValidOperationalAcademyId(academyId) && academyIds.indexOf(academyId) === index
+    )
+}
+
+async function loadActiveMemberships(uid, userData) {
+  const membershipsById = new Map()
+
+  await Promise.all(
+    getCandidateAcademyIds(userData).map(async (academyId) => {
+      try {
+        const membershipSnap = await getDoc(doc(db, 'academyMemberships', `${academyId}_${uid}`))
+        if (!membershipSnap.exists()) return
+        const membership = {
+          id: membershipSnap.id,
+          ...membershipSnap.data(),
+        }
+        if (membership.uid === uid && membership.status === 'active') {
+          membershipsById.set(membership.id, membership)
+        }
+      } catch (error) {
+        debugWarn('[AuthContext] academyMemberships 직접 로드 실패:', academyId, error)
+      }
+    })
+  )
+
   try {
     const membershipSnap = await getDocs(
       query(
@@ -154,11 +186,12 @@ async function loadActiveMemberships(uid) {
       ...docItem.data(),
     }))
 
-    return sortMemberships(memberships)
+    memberships.forEach((membership) => membershipsById.set(membership.id, membership))
   } catch (error) {
     debugWarn('[AuthContext] academyMemberships 로드 실패:', error)
   }
-  return []
+
+  return sortMemberships([...membershipsById.values()])
 }
 
 async function loadAcademy(academyId) {
@@ -231,7 +264,7 @@ export function AuthProvider({ children }) {
           return
         }
 
-        const memberships = await loadActiveMemberships(firebaseUser.uid)
+        const memberships = await loadActiveMemberships(firebaseUser.uid, globalUserProfile)
         const currentAcademyId = chooseAcademyId(globalUserProfile, memberships)
         const currentMembership =
           memberships.find((membership) => membership.academyId === currentAcademyId) || null
