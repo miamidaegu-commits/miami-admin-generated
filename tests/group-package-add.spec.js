@@ -11,13 +11,43 @@ import {
   TEST_GROUP_NAME,
 } from './fixtures/test-data.js';
 
+test.setTimeout(90000);
+
+async function expectPostEnrollDialog(page, packageDialog, dialogMessages) {
+  try {
+    await expect(packageDialog).toBeHidden({ timeout: 30000 });
+    const postEnrollDialog = page.getByRole('dialog', { name: '이 반에 바로 등록할까요?' });
+    await expect(postEnrollDialog).toBeVisible({ timeout: 15000 });
+    return postEnrollDialog;
+  } catch (error) {
+    const [bodyText, packageDialogVisible] = await Promise.all([
+      page.locator('body').innerText().catch(() => ''),
+      packageDialog.isVisible().catch(() => false),
+    ]);
+    throw new Error(
+      [
+        'Post-enroll dialog did not appear after group package save.',
+        `Package dialog still visible: ${packageDialogVisible}`,
+        `Browser dialog messages: ${dialogMessages.join(' | ') || '-'}`,
+        `Current URL: ${page.url()}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+}
+
 test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 등록 모달을 확인한다', async ({
   page,
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
+  const dialogMessages = [];
   page.on('dialog', async (dialog) => {
+    dialogMessages.push(dialog.message());
     await dialog.accept();
   });
 
@@ -65,8 +95,7 @@ test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 �
 
     await packageDialog.getByRole('button', { name: '저장' }).click();
 
-    const postEnrollDialog = page.getByRole('dialog', { name: '이 반에 바로 등록할까요?' });
-    await expect(postEnrollDialog).toBeVisible();
+    const postEnrollDialog = await expectPostEnrollDialog(page, packageDialog, dialogMessages);
     await expect(postEnrollDialog).toContainText(tempStudentName);
     await expect(postEnrollDialog).toContainText(TEST_GROUP_NAME);
 

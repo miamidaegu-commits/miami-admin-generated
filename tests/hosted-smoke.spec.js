@@ -84,6 +84,11 @@ async function getHostedFirebaseProjectId() {
 }
 
 test.describe('hosted miami-e2e smoke', () => {
+  test.skip(
+    process.env.RUN_HOSTED_SMOKE !== 'true',
+    'hosted smoke hits the live hosted app; set RUN_HOSTED_SMOKE=true to run it.'
+  );
+
   test.beforeAll(async () => {
     const hostedProjectId = await getHostedFirebaseProjectId().catch(() => '');
     if (hostedProjectId && hostedProjectId !== EXPECTED_HOSTED_FIREBASE_PROJECT_ID) {

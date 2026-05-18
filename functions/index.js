@@ -65,25 +65,24 @@ function isEnabledFlag(value) {
   );
 }
 
-function isPrivateSlotReservationEnabled() {
-  const projectId = getRuntimeProjectId();
-  if (projectId === "miami-e2e") return true;
+function isPrivateSlotBookingE2eOverride(data) {
+  return (
+    getRuntimeProjectId() === "miami-e2e" &&
+    isEnabledFlag(data && data.privateSlotBooking)
+  );
+}
 
+function isPrivateSlotReservationEnabled(data) {
+  if (isPrivateSlotBookingE2eOverride(data)) return true;
   return isEnabledFlag(process.env.PRIVATE_SLOT_BOOKING_ENABLED);
 }
 
-function isPrivateSlotAvailabilityBookingEnabled() {
-  if (getRuntimeProjectId() === "miami-e2e") return true;
-  return isPrivateSlotReservationEnabled();
+function isPrivateSlotAvailabilityBookingEnabled(data) {
+  return isPrivateSlotReservationEnabled(data);
 }
 
-
-function isPrivateSlotReservationPilotRequired() {
-  return getRuntimeProjectId() !== "miami-e2e";
-}
-
-function requirePrivateSlotReservationEnabled() {
-  if (isPrivateSlotReservationEnabled()) return;
+function requirePrivateSlotReservationEnabled(data) {
+  if (isPrivateSlotReservationEnabled(data)) return;
   throw new HttpsError(
       "failed-precondition",
       PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE,
@@ -91,7 +90,6 @@ function requirePrivateSlotReservationEnabled() {
 }
 
 function requirePrivateSlotBookingPilotEnabled(summary) {
-  if (!isPrivateSlotReservationPilotRequired()) return;
   if (summary && summary.privateSlotBookingPilotEnabled === true) return;
   throw new HttpsError(
       "failed-precondition",
@@ -292,6 +290,14 @@ function uniqueNormalizedIdList(...values) {
     normalizeIdList(value).forEach((id) => ids.add(id));
   });
   return Array.from(ids.values());
+}
+
+function uniqueNormalizedTeacherKeyList(...values) {
+  const keys = new Set();
+  values.forEach((value) => {
+    normalizeTeacherKeyList(value).forEach((key) => keys.add(key));
+  });
+  return Array.from(keys.values());
 }
 
 function chunkValues(values, size) {
@@ -805,25 +811,60 @@ exports.listPrivateLessonSlotAvailability = onCall(
         const summaryRef = db
             .collection("studentPrivateAccessSummary")
             .doc(`${academyId}__${studentId}`);
-        const summarySnap = await summaryRef.get();
+        const [summarySnap, packageSnap] = await Promise.all([
+          summaryRef.get(),
+          db
+              .collection("studentPackages")
+              .where("academyId", "==", academyId)
+              .where("studentId", "==", studentId)
+              .get(),
+        ]);
         const summary = summarySnap.exists ? summarySnap.data() || {} : null;
+        const packageTeacherKeys = [];
+        const packageIds = [];
+        packageSnap.docs.forEach((docSnap) => {
+          const packageData = docSnap.data() || {};
+          const packageType = normalizeId(packageData.packageType)
+              .toLowerCase();
+          const status = normalizeId(packageData.status || "active")
+              .toLowerCase();
+          const remainingCount = Number(packageData.remainingCount || 0);
+          if (packageType && packageType !== "private") return;
+          if (
+            ["inactive", "expired", "ended", "cancelled", "canceled"]
+                .includes(status)
+          ) {
+            return;
+          }
+          if (!Number.isFinite(remainingCount) || remainingCount <= 0) return;
+          const teacherKey = getPrivatePackageTeacherKey(packageData);
+          if (!teacherKey) return;
+          packageTeacherKeys.push(teacherKey);
+          packageIds.push(docSnap.id);
+        });
 
-        const teacherKeys = normalizeTeacherKeyList(
+        const teacherKeys = uniqueNormalizedTeacherKeyList(
             summary && summary.teacherKeys,
+            packageTeacherKeys,
         );
-        const activePackageIds = normalizeIdList(
+        const activePackageIds = uniqueNormalizedIdList(
             summary && summary.activePackageIds,
+            packageIds,
         );
+        const effectiveSummary = {
+          ...(summary || {}),
+          teacherKeys,
+          activePackageIds,
+        };
         const allowedSlotIds = uniqueNormalizedIdList(
             summary && summary.allowedSlotIds,
             summary && summary.allowedPrivateLessonSlotIds,
         );
         const hasTeacherPackageAccess =
           activePackageIds.length > 0 && teacherKeys.length > 0;
-        const bookingEnabled = isPrivateSlotAvailabilityBookingEnabled();
+        const bookingEnabled = isPrivateSlotAvailabilityBookingEnabled(data);
         const pilotBookable =
-          !isPrivateSlotReservationPilotRequired() ||
-          (summary && summary.privateSlotBookingPilotEnabled === true);
+          summary && summary.privateSlotBookingPilotEnabled === true;
         const today = getSeoulTodayDateString();
         const byId = new Map();
 
@@ -836,7 +877,14 @@ exports.listPrivateLessonSlotAvailability = onCall(
           if (normalizeId(slot.academyId) !== academyId) return;
           if (!(status === "open" || status === "reserved")) return;
           if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date < today) return;
-          if (!hasSlotAccess({slot, summary, slotId, studentId})) return;
+          if (!hasSlotAccess({
+            slot,
+            summary: effectiveSummary,
+            slotId,
+            studentId,
+          })) {
+            return;
+          }
           byId.set(slotId, slot);
         };
 
@@ -878,7 +926,38 @@ exports.listPrivateLessonSlotAvailability = onCall(
           directSnaps.forEach((docSnap) => addVisibleSlot(docSnap));
         }
 
-        const slots = Array.from(byId.entries())
+        const visibleSlotEntries = Array.from(byId.entries());
+        const activeReservationBySlotId = new Map();
+        await Promise.all(
+            visibleSlotEntries.map(async ([slotId, slot]) => {
+              if (String(slot.status || "").trim() !== "reserved") return;
+              const reservationId = normalizeId(slot.reservationId);
+              if (!reservationId) return;
+              const reservationSnap = await db
+                  .collection("privateLessonReservations")
+                  .doc(reservationId)
+                  .get();
+              if (!reservationSnap.exists) return;
+              const reservation = reservationSnap.data() || {};
+              if (
+                normalizeId(reservation.academyId) === academyId &&
+                normalizeId(reservation.slotId) === slotId &&
+                isActivePrivateReservation(reservation)
+              ) {
+                activeReservationBySlotId.set(slotId, reservation);
+              }
+            }),
+        );
+
+        const slots = visibleSlotEntries
+            .filter(([slotId, slot]) => {
+              const status = String(slot.status || "").trim();
+              if (status === "open") return true;
+              if (status !== "reserved") return false;
+              const reservation = activeReservationBySlotId.get(slotId);
+              return normalizeId(reservation && reservation.studentId) ===
+                studentId;
+            })
             .map(([slotId, slot]) =>
               sanitizePrivateSlotAvailabilityRow({
                 slotId,
@@ -908,9 +987,8 @@ exports.reservePrivateLessonSlot = onCall(
         if (!request.auth) {
           throw new HttpsError("unauthenticated", "Login required.");
         }
-        requirePrivateSlotReservationEnabled();
-
         const data = request.data || {};
+        requirePrivateSlotReservationEnabled(data);
         const academyId = requireString(data, "academyId");
         const slotId = requireString(data, "slotId");
         validateAcademyId(academyId);
@@ -1148,9 +1226,8 @@ exports.cancelPrivateLessonReservation = onCall(
         if (!request.auth) {
           throw new HttpsError("unauthenticated", "Login required.");
         }
-        requirePrivateSlotReservationEnabled();
-
         const data = request.data || {};
+        requirePrivateSlotReservationEnabled(data);
         const academyId = requireString(data, "academyId");
         const slotId = requireString(data, "slotId");
         validateAcademyId(academyId);

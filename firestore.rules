@@ -373,6 +373,21 @@ service cloud.firestore {
         data.teacher == myAcademyTeacherName(data.academyId);
     }
 
+    function privateSlotVisibleToCurrentStudent(data, slotId) {
+      return hasStudentIdentity(data.academyId) &&
+        data.status in ["open", "reserved"] &&
+        (
+          data.reservedStudentId == myStudentId(data.academyId) ||
+          hasPrivateAllowedSlotAccess(data.academyId, slotId) ||
+          (
+            data.eligibleStudentIds is list &&
+            myStudentId(data.academyId) in data.eligibleStudentIds
+          ) ||
+          hasPrivateTeacherAccess(data.academyId, data.teacher) ||
+          hasPrivateTeacherAccess(data.academyId, data.teacherName)
+        );
+    }
+
     function privateLessonSlotPath(slotId) {
       return /databases/$(database)/documents/privateLessonSlots/$(slotId);
     }
@@ -601,7 +616,7 @@ service cloud.firestore {
         data.academyId != "" &&
         data.studentId is string &&
         data.studentId != "" &&
-        data.groupClassIds is list &&
+        (!("groupClassIds" in data.keys()) || data.groupClassIds is list) &&
         (!("groupCourseTypes" in data.keys()) || data.groupCourseTypes is list);
     }
 
@@ -1594,13 +1609,15 @@ service cloud.firestore {
     }
 
     match /studentGroupAccessSummary/{summaryId} {
+      allow get: if signedIn() &&
+        !exists(/databases/$(database)/documents/studentGroupAccessSummary/$(summaryId));
+
       allow read: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
         (
           hasStudentIdentity(resource.data.academyId) &&
           resource.data.studentId == myStudentId(resource.data.academyId)
-        ) ||
-        isAcademyTeacherOrStaff(resource.data.academyId)
+        )
       );
 
       allow create: if sameAcademyOnCreate() &&
@@ -1636,6 +1653,9 @@ service cloud.firestore {
     }
 
     match /studentPrivateAccessSummary/{summaryId} {
+      allow get: if signedIn() &&
+        !exists(/databases/$(database)/documents/studentPrivateAccessSummary/$(summaryId));
+
       allow read: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
         (
@@ -1667,16 +1687,14 @@ service cloud.firestore {
         sameAcademyOnRead() && (
           isAcademyAdmin(resource.data.academyId) ||
           privateSlotBelongsToTeacher(resource.data) ||
-          (
-            hasStudentIdentity(resource.data.academyId) &&
-            resource.data.reservedStudentId == myStudentId(resource.data.academyId)
-          )
+          privateSlotVisibleToCurrentStudent(resource.data, slotId)
         )
       );
 
       allow list: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
-        privateSlotBelongsToTeacher(resource.data)
+        privateSlotBelongsToTeacher(resource.data) ||
+        privateSlotVisibleToCurrentStudent(resource.data, slotId)
       );
 
       allow create: if sameAcademyOnCreate() &&

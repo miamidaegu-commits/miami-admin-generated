@@ -6,6 +6,24 @@ export function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+const LOGIN_ATTEMPT_TIMEOUT_MS = 10000;
+
+async function waitForLoginOutcome(page, pathPattern) {
+  const signInError = page
+    .locator('[role="alert"], .error-msg, .error, [data-testid*="error"]')
+    .filter({ hasText: /sign-in failed|로그인|실패|failed/i })
+    .first()
+    .waitFor({ state: 'visible', timeout: LOGIN_ATTEMPT_TIMEOUT_MS })
+    .then(() => 'error')
+    .catch(() => null);
+  const redirect = page
+    .waitForURL(pathPattern, { timeout: LOGIN_ATTEMPT_TIMEOUT_MS })
+    .then(() => 'redirect')
+    .catch(() => null);
+
+  return Promise.race([redirect, signInError]);
+}
+
 async function loginAndExpectPath(page, email, password, pathPattern) {
   const consoleMessages = [];
   const pageErrors = [];
@@ -33,7 +51,10 @@ async function loginAndExpectPath(page, email, password, pathPattern) {
       await page.getByRole('button', { name: /Sign In|로그인/i }).click();
 
       try {
-        await expect(page).toHaveURL(pathPattern, { timeout: 15000 });
+        const outcome = await waitForLoginOutcome(page, pathPattern);
+        if (outcome !== 'redirect') {
+          throw new Error(`Login attempt ended with ${outcome || 'no redirect'}.`);
+        }
         break;
       } catch (error) {
         if (attempt === 3) {
@@ -66,7 +87,7 @@ async function loginAndExpectPath(page, email, password, pathPattern) {
             ].join('\n')
           );
         }
-        await page.waitForTimeout(1000);
+        await page.goto(`${BASE_URL}login/`);
       }
     }
   } finally {

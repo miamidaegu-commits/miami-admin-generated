@@ -2247,7 +2247,6 @@ export default function Dashboard() {
     studentSummaryGroupLessons,
     buildGroupPackageCoverageLessons,
     addCreditTransaction,
-    getNextGroupLessonDateYmd,
     recomputePrivatePackageUsage,
     validatePrivateLessonFormFields: (form) =>
       validatePrivateLessonFormFieldsShared(form, { isAdmin }),
@@ -2834,30 +2833,6 @@ export default function Dashboard() {
       })
     }
     return Array.from(byId.values())
-  }
-
-  async function getNextGroupLessonDateYmd(groupClassId) {
-    const gid = String(groupClassId || '').trim()
-    if (!gid) return formatLocalYmd(new Date())
-
-    const today = getTodayStorageDateString()
-
-    try {
-      const rows = await fetchGroupLessonsForClassIdMerge(gid)
-      let best = null
-      for (const gl of rows) {
-        if (getGroupLessonGroupId(gl) !== gid) continue
-        const dateStr = String(gl.date || '').trim()
-        if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) continue
-        if (dateStr < today) continue
-        if (best === null || dateStr < best) best = dateStr
-      }
-      if (best) return best
-    } catch (error) {
-      console.error('다음 수업일 조회 실패:', error)
-    }
-
-    return formatLocalYmd(new Date())
   }
 
   async function addCreditTransaction(payload) {

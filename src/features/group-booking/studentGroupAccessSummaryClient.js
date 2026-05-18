@@ -3,7 +3,6 @@ import {
   arrayUnion,
   collection,
   doc,
-  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -83,16 +82,11 @@ export async function syncStudentGroupCourseTypeAccessSummary(db, { academyId, s
     academyId: scopedAcademyId,
     studentId: scopedStudentId,
   })
-  const summarySnap = await getDoc(summaryRef)
   const payload = {
     academyId: scopedAcademyId,
     studentId: scopedStudentId,
     groupCourseTypes: Array.from(courseTypes.values()),
     updatedAt: serverTimestamp(),
-  }
-  if (!summarySnap.exists()) {
-    payload.groupClassIds = []
-    payload.createdAt = serverTimestamp()
   }
   await setDoc(summaryRef, payload, { merge: true })
   return payload.groupCourseTypes

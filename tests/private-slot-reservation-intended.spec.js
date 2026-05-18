@@ -76,6 +76,82 @@ function privateReservationCard(page, text) {
   return page.locator('[data-testid="student-private-reservation-card"]').filter({ hasText: text }).first();
 }
 
+async function expectPrivateSlotCardCount(page, date, expected, message) {
+  const cards = page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: date });
+  try {
+    await expect(cards, message).toHaveCount(expected, { timeout: 15000 });
+  } catch (error) {
+    const [cardTexts, bodyText] = await Promise.all([
+      page.locator('[data-testid="student-private-slot-card"]').allInnerTexts().catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+    throw new Error(
+      [
+        message,
+        `Expected count: ${expected}`,
+        `Date filter: ${date}`,
+        `Current URL: ${page.url()}`,
+        `Visible private slot cards: ${JSON.stringify(cardTexts)}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+  return cards;
+}
+
+async function expectStudentBookingHeadingVisible(page, message) {
+  try {
+    await expect(page.getByRole('heading', { name: '수업 예약', exact: true }), message).toBeVisible({
+      timeout: 15000,
+    });
+  } catch (error) {
+    const [bodyText, cardTexts] = await Promise.all([
+      page.locator('body').innerText().catch(() => ''),
+      page.locator('[data-testid="student-private-slot-card"]').allInnerTexts().catch(() => []),
+    ]);
+    throw new Error(
+      [
+        message,
+        `Current URL: ${page.url()}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        `Visible private slot cards: ${JSON.stringify(cardTexts)}`,
+        '',
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+}
+
+async function expectPrivateSlotReserveButtonEnabled(page, card, message) {
+  const button = card.getByTestId('student-private-slot-reserve-button');
+  try {
+    await expect(button, message).toBeEnabled();
+  } catch (error) {
+    const [cardText, buttonTexts, bodyText] = await Promise.all([
+      card.innerText().catch(() => ''),
+      card.locator('button').allInnerTexts().catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+    throw new Error(
+      [
+        message,
+        `Current URL: ${page.url()}`,
+        `Card text: ${cardText}`,
+        `Visible buttons: ${JSON.stringify(buttonTexts)}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+  return button;
+}
+
 async function expectReservationStatus(db, slotId, studentId, expected) {
   await expect
     .poll(async () => {
@@ -120,7 +196,13 @@ async function expectPrivateBookingStatsCount(db, studentId, expected) {
     .toBe(expected);
 }
 
-async function expectNotificationEvent(db, { type, slotId, studentId, reservationId: expectedReservationId }) {
+async function expectNotificationEvent(db, {
+  type,
+  slotId,
+  studentId,
+  reservationId: expectedReservationId,
+  teacher = TEACHER_NAME,
+}) {
   let eventData = null;
   await expect
     .poll(async () => {
@@ -148,7 +230,7 @@ async function expectNotificationEvent(db, { type, slotId, studentId, reservatio
   });
   expect(eventData?.date).toBeTruthy();
   expect(eventData?.time).toBeTruthy();
-  expect(eventData?.teacher).toBe(TEACHER_NAME);
+  expect(eventData?.teacher).toBe(teacher);
   expect(eventData?.createdAt?.toMillis?.() || 0).toBeGreaterThan(0);
   return eventData;
 }
@@ -156,9 +238,10 @@ async function expectNotificationEvent(db, { type, slotId, studentId, reservatio
 async function loginAsStudentWithPrivateBooking(page, email) {
   await loginAsStudent(page, email, TEST_STUDENT_PASSWORD);
   await page.goto(new URL('/student-booking?privateSlotBooking=enabled', BASE_URL).toString());
-  await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
-    timeout: 15000,
-  });
+  await expectStudentBookingHeadingVisible(
+    page,
+    'student booking page should remain available after enabling private slot booking flag'
+  );
 }
 
 async function createStudentFixture(db, auth, {
@@ -262,6 +345,8 @@ async function createFixture(unique) {
   const db = getDb();
   const auth = getAuth();
   const nowTs = admin.firestore.Timestamp.now();
+  const teacherKey = `teacher-${unique}`;
+  const ineligibleTeacherKey = `other-private-teacher-${unique}`;
   const numericUnique = Number.parseInt(String(unique).split('-')[0], 10) || Date.now();
   const day = 10 + (numericUnique % 18);
   const minute = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
@@ -300,6 +385,7 @@ async function createFixture(unique) {
     roleName: 'eligible',
     studentId: eligibleStudentId,
     teacherAccess: true,
+    teacherKey,
     allowedSlotIds: [],
     paidLessons: 1,
     privateSlotBookingPilotEnabled: true,
@@ -309,6 +395,7 @@ async function createFixture(unique) {
     roleName: 'no-remaining',
     studentId: noRemainingStudentId,
     teacherAccess: true,
+    teacherKey,
     allowedSlotIds: [noRemainingOpenSlotId],
     paidLessons: 1,
     privateSlotBookingPilotEnabled: true,
@@ -318,7 +405,7 @@ async function createFixture(unique) {
     roleName: 'ineligible',
     studentId: ineligibleStudentId,
     teacherAccess: true,
-    teacherKey: 'other-private-teacher',
+    teacherKey: ineligibleTeacherKey,
     allowedSlotIds: [],
     paidLessons: 1,
     privateSlotBookingPilotEnabled: true,
@@ -328,6 +415,7 @@ async function createFixture(unique) {
     roleName: 'pilot-disabled',
     studentId: pilotDisabledStudentId,
     teacherAccess: true,
+    teacherKey,
     allowedSlotIds: [pilotDisabledSlotId],
     paidLessons: 1,
     privateSlotBookingPilotEnabled: false,
@@ -336,8 +424,8 @@ async function createFixture(unique) {
   await Promise.all([
     db.collection('privateLessonSlots').doc(slotId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
-      teacher: TEACHER_NAME,
-      teacherName: TEACHER_NAME,
+      teacher: teacherKey,
+      teacherName: teacherKey,
       date,
       time,
       subject,
@@ -348,6 +436,8 @@ async function createFixture(unique) {
       status: 'open',
       reservedStudentId: '',
       reservationId: '',
+      slotType: 'open',
+      isBookable: true,
       createdByUid: 'e2e-admin-sdk',
       createdAt: nowTs,
       updatedAt: nowTs,
@@ -356,8 +446,8 @@ async function createFixture(unique) {
     }),
     db.collection('privateLessonSlots').doc(noRemainingOpenSlotId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
-      teacher: TEACHER_NAME,
-      teacherName: TEACHER_NAME,
+      teacher: teacherKey,
+      teacherName: teacherKey,
       date: noRemainingOpenDate,
       time: '10:40',
       subject: noRemainingOpenSubject,
@@ -366,8 +456,11 @@ async function createFixture(unique) {
       startAt: admin.firestore.Timestamp.fromDate(new Date(`${noRemainingOpenDate}T10:40:00`)),
       durationMinutes: 50,
       status: 'open',
+      eligibleStudentIds: [noRemainingStudentId],
       reservedStudentId: '',
       reservationId: '',
+      slotType: 'open',
+      isBookable: true,
       createdByUid: 'e2e-admin-sdk',
       createdAt: nowTs,
       updatedAt: nowTs,
@@ -376,8 +469,8 @@ async function createFixture(unique) {
     }),
     db.collection('privateLessonSlots').doc(noRemainingExistingSlotId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
-      teacher: TEACHER_NAME,
-      teacherName: TEACHER_NAME,
+      teacher: teacherKey,
+      teacherName: teacherKey,
       date: noRemainingExistingDate,
       time: '10:30',
       subject: noRemainingExistingSubject,
@@ -397,8 +490,8 @@ async function createFixture(unique) {
     }),
     db.collection('privateLessonSlots').doc(pilotDisabledSlotId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
-      teacher: TEACHER_NAME,
-      teacherName: TEACHER_NAME,
+      teacher: teacherKey,
+      teacherName: teacherKey,
       date: `2099-08-${String(day).padStart(2, '0')}`,
       time: '14:40',
       subject: `E2E Pilot Disabled Private Slot ${unique}`,
@@ -421,8 +514,8 @@ async function createFixture(unique) {
         academyId: DEFAULT_E2E_ACADEMY_ID,
         slotId: noRemainingExistingSlotId,
         studentId: noRemainingStudentId,
-        teacher: TEACHER_NAME,
-        teacherName: TEACHER_NAME,
+        teacher: teacherKey,
+        teacherName: teacherKey,
         date: noRemainingExistingDate,
         time: '10:30',
         subject: noRemainingExistingSubject,
@@ -435,8 +528,8 @@ async function createFixture(unique) {
       }),
     db.collection('lessons').doc(noRemainingFixedLessonId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
-      teacher: TEACHER_NAME,
-      teacherName: TEACHER_NAME,
+      teacher: teacherKey,
+      teacherName: teacherKey,
       studentId: noRemainingStudentId,
       studentID: noRemainingStudentId,
       studentName: noRemainingStudent.displayName,
@@ -461,6 +554,8 @@ async function createFixture(unique) {
   ]);
 
   return {
+    teacherKey,
+    ineligibleTeacherKey,
     slotId,
     date,
     time,
@@ -596,17 +691,21 @@ test('private slot booking callable production gate is wired server-side', async
   const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   expect(source).toContain('PRIVATE_SLOT_BOOKING_ENABLED');
   expect(source).toContain('"miami-e2e"');
+  expect(source).toContain('function isPrivateSlotBookingE2eOverride');
+  expect(source).toMatch(/data && data\.privateSlotBooking/);
   expect(source).toContain('"1:1 예약 기능은 아직 선택된 학생에게만 제공됩니다."');
   expect(source).toContain('exports.listPrivateLessonSlotAvailability');
   expect(source).toContain('privateSlotBookingPilotEnabled');
   expect(source).toMatch(/function requirePrivateSlotBookingPilotEnabled\(summary\)/);
   expect(source).toMatch(/summary\.privateSlotBookingPilotEnabled === true/);
-  expect(source).toMatch(/getRuntimeProjectId\(\) !== "miami-e2e"/);
   expect(source).toMatch(
-    /exports\.reservePrivateLessonSlot[\s\S]*requirePrivateSlotReservationEnabled\(\)/
+    /exports\.listPrivateLessonSlotAvailability[\s\S]*isPrivateSlotAvailabilityBookingEnabled\(data\)/
   );
   expect(source).toMatch(
-    /exports\.cancelPrivateLessonReservation[\s\S]*requirePrivateSlotReservationEnabled\(\)/
+    /exports\.reservePrivateLessonSlot[\s\S]*requirePrivateSlotReservationEnabled\(data\)/
+  );
+  expect(source).toMatch(
+    /exports\.cancelPrivateLessonReservation[\s\S]*requirePrivateSlotReservationEnabled\(data\)/
   );
   expect(source).toMatch(
     /exports\.reservePrivateLessonSlot[\s\S]*requirePrivateSlotBookingPilotEnabled\(summary\)/
@@ -623,6 +722,21 @@ test('private slot booking callable production gate is wired server-side', async
   expect(sanitizeSource).not.toContain('reservationId');
   expect(source).toMatch(/function hasSlotAccess[\s\S]*summary && summary\.teacherKeys/);
   expect(source).toMatch(/function hasSlotAccess[\s\S]*activePackageIds\.length > 0/);
+});
+
+test('student booking page passes private slot e2e override to callable actions', async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  expect(source).toContain('PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE');
+  expect(source).toMatch(/privateSlotBooking['"]?\s*:\s*'enabled'/);
+  expect(source).toMatch(
+    /listPrivateLessonSlotAvailability[\s\S]*academyId: currentAcademyId[\s\S]*PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE/
+  );
+  expect(source).toMatch(
+    /reservePrivateLessonSlot[\s\S]*academyId: scopedAcademyId[\s\S]*slotId: slot\.id[\s\S]*PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE/
+  );
+  expect(source).toMatch(
+    /cancelPrivateLessonReservation[\s\S]*academyId: scopedAcademyId[\s\S]*slotId: reservation\.slotId[\s\S]*PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE/
+  );
 });
 
 test('released fixed private slot behavior is wired server-side', async () => {
@@ -692,8 +806,14 @@ test('intended flexible private slot visibility honors teacher access and pilot 
       pilotDisabledPage,
       fixture.pilotDisabledStudent.email
     );
-    const pilotDisabledCard = studentSlotCard(pilotDisabledPage, fixture.pilotDisabledDate);
-    await expect(pilotDisabledCard).toBeVisible({ timeout: 15000 });
+    const pilotDisabledCards = await expectPrivateSlotCardCount(
+      pilotDisabledPage,
+      fixture.pilotDisabledDate,
+      1,
+      'pilot disabled student should see one eligible disabled private slot card'
+    );
+    const pilotDisabledCard = pilotDisabledCards.first();
+    await expect(pilotDisabledCard).toBeVisible();
     await expect(
       pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
     ).toBeDisabled();
@@ -706,7 +826,7 @@ test('intended flexible private slot visibility honors teacher access and pilot 
   }
 });
 
-test('student sees matching open and reserved private slots without reserved student details', async ({
+test('student sees matching open private slots but not another student reserved private slot', async ({
   browser,
   browserName,
 }, testInfo) => {
@@ -731,14 +851,12 @@ test('student sees matching open and reserved private slots without reserved stu
       '1:1 수업 예약'
     );
 
-    const reservedSlotCard = studentSlotCard(page, fixture.noRemainingExistingDate);
-    await expect(reservedSlotCard).toBeVisible({ timeout: 15000 });
-    await expect(reservedSlotCard).toContainText('예약 완료');
-    await expect(reservedSlotCard.getByTestId('student-private-slot-reserved-badge')).toBeVisible();
-    await expect(reservedSlotCard.getByTestId('student-private-slot-reserve-button')).toHaveCount(0);
-    await expect(reservedSlotCard).not.toContainText(fixture.noRemainingStudent.displayName);
-    await expect(reservedSlotCard).not.toContainText(fixture.noRemainingStudent.studentId);
-    await expect(reservedSlotCard).not.toContainText(
+    await expect(page.locator('[data-testid="student-private-slot-card"]').filter({
+      hasText: fixture.noRemainingExistingDate,
+    })).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText(fixture.noRemainingStudent.displayName);
+    await expect(page.locator('body')).not.toContainText(fixture.noRemainingStudent.studentId);
+    await expect(page.locator('body')).not.toContainText(
       reservationId(fixture.noRemainingExistingSlotId, fixture.noRemainingStudent.studentId)
     );
   } finally {
@@ -769,8 +887,14 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     contexts.push(disabledContext);
     const disabledPage = await disabledContext.newPage();
     await loginAsStudent(disabledPage, fixture.eligibleStudent.email, TEST_STUDENT_PASSWORD);
-    const disabledCard = studentSlotCard(disabledPage, fixture.date);
-    await expect(disabledCard).toBeVisible({ timeout: 15000 });
+    const disabledCards = await expectPrivateSlotCardCount(
+      disabledPage,
+      fixture.date,
+      1,
+      'eligible student should see the private slot with booking disabled'
+    );
+    const disabledCard = disabledCards.first();
+    await expect(disabledCard).toBeVisible();
     await expect(disabledCard.getByTestId('student-private-slot-reserve-button')).toBeDisabled();
     await expect(disabledCard.getByTestId('student-private-slot-reserve-button')).toHaveText('예약 중지');
 
@@ -781,8 +905,13 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       pilotDisabledPage,
       fixture.pilotDisabledStudent.email
     );
-    const pilotDisabledCard = studentSlotCard(pilotDisabledPage, fixture.pilotDisabledDate);
-    await expect(pilotDisabledCard).toBeVisible({ timeout: 15000 });
+    const pilotDisabledCards = await expectPrivateSlotCardCount(
+      pilotDisabledPage,
+      fixture.pilotDisabledDate,
+      1,
+      'pilot disabled student should see one disabled private slot card'
+    );
+    const pilotDisabledCard = pilotDisabledCards.first();
     await expect(
       pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
     ).toBeDisabled();
@@ -801,15 +930,24 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     contexts.push(eligibleContext);
     const eligiblePage = await eligibleContext.newPage();
     await loginAsStudentWithPrivateBooking(eligiblePage, fixture.eligibleStudent.email);
-    const slotCard = studentSlotCard(eligiblePage, fixture.date);
+    const slotCards = await expectPrivateSlotCardCount(
+      eligiblePage,
+      fixture.date,
+      1,
+      'eligible pilot-enabled student should see one private slot card'
+    );
+    const slotCard = slotCards.first();
     const bookingDialogs = [];
     eligiblePage.on('dialog', async (dialog) => {
       bookingDialogs.push(dialog.message());
       await dialog.accept();
     });
-    await expect(slotCard).toBeVisible({ timeout: 15000 });
-    await expect(slotCard.getByTestId('student-private-slot-reserve-button')).toBeEnabled();
-    await expect(slotCard.getByTestId('student-private-slot-reserve-button')).toHaveText('1:1 수업 예약');
+    const eligibleReserveButton = await expectPrivateSlotReserveButtonEnabled(
+      eligiblePage,
+      slotCard,
+      'eligible pilot-enabled student should have an enabled private slot reserve button'
+    );
+    await expect(eligibleReserveButton).toHaveText('1:1 수업 예약');
     const initialSlotSnap = await db.collection('privateLessonSlots').doc(fixture.slotId).get();
     const initialSlot = initialSlotSnap.data() || {};
     expect(Array.isArray(initialSlot.eligibleStudentIds) ? initialSlot.eligibleStudentIds : []).toEqual([]);
@@ -818,7 +956,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       .doc(privateSummaryId(fixture.eligibleStudent.studentId))
       .get();
     const initialSummary = initialSummarySnap.data() || {};
-    expect(initialSummary.teacherKeys).toContain(TEACHER_NAME);
+    expect(initialSummary.teacherKeys).toContain(fixture.teacherKey);
     expect(initialSummary.activePackageIds?.length || 0).toBeGreaterThan(0);
     expect(Array.isArray(initialSummary.allowedSlotIds) ? initialSummary.allowedSlotIds : []).toEqual([]);
     expect(
@@ -840,10 +978,20 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       await dialog.accept();
     });
     await loginAsStudentWithPrivateBooking(noRemainingPage, fixture.noRemainingStudent.email);
-    const noRemainingSlotCard = studentSlotCard(noRemainingPage, fixture.noRemainingOpenDate);
-    await expect(noRemainingSlotCard).toBeVisible({ timeout: 15000 });
-    await expect(noRemainingSlotCard.getByTestId('student-private-slot-reserve-button')).toBeEnabled();
-    await noRemainingSlotCard.getByTestId('student-private-slot-reserve-button').click();
+    const noRemainingSlotCards = await expectPrivateSlotCardCount(
+      noRemainingPage,
+      fixture.noRemainingOpenDate,
+      1,
+      'no-remaining student should see the allowed open private slot'
+    );
+    const noRemainingSlotCard = noRemainingSlotCards.first();
+    await expect(noRemainingSlotCard).toBeVisible();
+    const noRemainingReserveButton = await expectPrivateSlotReserveButtonEnabled(
+      noRemainingPage,
+      noRemainingSlotCard,
+      'no-remaining student should be able to reserve the allowed open private slot'
+    );
+    await noRemainingReserveButton.click();
     await expectReservationStatus(
       db,
       fixture.noRemainingOpenSlotId,
@@ -852,7 +1000,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     );
     await expectSlotStatus(db, fixture.noRemainingOpenSlotId, 'reserved');
 
-    await slotCard.getByTestId('student-private-slot-reserve-button').click();
+    await eligibleReserveButton.click();
     await expect
       .poll(
         () =>
@@ -886,7 +1034,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       academyId: DEFAULT_E2E_ACADEMY_ID,
       slotId: fixture.slotId,
       studentId: fixture.eligibleStudent.studentId,
-      teacher: TEACHER_NAME,
+      teacher: fixture.teacherKey,
       date: fixture.date,
       time: fixture.time,
       status: 'active',
@@ -904,6 +1052,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       slotId: fixture.slotId,
       studentId: fixture.eligibleStudent.studentId,
       reservationId: expectedReservationId,
+      teacher: fixture.teacherKey,
     });
 
     const secondContext = await browser.newContext();
@@ -945,10 +1094,16 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       slotId: fixture.slotId,
       studentId: fixture.eligibleStudent.studentId,
       reservationId: expectedReservationId,
+      teacher: fixture.teacherKey,
     });
 
-    const reopenedSlotCard = studentSlotCard(eligiblePage, fixture.date);
-    await expect(reopenedSlotCard).toBeVisible({ timeout: 15000 });
+    const reopenedSlotCards = await expectPrivateSlotCardCount(
+      eligiblePage,
+      fixture.date,
+      1,
+      'eligible student should see the reopened private slot after cancellation'
+    );
+    const reopenedSlotCard = reopenedSlotCards.first();
     await reopenedSlotCard.getByTestId('student-private-slot-reserve-button').click();
     await expectReservationStatus(
       db,
@@ -980,10 +1135,27 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     await db.collection('privateLessonSlots').doc(fixture.slotId).set(
       {
         status: 'open',
+        reservedCount: 0,
         eligibleStudentIds: [fixture.ineligibleStudent.studentId],
         reservedStudentId: '',
         reservationId: '',
         reservedAt: null,
+        slotType: 'open',
+        fixedStudentId: '',
+        fixedStudentName: '',
+        releasedFromFixed: false,
+        releasedByStudentId: '',
+        releaseReason: '',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    await db.collection('studentPackages').doc(fixture.ineligibleStudent.packageId).set(
+      {
+        teacher: fixture.teacherKey,
+        teacherName: fixture.teacherKey,
+        status: 'active',
+        remainingCount: 1,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
@@ -992,6 +1164,8 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       privateSummaryId(fixture.ineligibleStudent.studentId)
     ).set(
       {
+        teacherKeys: [fixture.teacherKey],
+        activePackageIds: [fixture.ineligibleStudent.packageId],
         allowedSlotIds: [fixture.slotId],
         allowedPrivateLessonSlotIds: [fixture.slotId],
         privateSlotBookingPilotEnabled: true,
@@ -1011,8 +1185,13 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       fixture.slotId
     );
     await secondPage.reload();
-    await expect(studentSlotCard(secondPage, fixture.date)).toBeVisible({ timeout: 45000 });
-    await studentSlotCard(secondPage, fixture.date)
+    const legacySlotCards = await expectPrivateSlotCardCount(
+      secondPage,
+      fixture.date,
+      1,
+      'legacy eligible student should see the reopened private slot after reload'
+    );
+    await legacySlotCards.first()
       .getByTestId('student-private-slot-reserve-button')
       .click();
     await expectReservationStatus(
@@ -1054,8 +1233,8 @@ test('student flexible private cancellation cutoff blocks cancel within 6 hours'
     await Promise.all([
       db.collection('privateLessonSlots').doc(nearSlotId).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
-        teacher: TEACHER_NAME,
-        teacherName: TEACHER_NAME,
+        teacher: fixture.teacherKey,
+        teacherName: fixture.teacherKey,
         date: nearStart.date,
         time: nearStart.time,
         subject: `E2E Near Cutoff Private Slot ${testInfo.workerIndex}`,
@@ -1077,8 +1256,8 @@ test('student flexible private cancellation cutoff blocks cancel within 6 hours'
         slotId: nearSlotId,
         studentId: fixture.eligibleStudent.studentId,
         studentName: fixture.eligibleStudent.displayName,
-        teacher: TEACHER_NAME,
-        teacherName: TEACHER_NAME,
+        teacher: fixture.teacherKey,
+        teacherName: fixture.teacherKey,
         date: nearStart.date,
         time: nearStart.time,
         status: 'active',
@@ -1128,6 +1307,16 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
 
   try {
     fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-cancel-limit`);
+    await db.collection('studentPrivateAccessSummary').doc(
+      privateSummaryId(fixture.eligibleStudent.studentId)
+    ).set(
+      {
+        allowedSlotIds: [fixture.slotId],
+        allowedPrivateLessonSlotIds: [fixture.slotId],
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
     const context = await browser.newContext();
     contexts.push(context);
     const page = await context.newPage();
@@ -1140,9 +1329,20 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
     const expectedReservationId = reservationId(fixture.slotId, fixture.eligibleStudent.studentId);
 
     for (let index = 1; index <= 2; index += 1) {
-      const slotCard = studentSlotCard(page, fixture.date);
-      await expect(slotCard).toBeVisible({ timeout: 15000 });
-      await slotCard.getByTestId('student-private-slot-reserve-button').click();
+      const slotCards = await expectPrivateSlotCardCount(
+        page,
+        fixture.date,
+        1,
+        `slot should be visible before reservation attempt ${index}`
+      );
+      const slotCard = slotCards.first();
+      const reserveButton = slotCard.getByTestId('student-private-slot-reserve-button');
+      await expect(
+        reserveButton,
+        `reserve button should be enabled before attempt ${index}`
+      ).toBeEnabled();
+      await expect(reserveButton).toHaveText('1:1 수업 예약');
+      await reserveButton.click();
       await expectReservationStatus(db, fixture.slotId, fixture.eligibleStudent.studentId, 'active');
 
       const reservationCard = privateReservationCard(page, fixture.date);
@@ -1151,11 +1351,29 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
       await expectReservationStatus(db, fixture.slotId, fixture.eligibleStudent.studentId, 'cancelled');
       await expectSlotStatus(db, fixture.slotId, 'open');
       await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, index);
+      await expect(
+        page.locator('[data-testid="student-private-reservation-card"]').filter({ hasText: fixture.date }),
+        `reservation card should disappear after cancellation ${index}`
+      ).toHaveCount(0, { timeout: 15000 });
+      await expectPrivateSlotCardCount(
+        page,
+        fixture.date,
+        1,
+        `slot should reappear after cancellation ${index}`
+      );
     }
 
-    const slotCard = studentSlotCard(page, fixture.date);
-    await expect(slotCard).toBeVisible({ timeout: 15000 });
-    await slotCard.getByTestId('student-private-slot-reserve-button').click();
+    const slotCards = await expectPrivateSlotCardCount(
+      page,
+      fixture.date,
+      1,
+      'slot should be visible before reservation attempt 3'
+    );
+    const slotCard = slotCards.first();
+    const reserveButton = slotCard.getByTestId('student-private-slot-reserve-button');
+    await expect(reserveButton, 'reserve button should be enabled before attempt 3').toBeEnabled();
+    await expect(reserveButton).toHaveText('1:1 수업 예약');
+    await reserveButton.click();
     await expectReservationStatus(db, fixture.slotId, fixture.eligibleStudent.studentId, 'active');
 
     const reservationCard = privateReservationCard(page, fixture.date);
@@ -1174,12 +1392,14 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
       slotId: fixture.slotId,
       studentId: fixture.eligibleStudent.studentId,
       reservationId: expectedReservationId,
+      teacher: fixture.teacherKey,
     });
     await expectNotificationEvent(db, {
       type: 'private_slot_cancelled',
       slotId: fixture.slotId,
       studentId: fixture.eligibleStudent.studentId,
       reservationId: expectedReservationId,
+      teacher: fixture.teacherKey,
     });
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));

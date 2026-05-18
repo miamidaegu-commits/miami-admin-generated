@@ -50,11 +50,18 @@ function isEnabledFlag(value) {
   )
 }
 
+const PRIVATE_SLOT_BOOKING_OVERRIDE_ENABLED =
+  import.meta.env.MODE === 'e2e' &&
+  typeof window !== 'undefined' &&
+  new URLSearchParams(window.location.search).get('privateSlotBooking') === 'enabled'
+
 const PRIVATE_SLOT_BOOKING_ENABLED =
   isEnabledFlag(import.meta.env.VITE_PRIVATE_SLOT_BOOKING_ENABLED) ||
-  (import.meta.env.MODE === 'e2e' &&
-    typeof window !== 'undefined' &&
-    new URLSearchParams(window.location.search).get('privateSlotBooking') === 'enabled')
+  PRIVATE_SLOT_BOOKING_OVERRIDE_ENABLED
+
+const PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE = PRIVATE_SLOT_BOOKING_OVERRIDE_ENABLED
+  ? { privateSlotBooking: 'enabled' }
+  : {}
 
 const PRIVATE_SLOT_RESERVE_CONFIRM_MESSAGE =
   '1:1 수업을 예약하시겠습니까?\n\n취소는 수업 시작 6시간 전까지만 가능하며, 학생 직접 취소는 최대 2회까지 가능합니다.'
@@ -141,6 +148,23 @@ function slotMatchesPrivateTeacherAccess(slot, teacherKeys) {
   return (
     privateTeacherValuesMatch(teacherKeys, slot?.teacher) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacherName)
+  )
+}
+
+function getPrivatePackageTeacherKey(pkg) {
+  return String(pkg?.teacher || pkg?.teacherName || pkg?.teacherKey || '').trim()
+}
+
+function isActivePrivatePackage(pkg) {
+  const packageType = String(pkg?.packageType || 'private').trim()
+  const status = String(pkg?.status || 'active').trim().toLowerCase()
+  const remainingCount = Number(pkg?.remainingCount || 0)
+  return (
+    (!packageType || packageType === 'private') &&
+    !['inactive', 'expired', 'ended', 'cancelled', 'canceled'].includes(status) &&
+    Number.isFinite(remainingCount) &&
+    remainingCount > 0 &&
+    Boolean(getPrivatePackageTeacherKey(pkg))
   )
 }
 
@@ -346,10 +370,28 @@ export default function StudentBookingPage() {
         studentId: scopedStudentId,
       })
     )
+    let cancelled = false
+
+    async function loadActivePrivatePackageTeacherKeys() {
+      const packageSnapshot = await getDocs(
+        query(
+          collection(db, 'studentPackages'),
+          where('academyId', '==', currentAcademyId),
+          where('studentId', '==', scopedStudentId)
+        )
+      )
+      const packageTeacherKeys = []
+      packageSnapshot.docs.forEach((docSnap) => {
+        const pkg = docSnap.data() || {}
+        if (!isActivePrivatePackage(pkg)) return
+        packageTeacherKeys.push(getPrivatePackageTeacherKey(pkg))
+      })
+      return packageTeacherKeys
+    }
 
     const unsubscribe = onSnapshot(
       summaryRef,
-      (snapshot) => {
+      async (snapshot) => {
         const summaryData = snapshot.exists() ? snapshot.data() : null
         const teacherKeys = Array.isArray(summaryData?.teacherKeys)
           ? summaryData.teacherKeys
@@ -366,10 +408,17 @@ export default function StudentBookingPage() {
         const hasActivePrivateAccess = activePackageIds.some((value) =>
           String(value || '').trim()
         )
+        let packageTeacherKeys = []
+        try {
+          packageTeacherKeys = await loadActivePrivatePackageTeacherKeys()
+        } catch (error) {
+          console.error('student private packages 불러오기 실패:', error)
+        }
+        if (cancelled) return
         setPrivateSlotBookingPilotEnabled(summaryData?.privateSlotBookingPilotEnabled === true)
         const nextKeys = new Set()
-        if (hasActivePrivateAccess) {
-          teacherKeys.forEach((value) => {
+        if (hasActivePrivateAccess || packageTeacherKeys.length > 0) {
+          ;[...teacherKeys, ...packageTeacherKeys].forEach((value) => {
             const teacherKey = String(value || '').trim()
             if (!teacherKey) return
             nextKeys.add(teacherKey)
@@ -397,7 +446,10 @@ export default function StudentBookingPage() {
       }
     )
 
-    return () => unsubscribe()
+    return () => {
+      cancelled = true
+      unsubscribe()
+    }
   }, [currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
 
   useEffect(() => {
@@ -485,6 +537,194 @@ export default function StudentBookingPage() {
     scopedStudentId,
   ])
 
+  async function loadDirectOpenPrivateSlotsFallback() {
+    const byId = new Map()
+    const teacherChunks = chunkValues(allowedPrivateTeacherKeys, GROUP_CLASS_QUERY_CHUNK_SIZE)
+    const querySpecs = [
+      ...teacherChunks.map((values) => ({ type: 'teacher', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
+    ]
+
+    const addOpenRow = (id, data) => {
+      const {
+        fixedStudentId: _fixedStudentId,
+        fixedStudentName: _fixedStudentName,
+        releasedByStudentId: _releasedByStudentId,
+        ...safeData
+      } = data || {}
+      const row = { id, ...safeData, isReserved: false, isBookable: true }
+      if (
+        String(row.academyId || '').trim() !== currentAcademyId ||
+        String(row.status || '').trim() !== 'open'
+      ) {
+        return
+      }
+      if (
+        !allowedPrivateSlotIds.includes(id) &&
+        !slotMatchesPrivateTeacherAccess(row, allowedPrivateTeacherKeys)
+      ) {
+        return
+      }
+      byId.set(id, row)
+    }
+
+    const queryResults = await Promise.allSettled(
+      querySpecs.map((source) =>
+        getDocs(
+          query(
+            collection(db, 'privateLessonSlots'),
+            where('academyId', '==', currentAcademyId),
+            where('status', '==', 'open'),
+            where(source.type, 'in', source.values)
+          )
+        )
+      )
+    )
+    queryResults.forEach((result) => {
+      if (result.status !== 'fulfilled') return
+      result.value.docs.forEach((docItem) => addOpenRow(docItem.id, docItem.data()))
+    })
+
+    const directResults = await Promise.allSettled(
+      allowedPrivateSlotIds.map((slotId) => getDoc(doc(db, 'privateLessonSlots', slotId)))
+    )
+    directResults.forEach((result) => {
+      if (result.status !== 'fulfilled') return
+      const snapshot = result.value
+      if (snapshot.exists()) addOpenRow(snapshot.id, snapshot.data())
+    })
+
+    return Array.from(byId.values())
+  }
+
+  async function loadPrivateSlotAvailability() {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      setPrivateSlots([])
+      setPrivateSlotsLoading(false)
+      setPrivateSlotsError('')
+      return []
+    }
+    if (!privateAccessResolved || privateAccessLoading) {
+      setPrivateSlots([])
+      setPrivateSlotsLoading(true)
+      setPrivateSlotsError('')
+      return []
+    }
+
+    setPrivateSlotsLoading(true)
+    setPrivateSlotsError('')
+    try {
+      const listPrivateLessonSlotAvailability = httpsCallable(
+        firebaseFunctions,
+        'listPrivateLessonSlotAvailability'
+      )
+      const response = await listPrivateLessonSlotAvailability({
+        academyId: currentAcademyId,
+        ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
+      })
+      const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+      if (rows.length === 0) {
+        const fallbackRows = await loadDirectOpenPrivateSlotsFallback()
+        if (fallbackRows.length > 0) {
+          setPrivateSlots(fallbackRows)
+          return fallbackRows
+        }
+      }
+      setPrivateSlots(rows)
+      return rows
+    } catch (error) {
+      console.error('student privateLessonSlots availability 불러오기 실패:', error)
+      const fallbackRows = await loadDirectOpenPrivateSlotsFallback().catch(() => null)
+      if (fallbackRows === null) {
+        setPrivateSlots([])
+        setPrivateSlotsError('예약 가능한 1:1 수업 시간을 불러오지 못했습니다.')
+        return []
+      }
+      setPrivateSlots(fallbackRows)
+      setPrivateSlotsError('')
+      return fallbackRows
+    } finally {
+      setPrivateSlotsLoading(false)
+    }
+  }
+
+  async function loadPrivateReservations() {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      setPrivateReservations([])
+      setPrivateReservationsLoading(false)
+      setPrivateReservationsResolved(false)
+      setPrivateReservationsError('')
+      return []
+    }
+
+    setPrivateReservationsLoading(true)
+    setPrivateReservationsError('')
+    try {
+      const reservationsQuery = query(
+        collection(db, 'privateLessonReservations'),
+        where('academyId', '==', currentAcademyId),
+        where('studentId', '==', scopedStudentId),
+        where('status', 'in', ['active', 'cancelled'])
+      )
+      const snapshot = await getDocs(reservationsQuery)
+      const rows = snapshot.docs.map((docItem) => ({
+        id: docItem.id,
+        ...docItem.data(),
+      }))
+      setPrivateReservations(rows)
+      setPrivateReservationsResolved(true)
+      return rows
+    } catch (error) {
+      console.error('student private reservation 불러오기 실패:', error)
+      setPrivateReservations([])
+      setPrivateReservationsResolved(true)
+      setPrivateReservationsError('내 1:1 수업 예약을 불러오지 못했습니다.')
+      return []
+    } finally {
+      setPrivateReservationsLoading(false)
+    }
+  }
+
+  async function mergeOpenPrivateSlotById(slotId, reservation = null) {
+    const scopedSlotId = String(slotId || '').trim()
+    if (!scopedSlotId || !hasOperationalAcademy || role !== 'student') return null
+
+    try {
+      const snapshot = await getDoc(doc(db, 'privateLessonSlots', scopedSlotId))
+      if (!snapshot.exists()) return null
+      const {
+        fixedStudentId: _fixedStudentId,
+        fixedStudentName: _fixedStudentName,
+        releasedByStudentId: _releasedByStudentId,
+        ...safeData
+      } = snapshot.data() || {}
+      const row = { id: snapshot.id, ...safeData, isReserved: false, isBookable: true }
+      if (
+        String(row.academyId || '').trim() !== currentAcademyId ||
+        String(row.status || '').trim() !== 'open'
+      ) {
+        return null
+      }
+      const reservationTeacher = String(reservation?.teacher || reservation?.teacherName || '').trim()
+      const hasTeacherAccess =
+        slotMatchesPrivateTeacherAccess(row, allowedPrivateTeacherKeys) ||
+        (reservationTeacher &&
+          (normalizePrivateAccessKey(row.teacher) === normalizePrivateAccessKey(reservationTeacher) ||
+            normalizePrivateAccessKey(row.teacherName) === normalizePrivateAccessKey(reservationTeacher)))
+      if (!allowedPrivateSlotIds.includes(scopedSlotId) && !hasTeacherAccess) return null
+
+      setPrivateSlots((prev) => {
+        const byId = new Map(prev.map((slot) => [slot.id, slot]))
+        byId.set(row.id, row)
+        return Array.from(byId.values())
+      })
+      return row
+    } catch (error) {
+      console.error('student privateLessonSlots direct refresh 실패:', error)
+      return null
+    }
+  }
+
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
       setPrivateSlots([])
@@ -503,7 +743,7 @@ export default function StudentBookingPage() {
     setPrivateSlotsError('')
 
     let cancelled = false
-    async function loadDirectOpenPrivateSlotsFallback() {
+    async function loadDirectOpenPrivateSlotsFallbackForEffect() {
       const byId = new Map()
       const teacherChunks = chunkValues(allowedPrivateTeacherKeys, GROUP_CLASS_QUERY_CHUNK_SIZE)
       const querySpecs = [
@@ -563,11 +803,11 @@ export default function StudentBookingPage() {
       return Array.from(byId.values())
     }
 
-    async function loadPrivateSlotAvailability() {
+    async function loadPrivateSlotAvailabilityForEffect() {
       let fallbackResolved = false
       let fallbackFailed = false
       let latestFallbackRows = null
-      const fallbackPromise = loadDirectOpenPrivateSlotsFallback()
+      const fallbackPromise = loadDirectOpenPrivateSlotsFallbackForEffect()
         .then((fallbackRows) => {
           fallbackResolved = true
           latestFallbackRows = fallbackRows
@@ -590,6 +830,7 @@ export default function StudentBookingPage() {
         )
         const response = await listPrivateLessonSlotAvailability({
           academyId: currentAcademyId,
+          ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
         })
         if (cancelled) return
         const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
@@ -614,7 +855,7 @@ export default function StudentBookingPage() {
       }
     }
 
-    loadPrivateSlotAvailability()
+    loadPrivateSlotAvailabilityForEffect()
 
     return () => {
       cancelled = true
@@ -862,11 +1103,13 @@ export default function StudentBookingPage() {
   }, [privateSlots])
 
   const sortedPrivateReservations = useMemo(() => {
-    return [...privateReservations].sort((a, b) => {
-      const aKey = `${a.date || ''} ${a.time || ''} ${a.slotId || ''}`
-      const bKey = `${b.date || ''} ${b.time || ''} ${b.slotId || ''}`
-      return aKey.localeCompare(bKey, 'ko')
-    })
+    return privateReservations
+      .filter((reservation) => reservation.status === 'active')
+      .sort((a, b) => {
+        const aKey = `${a.date || ''} ${a.time || ''} ${a.slotId || ''}`
+        const bKey = `${b.date || ''} ${b.time || ''} ${b.slotId || ''}`
+        return aKey.localeCompare(bKey, 'ko')
+      })
   }, [privateReservations])
 
   const todayYmd = getTodayStorageDateString()
@@ -1274,6 +1517,7 @@ export default function StudentBookingPage() {
       await reservePrivateLessonSlot({
         academyId: scopedAcademyId,
         slotId: slot.id,
+        ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
       logStudentPrivateBookingEvent('reserve_success', {
         academyId: scopedAcademyId,
@@ -1400,13 +1644,20 @@ export default function StudentBookingPage() {
       await cancelPrivateLessonReservation({
         academyId: scopedAcademyId,
         slotId: reservation.slotId,
+        ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
       logStudentPrivateBookingEvent('cancel_success', {
         academyId: scopedAcademyId,
         slotId: reservation.slotId,
         studentId: scopedStudentId,
       })
-      setPrivateSlotsRefreshKey((value) => value + 1)
+      const [, nextSlots] = await Promise.all([
+        loadPrivateReservations(),
+        loadPrivateSlotAvailability(),
+      ])
+      if (!nextSlots.some((slot) => String(slot.id || '').trim() === String(reservation.slotId))) {
+        await mergeOpenPrivateSlotById(reservation.slotId, reservation)
+      }
     } catch (error) {
       console.error('학생 1:1 수업 예약 취소 실패:', error)
       logStudentPrivateBookingEvent('cancel_failure', {
@@ -1933,9 +2184,6 @@ export default function StudentBookingPage() {
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               {getReservationStatusLabel(reservation)}
-                              {getGroupCourseTypeLabel(lesson?.groupCourseType)
-                                ? ` · ${getGroupCourseTypeLabel(lesson.groupCourseType)}`
-                                : ''}
                             </div>
                             {isActive ? (
                               <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
