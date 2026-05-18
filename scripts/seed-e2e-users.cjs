@@ -3,10 +3,7 @@ const path = require("path");
 const admin = require("firebase-admin");
 
 const serviceAccountPath = path.join(__dirname, "..", "serviceAccountKey.json");
-const expectedProjectId =
-  process.env.E2E_FIREBASE_PROJECT_ID ||
-  process.env.VITE_FIREBASE_PROJECT_ID ||
-  "miami-e2e";
+const E2E_FIREBASE_PROJECT_ID = "miami-e2e";
 const DEFAULT_E2E_ACADEMY_ID = "academy_e2e_default";
 const DEFAULT_E2E_ACADEMY_NAME = "Miami E2E Academy";
 const DEFAULT_E2E_ACADEMY_TIMEZONE = "Asia/Seoul";
@@ -27,13 +24,31 @@ if (!fs.existsSync(serviceAccountPath)) {
 
 const serviceAccount = require(serviceAccountPath);
 
-if (serviceAccount.project_id !== expectedProjectId) {
+if (process.env.VITE_FIREBASE_PROJECT_ID && process.env.VITE_FIREBASE_PROJECT_ID !== E2E_FIREBASE_PROJECT_ID) {
+  throw new Error(
+    [
+      `Refusing to seed E2E users with VITE_FIREBASE_PROJECT_ID=${process.env.VITE_FIREBASE_PROJECT_ID}.`,
+      `This script only writes to ${E2E_FIREBASE_PROJECT_ID}.`,
+    ].join(" ")
+  );
+}
+
+if (process.env.E2E_FIREBASE_PROJECT_ID && process.env.E2E_FIREBASE_PROJECT_ID !== E2E_FIREBASE_PROJECT_ID) {
+  throw new Error(
+    [
+      `Refusing to seed E2E users with E2E_FIREBASE_PROJECT_ID=${process.env.E2E_FIREBASE_PROJECT_ID}.`,
+      `This script only writes to ${E2E_FIREBASE_PROJECT_ID}.`,
+    ].join(" ")
+  );
+}
+
+if (serviceAccount.project_id !== E2E_FIREBASE_PROJECT_ID) {
   throw new Error(
     [
       `serviceAccountKey.json project_id mismatch.`,
-      `Expected: ${expectedProjectId}`,
+      `Expected: ${E2E_FIREBASE_PROJECT_ID}`,
       `Received: ${serviceAccount.project_id || "(missing)"}`,
-      "Replace serviceAccountKey.json with the E2E Firebase service account or set E2E_FIREBASE_PROJECT_ID intentionally.",
+      "Replace serviceAccountKey.json with the E2E Firebase service account.",
     ].join(" ")
   );
 }
@@ -53,13 +68,15 @@ const USERS = [
     key: "admin",
     email: "admin@example.com",
     password: "123456",
-    displayName: "Admin E2E",
-    claims: { role: "admin" },
+    displayName: "E2E Admin",
+    claims: { role: "admin", academyId: DEFAULT_E2E_ACADEMY_ID },
     firestoreData: {
       email: "admin@example.com",
-      displayName: "Admin E2E",
+      displayName: "E2E Admin",
       role: "admin",
       isActive: true,
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      currentAcademyId: DEFAULT_E2E_ACADEMY_ID,
       teacherName: "",
       canManageAttendance: true,
       canAddStudent: true,
@@ -76,12 +93,14 @@ const USERS = [
     email: "teacher@example.com",
     password: "123456",
     displayName: "Teacher E2E",
-    claims: { role: "teacher" },
+    claims: { role: "teacher", academyId: DEFAULT_E2E_ACADEMY_ID },
     firestoreData: {
       email: "teacher@example.com",
       displayName: "Teacher E2E",
       role: "teacher",
       isActive: true,
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      currentAcademyId: DEFAULT_E2E_ACADEMY_ID,
       teacherName: "teacher",
       canManageAttendance: false,
       canAddStudent: false,
@@ -98,12 +117,14 @@ const USERS = [
     email: "student@example.com",
     password: "123456",
     displayName: "Student E2E",
-    claims: { role: "student" },
+    claims: { role: "student", academyId: DEFAULT_E2E_ACADEMY_ID },
     firestoreData: {
       email: "student@example.com",
       displayName: "Student E2E",
       role: "student",
       isActive: true,
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      currentAcademyId: DEFAULT_E2E_ACADEMY_ID,
       teacherName: "",
       canManageAttendance: false,
       canAddStudent: false,
@@ -189,16 +210,12 @@ async function seedUser(userSpec) {
   console.log(
     `[MERGE] users/${uid} role=${userSpec.firestoreData.role} teacherName="${userSpec.firestoreData.teacherName}"`
   );
-  console.log(
-    `[FINAL] ${userSpec.key} email=${userSpec.email} password=${userSpec.password}`
-  );
 
   return {
     key: userSpec.key,
     action,
     uid,
     email: userSpec.email,
-    password: userSpec.password,
     displayName: userSpec.displayName,
     firestoreData: userSpec.firestoreData,
   };
@@ -226,7 +243,7 @@ async function seedAcademyAndMemberships(results) {
 
   for (const result of results) {
     const membershipId = `${DEFAULT_E2E_ACADEMY_ID}_${result.uid}`;
-    const role = result.key === "admin" ? "owner" : result.firestoreData.role || "staff";
+    const role = result.firestoreData.role || "staff";
     const teacherName =
       role === "teacher" || role === "staff"
         ? String(
@@ -277,7 +294,7 @@ async function run() {
   console.log("Summary");
   for (const result of results) {
     console.log(
-      `- ${result.key}: ${result.action} uid=${result.uid} email=${result.email} password=${result.password}`
+      `- ${result.key}: ${result.action} uid=${result.uid} email=${result.email}`
     );
   }
 }
