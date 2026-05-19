@@ -167,6 +167,64 @@ async function createRoleDocs({ db, uid, email, role, teacherName = '', studentI
   ]);
 }
 
+function isStaleTodayScheduleE2EDoc(docSnap) {
+  const data = docSnap.data() || {};
+  const marker = [
+    docSnap.id,
+    data.subject,
+    data.title,
+    data.name,
+    data.student,
+    data.studentName,
+    data.teacher,
+    data.teacherName,
+    data.groupClassName,
+  ]
+    .map((value) => String(value || ''))
+    .join(' ');
+
+  return (
+    docSnap.id.startsWith('today-') ||
+    docSnap.id.startsWith('e2e-') ||
+    marker.includes(' today-') ||
+    marker.includes('E2E') ||
+    marker.includes('오늘')
+  );
+}
+
+async function deleteRefsInBatches(db, refs) {
+  const uniqueRefs = Array.from(new Map(refs.map((ref) => [ref.path, ref])).values());
+  for (let index = 0; index < uniqueRefs.length; index += 400) {
+    const batch = db.batch();
+    uniqueRefs.slice(index, index + 400).forEach((ref) => batch.delete(ref));
+    await batch.commit();
+  }
+}
+
+async function cleanupStaleTodayScheduleDocs({ db, today }) {
+  const collectionsWithDate = [
+    'lessons',
+    'groupLessons',
+    'privateLessonSlots',
+    'privateLessonReservations',
+  ];
+  const snaps = await Promise.all(
+    collectionsWithDate.map((collectionName) =>
+      db
+        .collection(collectionName)
+        .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+        .where('date', '==', today)
+        .get()
+    )
+  );
+  const refs = snaps
+    .flatMap((snap) => snap.docs)
+    .filter((docSnap) => isStaleTodayScheduleE2EDoc(docSnap))
+    .map((docSnap) => docSnap.ref);
+
+  await deleteRefsInBatches(db, refs);
+}
+
 async function expectPanelContains(page, text) {
   await expect(page.getByTestId('today-schedule-panel')).toContainText(text, { timeout: 20000 });
 }
@@ -241,6 +299,7 @@ test.beforeAll(async () => {
   fixture.ownPrivateReservationTitle = `오늘1대1예약 ${unique}`;
   fixture.otherPrivateReservationTitle = `다른학생1대1 ${unique}`;
 
+  await cleanupStaleTodayScheduleDocs({ db, today });
   await ensureAdminFixture({ auth, db });
 
   const [teacherUser, studentUser, emptyStudentUser] = await Promise.all([
