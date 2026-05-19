@@ -37,6 +37,31 @@ function timestampNow() {
   return admin.firestore.Timestamp.now();
 }
 
+function parseLegacyLessonDateTime(date, time) {
+  const [year, month, day] = String(date || '').split('-').map(Number);
+  const [hour = 0, minute = 0] = String(time || '00:00').split(':').map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day, hour || 0, minute || 0, 0, 0);
+}
+
+async function deleteKnownAcademyDoc(db, collectionName, docId, academyId) {
+  const id = String(docId || '').trim();
+  if (!id) return;
+
+  const docRef = db.collection(collectionName).doc(id);
+  const snap = await docRef.get();
+  if (!snap.exists) return;
+
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== academyId) {
+    throw new Error(
+      `Refusing to delete ${collectionName}/${id}: academyId ${data.academyId || '(missing)'} does not match ${academyId}.`
+    );
+  }
+
+  await docRef.delete();
+}
+
 export async function createAdminSeededPrivateStudent(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
@@ -50,7 +75,10 @@ export async function createAdminSeededPrivateStudent(params = {}) {
   await studentRef.set({
     academyId,
     name,
+    studentName: String(params.studentName || name).trim(),
     teacher,
+    teacherName: String(params.teacherName || teacher).trim(),
+    status: String(params.status || 'active').trim(),
     phone: String(params.phone || '010-9999-0000').trim(),
     carNumber: String(params.carNumber || '').trim(),
     learningPurpose: String(params.learningPurpose || 'E2E private progress').trim(),
@@ -171,6 +199,9 @@ export async function createAdminSeededLessonRequest(params = {}) {
     studentId,
     studentName,
     teacherName,
+    date: String(params.date || '').trim(),
+    time: String(params.time || '10:00').trim(),
+    subject: String(params.subject || 'E2E 승인 요청').trim(),
   };
 }
 
@@ -207,6 +238,7 @@ export async function createAdminSeededPrivateLesson(params = {}) {
   const teacher = String(params.teacher || 'teacher').trim();
   const date = String(params.date || '').trim();
   const time = String(params.time || '10:00').trim();
+  const startDate = parseLegacyLessonDateTime(date, time);
 
   await lessonRef.set({
     academyId,
@@ -219,6 +251,8 @@ export async function createAdminSeededPrivateLesson(params = {}) {
     date,
     time,
     subject: String(params.subject || 'E2E 기존 수업').trim(),
+    packageId: String(params.packageId || '').trim(),
+    counted: params.counted === true,
     completed: params.completed === true,
     isDeductCancelled: params.isDeductCancelled === true,
     deductMemo: String(params.deductMemo || ''),
@@ -226,6 +260,7 @@ export async function createAdminSeededPrivateLesson(params = {}) {
       Number.isInteger(Number(params.sessionNumber)) && Number(params.sessionNumber) > 0
         ? Number(params.sessionNumber)
         : null,
+    ...(startDate ? { startAt: admin.firestore.Timestamp.fromDate(startDate) } : {}),
     createdAt: now,
     updatedAt: now,
   });
@@ -235,7 +270,203 @@ export async function createAdminSeededPrivateLesson(params = {}) {
     studentId,
     studentName,
     teacher,
+    packageId: String(params.packageId || '').trim(),
   };
+}
+
+export async function createAdminSeededPrivateLessonEditFixture(params = {}) {
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const unique = String(params.unique || Date.now()).trim();
+  const studentName = String(params.studentName || `E2E 개인수정 ${unique}`).trim();
+  const teacher = String(
+    params.teacher || params.teacherName || `E2E 개인수정 선생 ${unique}`
+  ).trim();
+  const date = String(params.date || '').trim();
+  const time = String(params.time || '11:30').trim();
+  const subject = String(params.subject || `E2E 개인수정 과목 ${unique}`).trim();
+  if (!date) throw new Error('date is required for private lesson edit fixture.');
+
+  let fixture = null;
+  try {
+    const student = await createAdminSeededPrivateStudent({
+      academyId,
+      name: studentName,
+      studentName,
+      teacher,
+      teacherName: teacher,
+      status: 'active',
+      paidLessons: 8,
+      attendanceCount: 0,
+      note: 'E2E private lesson edit fixture',
+    });
+    fixture = { academyId, studentId: student.studentId };
+
+    const studentPackage = await createAdminSeededStudentPackage({
+      academyId,
+      studentId: student.studentId,
+      studentName,
+      packageType: 'private',
+      teacher,
+      teacherName: teacher,
+      totalCount: 8,
+      usedCount: 0,
+      remainingCount: 8,
+      status: 'active',
+      title: `E2E private edit package ${unique}`,
+    });
+    fixture.packageId = studentPackage.packageId;
+
+    const lesson = await createAdminSeededPrivateLesson({
+      academyId,
+      studentId: student.studentId,
+      studentID: student.studentId,
+      studentName,
+      student: studentName,
+      teacher,
+      teacherName: teacher,
+      date,
+      time,
+      subject,
+      packageId: studentPackage.packageId,
+      sessionNumber: 1,
+      counted: false,
+      completed: false,
+    });
+    fixture.lessonId = lesson.lessonId;
+
+    return {
+      ...fixture,
+      studentName,
+      teacher,
+      date,
+      time,
+      subject,
+    };
+  } catch (error) {
+    if (fixture) {
+      await cleanupAdminSeededPrivateLessonEditFixture(fixture).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+export async function cleanupAdminSeededPrivateLessonEditFixture(fixture = {}) {
+  const db = getDb();
+  const academyId = String(fixture.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+
+  await deleteKnownAcademyDoc(db, 'lessons', fixture.lessonId, academyId);
+  await deleteKnownAcademyDoc(db, 'studentPackages', fixture.packageId, academyId);
+  await deleteKnownAcademyDoc(db, 'privateStudents', fixture.studentId, academyId);
+}
+
+export async function createAdminSeededCalendarGroupLessonSetup(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassRef = params.groupClassId
+    ? db.collection('groupClasses').doc(String(params.groupClassId))
+    : db.collection('groupClasses').doc();
+  const groupLessonRef = params.groupLessonId
+    ? db.collection('groupLessons').doc(String(params.groupLessonId))
+    : db.collection('groupLessons').doc();
+  const now = timestampNow();
+  const groupName = String(params.groupName || `E2E 캘린더 그룹 ${Date.now()}`).trim();
+  const teacher = String(params.teacher || params.teacherName || 'teacher').trim().toLowerCase();
+  const lessonDate = String(params.lessonDate || '').trim();
+  const lessonTime = String(params.lessonTime || '09:00').trim();
+  const lessonSubject = String(params.lessonSubject || `E2E 그룹 과목 ${Date.now()}`).trim();
+  const maxStudents =
+    Number.isInteger(Number(params.maxStudents)) && Number(params.maxStudents) > 0
+      ? Number(params.maxStudents)
+      : 8;
+  const weekdays = Array.isArray(params.weekdays) && params.weekdays.length > 0
+    ? params.weekdays.map((value) => Number(value)).filter((value) => Number.isInteger(value))
+    : [3];
+
+  if (!lessonDate) throw new Error('lessonDate is required for calendar group lesson setup.');
+
+  await groupClassRef.set({
+    academyId,
+    name: groupName,
+    teacher,
+    teacherName: teacher,
+    maxStudents,
+    time: lessonTime,
+    subject: lessonSubject,
+    groupCourseType: String(params.groupCourseType || 'general_conversation').trim(),
+    weekdays,
+    recurrenceMode: 'fixedWeekdays',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await groupLessonRef.set({
+    academyId,
+    groupClassId: groupClassRef.id,
+    groupClassID: groupClassRef.id,
+    groupClassName: groupName,
+    teacher,
+    teacherName: teacher,
+    date: lessonDate,
+    time: lessonTime,
+    subject: lessonSubject,
+    groupCourseType: String(params.groupCourseType || 'general_conversation').trim(),
+    completed: false,
+    countedStudentIDs: [],
+    attendanceAppliedAt: null,
+    bookingMode: 'fixed',
+    capacity: maxStudents,
+    bookedCount: 0,
+    isBookable: false,
+    generationKind: 'manual',
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    academyId,
+    groupClassId: groupClassRef.id,
+    groupLessonId: groupLessonRef.id,
+    groupName,
+    lessonDate,
+    lessonTime,
+    lessonSubject,
+  };
+}
+
+export async function cleanupAdminSeededCalendarGroupLessonSetup(fixture = {}) {
+  const db = getDb();
+  const academyId = String(fixture.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(fixture.groupClassId || '').trim();
+  const explicitLessonIds = new Set(
+    Array.isArray(fixture.groupLessonIds)
+      ? fixture.groupLessonIds.map((lessonId) => String(lessonId || '').trim()).filter(Boolean)
+      : []
+  );
+
+  if (fixture.groupLessonId) explicitLessonIds.add(String(fixture.groupLessonId));
+
+  if (groupClassId) {
+    const [byGroupClassId, byGroupClassID] = await Promise.all([
+      db
+        .collection('groupLessons')
+        .where('academyId', '==', academyId)
+        .where('groupClassId', '==', groupClassId)
+        .get(),
+      db
+        .collection('groupLessons')
+        .where('academyId', '==', academyId)
+        .where('groupClassID', '==', groupClassId)
+        .get(),
+    ]);
+    for (const snap of [byGroupClassId, byGroupClassID]) {
+      snap.docs.forEach((docSnap) => explicitLessonIds.add(docSnap.id));
+    }
+  }
+
+  for (const lessonId of explicitLessonIds) {
+    await deleteKnownAcademyDoc(db, 'groupLessons', lessonId, academyId);
+  }
+  await deleteKnownAcademyDoc(db, 'groupClasses', groupClassId, academyId);
 }
 
 export async function getAdminLessonsForStudentTeacher(params = {}) {
