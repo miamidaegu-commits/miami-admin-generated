@@ -373,11 +373,7 @@ test('admin can reject a pending lesson request without creating lessons', async
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '수업 요청 관리');
 
-  const requestRow = page
-    .getByTestId('lesson-request-row')
-    .filter({ hasText: createdRequest.studentName })
-    .first();
-  await expect(requestRow).toBeVisible();
+  const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
 
   page.once('dialog', async (dialog) => {
     expect(dialog.type()).toBe('prompt');

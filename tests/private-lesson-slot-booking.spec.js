@@ -109,6 +109,12 @@ function addWeeksToYmd(date, weeks) {
   return formatYmd(next);
 }
 
+function addDaysToYmd(date, days) {
+  const next = new Date(`${date}T00:00:00`);
+  next.setDate(next.getDate() + days);
+  return formatYmd(next);
+}
+
 function futureTuesdayYmd(unique) {
   const offsetWeeks = (Number.parseInt(String(unique).split('-')[0], 10) || Date.now()) % 400;
   const date = new Date('2098-01-01T00:00:00');
@@ -231,14 +237,16 @@ async function createFixture(unique) {
   const firstStudentName = `개인예약학생 A ${unique}`;
   const secondStudentName = `개인예약학생 B ${unique}`;
   const numericUnique = Number.parseInt(String(unique).split('-')[0], 10) || Date.now();
-  const day = 10 + (numericUnique % 18);
-  const createdDate = `2099-04-${String(day).padStart(2, '0')}`;
+  const createdDateBase = new Date('2099-04-01T00:00:00');
+  createdDateBase.setDate(createdDateBase.getDate() + (numericUnique % 5000));
+  const createdDate = formatYmd(createdDateBase);
   const workerSuffix = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
-  const createdTime = `09:${String(workerSuffix % 10).padStart(2, '0')}`;
-  const hiddenDate = `2099-05-${String(day).padStart(2, '0')}`;
-  const otherAcademyDate = `2099-06-${String(day).padStart(2, '0')}`;
-  const approvedLessonDate = `2099-07-${String(day).padStart(2, '0')}`;
-  const hiddenApprovedLessonDate = `2099-08-${String(day).padStart(2, '0')}`;
+  const createdHour = 8 + ((Math.floor(numericUnique / 60000) + workerSuffix) % 10);
+  const createdTime = `${String(createdHour).padStart(2, '0')}:${String(numericUnique % 60).padStart(2, '0')}`;
+  const hiddenDate = addDaysToYmd(createdDate, 31);
+  const otherAcademyDate = addDaysToYmd(createdDate, 62);
+  const approvedLessonDate = addDaysToYmd(createdDate, 93);
+  const hiddenApprovedLessonDate = addDaysToYmd(createdDate, 124);
   const pastApprovedLessonDate = '2020-01-04';
   const approvedLessonTime = `11:${String(workerSuffix % 10).padStart(2, '0')}`;
   const approvedLessonSubject = `Approved Private Lesson ${unique}`;
@@ -606,6 +614,7 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
   try {
     const unique = `${Date.now()}-${testInfo.workerIndex}`;
     fixture = await createFixture(unique);
+    await deleteMatchingSlots(db, { dates: [fixture.createdDate], time: fixture.createdTime });
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '1:1 예약 시간 관리');

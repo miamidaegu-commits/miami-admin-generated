@@ -195,6 +195,9 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
             docId: context?.docId || '',
             filters: context?.filters || [],
             academyId: context?.academyId || getTaskAcademyId(params),
+            studentId: context?.studentId || params?.studentId || params?.tempStudentId || '',
+            groupClassId: context?.groupClassId || params?.groupClassId || '',
+            packageId: context?.packageId || params?.packageId || '',
             auth: getAuthDiagnostic(),
           };
           const message = [
@@ -208,6 +211,83 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           wrapped.__firebaseTaskDiagnostic = true;
           throw wrapped;
         }
+      }
+
+      async function getAcademyScopedDocById(
+        dbRef,
+        firestoreModule,
+        collectionName,
+        docId,
+        academyId,
+        stepName,
+        context = {}
+      ) {
+        const { collection, documentId, getDocs, query, where } = firestoreModule;
+        const normalizedDocId = String(docId || '').trim();
+        if (!normalizedDocId) return null;
+
+        const snap = await withFirestoreStep(
+          stepName,
+          {
+            collection: collectionName,
+            docId: normalizedDocId,
+            academyId,
+            ...context,
+            filters: [
+              { field: 'academyId', op: '==', value: academyId },
+              { field: '__name__', op: '==', value: normalizedDocId },
+            ],
+          },
+          () =>
+            getDocs(
+              query(
+                collection(dbRef, collectionName),
+                where('academyId', '==', academyId),
+                where(documentId(), '==', normalizedDocId)
+              )
+            )
+        );
+
+        if (snap.empty) return null;
+        const docSnap = snap.docs[0];
+        return {
+          id: docSnap.id,
+          data: docSnap.data() || {},
+        };
+      }
+
+      async function deleteAcademyScopedDocById(
+        dbRef,
+        firestoreModule,
+        collectionName,
+        docId,
+        academyId,
+        stepName,
+        context = {}
+      ) {
+        const { deleteDoc, doc } = firestoreModule;
+        const docItem = await getAcademyScopedDocById(
+          dbRef,
+          firestoreModule,
+          collectionName,
+          docId,
+          academyId,
+          `${stepName}.get`,
+          context
+        );
+        if (!docItem) return false;
+
+        await withFirestoreStep(
+          `${stepName}.delete`,
+          {
+            collection: collectionName,
+            docId: docItem.id,
+            academyId,
+            ...context,
+          },
+          () => deleteDoc(doc(dbRef, collectionName, docItem.id))
+        );
+        return true;
       }
 
       async function getGroupClassByName(dbRef, firestoreModule, groupName, academyId) {
@@ -516,41 +596,88 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         const { packageId, groupClassId, tempStudentId } = params;
         const academyId = getTaskAcademyId(params);
         const groupStudentDocIds = new Set();
-
-        if (packageId) {
-          const byPackageSnap = await getDocs(
-            query(
-              collection(db, 'groupStudents'),
-              where('academyId', '==', academyId),
-              where('packageId', '==', packageId)
+        const packageDoc = packageId
+          ? await getAcademyScopedDocById(
+              db,
+              firestoreModule,
+              'studentPackages',
+              packageId,
+              academyId,
+              'cleanupTempGroupStudentAddSetup.getStudentPackage',
+              {
+                packageId,
+                studentId: tempStudentId,
+                groupClassId,
+              }
             )
-          );
-          byPackageSnap.docs.forEach((docItem) => groupStudentDocIds.add(docItem.id));
-        }
+          : null;
+        const scopedStudentId = String(tempStudentId || packageDoc?.data?.studentId || '').trim();
+        const scopedGroupClassId = String(groupClassId || packageDoc?.data?.groupClassId || '').trim();
 
-        if (tempStudentId) {
-          const byStudentSnap = await getDocs(
-            query(
-              collection(db, 'groupStudents'),
-              where('academyId', '==', academyId),
-              where('studentId', '==', tempStudentId)
-            )
+        if (scopedStudentId && scopedGroupClassId) {
+          const byStudentAndGroupSnap = await withFirestoreStep(
+            'cleanupTempGroupStudentAddSetup.getGroupStudentsByStudentAndGroup',
+            {
+              collection: 'groupStudents',
+              academyId,
+              studentId: scopedStudentId,
+              groupClassId: scopedGroupClassId,
+              packageId,
+              filters: [
+                { field: 'academyId', op: '==', value: academyId },
+                { field: 'studentId', op: '==', value: scopedStudentId },
+                { field: 'groupClassId', op: '==', value: scopedGroupClassId },
+              ],
+            },
+            () =>
+              getDocs(
+                query(
+                  collection(db, 'groupStudents'),
+                  where('academyId', '==', academyId),
+                  where('studentId', '==', scopedStudentId),
+                  where('groupClassId', '==', scopedGroupClassId)
+                )
+              )
           );
-          byStudentSnap.docs.forEach((docItem) => {
+
+          byStudentAndGroupSnap.docs.forEach((docItem) => {
             const row = docItem.data() || {};
-            if (groupClassId && String(row.groupClassId || '') !== String(groupClassId)) return;
+            if (packageId && String(row.packageId || '') !== String(packageId)) return;
             groupStudentDocIds.add(docItem.id);
           });
         }
 
         await Promise.all(
           Array.from(groupStudentDocIds).map((groupStudentId) =>
-            deleteDoc(doc(db, 'groupStudents', groupStudentId)).catch(() => {})
+            withFirestoreStep(
+              'cleanupTempGroupStudentAddSetup.deleteGroupStudent',
+              {
+                collection: 'groupStudents',
+                docId: groupStudentId,
+                academyId,
+                studentId: scopedStudentId,
+                groupClassId: scopedGroupClassId,
+                packageId,
+              },
+              () => deleteDoc(doc(db, 'groupStudents', groupStudentId))
+            )
           )
         );
 
         if (packageId) {
-          await deleteDoc(doc(db, 'studentPackages', packageId)).catch(() => {});
+          await deleteAcademyScopedDocById(
+            db,
+            firestoreModule,
+            'studentPackages',
+            packageId,
+            academyId,
+            'cleanupTempGroupStudentAddSetup.deleteStudentPackage',
+            {
+              packageId,
+              studentId: scopedStudentId,
+              groupClassId: scopedGroupClassId,
+            }
+          );
         }
       }
 
