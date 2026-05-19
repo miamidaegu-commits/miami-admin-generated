@@ -15,6 +15,7 @@ import {
   createTempCalendarGroupLessonSetup,
   createTempStudent,
   createTempGroupAttendanceSetup,
+  getTempGroupAttendanceState,
 } from './e2e-firebase-helpers.js';
 import {
   ADMIN_EMAIL,
@@ -99,11 +100,11 @@ async function getAttendanceRowSnapshot(attendanceDialog, studentName, packageTi
     deductButton,
     deductVisible: deductCount > 0,
     deductEnabled:
-      deductCount > 0 ? await deductButton.isEnabled().catch(() => false) : false,
+      deductCount > 0 ? await deductButton.isEnabled({ timeout: 1000 }).catch(() => false) : false,
     restoreButton,
     restoreVisible: restoreCount > 0,
     restoreEnabled:
-      restoreCount > 0 ? await restoreButton.isEnabled().catch(() => false) : false,
+      restoreCount > 0 ? await restoreButton.isEnabled({ timeout: 1000 }).catch(() => false) : false,
   };
 }
 
@@ -132,7 +133,7 @@ async function waitForAttendanceRowState(
   predicate,
   options = {}
 ) {
-  const { timeout = 20000, dialogCollector = null } = options;
+  const { timeout = 20000, dialogCollector = null, diagnostics = null } = options;
   const deadline = Date.now() + timeout;
   let lastState = null;
 
@@ -155,9 +156,63 @@ async function waitForAttendanceRowState(
     await sleep(250);
   }
 
+  const diagnosticText = diagnostics
+    ? await diagnostics().catch((error) => `Diagnostics unavailable: ${error?.message || String(error)}`)
+    : '';
   throw new Error(
-    `Timed out waiting for attendance row state. Last state: ${JSON.stringify(lastState)}`
+    [
+      `Timed out waiting for attendance row state. Last state: ${JSON.stringify(lastState)}`,
+      diagnosticText,
+    ].filter(Boolean).join('\n')
   );
+}
+
+async function collectAttendanceDiagnostics({
+  page,
+  attendanceDialog,
+  groupName,
+  lessonDate,
+  lessonTime,
+  lessonSubject,
+  groupLessonId,
+  studentId,
+  packageId,
+  groupStudentId,
+}) {
+  const [visibleGroupRows, modalRowTexts, firestoreState] = await Promise.all([
+    page
+      .locator('[data-testid="group-row"]')
+      .evaluateAll((rows) =>
+        rows.slice(0, 40).map((row) => ({
+          dataGroupName: row.getAttribute('data-group-name') || '',
+          text: (row.textContent || '').trim(),
+        }))
+      )
+      .catch((error) => ({ error: error?.message || String(error) })),
+    attendanceDialog
+      .locator('.table-row')
+      .evaluateAll((rows) => rows.slice(0, 40).map((row) => (row.textContent || '').trim()))
+      .catch((error) => ({ error: error?.message || String(error) })),
+    getTempGroupAttendanceState(page, {
+      groupLessonId,
+      studentId,
+      packageId,
+      groupStudentId,
+      firebaseTaskTimeoutMs: 10000,
+    }).catch((error) => ({ error: error?.message || String(error) })),
+  ]);
+
+  return `Attendance diagnostics: ${JSON.stringify(
+    {
+      selectedGroupName: groupName,
+      lesson: { date: lessonDate, time: lessonTime, subject: lessonSubject },
+      visibleGroupRows,
+      modalRowTexts,
+      firestoreState,
+    },
+    null,
+    2
+  )}`;
 }
 
 async function clickAttendanceActionAndWait({
@@ -335,12 +390,25 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
     await expect(targetLessonRow).toHaveCount(1, { timeout: 10000 });
 
     attendanceDialog = await openAttendanceDialogForLesson(targetLessonRow, page);
+    const attendanceDiagnostics = () =>
+      collectAttendanceDiagnostics({
+        page,
+        attendanceDialog,
+        groupName,
+        lessonDate,
+        lessonTime,
+        lessonSubject,
+        groupLessonId: tempTargetLessonId,
+        studentId: tempStudentId,
+        packageId: tempPackageId,
+        groupStudentId: tempGroupStudentId,
+      });
     let snapshot = await waitForAttendanceRowState(
       attendanceDialog,
       tempStudentName,
       tempPackageTitle,
       isDeductReady,
-      { dialogCollector }
+      { dialogCollector, diagnostics: attendanceDiagnostics }
     );
 
     try {
@@ -352,7 +420,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
             tempStudentName,
             tempPackageTitle,
             isDeductReady,
-            { dialogCollector }
+            { dialogCollector, diagnostics: attendanceDiagnostics }
           ),
         selectButton: (readySnapshot) => readySnapshot.deductButton,
         waitForNextState: () =>
@@ -361,7 +429,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
             tempStudentName,
             tempPackageTitle,
             isRestoreReady,
-            { timeout: 30000, dialogCollector }
+            { timeout: 30000, dialogCollector, diagnostics: attendanceDiagnostics }
           ),
       });
 
@@ -373,7 +441,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
             tempStudentName,
             tempPackageTitle,
             isRestoreReady,
-            { dialogCollector }
+            { dialogCollector, diagnostics: attendanceDiagnostics }
           ),
         selectButton: (readySnapshot) => readySnapshot.restoreButton,
         waitForNextState: () =>
@@ -382,7 +450,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
             tempStudentName,
             tempPackageTitle,
             isDeductReady,
-            { timeout: 30000, dialogCollector }
+            { timeout: 30000, dialogCollector, diagnostics: attendanceDiagnostics }
           ),
       });
 

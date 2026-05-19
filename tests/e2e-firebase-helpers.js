@@ -73,9 +73,9 @@ export async function createTempCalendarGroupLessonSetup(page, params) {
   return runFirebaseTask(page, 'createTempCalendarGroupLessonSetup', params);
 }
 
-export async function cleanupTempCalendarGroupLessonSetup(page, params) {
+export async function cleanupTempCalendarGroupLessonSetup(page, params, options = {}) {
   if (!params?.groupClassId && !params?.groupLessonId && !params?.groupLessonIds?.length) return;
-  await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params);
+  await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params, options);
 }
 
 export async function getGroupPackageStartDate(page, params) {
@@ -90,13 +90,17 @@ export async function getLessonRequestApprovalState(page, params) {
   return runFirebaseTask(page, 'getLessonRequestApprovalState', params);
 }
 
-async function runFirebaseTask(page, taskName, params) {
+export async function getTempGroupAttendanceState(page, params) {
+  return runFirebaseTask(page, 'getTempGroupAttendanceState', params);
+}
+
+async function runFirebaseTask(page, taskName, params, options = {}) {
   const firebaseConfig = getFirebaseConfigFromEnv(process.env)
-  const timeoutMs = getFirebaseTaskTimeoutMs(taskName, params);
+  const timeoutMs = getFirebaseTaskTimeoutMs(taskName, params, options);
   let timeoutId = null;
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error(`Timed out running Firebase helper task: ${taskName}`));
+      reject(createFirebaseTaskTimeoutError(taskName, params, timeoutMs));
     }, timeoutMs);
   });
 
@@ -141,6 +145,8 @@ async function runFirebaseTask(page, taskName, params) {
           return getStudentGroupAccessSummaryTask({ db, firestore, params });
         case 'getLessonRequestApprovalState':
           return getLessonRequestApprovalStateTask({ db, firestore, params });
+        case 'getTempGroupAttendanceState':
+          return getTempGroupAttendanceStateTask({ db, firestore, params });
         default:
           throw new Error(`Unknown Firebase helper task: ${taskName}`);
       }
@@ -166,14 +172,64 @@ async function runFirebaseTask(page, taskName, params) {
         return String(taskParams?.academyId || defaultAcademyId || '').trim();
       }
 
+      function getAuthDiagnostic() {
+        const user = auth.currentUser;
+        return {
+          uid: user?.uid || '',
+          email: user?.email || '',
+        };
+      }
+
+      async function withFirestoreStep(stepName, context, action) {
+        try {
+          return await action();
+        } catch (error) {
+          if (error?.__firebaseTaskDiagnostic) {
+            throw error;
+          }
+
+          const diagnostic = {
+            taskName,
+            stepName,
+            collection: context?.collection || '',
+            docId: context?.docId || '',
+            filters: context?.filters || [],
+            academyId: context?.academyId || getTaskAcademyId(params),
+            auth: getAuthDiagnostic(),
+          };
+          const message = [
+            `Firebase helper task failed at ${taskName}.${stepName}: ${error?.message || String(error)}`,
+            `Context: ${JSON.stringify(diagnostic)}`,
+          ].join('\n');
+          const wrapped = new Error(message);
+          wrapped.name = error?.name || 'FirebaseTaskError';
+          wrapped.code = error?.code;
+          wrapped.stack = `${message}\n${error?.stack || ''}`;
+          wrapped.__firebaseTaskDiagnostic = true;
+          throw wrapped;
+        }
+      }
+
       async function getGroupClassByName(dbRef, firestoreModule, groupName, academyId) {
         const { collection, getDocs, query, where } = firestoreModule;
-        const groupClassSnap = await getDocs(
-          query(
-            collection(dbRef, 'groupClasses'),
-            where('academyId', '==', academyId),
-            where('name', '==', groupName)
-          )
+        const groupClassSnap = await withFirestoreStep(
+          'getGroupClassByName',
+          {
+            collection: 'groupClasses',
+            academyId,
+            filters: [
+              { field: 'academyId', op: '==', value: academyId },
+              { field: 'name', op: '==', value: groupName },
+            ],
+          },
+          () =>
+            getDocs(
+              query(
+                collection(dbRef, 'groupClasses'),
+                where('academyId', '==', academyId),
+                where('name', '==', groupName)
+              )
+            )
         );
 
         if (groupClassSnap.empty) {
@@ -187,14 +243,35 @@ async function runFirebaseTask(page, taskName, params) {
         };
       }
 
-      async function getGroupClassById(dbRef, firestoreModule, groupClassId) {
-        const { doc, getDoc } = firestoreModule;
-        const groupClassDoc = await getDoc(doc(dbRef, 'groupClasses', String(groupClassId)));
+      async function getGroupClassById(dbRef, firestoreModule, groupClassId, academyId) {
+        const { collection, documentId, getDocs, query, where } = firestoreModule;
+        const normalizedGroupClassId = String(groupClassId);
+        const groupClassSnap = await withFirestoreStep(
+          'getGroupClassById',
+          {
+            collection: 'groupClasses',
+            docId: normalizedGroupClassId,
+            academyId,
+            filters: [
+              { field: 'academyId', op: '==', value: academyId },
+              { field: '__name__', op: '==', value: normalizedGroupClassId },
+            ],
+          },
+          () =>
+            getDocs(
+              query(
+                collection(dbRef, 'groupClasses'),
+                where('academyId', '==', academyId),
+                where(documentId(), '==', normalizedGroupClassId)
+              )
+            )
+        );
 
-        if (!groupClassDoc.exists()) {
+        if (groupClassSnap.empty) {
           throw new Error(`Group class not found by id: ${groupClassId}`);
         }
 
+        const groupClassDoc = groupClassSnap.docs[0];
         return {
           id: groupClassDoc.id,
           data: groupClassDoc.data() || {},
@@ -204,19 +281,43 @@ async function runFirebaseTask(page, taskName, params) {
       async function getGroupLessonsByClassId(dbRef, firestoreModule, groupClassId, academyId) {
         const { collection, getDocs, query, where } = firestoreModule;
         const [groupLessonsA, groupLessonsB] = await Promise.all([
-          getDocs(
-            query(
-              collection(dbRef, 'groupLessons'),
-              where('academyId', '==', academyId),
-              where('groupClassId', '==', groupClassId)
-            )
+          withFirestoreStep(
+            'getGroupLessonsByClassId.groupClassId',
+            {
+              collection: 'groupLessons',
+              academyId,
+              filters: [
+                { field: 'academyId', op: '==', value: academyId },
+                { field: 'groupClassId', op: '==', value: groupClassId },
+              ],
+            },
+            () =>
+              getDocs(
+                query(
+                  collection(dbRef, 'groupLessons'),
+                  where('academyId', '==', academyId),
+                  where('groupClassId', '==', groupClassId)
+                )
+              )
           ),
-          getDocs(
-            query(
-              collection(dbRef, 'groupLessons'),
-              where('academyId', '==', academyId),
-              where('groupClassID', '==', groupClassId)
-            )
+          withFirestoreStep(
+            'getGroupLessonsByClassId.groupClassID',
+            {
+              collection: 'groupLessons',
+              academyId,
+              filters: [
+                { field: 'academyId', op: '==', value: academyId },
+                { field: 'groupClassID', op: '==', value: groupClassId },
+              ],
+            },
+            () =>
+              getDocs(
+                query(
+                  collection(dbRef, 'groupLessons'),
+                  where('academyId', '==', academyId),
+                  where('groupClassID', '==', groupClassId)
+                )
+              )
           ),
         ]);
 
@@ -271,7 +372,14 @@ async function runFirebaseTask(page, taskName, params) {
         const nowTs = Timestamp.now();
         const teacher = String(groupClass.data.teacher || '').trim().toLowerCase();
 
-        await setDoc(packageRef, {
+        await withFirestoreStep(
+          'createTempGroupStudentAddPackage.setStudentPackage',
+          {
+            collection: 'studentPackages',
+            docId: packageRef.id,
+            academyId,
+          },
+          () => setDoc(packageRef, {
           academyId,
           studentId: tempStudentId,
           studentName: tempStudentName,
@@ -293,7 +401,8 @@ async function runFirebaseTask(page, taskName, params) {
           memo: 'E2E temporary package for group student add save test',
           createdAt: nowTs,
           updatedAt: nowTs,
-        });
+          })
+        );
 
         return {
           packageId: packageRef.id,
@@ -318,7 +427,14 @@ async function runFirebaseTask(page, taskName, params) {
           : doc(collection(db, 'privateStudents'));
         const nowTs = Timestamp.now();
 
-        await setDoc(studentRef, {
+        await withFirestoreStep(
+          'createTempStudent.setPrivateStudent',
+          {
+            collection: 'privateStudents',
+            docId: studentRef.id,
+            academyId,
+          },
+          () => setDoc(studentRef, {
           academyId,
           name: String(studentName || '').trim(),
           teacher: String(teacherName || '').trim(),
@@ -331,7 +447,8 @@ async function runFirebaseTask(page, taskName, params) {
           attendanceCount: 0,
           createdAt: nowTs,
           updatedAt: nowTs,
-        });
+          })
+        );
 
         return {
           studentId: studentRef.id,
@@ -438,7 +555,7 @@ async function runFirebaseTask(page, taskName, params) {
       }
 
       async function createTempGroupAttendanceSetupTask({ db, firestore: firestoreModule, params }) {
-        const { Timestamp, collection, doc, getDoc, getDocs, query, setDoc, where } = firestoreModule;
+        const { Timestamp, collection, doc, getDocs, query, setDoc, where } = firestoreModule;
         const {
           groupName,
           groupClassId,
@@ -451,26 +568,57 @@ async function runFirebaseTask(page, taskName, params) {
         } = params;
         const academyId = getTaskAcademyId(params);
         const groupClass = groupClassId
-          ? await getGroupClassById(db, firestoreModule, groupClassId)
+          ? await getGroupClassById(db, firestoreModule, groupClassId, academyId)
           : await getGroupClassByName(db, firestoreModule, groupName, academyId);
         let studentDoc = null;
         let studentData = null;
 
         if (studentId) {
-          const studentRef = doc(db, 'privateStudents', String(studentId));
-          const studentSnap = await getDoc(studentRef);
-          if (!studentSnap.exists()) {
+          const normalizedStudentId = String(studentId);
+          const studentSnap = await withFirestoreStep(
+            'createTempGroupAttendanceSetup.getPrivateStudentById',
+            {
+              collection: 'privateStudents',
+              docId: normalizedStudentId,
+              academyId,
+              filters: [
+                { field: 'academyId', op: '==', value: academyId },
+                { field: '__name__', op: '==', value: normalizedStudentId },
+              ],
+            },
+            () =>
+              getDocs(
+                query(
+                  collection(db, 'privateStudents'),
+                  where('academyId', '==', academyId),
+                  where(firestoreModule.documentId(), '==', normalizedStudentId)
+                )
+              )
+          );
+          if (studentSnap.empty) {
             throw new Error(`Student not found by id: ${studentId}`);
           }
-          studentDoc = studentSnap;
-          studentData = studentSnap.data() || {};
+          studentDoc = studentSnap.docs[0];
+          studentData = studentDoc.data() || {};
         } else {
-          const studentSnap = await getDocs(
-            query(
-              collection(db, 'privateStudents'),
-              where('academyId', '==', academyId),
-              where('name', '==', studentName)
-            )
+          const studentSnap = await withFirestoreStep(
+            'createTempGroupAttendanceSetup.getPrivateStudentByName',
+            {
+              collection: 'privateStudents',
+              academyId,
+              filters: [
+                { field: 'academyId', op: '==', value: academyId },
+                { field: 'name', op: '==', value: studentName },
+              ],
+            },
+            () =>
+              getDocs(
+                query(
+                  collection(db, 'privateStudents'),
+                  where('academyId', '==', academyId),
+                  where('name', '==', studentName)
+                )
+              )
           );
 
           if (studentSnap.empty) {
@@ -492,7 +640,14 @@ async function runFirebaseTask(page, taskName, params) {
         const teacher = String(groupClass.data.teacher || '').trim().toLowerCase();
         const studentDisplayName = String(studentData.name || studentName).trim();
 
-        await setDoc(packageRef, {
+        await withFirestoreStep(
+          'createTempGroupAttendanceSetup.setStudentPackage',
+          {
+            collection: 'studentPackages',
+            docId: packageRef.id,
+            academyId,
+          },
+          () => setDoc(packageRef, {
           academyId,
           studentId: studentDoc.id,
           studentName: studentDisplayName,
@@ -513,9 +668,17 @@ async function runFirebaseTask(page, taskName, params) {
           memo: 'E2E temporary package for group attendance test',
           createdAt: nowTs,
           updatedAt: nowTs,
-        });
+          })
+        );
 
-        await setDoc(groupStudentRef, {
+        await withFirestoreStep(
+          'createTempGroupAttendanceSetup.setGroupStudent',
+          {
+            collection: 'groupStudents',
+            docId: groupStudentRef.id,
+            academyId,
+          },
+          () => setDoc(groupStudentRef, {
           academyId,
           groupClassId: groupClass.id,
           classID: groupClass.id,
@@ -535,7 +698,8 @@ async function runFirebaseTask(page, taskName, params) {
           breakEndDate: '',
           createdAt: nowTs,
           updatedAt: nowTs,
-        });
+          })
+        );
 
         return {
           packageId: packageRef.id,
@@ -562,11 +726,22 @@ async function runFirebaseTask(page, taskName, params) {
 
         if (packageId) {
           if (!skipCreditTransactionCleanup) {
-            const creditTransactionSnap = await getDocs(
-              query(
-                collection(db, 'creditTransactions'),
-                where('academyId', '==', academyId),
-                where('packageId', '==', packageId)
+            const creditTransactionSnap = await withFirestoreStep(
+              'cleanupTempGroupAttendanceSetup.getCreditTransactionsByPackage',
+              {
+                collection: 'creditTransactions',
+                academyId,
+                filters: [
+                  { field: 'academyId', op: '==', value: academyId },
+                  { field: 'packageId', op: '==', value: packageId },
+                ],
+              },
+              () => getDocs(
+                query(
+                  collection(db, 'creditTransactions'),
+                  where('academyId', '==', academyId),
+                  where('packageId', '==', packageId)
+                )
               )
             ).catch(() => null);
 
@@ -651,14 +826,22 @@ async function runFirebaseTask(page, taskName, params) {
           { merge: true }
         );
 
-        await Promise.race([
-          batch.commit(),
-          new Promise((_, reject) => {
-            setTimeout(() => {
-              reject(new Error('Timed out committing temporary group attendance state.'));
-            }, timeoutMs);
-          }),
-        ]);
+        await withFirestoreStep(
+          'setTempGroupAttendanceState.commitBatch',
+          {
+            collection: 'groupLessons/studentPackages/groupStudents',
+            academyId,
+            docId: `${groupLessonId}/${packageId}/${groupStudentId}`,
+          },
+          () => Promise.race([
+            batch.commit(),
+            new Promise((_, reject) => {
+              setTimeout(() => {
+                reject(new Error('Timed out committing temporary group attendance state.'));
+              }, timeoutMs);
+            }),
+          ])
+        );
       }
 
       async function createTempCalendarGroupLessonSetupTask({
@@ -688,7 +871,14 @@ async function runFirebaseTask(page, taskName, params) {
         const normalizedTeacher = String(teacherName || '').trim().toLowerCase();
         const trimmedGroupName = String(groupName || '').trim();
 
-        await setDoc(groupClassRef, {
+        await withFirestoreStep(
+          'createTempCalendarGroupLessonSetup.setGroupClass',
+          {
+            collection: 'groupClasses',
+            docId: groupClassRef.id,
+            academyId,
+          },
+          () => setDoc(groupClassRef, {
           academyId,
           name: trimmedGroupName,
           teacher: normalizedTeacher,
@@ -698,9 +888,17 @@ async function runFirebaseTask(page, taskName, params) {
           weekdays: [],
           createdAt: nowTs,
           updatedAt: nowTs,
-        });
+          })
+        );
 
-        await setDoc(groupLessonRef, {
+        await withFirestoreStep(
+          'createTempCalendarGroupLessonSetup.setGroupLesson',
+          {
+            collection: 'groupLessons',
+            docId: groupLessonRef.id,
+            academyId,
+          },
+          () => setDoc(groupLessonRef, {
           academyId,
           groupClassId: groupClassRef.id,
           groupClassID: groupClassRef.id,
@@ -721,7 +919,8 @@ async function runFirebaseTask(page, taskName, params) {
           generationKind: 'manual',
           createdAt: nowTs,
           updatedAt: nowTs,
-        });
+          })
+        );
 
         return {
           groupClassId: groupClassRef.id,
@@ -754,27 +953,59 @@ async function runFirebaseTask(page, taskName, params) {
         if (explicitLessonIds.size > 0) {
           await Promise.all(
             Array.from(explicitLessonIds).map((lessonId) =>
-              deleteDoc(doc(db, 'groupLessons', lessonId)).catch(() => {})
+              withFirestoreStep(
+                'cleanupTempCalendarGroupLessonSetup.deleteKnownGroupLesson',
+                {
+                  collection: 'groupLessons',
+                  docId: lessonId,
+                  academyId,
+                },
+                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+              )
             )
           );
         }
 
         if (groupClassId && !strictLessonIdsOnly) {
           const [groupLessonsA, groupLessonsB] = await Promise.all([
-            getDocs(
-              query(
-                collection(db, 'groupLessons'),
-                where('academyId', '==', academyId),
-                where('groupClassId', '==', groupClassId)
-              )
-            ).catch(() => null),
-            getDocs(
-              query(
-                collection(db, 'groupLessons'),
-                where('academyId', '==', academyId),
-                where('groupClassID', '==', groupClassId)
-              )
-            ).catch(() => null),
+            withFirestoreStep(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassId',
+              {
+                collection: 'groupLessons',
+                academyId,
+                filters: [
+                  { field: 'academyId', op: '==', value: academyId },
+                  { field: 'groupClassId', op: '==', value: groupClassId },
+                ],
+              },
+              () =>
+                getDocs(
+                  query(
+                    collection(db, 'groupLessons'),
+                    where('academyId', '==', academyId),
+                    where('groupClassId', '==', groupClassId)
+                  )
+                )
+            ),
+            withFirestoreStep(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassID',
+              {
+                collection: 'groupLessons',
+                academyId,
+                filters: [
+                  { field: 'academyId', op: '==', value: academyId },
+                  { field: 'groupClassID', op: '==', value: groupClassId },
+                ],
+              },
+              () =>
+                getDocs(
+                  query(
+                    collection(db, 'groupLessons'),
+                    where('academyId', '==', academyId),
+                    where('groupClassID', '==', groupClassId)
+                  )
+                )
+            )
           ]);
 
           const lessonIds = new Set();
@@ -785,13 +1016,29 @@ async function runFirebaseTask(page, taskName, params) {
 
           await Promise.all(
             Array.from(lessonIds).map((lessonId) =>
-              deleteDoc(doc(db, 'groupLessons', lessonId)).catch(() => {})
+              withFirestoreStep(
+                'cleanupTempCalendarGroupLessonSetup.deleteQueriedGroupLesson',
+                {
+                  collection: 'groupLessons',
+                  docId: lessonId,
+                  academyId,
+                },
+                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+              )
             )
           );
         }
 
         if (groupClassId) {
-          await deleteDoc(doc(db, 'groupClasses', groupClassId)).catch(() => {});
+          await withFirestoreStep(
+            'cleanupTempCalendarGroupLessonSetup.deleteGroupClass',
+            {
+              collection: 'groupClasses',
+              docId: groupClassId,
+              academyId,
+            },
+            () => deleteDoc(doc(db, 'groupClasses', groupClassId))
+          );
         }
       }
 
@@ -831,6 +1078,58 @@ async function runFirebaseTask(page, taskName, params) {
         if (!studentId) return null;
         const snap = await getDoc(doc(db, 'studentGroupAccessSummary', `${academyId}__${studentId}`));
         return snap.exists() ? snap.data() : null;
+      }
+
+      async function getTempGroupAttendanceStateTask({ db, firestore: firestoreModule, params }) {
+        const { doc, getDoc } = firestoreModule;
+        const academyId = getTaskAcademyId(params);
+
+        async function readDoc(collectionName, docId) {
+          const normalizedDocId = String(docId || '').trim();
+          if (!normalizedDocId) {
+            return { exists: false };
+          }
+
+          const snap = await withFirestoreStep(
+            `getTempGroupAttendanceState.${collectionName}`,
+            {
+              collection: collectionName,
+              docId: normalizedDocId,
+              academyId,
+            },
+            () => getDoc(doc(db, collectionName, normalizedDocId))
+          );
+          const data = snap.exists() ? snap.data() || {} : {};
+          return {
+            exists: snap.exists(),
+            academyId: data.academyId || '',
+            studentId: data.studentId || '',
+            packageId: data.packageId || '',
+            groupClassId: data.groupClassId || data.groupClassID || data.classID || '',
+            countedStudentIDs: Array.isArray(data.countedStudentIDs) ? data.countedStudentIDs : [],
+            usedCount: data.usedCount ?? null,
+            remainingCount: data.remainingCount ?? null,
+            attendanceCount: data.attendanceCount ?? null,
+            status: data.status || '',
+            studentStatus: data.studentStatus || '',
+            updatedAtType: data.updatedAt?.toDate ? 'timestamp' : typeof data.updatedAt,
+          };
+        }
+
+        const [groupLesson, studentPackage, groupStudent, privateStudent] = await Promise.all([
+          readDoc('groupLessons', params?.groupLessonId),
+          readDoc('studentPackages', params?.packageId),
+          readDoc('groupStudents', params?.groupStudentId),
+          readDoc('privateStudents', params?.studentId),
+        ]);
+
+        return {
+          academyId,
+          groupLesson,
+          studentPackage,
+          groupStudent,
+          privateStudent,
+        };
       }
 
       async function getLessonRequestApprovalStateTask({ db, firestore: firestoreModule, params }) {
@@ -904,7 +1203,12 @@ async function runFirebaseTask(page, taskName, params) {
   }
 }
 
-function getFirebaseTaskTimeoutMs(taskName, params) {
+function getFirebaseTaskTimeoutMs(taskName, params, options = {}) {
+  const requestedOptionTimeoutMs = Number(options?.timeoutMs);
+  if (Number.isFinite(requestedOptionTimeoutMs) && requestedOptionTimeoutMs >= 5000) {
+    return requestedOptionTimeoutMs;
+  }
+
   const requestedTimeoutMs = Number(params?.firebaseTaskTimeoutMs);
   if (Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs >= 5000) {
     return requestedTimeoutMs;
@@ -915,4 +1219,25 @@ function getFirebaseTaskTimeoutMs(taskName, params) {
   }
 
   return 30000;
+}
+
+function createFirebaseTaskTimeoutError(taskName, params, timeoutMs) {
+  const diagnostic = {
+    taskName,
+    timeoutMs,
+    academyId: String(params?.academyId || DEFAULT_E2E_ACADEMY_ID || '').trim(),
+    groupClassId: params?.groupClassId || '',
+    groupLessonId: params?.groupLessonId || '',
+    groupLessonIds: Array.isArray(params?.groupLessonIds) ? params.groupLessonIds : [],
+    groupStudentId: params?.groupStudentId || '',
+    packageId: params?.packageId || '',
+    studentId: params?.studentId || '',
+    strictLessonIdsOnly: Boolean(params?.strictLessonIdsOnly),
+  };
+  return new Error(
+    [
+      `Timed out running Firebase helper task: ${taskName} after ${timeoutMs}ms`,
+      `Context: ${JSON.stringify(diagnostic)}`,
+    ].join('\n')
+  );
 }

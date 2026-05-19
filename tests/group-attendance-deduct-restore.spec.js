@@ -15,6 +15,7 @@ import {
   createTempCalendarGroupLessonSetup,
   createTempStudent,
   createTempGroupAttendanceSetup,
+  getTempGroupAttendanceState,
   setTempGroupAttendanceState,
 } from './e2e-firebase-helpers.js';
 import {
@@ -70,11 +71,11 @@ async function getAttendanceRowSnapshot(attendanceDialog, studentName, packageTi
     deductButton,
     deductVisible: deductCount > 0,
     deductEnabled:
-      deductCount > 0 ? await deductButton.isEnabled().catch(() => false) : false,
+      deductCount > 0 ? await deductButton.isEnabled({ timeout: 1000 }).catch(() => false) : false,
     restoreButton,
     restoreVisible: restoreCount > 0,
     restoreEnabled:
-      restoreCount > 0 ? await restoreButton.isEnabled().catch(() => false) : false,
+      restoreCount > 0 ? await restoreButton.isEnabled({ timeout: 1000 }).catch(() => false) : false,
   };
 }
 
@@ -103,7 +104,7 @@ async function waitForAttendanceRowState(
   predicate,
   options = {}
 ) {
-  const { timeout = 15000 } = options;
+  const { timeout = 15000, diagnostics = null } = options;
   const deadline = Date.now() + timeout;
   let lastState = null;
 
@@ -122,9 +123,63 @@ async function waitForAttendanceRowState(
     await sleep(250);
   }
 
+  const diagnosticText = diagnostics
+    ? await diagnostics().catch((error) => `Diagnostics unavailable: ${error?.message || String(error)}`)
+    : '';
   throw new Error(
-    `Timed out waiting for attendance row state. Last state: ${JSON.stringify(lastState)}`
+    [
+      `Timed out waiting for attendance row state. Last state: ${JSON.stringify(lastState)}`,
+      diagnosticText,
+    ].filter(Boolean).join('\n')
   );
+}
+
+async function collectAttendanceDiagnostics({
+  page,
+  attendanceDialog,
+  groupName,
+  lessonDate,
+  lessonTime,
+  lessonSubject,
+  groupLessonId,
+  studentId,
+  packageId,
+  groupStudentId,
+}) {
+  const [visibleGroupRows, modalRowTexts, firestoreState] = await Promise.all([
+    page
+      .locator('[data-testid="group-row"]')
+      .evaluateAll((rows) =>
+        rows.slice(0, 40).map((row) => ({
+          dataGroupName: row.getAttribute('data-group-name') || '',
+          text: (row.textContent || '').trim(),
+        }))
+      )
+      .catch((error) => ({ error: error?.message || String(error) })),
+    attendanceDialog
+      .locator('.table-row')
+      .evaluateAll((rows) => rows.slice(0, 40).map((row) => (row.textContent || '').trim()))
+      .catch((error) => ({ error: error?.message || String(error) })),
+    getTempGroupAttendanceState(page, {
+      groupLessonId,
+      studentId,
+      packageId,
+      groupStudentId,
+      firebaseTaskTimeoutMs: 10000,
+    }).catch((error) => ({ error: error?.message || String(error) })),
+  ]);
+
+  return `Attendance diagnostics: ${JSON.stringify(
+    {
+      selectedGroupName: groupName,
+      lesson: { date: lessonDate, time: lessonTime, subject: lessonSubject },
+      visibleGroupRows,
+      modalRowTexts,
+      firestoreState,
+    },
+    null,
+    2
+  )}`;
 }
 
 async function setAttendanceStateAndWait({
@@ -139,6 +194,7 @@ async function setAttendanceStateAndWait({
   syncGuardStudentId,
   deducted,
   expectedState,
+  diagnostics,
 }) {
   let lastError = null;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -169,7 +225,7 @@ async function setAttendanceStateAndWait({
     studentName,
     packageTitle,
     expectedState,
-    { timeout: 20000 }
+    { timeout: 20000, diagnostics }
   );
 }
 
@@ -304,12 +360,25 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
 
     await expect(targetLessonRow).toHaveCount(1, { timeout: 10000 });
     attendanceDialog = await openAttendanceDialogForLesson(targetLessonRow, page);
+    const attendanceDiagnostics = () =>
+      collectAttendanceDiagnostics({
+        page,
+        attendanceDialog,
+        groupName,
+        lessonDate,
+        lessonTime,
+        lessonSubject,
+        groupLessonId: tempTargetLessonId,
+        studentId: tempStudentId,
+        packageId: tempPackageId,
+        groupStudentId: tempGroupStudentId,
+      });
     let snapshot = await waitForAttendanceRowState(
       attendanceDialog,
       tempStudentName,
       tempPackageTitle,
       isDeductReady,
-      { timeout: 20000 }
+      { timeout: 20000, diagnostics: attendanceDiagnostics }
     );
 
     expect(isDeductReady(snapshot)).toBe(true);
@@ -325,6 +394,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       syncGuardStudentId: attendanceSyncGuardId,
       deducted: true,
       expectedState: isRestoreReady,
+      diagnostics: attendanceDiagnostics,
     });
 
     expect(isRestoreReady(snapshot)).toBe(true);
@@ -340,6 +410,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       syncGuardStudentId: attendanceSyncGuardId,
       deducted: false,
       expectedState: isDeductReady,
+      diagnostics: attendanceDiagnostics,
     });
 
     expect(isDeductReady(snapshot)).toBe(true);
