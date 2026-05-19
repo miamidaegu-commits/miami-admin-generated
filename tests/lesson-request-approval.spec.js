@@ -4,6 +4,7 @@ import { getLessonRequestApprovalState } from './e2e-firebase-helpers.js';
 import {
   createAdminSeededLessonRequest,
   createAdminSeededPrivateLesson,
+  getAdminSeededLessonRequest,
   getAdminLessonsForStudentTeacher,
 } from './e2e-admin-helpers.js';
 import {
@@ -66,6 +67,48 @@ async function expectSessionPlan({ studentId, teacher, expected }) {
     .toEqual(expected);
 }
 
+async function expectLessonRequestRowVisible(page, createdRequest) {
+  const requestRow = page
+    .getByTestId('lesson-request-row')
+    .filter({ hasText: createdRequest.studentName })
+    .first();
+
+  try {
+    await expect(requestRow).toBeVisible({ timeout: 15000 });
+  } catch (error) {
+    const [requestDoc, visibleRows, bodyText] = await Promise.all([
+      getAdminSeededLessonRequest(createdRequest.requestId).catch((requestError) => ({
+        error: requestError?.message || String(requestError),
+      })),
+      page
+        .getByTestId('lesson-request-row')
+        .evaluateAll((rows) =>
+          rows.map((rowEl) => ({
+            requestId: rowEl.getAttribute('data-request-id') || '',
+            studentName: rowEl.getAttribute('data-student-name') || '',
+            text: rowEl.textContent || '',
+          }))
+        )
+        .catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+
+    throw new Error(
+      [
+        `Lesson request row was not visible for ${createdRequest.studentName}.`,
+        `Firestore lessonRequests snapshot: ${JSON.stringify(requestDoc)}`,
+        `Visible lesson-request rows: ${JSON.stringify(visibleRows.slice(0, 40))}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original assertion: ${error.message}`,
+      ].join('\n')
+    );
+  }
+
+  return requestRow;
+}
+
 test('admin sees a pending lesson request and approving it creates lessons', async ({
   page,
   browserName,
@@ -92,11 +135,20 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '수업 요청 관리');
 
-  const requestRow = page
-    .getByTestId('lesson-request-row')
-    .filter({ hasText: createdRequest.studentName })
-    .first();
-  await expect(requestRow).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        getLessonRequestApprovalState(page, {
+          requestId: createdRequest.requestId,
+        }),
+      { timeout: 15000 }
+    )
+    .toMatchObject({
+      exists: true,
+      approvalStatus: 'pending',
+    });
+
+  const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
   await expect(requestRow).toContainText(createdRequest.teacherName);
   await expect(requestRow).toContainText(lessonDate);
   await expect(requestRow).toContainText(lessonTime);

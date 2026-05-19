@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
+  clickGroupRow,
   getGroupRow,
   getRegisteredStudentsHeading,
   getStudentRow,
@@ -63,9 +64,7 @@ async function getStudentRowByName(page, studentName) {
 async function openGroupDetail(page) {
   await openDashboardSection(page, '단체반 관리');
 
-  const groupRow = getGroupRow(page, TEST_GROUP_NAME);
-  await expect(groupRow).toBeVisible();
-  await groupRow.click();
+  const groupRow = await clickGroupRow(page, TEST_GROUP_NAME);
 
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
 }

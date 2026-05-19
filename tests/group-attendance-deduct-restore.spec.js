@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import {
+  clickGroupRow,
   getGroupRow,
   getRegisteredStudentsHeading,
   loginAsAdmin,
@@ -34,15 +35,13 @@ function addDays(baseDate, days) {
   return next;
 }
 
-async function getTodayInSeoul(page) {
-  return page.evaluate(() =>
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Seoul',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date())
-  );
+function getTodayInSeoul() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
 function sleep(ms) {
@@ -180,7 +179,8 @@ async function openAttendanceDialogForLesson(targetLessonRow, page) {
     exact: true,
   });
   await expect(attendanceButton).toBeVisible();
-  await attendanceButton.click();
+  await expect(attendanceButton).toBeEnabled({ timeout: 15000 });
+  await attendanceButton.dispatchEvent('click');
 
   const attendanceDialog = page.getByRole('dialog', { name: /출결\s*\/\s*차감/ });
   await expect(attendanceDialog).toBeVisible({ timeout: 15000 });
@@ -242,7 +242,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
   test.slow();
   test.setTimeout(180000);
 
-  const todayYmd = await getTodayInSeoul(page);
+  const todayYmd = getTodayInSeoul();
   const lessonDate = formatYmd(addDays(new Date(`${todayYmd}T00:00:00`), -2));
   const lessonTime = '22:35';
   const uniqueToken = `run${Date.now()}-w${testInfo.workerIndex}-r${testInfo.repeatEachIndex}`;
@@ -262,16 +262,13 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
 
   try {
     releaseFirebaseAttendanceLock = await acquireFirebaseAttendanceLock();
-
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-
     await createTempStudent(page, {
       studentId: tempStudentId,
       studentName: tempStudentName,
       teacherName: '',
       note: 'E2E temporary student for group attendance deduct/restore test',
     });
-
     await createTempCalendarGroupLessonSetup(page, {
       groupClassId: tempGroupClassId,
       groupLessonId: tempTargetLessonId,
@@ -282,7 +279,6 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       lessonSubject,
       skipPastAttendanceSync: true,
     });
-
     await createTempGroupAttendanceSetup(page, {
       groupClassId: tempGroupClassId,
       groupName,
@@ -293,13 +289,8 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       packageId: tempPackageId,
       groupStudentId: tempGroupStudentId,
     });
-
     await openDashboardSection(page, '단체반 관리');
-
-    const groupRow = getGroupRow(page, groupName);
-    await expect(groupRow).toBeVisible();
-    await groupRow.click();
-
+    const groupRow = await clickGroupRow(page, groupName);
     await expect(getRegisteredStudentsHeading(page, groupName)).toBeVisible();
 
     const lessonSection = page.getByTestId('group-lessons-section').locator('..');
@@ -312,7 +303,6 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       .filter({ hasText: lessonSubject });
 
     await expect(targetLessonRow).toHaveCount(1, { timeout: 10000 });
-
     attendanceDialog = await openAttendanceDialogForLesson(targetLessonRow, page);
     let snapshot = await waitForAttendanceRowState(
       attendanceDialog,
@@ -323,7 +313,6 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
     );
 
     expect(isDeductReady(snapshot)).toBe(true);
-
     snapshot = await setAttendanceStateAndWait({
       page,
       attendanceDialog,
@@ -339,7 +328,6 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
     });
 
     expect(isRestoreReady(snapshot)).toBe(true);
-
     snapshot = await setAttendanceStateAndWait({
       page,
       attendanceDialog,

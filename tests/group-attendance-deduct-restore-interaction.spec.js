@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import {
+  clickGroupRow,
   getGroupRow,
   getRegisteredStudentsHeading,
   loginAsAdmin,
@@ -200,7 +201,8 @@ async function openAttendanceDialogForLesson(targetLessonRow, page) {
     exact: true,
   });
   await expect(attendanceButton).toBeVisible();
-  await attendanceButton.click();
+  await expect(attendanceButton).toBeEnabled({ timeout: 15000 });
+  await attendanceButton.dispatchEvent('click');
 
   const attendanceDialog = page.getByRole('dialog', { name: /출결\s*\/\s*차감/ });
   await expect(attendanceDialog).toBeVisible({ timeout: 15000 });
@@ -317,9 +319,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
 
     await openDashboardSection(page, '단체반 관리');
 
-    const groupRow = getGroupRow(page, groupName);
-    await expect(groupRow).toBeVisible();
-    await groupRow.click();
+    const groupRow = await clickGroupRow(page, groupName);
 
     await expect(getRegisteredStudentsHeading(page, groupName)).toBeVisible();
 

@@ -48,7 +48,9 @@ async function loginAndExpectPath(page, email, password, pathPattern) {
 
       await emailInput.fill(email);
       await passwordInput.fill(password);
-      await page.getByRole('button', { name: /Sign In|로그인/i }).click();
+      const signInButton = page.getByRole('button', { name: /Sign In|로그인/i });
+      await expect(signInButton).toBeEnabled({ timeout: LOGIN_ATTEMPT_TIMEOUT_MS });
+      await signInButton.click({ timeout: LOGIN_ATTEMPT_TIMEOUT_MS });
 
       try {
         const outcome = await waitForLoginOutcome(page, pathPattern);
@@ -124,6 +126,49 @@ export function getStudentRow(page, studentName) {
 
 export function getGroupRow(page, groupName) {
   return page.locator(`[data-testid="group-row"][data-group-name="${groupName}"]`).first();
+}
+
+export async function expectGroupRowVisible(page, groupName, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  const groupRow = getGroupRow(page, groupName);
+
+  try {
+    await expect(groupRow).toBeVisible({ timeout });
+  } catch (error) {
+    const [visibleRows, bodyText] = await Promise.all([
+      page
+        .locator('[data-testid="group-row"]')
+        .evaluateAll((rows) =>
+          rows.map((rowEl) => ({
+            dataGroupName: rowEl.getAttribute('data-group-name') || '',
+            text: rowEl.textContent || '',
+          }))
+        )
+        .catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+
+    throw new Error(
+      [
+        `Group row was not visible for ${groupName}.`,
+        `Visible group rows: ${JSON.stringify(visibleRows.slice(0, 40))}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original assertion: ${error.message}`,
+      ].join('\n')
+    );
+  }
+
+  return groupRow;
+}
+
+export async function clickGroupRow(page, groupName, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  const groupRow = await expectGroupRowVisible(page, groupName, { timeout });
+  await groupRow.scrollIntoViewIfNeeded({ timeout });
+  await groupRow.click({ timeout });
+  return groupRow;
 }
 
 export function getRegisteredStudentsHeading(page, groupName) {

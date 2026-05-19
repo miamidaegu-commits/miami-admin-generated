@@ -174,6 +174,27 @@ export async function createAdminSeededLessonRequest(params = {}) {
   };
 }
 
+export async function getAdminSeededLessonRequest(requestId) {
+  const db = getDb();
+  const requestRef = db.collection('lessonRequests').doc(String(requestId || '').trim());
+  const snap = await requestRef.get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  return {
+    id: snap.id,
+    academyId: data.academyId || null,
+    approvalStatus: data.approvalStatus || null,
+    studentId: data.studentId || data.studentID || null,
+    studentName: data.studentName || data.student || null,
+    teacherName: data.teacherName || data.teacher || null,
+    date: data.date || null,
+    time: data.time || null,
+    subject: data.subject || null,
+    repeatWeekly: data.repeatWeekly === true,
+    repeatWeeks: data.repeatWeeks || null,
+  };
+}
+
 export async function createAdminSeededPrivateLesson(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();

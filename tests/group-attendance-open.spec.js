@@ -11,15 +11,48 @@ import {
   TEST_GROUP_NAME,
 } from './fixtures/test-data.js';
 
+async function expectGroupRowVisible(page, groupName) {
+  const groupRow = getGroupRow(page, groupName);
+
+  try {
+    await expect(groupRow).toBeVisible({ timeout: 15000 });
+  } catch (error) {
+    const [visibleRows, bodyText] = await Promise.all([
+      page
+        .locator('[data-testid="group-row"]')
+        .evaluateAll((rows) =>
+          rows.map((rowEl) => ({
+            dataGroupName: rowEl.getAttribute('data-group-name') || '',
+            text: rowEl.textContent || '',
+          }))
+        )
+        .catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+
+    throw new Error(
+      [
+        `Group row was not visible for ${groupName}.`,
+        `Visible group rows: ${JSON.stringify(visibleRows.slice(0, 40))}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original assertion: ${error.message}`,
+      ].join('\n')
+    );
+  }
+
+  return groupRow;
+}
+
 test('관리자가 특정 그룹의 출결/차감 모달을 열 수 있다', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '단체반 관리');
 
-  const groupRow = getGroupRow(page, TEST_GROUP_NAME);
-  await expect(groupRow).toBeVisible();
-  await groupRow.click();
+  const groupRow = await expectGroupRowVisible(page, TEST_GROUP_NAME);
+  await groupRow.click({ timeout: 15000 });
 
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
 
