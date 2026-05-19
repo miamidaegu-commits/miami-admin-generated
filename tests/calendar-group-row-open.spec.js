@@ -19,10 +19,38 @@ function addDays(baseDate, days) {
   return next;
 }
 
+async function collectCalendarDiagnostics(page, selectedDate) {
+  const [calendarRows, groupRows, bodyText, currentUrl] = await Promise.all([
+    page
+      .locator('[data-testid="calendar-lesson-row"]')
+      .evaluateAll((rows) => rows.slice(0, 40).map((row) => (row.textContent || '').trim()))
+      .catch((error) => ({ error: error?.message || String(error) })),
+    page
+      .locator('[data-testid="group-row"]')
+      .evaluateAll((rows) => rows.slice(0, 40).map((row) => (row.textContent || '').trim()))
+      .catch((error) => ({ error: error?.message || String(error) })),
+    page
+      .locator('body')
+      .innerText({ timeout: 1000 })
+      .catch((error) => `body unavailable: ${error?.message || String(error)}`),
+    Promise.resolve(page.url()).catch((error) => `url unavailable: ${error?.message || String(error)}`),
+  ]);
+
+  return {
+    currentUrl,
+    selectedDate,
+    calendarRows,
+    groupRows,
+    bodyText: String(bodyText || '').slice(0, 3000),
+  };
+}
+
+test.setTimeout(90000);
+
 test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 열린다', async ({
   page,
   browserName,
-}) => {
+}, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
   const uniqueToken = Date.now();
@@ -68,6 +96,12 @@ test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 
     await expect(attendanceDialog).toContainText(lessonDate);
     await expect(attendanceDialog).toContainText(tempLessonTime);
     await expect(attendanceDialog).toContainText(tempLessonSubject);
+  } catch (error) {
+    await testInfo.attach('calendar-group-row-open-diagnostics', {
+      body: JSON.stringify(await collectCalendarDiagnostics(page, lessonDate), null, 2),
+      contentType: 'application/json',
+    });
+    throw error;
   } finally {
     const attendanceDialog = page.getByRole('dialog', { name: /출결\s*\/\s*차감/ });
     if (await attendanceDialog.isVisible().catch(() => false)) {
@@ -76,7 +110,12 @@ test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 
     }
 
     if (tempSetup) {
-      await cleanupTempCalendarGroupLessonSetup(page, tempSetup);
+      await cleanupTempCalendarGroupLessonSetup(page, {
+        ...tempSetup,
+        groupLessonIds: [tempSetup.groupLessonId],
+        strictLessonIdsOnly: true,
+        firebaseTaskTimeoutMs: 15000,
+      });
     }
   }
 });

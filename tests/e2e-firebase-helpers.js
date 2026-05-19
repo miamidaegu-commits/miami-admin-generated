@@ -73,9 +73,9 @@ export async function createTempCalendarGroupLessonSetup(page, params) {
   return runFirebaseTask(page, 'createTempCalendarGroupLessonSetup', params);
 }
 
-export async function cleanupTempCalendarGroupLessonSetup(page, params) {
+export async function cleanupTempCalendarGroupLessonSetup(page, params, options = {}) {
   if (!params?.groupClassId && !params?.groupLessonId && !params?.groupLessonIds?.length) return;
-  await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params);
+  await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params, options);
 }
 
 export async function getGroupPackageStartDate(page, params) {
@@ -94,13 +94,13 @@ export async function getTempGroupAttendanceState(page, params) {
   return runFirebaseTask(page, 'getTempGroupAttendanceState', params);
 }
 
-async function runFirebaseTask(page, taskName, params) {
+async function runFirebaseTask(page, taskName, params, options = {}) {
   const firebaseConfig = getFirebaseConfigFromEnv(process.env)
-  const timeoutMs = getFirebaseTaskTimeoutMs(taskName, params);
+  const timeoutMs = getFirebaseTaskTimeoutMs(taskName, params, options);
   let timeoutId = null;
   const timeoutPromise = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      reject(new Error(`Timed out running Firebase helper task: ${taskName}`));
+      reject(createFirebaseTaskTimeoutError(taskName, params, timeoutMs));
     }, timeoutMs);
   });
 
@@ -953,27 +953,59 @@ async function runFirebaseTask(page, taskName, params) {
         if (explicitLessonIds.size > 0) {
           await Promise.all(
             Array.from(explicitLessonIds).map((lessonId) =>
-              deleteDoc(doc(db, 'groupLessons', lessonId)).catch(() => {})
+              withFirestoreStep(
+                'cleanupTempCalendarGroupLessonSetup.deleteKnownGroupLesson',
+                {
+                  collection: 'groupLessons',
+                  docId: lessonId,
+                  academyId,
+                },
+                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+              )
             )
           );
         }
 
         if (groupClassId && !strictLessonIdsOnly) {
           const [groupLessonsA, groupLessonsB] = await Promise.all([
-            getDocs(
-              query(
-                collection(db, 'groupLessons'),
-                where('academyId', '==', academyId),
-                where('groupClassId', '==', groupClassId)
-              )
-            ).catch(() => null),
-            getDocs(
-              query(
-                collection(db, 'groupLessons'),
-                where('academyId', '==', academyId),
-                where('groupClassID', '==', groupClassId)
-              )
-            ).catch(() => null),
+            withFirestoreStep(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassId',
+              {
+                collection: 'groupLessons',
+                academyId,
+                filters: [
+                  { field: 'academyId', op: '==', value: academyId },
+                  { field: 'groupClassId', op: '==', value: groupClassId },
+                ],
+              },
+              () =>
+                getDocs(
+                  query(
+                    collection(db, 'groupLessons'),
+                    where('academyId', '==', academyId),
+                    where('groupClassId', '==', groupClassId)
+                  )
+                )
+            ),
+            withFirestoreStep(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassID',
+              {
+                collection: 'groupLessons',
+                academyId,
+                filters: [
+                  { field: 'academyId', op: '==', value: academyId },
+                  { field: 'groupClassID', op: '==', value: groupClassId },
+                ],
+              },
+              () =>
+                getDocs(
+                  query(
+                    collection(db, 'groupLessons'),
+                    where('academyId', '==', academyId),
+                    where('groupClassID', '==', groupClassId)
+                  )
+                )
+            )
           ]);
 
           const lessonIds = new Set();
@@ -984,13 +1016,29 @@ async function runFirebaseTask(page, taskName, params) {
 
           await Promise.all(
             Array.from(lessonIds).map((lessonId) =>
-              deleteDoc(doc(db, 'groupLessons', lessonId)).catch(() => {})
+              withFirestoreStep(
+                'cleanupTempCalendarGroupLessonSetup.deleteQueriedGroupLesson',
+                {
+                  collection: 'groupLessons',
+                  docId: lessonId,
+                  academyId,
+                },
+                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+              )
             )
           );
         }
 
         if (groupClassId) {
-          await deleteDoc(doc(db, 'groupClasses', groupClassId)).catch(() => {});
+          await withFirestoreStep(
+            'cleanupTempCalendarGroupLessonSetup.deleteGroupClass',
+            {
+              collection: 'groupClasses',
+              docId: groupClassId,
+              academyId,
+            },
+            () => deleteDoc(doc(db, 'groupClasses', groupClassId))
+          );
         }
       }
 
@@ -1155,7 +1203,12 @@ async function runFirebaseTask(page, taskName, params) {
   }
 }
 
-function getFirebaseTaskTimeoutMs(taskName, params) {
+function getFirebaseTaskTimeoutMs(taskName, params, options = {}) {
+  const requestedOptionTimeoutMs = Number(options?.timeoutMs);
+  if (Number.isFinite(requestedOptionTimeoutMs) && requestedOptionTimeoutMs >= 5000) {
+    return requestedOptionTimeoutMs;
+  }
+
   const requestedTimeoutMs = Number(params?.firebaseTaskTimeoutMs);
   if (Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs >= 5000) {
     return requestedTimeoutMs;
@@ -1166,4 +1219,25 @@ function getFirebaseTaskTimeoutMs(taskName, params) {
   }
 
   return 30000;
+}
+
+function createFirebaseTaskTimeoutError(taskName, params, timeoutMs) {
+  const diagnostic = {
+    taskName,
+    timeoutMs,
+    academyId: String(params?.academyId || DEFAULT_E2E_ACADEMY_ID || '').trim(),
+    groupClassId: params?.groupClassId || '',
+    groupLessonId: params?.groupLessonId || '',
+    groupLessonIds: Array.isArray(params?.groupLessonIds) ? params.groupLessonIds : [],
+    groupStudentId: params?.groupStudentId || '',
+    packageId: params?.packageId || '',
+    studentId: params?.studentId || '',
+    strictLessonIdsOnly: Boolean(params?.strictLessonIdsOnly),
+  };
+  return new Error(
+    [
+      `Timed out running Firebase helper task: ${taskName} after ${timeoutMs}ms`,
+      `Context: ${JSON.stringify(diagnostic)}`,
+    ].join('\n')
+  );
 }
