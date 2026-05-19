@@ -97,8 +97,7 @@ async function ensureStudentGroupAccessSummary(page, { studentId }) {
 async function openStudentPackageHistory(page) {
   await openDashboardSection(page, '학생 관리');
 
-  const studentSearchInput = getStudentSearchInput(page);
-  await studentSearchInput.fill(TEST_STUDENT_NAME);
+  await searchStudent(page, TEST_STUDENT_NAME);
 
   const studentRow = getStudentRow(page, TEST_STUDENT_NAME);
   await expect(studentRow).toBeVisible();
@@ -123,6 +122,38 @@ async function openStudentPackageHistory(page) {
 
   await expect(historyButton).toBeVisible();
   await historyButton.click();
+}
+
+async function searchStudent(page, studentName) {
+  const studentSearchInput = getStudentSearchInput(page);
+  try {
+    await expect(studentSearchInput).toBeEditable({ timeout: 15000 });
+    await studentSearchInput.fill(studentName, { timeout: 15000 });
+  } catch (error) {
+    const [bodyText, studentRows] = await Promise.all([
+      page.locator('body').innerText().catch(() => ''),
+      page
+        .locator('[data-testid="student-row"]')
+        .evaluateAll((rows) =>
+          rows.map((rowEl) => ({
+            studentName: rowEl.getAttribute('data-student-name') || '',
+            text: rowEl.textContent || '',
+          }))
+        )
+        .catch(() => []),
+    ]);
+
+    throw new Error(
+      [
+        `Student search input was not editable for query ${studentName}.`,
+        `Visible student rows: ${JSON.stringify(studentRows.slice(0, 40))}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
 }
 
 test('관리자가 학생의 수강권 이력 모달을 열 수 있다', async ({ page, browserName }) => {
@@ -155,8 +186,7 @@ test('학생 관리 목록에 개인 수업 진행 요약이 표시된다', asyn
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '학생 관리');
 
-  const studentSearchInput = getStudentSearchInput(page);
-  await studentSearchInput.fill(TEST_STUDENT_NAME);
+  await searchStudent(page, TEST_STUDENT_NAME);
 
   const studentRow = getStudentRow(page, TEST_STUDENT_NAME);
   await expect(studentRow).toBeVisible();
@@ -212,8 +242,7 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '학생 관리');
 
-  const studentSearchInput = getStudentSearchInput(page);
-  await studentSearchInput.fill(studentName);
+  await searchStudent(page, studentName);
 
   const studentRow = getStudentRow(page, studentName);
   await expect(studentRow).toBeVisible();
@@ -271,8 +300,7 @@ test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '학생 관리');
 
-  const studentSearchInput = getStudentSearchInput(page);
-  await studentSearchInput.fill(studentName);
+  await searchStudent(page, studentName);
 
   const studentRow = getStudentRow(page, studentName);
   await expect(studentRow).toBeVisible();
@@ -308,7 +336,7 @@ test('관리자가 프리토킹 그룹 수강권을 만들면 summary에 groupCo
     await ensureStudentGroupAccessSummary(page, { studentId: tempStudent.studentId });
 
     await openDashboardSection(page, '학생 관리');
-    await getStudentSearchInput(page).fill(tempStudentName);
+    await searchStudent(page, tempStudentName);
     const studentRow = getStudentRow(page, tempStudentName);
     await expect(studentRow).toBeVisible();
     await studentRow.getByRole('button', { name: '수강권 추가' }).click();

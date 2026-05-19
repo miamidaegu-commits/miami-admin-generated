@@ -89,6 +89,51 @@ function getLessonCard(page, subject) {
     .first();
 }
 
+async function getStudentGroupAccessSummary(ref) {
+  const snap = await ref.get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  return {
+    academyId: data.academyId || null,
+    studentId: data.studentId || null,
+    groupClassIds: Array.isArray(data.groupClassIds) ? data.groupClassIds : [],
+    groupCourseTypes: Array.isArray(data.groupCourseTypes) ? data.groupCourseTypes : [],
+  };
+}
+
+async function expectLessonCardVisible(page, subject, summaryRef) {
+  const card = getLessonCard(page, subject);
+
+  try {
+    await expect(card).toBeVisible({ timeout: 30000 });
+  } catch (error) {
+    const [summary, visibleCards, bodyText] = await Promise.all([
+      getStudentGroupAccessSummary(summaryRef).catch((summaryError) => ({
+        error: summaryError?.message || String(summaryError),
+      })),
+      page
+        .locator('[data-testid="student-booking-lesson-card"]')
+        .evaluateAll((cards) => cards.map((cardEl) => cardEl.textContent || ''))
+        .catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+
+    throw new Error(
+      [
+        `Student booking lesson card was not visible for ${subject}.`,
+        `Firestore studentGroupAccessSummary snapshot: ${JSON.stringify(summary)}`,
+        `Visible lesson cards: ${JSON.stringify(visibleCards.slice(0, 40))}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original assertion: ${error.message}`,
+      ].join('\n')
+    );
+  }
+
+  return card;
+}
+
 function getReservationCard(page, subject) {
   return page
     .locator('[data-testid="student-booking-reservation-card"]')
@@ -983,8 +1028,14 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
       },
       { merge: true }
     );
-    await expect(getLessonCard(page, 'Course Free Visible')).toBeVisible({ timeout: 15000 });
-    await expect(getLessonCard(page, 'Course Legacy Visible')).toBeVisible({ timeout: 15000 });
+    await expect
+      .poll(async () => getStudentGroupAccessSummary(summaryRef), { timeout: 15000 })
+      .toMatchObject({
+        groupClassIds: expect.arrayContaining([freeClassId, legacyClassId]),
+        groupCourseTypes: expect.arrayContaining(['beginner_conversation']),
+      });
+    await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
+    await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);
 
     await summaryRef.set(
       {
@@ -994,9 +1045,15 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
       },
       { merge: true }
     );
-    await expect(getLessonCard(page, 'Course Free Visible')).toBeVisible({ timeout: 15000 });
+    await expect
+      .poll(async () => getStudentGroupAccessSummary(summaryRef), { timeout: 15000 })
+      .toMatchObject({
+        groupClassIds: [legacyClassId],
+        groupCourseTypes: ['free_talking'],
+      });
+    await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
     await expect(page.getByText('Course Beginner Only')).toHaveCount(0);
-    await expect(getLessonCard(page, 'Course Legacy Visible')).toBeVisible({ timeout: 15000 });
+    await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);
   } finally {
     await Promise.all(refsToDelete.map((ref) => ref.delete().catch(() => {})));
     await Promise.all([

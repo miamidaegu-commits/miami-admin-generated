@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
+  clickGroupRow,
   getGroupRow,
   getRegisteredStudentsHeading,
   loginAsAdmin,
@@ -45,9 +46,7 @@ test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '단체반 관리');
 
-  const groupRow = getGroupRow(page, TEST_GROUP_NAME);
-  await expect(groupRow).toBeVisible();
-  await groupRow.click();
+  const groupRow = await clickGroupRow(page, TEST_GROUP_NAME);
 
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
 

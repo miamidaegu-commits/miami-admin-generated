@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
 import {
+  clickGroupRow,
   getGroupRow,
   getRegisteredStudentsHeading,
   loginAsAdmin,
@@ -51,6 +52,76 @@ function getLessonRow(page, subject) {
     .locator('[data-testid="group-lesson-row"]')
     .filter({ hasText: subject })
     .first();
+}
+
+async function getGroupClassDebugSnapshot(db, groupName, groupClassId) {
+  if (groupClassId) {
+    const snap = await db.collection('groupClasses').doc(groupClassId).get();
+    if (snap.exists) {
+      const data = snap.data() || {};
+      return {
+        id: snap.id,
+        academyId: data.academyId || null,
+        name: data.name || null,
+        teacher: data.teacher || null,
+        teacherName: data.teacherName || null,
+        groupCourseType: data.groupCourseType || null,
+      };
+    }
+  }
+
+  const snap = await db
+    .collection('groupClasses')
+    .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+    .where('name', '==', groupName)
+    .limit(1)
+    .get();
+  const docSnap = snap.docs[0];
+  if (!docSnap) return null;
+  const data = docSnap.data() || {};
+  return {
+    id: docSnap.id,
+    academyId: data.academyId || null,
+    name: data.name || null,
+    teacher: data.teacher || null,
+    teacherName: data.teacherName || null,
+    groupCourseType: data.groupCourseType || null,
+  };
+}
+
+async function expectGroupRowCourseType(page, db, groupName, groupClassId) {
+  const row = getGroupRow(page, groupName);
+  try {
+    await expect(row).toContainText('프리토킹', { timeout: 15000 });
+  } catch (error) {
+    const [groupDoc, visibleRows, bodyText] = await Promise.all([
+      getGroupClassDebugSnapshot(db, groupName, groupClassId).catch((snapshotError) => ({
+        error: snapshotError?.message || String(snapshotError),
+      })),
+      page
+        .locator('[data-testid="group-row"]')
+        .evaluateAll((rows) =>
+          rows.map((rowEl) => ({
+            dataGroupName: rowEl.getAttribute('data-group-name') || '',
+            text: rowEl.textContent || '',
+          }))
+        )
+        .catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+
+    throw new Error(
+      [
+        `Group row was not visible for ${groupName}.`,
+        `Firestore groupClasses snapshot: ${JSON.stringify(groupDoc)}`,
+        `Visible group rows: ${JSON.stringify(visibleRows.slice(0, 40))}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original assertion: ${error.message}`,
+      ].join('\n')
+    );
+  }
 }
 
 function formatLocalYmd(date) {
@@ -173,6 +244,10 @@ test('admin can create a free_talking group class and generated lessons inherit 
       }, { timeout: 90000 })
       .toBeGreaterThan(0);
 
+    await expect(dialog)
+      .toBeHidden({ timeout: 90000 })
+      .catch(async () => {});
+
     if (await dialog.isVisible().catch(() => false)) {
       await page.reload({ waitUntil: 'domcontentloaded' });
       const groupSectionButton = page.getByRole('button', { name: '단체반 관리', exact: true });
@@ -184,7 +259,7 @@ test('admin can create a free_talking group class and generated lessons inherit 
       await openDashboardSection(page, '단체반 관리');
     }
 
-    await expect(getGroupRow(page, groupName)).toContainText('프리토킹');
+    await expectGroupRowCourseType(page, db, groupName, groupClassId);
   } finally {
     await deleteGroupClassLessons(db, groupClassId).catch(() => {});
     if (groupClassId) {
@@ -538,9 +613,7 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '단체반 관리');
 
-    const groupRow = getGroupRow(page, setup.groupName);
-    await expect(groupRow).toBeVisible({ timeout: 15000 });
-    await groupRow.click();
+    const groupRow = await clickGroupRow(page, setup.groupName);
     await expect(getRegisteredStudentsHeading(page, setup.groupName)).toBeVisible();
 
     const bookableRow = getLessonRow(page, 'Bookable');

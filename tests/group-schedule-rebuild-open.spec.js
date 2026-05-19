@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
+  clickGroupRow,
+  expectGroupRowVisible,
   getGroupRow,
   loginAsAdmin,
   openDashboardSection,
@@ -35,8 +37,7 @@ test('관리자가 그룹 수정 후 이후 일정 재생성 모달을 열고 �
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '단체반 관리');
 
-  const groupRow = getGroupRow(page, TEST_GROUP_NAME);
-  await expect(groupRow).toBeVisible();
+  const groupRow = await expectGroupRowVisible(page, TEST_GROUP_NAME);
 
   const editButton = groupRow.getByRole('button', { name: '수정', exact: true });
   await expect(editButton).toBeVisible();
