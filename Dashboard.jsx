@@ -360,7 +360,8 @@ async function recomputePrivatePackageUsage(packageId, academyId) {
     usedCount += 1
   })
 
-  const total = Number(pkg.totalCount ?? 0)
+  const totalRaw = Number(pkg.totalCount ?? 0)
+  const total = Number.isFinite(totalRaw) ? totalRaw : 0
   const remainingCount = Math.max(0, total - usedCount)
   const status = getNextStudentPackageStatus(pkg.status, remainingCount)
 
@@ -531,6 +532,7 @@ export default function Dashboard() {
   const [migrating, setMigrating] = useState(false)
   const [busyGroupLegacyBackfill, setBusyGroupLegacyBackfill] = useState(false)
   const [busyLessonId, setBusyLessonId] = useState(null)
+  const privatePackageUsageSyncInFlightRef = useRef(new Set())
   const [busyDeletingStudentId, setBusyDeletingStudentId] = useState(null)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [showOnlySelectedDate, setShowOnlySelectedDate] = useState(true)
@@ -1215,6 +1217,75 @@ export default function Dashboard() {
 
     setStudentPackages([])
   }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId) || !userProfile?.role) {
+      return
+    }
+
+    const scopedAcademyId = String(currentAcademyId || '').trim()
+    const privatePackagesById = new Map(
+      studentPackages
+        .filter(
+          (pkg) =>
+            String(pkg.academyId || '').trim() === scopedAcademyId &&
+            pkg.packageType === 'private' &&
+            String(pkg.id || '').trim()
+        )
+        .map((pkg) => [String(pkg.id), pkg])
+    )
+    if (privatePackagesById.size === 0) return
+
+    const today = getTodayStorageDateString()
+    const expectedUsedByPackageId = new Map()
+
+    lessons.forEach((lesson) => {
+      if (String(lesson.academyId || '').trim() !== scopedAcademyId) return
+      const packageId = String(lesson.packageId || '').trim()
+      if (!privatePackagesById.has(packageId)) return
+      const dateStr = getLessonStorageDateString(lesson)
+      if (!dateStr || dateStr > today) return
+      if (lesson.isDeductCancelled === true) return
+      expectedUsedByPackageId.set(packageId, (expectedUsedByPackageId.get(packageId) || 0) + 1)
+    })
+
+    privateLessonReservations.forEach((reservation) => {
+      if (String(reservation.academyId || '').trim() !== scopedAcademyId) return
+      const packageId = String(reservation.deductionPackageId || '').trim()
+      if (!privatePackagesById.has(packageId)) return
+      if (reservation.deductionApplied !== true) return
+      const status = String(reservation.status || '').trim()
+      if (status !== 'completed' && status !== 'no_show') return
+      expectedUsedByPackageId.set(packageId, (expectedUsedByPackageId.get(packageId) || 0) + 1)
+    })
+
+    privatePackagesById.forEach((pkg, packageId) => {
+      const expectedUsed = expectedUsedByPackageId.get(packageId) || 0
+      const totalRaw = Number(pkg.totalCount ?? 0)
+      const total = Number.isFinite(totalRaw) ? totalRaw : 0
+      const expectedRemaining = Math.max(0, total - expectedUsed)
+      const currentUsed = Number(pkg.usedCount ?? 0)
+      const currentRemaining = Number(pkg.remainingCount ?? 0)
+      if (currentUsed === expectedUsed && currentRemaining === expectedRemaining) return
+      if (privatePackageUsageSyncInFlightRef.current.has(packageId)) return
+
+      privatePackageUsageSyncInFlightRef.current.add(packageId)
+      recomputePrivatePackageUsage(packageId, scopedAcademyId)
+        .catch((error) => {
+          console.error('private package usage sync failed:', error)
+        })
+        .finally(() => {
+          privatePackageUsageSyncInFlightRef.current.delete(packageId)
+        })
+    })
+  }, [
+    currentAcademyId,
+    lessons,
+    privateLessonReservations,
+    studentPackages,
+    user?.uid,
+    userProfile?.role,
+  ])
 
   useEffect(() => {
     if (activeSection !== 'groups') {

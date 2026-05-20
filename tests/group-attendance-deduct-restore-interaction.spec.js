@@ -116,6 +116,24 @@ function isRestoreReady(snapshot) {
   return snapshot.rowCount === 1 && snapshot.restoreVisible && snapshot.restoreEnabled;
 }
 
+async function expectAttendancePackageCounts(page, ids, expected) {
+  await expect
+    .poll(
+      async () => {
+        const state = await getTempGroupAttendanceState(page, {
+          ...ids,
+          firebaseTaskTimeoutMs: 10000,
+        });
+        return {
+          usedCount: Number(state?.studentPackage?.usedCount ?? -1),
+          remainingCount: Number(state?.studentPackage?.remainingCount ?? -1),
+        };
+      },
+      { timeout: 20000 }
+    )
+    .toEqual(expected);
+}
+
 function toSerializableState(snapshot) {
   return {
     rowCount: snapshot.rowCount,
@@ -370,6 +388,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
       tempPackageTitle,
       packageId: tempPackageId,
       groupStudentId: tempGroupStudentId,
+      totalCount: 8,
     });
 
     await openDashboardSection(page, '단체반 관리');
@@ -410,6 +429,17 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
       isDeductReady,
       { dialogCollector, diagnostics: attendanceDiagnostics }
     );
+    await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('8');
+    await expectAttendancePackageCounts(
+      page,
+      {
+        groupLessonId: tempTargetLessonId,
+        studentId: tempStudentId,
+        packageId: tempPackageId,
+        groupStudentId: tempGroupStudentId,
+      },
+      { usedCount: 0, remainingCount: 8 }
+    );
 
     try {
       snapshot = await clickAttendanceActionAndWait({
@@ -432,6 +462,17 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
             { timeout: 30000, dialogCollector, diagnostics: attendanceDiagnostics }
           ),
       });
+      await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('7');
+      await expectAttendancePackageCounts(
+        page,
+        {
+          groupLessonId: tempTargetLessonId,
+          studentId: tempStudentId,
+          packageId: tempPackageId,
+          groupStudentId: tempGroupStudentId,
+        },
+        { usedCount: 1, remainingCount: 7 }
+      );
 
       snapshot = await clickAttendanceActionAndWait({
         actionName: '차감복구',
@@ -454,6 +495,17 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
           ),
       });
 
+      await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('8');
+      await expectAttendancePackageCounts(
+        page,
+        {
+          groupLessonId: tempTargetLessonId,
+          studentId: tempStudentId,
+          packageId: tempPackageId,
+          groupStudentId: tempGroupStudentId,
+        },
+        { usedCount: 0, remainingCount: 8 }
+      );
       expect(isDeductReady(snapshot)).toBe(true);
     } catch (error) {
       test.skip(

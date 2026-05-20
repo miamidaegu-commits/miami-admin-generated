@@ -252,6 +252,14 @@ export default function CalendarSection(props) {
     canDeleteLesson,
     onOpenCalendarGroupLessonAttendance,
   } = props
+  const displayedLessonRows =
+    activeSection === 'groups'
+      ? displayedLessons.filter((lesson) => lesson._calendarRowKind === 'group')
+      : displayedLessons
+  const emptyLessonMessage =
+    activeSection === 'groups' && showOnlySelectedDate
+      ? '선택한 날짜의 단체반 수업이 없습니다.'
+      : '등록된 수업이 없습니다.'
 
   return (
     <section className="activity-section">
@@ -362,8 +370,8 @@ export default function CalendarSection(props) {
 
       {loading ? (
         <p>불러오는 중...</p>
-      ) : displayedLessons.length === 0 ? (
-        <p>등록된 수업이 없습니다.</p>
+      ) : displayedLessonRows.length === 0 ? (
+        <p>{emptyLessonMessage}</p>
       ) : (
         <div className="activity-table">
           <div
@@ -384,7 +392,7 @@ export default function CalendarSection(props) {
             <span>작업</span>
           </div>
 
-          {displayedLessons.map((lesson) => {
+          {displayedLessonRows.map((lesson) => {
             const isGroupRow = lesson._calendarRowKind === 'group'
             const isPrivateReservationRow = lesson._calendarRowKind === 'privateReservation'
             const lessonDate = getLessonDate(lesson)
@@ -400,15 +408,21 @@ export default function CalendarSection(props) {
                   ? Number(matchedStudent.paidLessons || 0) -
                     Number(matchedStudent.attendanceCount || 0)
                   : '-'
+            const todayString = getTodayStorageDateString()
+            const lessonDateStr = getLessonStorageDateString(lesson)
+            const isDeductedPrivateLesson =
+              !isGroupRow &&
+              !isPrivateReservationRow &&
+              lesson.isDeductCancelled !== true &&
+              Boolean(lessonDateStr && lessonDateStr <= todayString)
             const canDeductionAction =
               !isGroupRow &&
               !isPrivateReservationRow &&
               canManageAttendance &&
+              (isDeductedPrivateLesson || lesson.isDeductCancelled === true) &&
               (lesson.packageId
                 ? Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private')
                 : Boolean(getMatchedStudentId(lesson)))
-            const todayString = getTodayStorageDateString()
-            const lessonDateStr = getLessonStorageDateString(lesson)
             const privateReservationStatus = String(lesson.status || '').trim()
             const statusLabel = isGroupRow
               ? '예정'
@@ -420,7 +434,7 @@ export default function CalendarSection(props) {
                     : '예약됨'
                 : lesson.isDeductCancelled
                   ? '차감취소'
-                  : lessonDateStr && lessonDateStr <= todayString
+                  : isDeductedPrivateLesson
                     ? '정상 차감'
                     : '예정'
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
@@ -524,7 +538,10 @@ export default function CalendarSection(props) {
                     alignItems: 'flex-start',
                   }}
                 >
-                  {canManageAttendance && !isGroupRow && !isPrivateReservationRow ? (
+                  {canManageAttendance &&
+                  !isGroupRow &&
+                  !isPrivateReservationRow &&
+                  (isDeductedPrivateLesson || lesson.isDeductCancelled === true) ? (
                     <button
                       onClick={() => handleDeductionToggle(lesson)}
                       disabled={busyLessonId === lesson.id || !canDeductionAction}
