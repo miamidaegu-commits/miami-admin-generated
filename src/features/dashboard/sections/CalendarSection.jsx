@@ -304,7 +304,7 @@ export default function CalendarSection(props) {
   }
 
   return (
-    <section className="activity-section">
+    <section className="activity-section" data-testid="calendar-lessons-section">
       <div
         style={{
           display: 'flex',
@@ -610,6 +610,7 @@ export default function CalendarSection(props) {
                 data-testid="calendar-lesson-row"
                 data-row-kind={rowKind}
                 data-lesson-kind={rowKind}
+                data-lesson-id={lesson.id}
                 data-reservation-id={isPrivateReservationRow ? lesson.id : undefined}
                 data-group-name={rowGroupName || undefined}
                 data-student-name={rowStudentName || undefined}

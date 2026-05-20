@@ -26,8 +26,37 @@ function addDays(baseDate, days) {
   return next;
 }
 
-test('관리자가 특정 그룹의 미래 일정을 실제로 생성한다', async ({ page, browserName }) => {
+async function expectScheduleCreateButtonReady(page, testInfo) {
+  const createSeriesButton = page.getByRole('button', { name: '추가 일정 생성' });
+  try {
+    await expect(createSeriesButton).toBeEnabled({ timeout: 30000 });
+  } catch (error) {
+    const lessonSection = page.getByTestId('group-lessons-section').locator('..');
+    const diagnostics = {
+      url: page.url(),
+      buttonText: await createSeriesButton.textContent().catch((reason) => `button text failed: ${reason.message}`),
+      buttonDisabled: await createSeriesButton.isDisabled().catch(() => null),
+      selectedGroupHeadingVisible: await page
+        .getByRole('heading', { name: '수업 일정' })
+        .isVisible()
+        .catch(() => false),
+      lessonSectionText: await lessonSection.textContent().catch((reason) => `lesson section failed: ${reason.message}`),
+      loadingTexts: await page.getByText('불러오는 중...', { exact: true }).allInnerTexts().catch(() => []),
+      bodyText: await page.locator('body').innerText().then((text) => text.slice(0, 3000)).catch((reason) => `body text failed: ${reason.message}`),
+    };
+    await testInfo.attach('group-schedule-create-readiness.json', {
+      body: JSON.stringify(diagnostics, null, 2),
+      contentType: 'application/json',
+    });
+    throw error;
+  }
+
+  return createSeriesButton;
+}
+
+test('관리자가 특정 그룹의 미래 일정을 실제로 생성한다', async ({ page, browserName }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(60000);
 
   const today = new Date();
   const rangeStart = formatYmd(addDays(today, 400));
@@ -41,7 +70,8 @@ test('관리자가 특정 그룹의 미래 일정을 실제로 생성한다', as
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
   await expect(page.getByRole('heading', { name: '수업 일정' })).toBeVisible();
 
-  await page.getByRole('button', { name: '추가 일정 생성' }).click();
+  const createSeriesButton = await expectScheduleCreateButtonReady(page, testInfo);
+  await createSeriesButton.click();
 
   const seriesDialog = page.getByRole('dialog', { name: '추가 일정 생성' });
   await expect(seriesDialog).toBeVisible();

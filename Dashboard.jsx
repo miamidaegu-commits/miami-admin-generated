@@ -375,7 +375,7 @@ async function recomputePrivatePackageUsage(packageId, academyId) {
 
 
 /**
- * groupClassId + date + time 기준 중복은 건너뜀. Firestore addDoc 순차 호출.
+ * groupClassId + date + time 기준 중복은 건너뜀.
  */
 async function createGroupLessonsInDateRange({
   academyId,
@@ -406,6 +406,16 @@ async function createGroupLessonsInDateRange({
   if (weekdaySet.size === 0 || !timeStr || !subjectStr) return { created, skippedDup }
 
   const prior = Array.isArray(existingLessons) ? existingLessons : []
+  const commitBatchSize = 20
+  let batch = writeBatch(db)
+  let pendingWrites = 0
+
+  async function commitPendingWrites() {
+    if (pendingWrites === 0) return
+    await batch.commit()
+    batch = writeBatch(db)
+    pendingWrites = 0
+  }
 
   for (const dateStr of iterateYmdRangeInclusive(startYmd, endYmd)) {
     const dt = parseYmdToLocalDate(dateStr)
@@ -422,7 +432,8 @@ async function createGroupLessonsInDateRange({
       continue
     }
 
-    await addDoc(collection(db, 'groupLessons'), {
+    const lessonRef = doc(collection(db, 'groupLessons'))
+    batch.set(lessonRef, {
       academyId: scopedAcademyId,
       groupClassId,
       groupClassName: groupClassName || '',
@@ -443,7 +454,13 @@ async function createGroupLessonsInDateRange({
       updatedAt: serverTimestamp(),
     })
     created += 1
+    pendingWrites += 1
+    if (pendingWrites >= commitBatchSize) {
+      await commitPendingWrites()
+    }
   }
+
+  await commitPendingWrites()
 
   return { created, skippedDup }
 }

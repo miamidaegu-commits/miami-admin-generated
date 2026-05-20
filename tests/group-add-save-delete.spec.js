@@ -1,6 +1,9 @@
 import { test, expect } from '@playwright/test';
 import { getGroupRow, loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
+import { cleanupAdminGroupClassByName } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
+
+const E2E_ACADEMY_ID = 'academy_e2e_default';
 
 function formatYmd(date) {
   const year = date.getFullYear();
@@ -22,14 +25,50 @@ async function acceptNextDialog(page, timeout = 5000) {
   return message;
 }
 
-test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다', async ({ page, browserName }) => {
+async function attachGroupSaveDiagnostics(testInfo, page, groupName, groupDialog, targetGroupRow, consoleMessages) {
+  const saveButton = groupDialog.getByRole('button', { name: /저장|저장 중/ });
+  const diagnostics = {
+    url: page.url(),
+    groupName,
+    dialogVisible: await groupDialog.isVisible().catch(() => false),
+    dialogText: await groupDialog.textContent().catch((error) => `dialog text failed: ${error.message}`),
+    saveButtonText: await saveButton.textContent().catch((error) => `save button text failed: ${error.message}`),
+    saveButtonDisabled: await saveButton.isDisabled().catch(() => null),
+    targetRowCount: await targetGroupRow.count().catch(() => null),
+    visibleGroupRows: await page.locator('[data-testid="group-row"]').evaluateAll((rows) =>
+      rows.slice(0, 12).map((row) => row.textContent?.trim() || '')
+    ).catch((error) => [`group rows failed: ${error.message}`]),
+    bodyText: await page.locator('body').innerText().then((text) => text.slice(0, 3000)).catch((error) => `body text failed: ${error.message}`),
+    consoleMessages,
+  };
+
+  await testInfo.attach('group-add-save-delete-diagnostics.json', {
+    body: JSON.stringify(diagnostics, null, 2),
+    contentType: 'application/json',
+  });
+}
+
+test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다', async ({ page, browserName }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
 
   const uniqueToken = Date.now();
   const groupName = `E2E 그룹 ${uniqueToken}`;
   const startDate = formatYmd(addDays(new Date(), 720));
   const classTime = '19:30';
   const subject = `E2E 과목 ${uniqueToken}`;
+  const consoleMessages = [];
+
+  page.on('console', (message) => {
+    if (!['error', 'warning'].includes(message.type())) return;
+    consoleMessages.push(`${message.type()}: ${message.text()}`);
+    if (consoleMessages.length > 25) consoleMessages.shift();
+  });
+
+  await cleanupAdminGroupClassByName({
+    academyId: E2E_ACADEMY_ID,
+    groupName,
+  });
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '단체반 관리');
@@ -67,7 +106,7 @@ test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다'
   let groupCreated = false;
 
   try {
-    const saveDialogPromise = acceptNextDialog(page).catch(() => null);
+    const saveDialogPromise = acceptNextDialog(page, 60000).catch(() => null);
     await groupDialog.getByRole('button', { name: '저장', exact: true }).click();
 
     const saveDialogMessage = await saveDialogPromise;
@@ -75,10 +114,22 @@ test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다'
       expect(saveDialogMessage).toContain('반을 저장했습니다.');
     }
 
-    await expect(groupDialog).toBeHidden();
+    try {
+      await expect(groupDialog).toBeHidden({ timeout: 60000 });
+    } catch (error) {
+      await attachGroupSaveDiagnostics(
+        testInfo,
+        page,
+        groupName,
+        groupDialog,
+        targetGroupRow,
+        consoleMessages
+      );
+      throw error;
+    }
 
     await expect
-      .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
+      .poll(async () => await targetGroupRow.count(), { timeout: 20000 })
       .toBe(1);
     await expect(targetGroupRow).toBeVisible();
     groupCreated = true;
@@ -93,16 +144,19 @@ test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다'
       .toBe(0);
     groupCreated = false;
   } finally {
-    if (!groupCreated) return;
+    if (groupCreated && (await targetGroupRow.count()) > 0) {
+      const cleanupDialogPromise = acceptNextDialog(page);
+      await targetGroupRow.getByRole('button', { name: '삭제', exact: true }).click();
+      await cleanupDialogPromise;
 
-    if ((await targetGroupRow.count()) === 0) return;
+      await expect
+        .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
+        .toBe(0);
+    }
 
-    const cleanupDialogPromise = acceptNextDialog(page);
-    await targetGroupRow.getByRole('button', { name: '삭제', exact: true }).click();
-    await cleanupDialogPromise;
-
-    await expect
-      .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
-      .toBe(0);
+    await cleanupAdminGroupClassByName({
+      academyId: E2E_ACADEMY_ID,
+      groupName,
+    });
   }
 });

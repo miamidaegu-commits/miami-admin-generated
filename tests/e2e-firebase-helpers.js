@@ -596,8 +596,11 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         const { packageId, groupClassId, tempStudentId } = params;
         const academyId = getTaskAcademyId(params);
         const groupStudentDocIds = new Set();
-        const packageDoc = packageId
-          ? await getAcademyScopedDocById(
+        const initialStudentId = String(tempStudentId || '').trim();
+        const initialGroupClassId = String(groupClassId || '').trim();
+        const packageDoc =
+          packageId && (!initialStudentId || !initialGroupClassId)
+            ? await getAcademyScopedDocById(
               db,
               firestoreModule,
               'studentPackages',
@@ -611,8 +614,8 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
               }
             )
           : null;
-        const scopedStudentId = String(tempStudentId || packageDoc?.data?.studentId || '').trim();
-        const scopedGroupClassId = String(groupClassId || packageDoc?.data?.groupClassId || '').trim();
+        const scopedStudentId = String(initialStudentId || packageDoc?.data?.studentId || '').trim();
+        const scopedGroupClassId = String(initialGroupClassId || packageDoc?.data?.groupClassId || '').trim();
 
         if (scopedStudentId && scopedGroupClassId) {
           const byStudentAndGroupSnap = await withFirestoreStep(
@@ -665,19 +668,63 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         );
 
         if (packageId) {
-          await deleteAcademyScopedDocById(
-            db,
-            firestoreModule,
-            'studentPackages',
-            packageId,
-            academyId,
-            'cleanupTempGroupStudentAddSetup.deleteStudentPackage',
-            {
-              packageId,
-              studentId: scopedStudentId,
-              groupClassId: scopedGroupClassId,
+          if (scopedStudentId && scopedGroupClassId) {
+            const packageSnap = await withFirestoreStep(
+              'cleanupTempGroupStudentAddSetup.getStudentPackagesByStudentAndGroup',
+              {
+                collection: 'studentPackages',
+                academyId,
+                studentId: scopedStudentId,
+                groupClassId: scopedGroupClassId,
+                packageId,
+                filters: [
+                  { field: 'academyId', op: '==', value: academyId },
+                  { field: 'studentId', op: '==', value: scopedStudentId },
+                  { field: 'groupClassId', op: '==', value: scopedGroupClassId },
+                ],
+              },
+              () =>
+                getDocs(
+                  query(
+                    collection(db, 'studentPackages'),
+                    where('academyId', '==', academyId),
+                    where('studentId', '==', scopedStudentId),
+                    where('groupClassId', '==', scopedGroupClassId)
+                  )
+                )
+            );
+            const packageDocForDelete = packageSnap.docs.find(
+              (docItem) => docItem.id === String(packageId)
+            );
+            if (packageDocForDelete) {
+              await withFirestoreStep(
+                'cleanupTempGroupStudentAddSetup.deleteStudentPackage',
+                {
+                  collection: 'studentPackages',
+                  docId: packageDocForDelete.id,
+                  academyId,
+                  studentId: scopedStudentId,
+                  groupClassId: scopedGroupClassId,
+                  packageId,
+                },
+                () => deleteDoc(doc(db, 'studentPackages', packageDocForDelete.id))
+              );
             }
-          );
+          } else {
+            await deleteAcademyScopedDocById(
+              db,
+              firestoreModule,
+              'studentPackages',
+              packageId,
+              academyId,
+              'cleanupTempGroupStudentAddSetup.deleteStudentPackage',
+              {
+                packageId,
+                studentId: scopedStudentId,
+                groupClassId: scopedGroupClassId,
+              }
+            );
+          }
         }
       }
 
