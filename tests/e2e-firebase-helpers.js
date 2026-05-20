@@ -692,6 +692,7 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           tempPackageTitle,
           packageId,
           groupStudentId,
+          totalCount = 4,
         } = params;
         const academyId = getTaskAcademyId(params);
         const groupClass = groupClassId
@@ -766,6 +767,10 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         const startDateTs = Timestamp.fromDate(new Date(`${lessonDate}T00:00:00`));
         const teacher = String(groupClass.data.teacher || '').trim().toLowerCase();
         const studentDisplayName = String(studentData.name || studentName).trim();
+        const normalizedTotalCount =
+          Number.isInteger(Number(totalCount)) && Number(totalCount) >= 0
+            ? Number(totalCount)
+            : 4;
 
         await withFirestoreStep(
           'createTempGroupAttendanceSetup.setStudentPackage',
@@ -783,9 +788,9 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           groupClassId: groupClass.id,
           groupClassName: String(groupClass.data.name || groupName).trim(),
           title: tempPackageTitle,
-          totalCount: 4,
+          totalCount: normalizedTotalCount,
           usedCount: 0,
-          remainingCount: 4,
+          remainingCount: normalizedTotalCount,
           status: 'active',
           registrationStartDate: lessonDate,
           registrationWeeks: 1,
@@ -815,7 +820,7 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           teacher,
           packageId: packageRef.id,
           packageType: 'group',
-          paidLessons: 4,
+          paidLessons: normalizedTotalCount,
           attendanceCount: 0,
           startDate: startDateTs,
           status: 'active',

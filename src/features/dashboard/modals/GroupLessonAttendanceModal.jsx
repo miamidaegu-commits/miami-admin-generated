@@ -102,7 +102,7 @@ export default function GroupLessonAttendanceModal({
                 >
                   <span>{row.groupStudent.studentName || row.groupStudent.name || '-'}</span>
                   <span style={{ wordBreak: 'break-word' }}>{row.packageTitle}</span>
-                  <span>
+                  <span data-testid="group-attendance-remaining-count">
                     {row.remainingCount != null ? row.remainingCount : '—'}
                   </span>
                   <span>{getStatusLabel(row)}</span>

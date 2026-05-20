@@ -2,7 +2,9 @@ import { expect, test } from '@playwright/test';
 import { loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
 import {
   cleanupAdminSeededCalendarGroupLessonSetup,
+  cleanupAdminSeededPrivateLessonEditFixture,
   createAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededPrivateLessonEditFixture,
 } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
@@ -108,6 +110,86 @@ test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 
 
     if (tempSetup) {
       await cleanupAdminSeededCalendarGroupLessonSetup(tempSetup);
+    }
+  }
+});
+
+test('단체반 관리 선택 날짜 수업 목록은 개인 수업을 제외하고 단체반 수업만 보여준다', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+
+  const uniqueToken = Date.now();
+  const lessonDate = formatYmd(new Date());
+  const tempGroupName = `E2E 그룹필터 ${uniqueToken}`;
+  const tempGroupSubject = `E2E 그룹필터 과목 ${uniqueToken}`;
+  const tempPrivateStudentName = `E2E 개인필터 ${uniqueToken}`;
+  const tempPrivateSubject = `E2E 개인필터 과목 ${uniqueToken}`;
+
+  let tempGroupSetup = null;
+  let tempPrivateFixture = null;
+
+  try {
+    tempGroupSetup = await createAdminSeededCalendarGroupLessonSetup({
+      groupName: tempGroupName,
+      lessonDate,
+      lessonTime: '09:30',
+      lessonSubject: tempGroupSubject,
+    });
+    tempPrivateFixture = await createAdminSeededPrivateLessonEditFixture({
+      unique: `calendar-filter-${uniqueToken}`,
+      studentName: tempPrivateStudentName,
+      date: lessonDate,
+      time: '10:30',
+      subject: tempPrivateSubject,
+    });
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '캘린더');
+
+    const calendarGroupRow = page.locator(
+      `[data-testid="calendar-lesson-row"][data-row-kind="group"][data-group-name="${tempGroupName}"]`
+    );
+    const calendarPrivateRow = page.locator(
+      `[data-testid="calendar-lesson-row"][data-row-kind="private"][data-student-name="${tempPrivateStudentName}"]`
+    );
+
+    await expect
+      .poll(async () => await calendarGroupRow.count(), { timeout: 15000 })
+      .toBeGreaterThan(0);
+    await expect
+      .poll(async () => await calendarPrivateRow.count(), { timeout: 15000 })
+      .toBeGreaterThan(0);
+    await expect(calendarGroupRow.first()).toContainText(tempGroupSubject);
+    await expect(calendarPrivateRow.first()).toContainText(tempPrivateSubject);
+
+    await openDashboardSection(page, '단체반 관리');
+
+    const groupSectionGroupRow = page.locator(
+      `[data-testid="calendar-lesson-row"][data-row-kind="group"][data-group-name="${tempGroupName}"]`
+    );
+    const groupSectionPrivateRow = page.locator(
+      `[data-testid="calendar-lesson-row"][data-row-kind="private"][data-student-name="${tempPrivateStudentName}"]`
+    );
+
+    await expect
+      .poll(async () => await groupSectionGroupRow.count(), { timeout: 15000 })
+      .toBeGreaterThan(0);
+    await expect(groupSectionGroupRow.first()).toContainText(tempGroupSubject);
+    await expect(groupSectionPrivateRow).toHaveCount(0);
+  } catch (error) {
+    await testInfo.attach('group-management-selected-date-filter-diagnostics', {
+      body: JSON.stringify(await collectCalendarDiagnostics(page, lessonDate), null, 2),
+      contentType: 'application/json',
+    });
+    throw error;
+  } finally {
+    if (tempPrivateFixture) {
+      await cleanupAdminSeededPrivateLessonEditFixture(tempPrivateFixture);
+    }
+    if (tempGroupSetup) {
+      await cleanupAdminSeededCalendarGroupLessonSetup(tempGroupSetup);
     }
   }
 });
