@@ -40,12 +40,26 @@ async function loginAsTeacher(page) {
   await expect(page.getByRole('button', { name: '캘린더', exact: true })).toBeVisible();
 }
 
-async function approveRequestBySubject(page, subject) {
-  const requestRow = page
-    .getByTestId('lesson-request-row')
-    .filter({ hasText: subject })
-    .first();
-  await expect(requestRow).toBeVisible({ timeout: 15000 });
+async function approveRequest(page, createdRequest) {
+  if (createdRequest.requestId) {
+    await expect
+      .poll(
+        async () =>
+          getLessonRequestApprovalState(page, {
+            requestId: createdRequest.requestId,
+          }),
+        { timeout: 15000 }
+      )
+      .toMatchObject({
+        exists: true,
+        approvalStatus: 'pending',
+      });
+  }
+
+  const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
+  if (createdRequest.subject) {
+    await expect(requestRow).toContainText(createdRequest.subject);
+  }
   await requestRow.getByRole('button', { name: '승인', exact: true }).click();
   await expect(requestRow).toHaveCount(0, { timeout: 15000 });
 }
@@ -68,10 +82,13 @@ async function expectSessionPlan({ studentId, teacher, expected }) {
 }
 
 async function expectLessonRequestRowVisible(page, createdRequest) {
-  const requestRow = page
+  let requestRows = page
     .getByTestId('lesson-request-row')
-    .filter({ hasText: createdRequest.studentName })
-    .first();
+    .filter({ hasText: createdRequest.studentName });
+  if (createdRequest.subject) {
+    requestRows = requestRows.filter({ hasText: createdRequest.subject });
+  }
+  const requestRow = requestRows.first();
 
   try {
     await expect(requestRow).toBeVisible({ timeout: 15000 });
@@ -220,7 +237,7 @@ test('admin approval assigns continuous private lesson session numbers across re
   const unrelatedStudentSubject = `E2E 다른학생 ${now}`;
   const unrelatedTeacherSubject = `E2E 다른선생 ${now}`;
 
-  await createAdminSeededLessonRequest({
+  const requestA = await createAdminSeededLessonRequest({
     studentId,
     studentName,
     date: '2099-03-01',
@@ -229,7 +246,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     repeatWeekly: true,
     repeatWeeks: 4,
   });
-  await createAdminSeededLessonRequest({
+  const requestB = await createAdminSeededLessonRequest({
     studentId,
     studentName,
     date: '2099-03-04',
@@ -238,7 +255,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     repeatWeekly: true,
     repeatWeeks: 4,
   });
-  await createAdminSeededLessonRequest({
+  const requestBackdated = await createAdminSeededLessonRequest({
     studentId,
     studentName,
     date: '2099-02-25',
@@ -271,7 +288,7 @@ test('admin approval assigns continuous private lesson session numbers across re
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '수업 요청 관리');
 
-  await approveRequestBySubject(page, subjectA);
+  await approveRequest(page, requestA);
   await expectSessionPlan({
     studentId,
     teacher,
@@ -283,7 +300,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     ],
   });
 
-  await approveRequestBySubject(page, subjectB);
+  await approveRequest(page, requestB);
   await expectSessionPlan({
     studentId,
     teacher,
@@ -299,7 +316,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     ],
   });
 
-  await approveRequestBySubject(page, subjectBackdated);
+  await approveRequest(page, requestBackdated);
   await expectSessionPlan({
     studentId,
     teacher,

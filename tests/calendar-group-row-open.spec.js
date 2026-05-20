@@ -1,9 +1,9 @@
 import { expect, test } from '@playwright/test';
 import { loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
 import {
-  cleanupTempCalendarGroupLessonSetup,
-  createTempCalendarGroupLessonSetup,
-} from './e2e-firebase-helpers.js';
+  cleanupAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededCalendarGroupLessonSetup,
+} from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
 function formatYmd(date) {
@@ -11,12 +11,6 @@ function formatYmd(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0');
   const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
-}
-
-function addDays(baseDate, days) {
-  const next = new Date(baseDate);
-  next.setDate(next.getDate() + days);
-  return next;
 }
 
 async function collectCalendarDiagnostics(page, selectedDate) {
@@ -54,7 +48,7 @@ test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
   const uniqueToken = Date.now();
-  const lessonDate = formatYmd(addDays(new Date(), 1));
+  const lessonDate = formatYmd(new Date());
   const tempGroupName = `E2E 캘린더 그룹 ${uniqueToken}`;
   const tempLessonSubject = `E2E 캘린더 과목 ${uniqueToken}`;
   const tempLessonTime = '09:00';
@@ -62,19 +56,22 @@ test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 
   let tempSetup = null;
 
   try {
-    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    tempSetup = await createTempCalendarGroupLessonSetup(page, {
+    tempSetup = await createAdminSeededCalendarGroupLessonSetup({
       groupName: tempGroupName,
       lessonDate,
       lessonTime: tempLessonTime,
       lessonSubject: tempLessonSubject,
     });
 
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '캘린더');
 
-    const showAllButton = page.getByRole('button', { name: '전체 보기', exact: true });
-    if (await showAllButton.isVisible().catch(() => false)) {
-      await showAllButton.click();
+    const selectedDateOnlyButton = page.getByRole('button', {
+      name: '선택 날짜만 보기',
+      exact: true,
+    });
+    if (await selectedDateOnlyButton.isVisible().catch(() => false)) {
+      await selectedDateOnlyButton.click();
     }
 
     const groupLessonRow = page.locator(
@@ -110,12 +107,7 @@ test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 
     }
 
     if (tempSetup) {
-      await cleanupTempCalendarGroupLessonSetup(page, {
-        ...tempSetup,
-        groupLessonIds: [tempSetup.groupLessonId],
-        strictLessonIdsOnly: true,
-        firebaseTaskTimeoutMs: 15000,
-      });
+      await cleanupAdminSeededCalendarGroupLessonSetup(tempSetup);
     }
   }
 });

@@ -1,16 +1,14 @@
 import { test, expect } from '@playwright/test';
 import {
-  clickGroupRow,
   expectGroupRowVisible,
-  getGroupRow,
   loginAsAdmin,
   openDashboardSection,
 } from './e2e-helpers.js';
 import {
-  ADMIN_EMAIL,
-  ADMIN_PASSWORD,
-  TEST_GROUP_NAME,
-} from './fixtures/test-data.js';
+  cleanupAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededCalendarGroupLessonSetup,
+} from './e2e-admin-helpers.js';
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
 function formatYmd(date) {
   const year = date.getFullYear();
@@ -33,82 +31,99 @@ test('관리자가 그룹 수정 후 이후 일정 재생성 모달을 열고 �
 
   const rebuildFromDate = formatYmd(addDays(new Date(), 680));
   const uniqueToken = Date.now();
-
-  await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '단체반 관리');
-
-  const groupRow = await expectGroupRowVisible(page, TEST_GROUP_NAME);
-
-  const editButton = groupRow.getByRole('button', { name: '수정', exact: true });
-  await expect(editButton).toBeVisible();
-
-  async function openGroupEditDialog() {
-    await editButton.click();
-    const dialog = page.getByRole('dialog', { name: '반 수정' });
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByLabel('반 이름')).toHaveValue(TEST_GROUP_NAME);
-    return dialog;
-  }
-
-  async function saveGroupEditDialog(dialog) {
-    const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
-    await expect(saveButton).toBeEnabled();
-    await saveButton.click();
-    await expect(dialog).toBeHidden();
-  }
-
-  const initialDialog = await openGroupEditDialog();
-  const subjectInput = initialDialog.getByLabel('과목');
-  await expect(subjectInput).toBeVisible();
-
-  const originalSubject = await subjectInput.inputValue();
-  const updatedSubject = `${originalSubject} E2E-${uniqueToken}`.trim();
-
-  await initialDialog.getByLabel('이 날짜부터 이후 수업도 함께 변경').check();
-  await initialDialog.getByLabel('변경 적용 시작일').fill(rebuildFromDate);
-  await subjectInput.fill(updatedSubject);
-  await saveGroupEditDialog(initialDialog);
-
-  let groupUpdated = true;
+  const groupName = `000 E2E 재생성반 ${uniqueToken}`;
+  const lessonDate = formatYmd(addDays(new Date(), 1));
+  const originalSubject = `E2E 재생성 과목 ${uniqueToken}`;
+  let tempSetup = null;
 
   try {
-    const rebuildDialog = page.getByRole('dialog', {
-      name: '해당 날짜부터 이후 수업을 다시 만들까요?',
+    tempSetup = await createAdminSeededCalendarGroupLessonSetup({
+      groupName,
+      lessonDate,
+      lessonTime: '10:10',
+      lessonSubject: originalSubject,
+      weekdays: [3],
     });
-    await expect(rebuildDialog).toBeVisible();
-    await expect(rebuildDialog).toContainText(TEST_GROUP_NAME);
-    await expect(rebuildDialog.getByLabel('다시 생성 시작일')).toHaveValue(rebuildFromDate);
-    await expect(rebuildDialog).toContainText(`입력한 기준 날짜: ${rebuildFromDate}`);
-    await expect(rebuildDialog).toContainText(`실제 적용 기준일: ${rebuildFromDate}`);
-    await expect(rebuildDialog).toContainText(updatedSubject);
 
-    await rebuildDialog.getByRole('button', { name: '그대로 유지', exact: true }).click();
-    await expect(rebuildDialog).toBeHidden();
-  } finally {
-    const rebuildDialog = page.getByRole('dialog', {
-      name: '해당 날짜부터 이후 수업을 다시 만들까요?',
-    });
-    if (await rebuildDialog.count()) {
-      if (await rebuildDialog.isVisible()) {
-        await rebuildDialog.getByRole('button', { name: '그대로 유지', exact: true }).click();
-        await expect(rebuildDialog).toBeHidden();
-      }
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
+
+    const groupRow = await expectGroupRowVisible(page, groupName, { timeout: 30000 });
+
+    const editButton = groupRow.getByRole('button', { name: '수정', exact: true });
+    await expect(editButton).toBeVisible();
+
+    async function openGroupEditDialog() {
+      await editButton.click();
+      const dialog = page.getByRole('dialog', { name: '반 수정' });
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByLabel('반 이름')).toHaveValue(groupName);
+      return dialog;
     }
 
-    if (!groupUpdated) return;
+    async function saveGroupEditDialog(dialog) {
+      const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
+      await expect(saveButton).toBeEnabled();
+      await saveButton.click();
+      await expect(dialog).toBeHidden();
+    }
 
-    const restoreDialog = await openGroupEditDialog();
-    await restoreDialog.getByLabel('과목').fill(originalSubject);
-    await saveGroupEditDialog(restoreDialog);
+    const initialDialog = await openGroupEditDialog();
+    const subjectInput = initialDialog.getByLabel('과목');
+    await expect(subjectInput).toBeVisible();
 
-    const maybeRebuildDialog = page.getByRole('dialog', {
-      name: '해당 날짜부터 이후 수업을 다시 만들까요?',
-    });
-    if (await maybeRebuildDialog.count()) {
-      if (await maybeRebuildDialog.isVisible()) {
-        await maybeRebuildDialog.getByRole('button', { name: '그대로 유지', exact: true }).click();
-        await expect(maybeRebuildDialog).toBeHidden();
+    const updatedSubject = `${originalSubject} updated`.trim();
+
+    await initialDialog.getByLabel('이 날짜부터 이후 수업도 함께 변경').check();
+    await initialDialog.getByLabel('변경 적용 시작일').fill(rebuildFromDate);
+    await subjectInput.fill(updatedSubject);
+    await saveGroupEditDialog(initialDialog);
+
+    let groupUpdated = true;
+
+    try {
+      const rebuildDialog = page.getByRole('dialog', {
+        name: '해당 날짜부터 이후 수업을 다시 만들까요?',
+      });
+      await expect(rebuildDialog).toBeVisible();
+      await expect(rebuildDialog).toContainText(groupName);
+      await expect(rebuildDialog.getByLabel('다시 생성 시작일')).toHaveValue(rebuildFromDate);
+      await expect(rebuildDialog).toContainText(`입력한 기준 날짜: ${rebuildFromDate}`);
+      await expect(rebuildDialog).toContainText(`실제 적용 기준일: ${rebuildFromDate}`);
+      await expect(rebuildDialog).toContainText(updatedSubject);
+
+      await rebuildDialog.getByRole('button', { name: '그대로 유지', exact: true }).click();
+      await expect(rebuildDialog).toBeHidden();
+    } finally {
+      const rebuildDialog = page.getByRole('dialog', {
+        name: '해당 날짜부터 이후 수업을 다시 만들까요?',
+      });
+      if (await rebuildDialog.count()) {
+        if (await rebuildDialog.isVisible()) {
+          await rebuildDialog.getByRole('button', { name: '그대로 유지', exact: true }).click();
+          await expect(rebuildDialog).toBeHidden();
+        }
       }
+
+      if (!groupUpdated) return;
+
+      const restoreDialog = await openGroupEditDialog();
+      await restoreDialog.getByLabel('과목').fill(originalSubject);
+      await saveGroupEditDialog(restoreDialog);
+
+      const maybeRebuildDialog = page.getByRole('dialog', {
+        name: '해당 날짜부터 이후 수업을 다시 만들까요?',
+      });
+      if (await maybeRebuildDialog.count()) {
+        if (await maybeRebuildDialog.isVisible()) {
+          await maybeRebuildDialog.getByRole('button', { name: '그대로 유지', exact: true }).click();
+          await expect(maybeRebuildDialog).toBeHidden();
+        }
+      }
+    }
+  } finally {
+    if (tempSetup) {
+      await cleanupAdminSeededCalendarGroupLessonSetup(tempSetup);
     }
   }
 });

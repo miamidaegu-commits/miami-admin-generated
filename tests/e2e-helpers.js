@@ -128,6 +128,37 @@ export function getGroupRow(page, groupName) {
   return page.locator(`[data-testid="group-row"][data-group-name="${groupName}"]`).first();
 }
 
+export async function expectPrivateCalendarLessonRowVisible(page, studentName, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  const privateLessonRows = page
+    .locator('[data-testid="calendar-lesson-row"][data-row-kind="private"]')
+    .filter({ hasText: studentName });
+
+  try {
+    await expect(privateLessonRows, 'created private lesson row should be visible').toHaveCount(1, {
+      timeout,
+    });
+  } catch (error) {
+    const [rowTexts, bodyText] = await Promise.all([
+      page.locator('[data-testid="calendar-lesson-row"]').allInnerTexts().catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+    throw new Error(
+      [
+        'Created private lesson row was not visible.',
+        `Student: ${studentName}`,
+        `Visible rows: ${JSON.stringify(rowTexts)}`,
+        `Current URL: ${page.url()}`,
+        'Body:',
+        bodyText.slice(0, 1500),
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+
+  return privateLessonRows.first();
+}
+
 export async function expectGroupRowVisible(page, groupName, options = {}) {
   const timeout = options.timeout ?? 15000;
   const groupRow = getGroupRow(page, groupName);
