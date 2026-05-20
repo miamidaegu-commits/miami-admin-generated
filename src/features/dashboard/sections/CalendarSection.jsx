@@ -57,6 +57,31 @@ function getPrivateReservationEndMillis(row) {
   return startMillis + durationMinutes * 60 * 1000
 }
 
+function parseStorageDateToLocalDate(value) {
+  const text = String(value || '').trim()
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return null
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+}
+
+function offsetStorageDate(value, offsetDays) {
+  const base = parseStorageDateToLocalDate(value) || new Date()
+  base.setDate(base.getDate() + offsetDays)
+  return base
+}
+
+function formatSelectedDateControlLabel(value, fallback) {
+  const text = String(value || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text.replaceAll('-', '.')
+  return fallback || '-'
+}
+
+function formatRemainingCountFromPackage(pkg) {
+  if (!pkg || pkg.remainingCount == null || pkg.remainingCount === '') return '—'
+  const count = Number(pkg.remainingCount)
+  return Number.isFinite(count) ? count : '—'
+}
+
 /**
  * view="month": 월 달력 그리드
  * view="lessons": 전체/선택일 수업 목록 + 상단 액션(캘린더 탭에서만 일부 노출)
@@ -220,7 +245,9 @@ export default function CalendarSection(props) {
   const {
     activeSection,
     showOnlySelectedDate,
+    selectedDateString,
     selectedDateDisplayString,
+    setSelectedDate,
     setShowOnlySelectedDate,
     showPrivateLessonAddInCalendar,
     openPrivateLessonModal,
@@ -260,6 +287,21 @@ export default function CalendarSection(props) {
     activeSection === 'groups' && showOnlySelectedDate
       ? '선택한 날짜의 단체반 수업이 없습니다.'
       : '등록된 수업이 없습니다.'
+  const showGroupSelectedDateControl = activeSection === 'groups'
+  const selectedDateControlLabel = formatSelectedDateControlLabel(
+    selectedDateString,
+    selectedDateDisplayString
+  )
+  const changeSelectedDateBy = (offsetDays) => {
+    setSelectedDate?.(offsetStorageDate(selectedDateString, offsetDays))
+    setShowOnlySelectedDate(true)
+  }
+  const changeSelectedDateTo = (value) => {
+    const nextDate = parseStorageDateToLocalDate(value)
+    if (!nextDate) return
+    setSelectedDate?.(nextDate)
+    setShowOnlySelectedDate(true)
+  }
 
   return (
     <section className="activity-section">
@@ -284,7 +326,80 @@ export default function CalendarSection(props) {
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {showGroupSelectedDateControl ? (
+            <div
+              data-testid="group-selected-date-control"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                flexWrap: 'wrap',
+                border: '1px solid #333b4f',
+                borderRadius: 10,
+                padding: 6,
+                background: '#171c27',
+              }}
+            >
+              <button
+                type="button"
+                aria-label="이전 날짜"
+                onClick={() => changeSelectedDateBy(-1)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid #444',
+                  background: '#1f1f1f',
+                  color: 'white',
+                  cursor: 'pointer',
+                }}
+              >
+                이전 날짜
+              </button>
+              <label
+                data-testid="group-selected-date-label"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 13,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span>선택 날짜: {selectedDateControlLabel}</span>
+                <input
+                  type="date"
+                  aria-label="선택 날짜"
+                  value={selectedDateString || ''}
+                  onChange={(event) => changeSelectedDateTo(event.target.value)}
+                  style={{
+                    colorScheme: 'dark',
+                    border: '1px solid #444',
+                    borderRadius: 8,
+                    background: '#111722',
+                    color: 'white',
+                    padding: '7px 9px',
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                aria-label="다음 날짜"
+                onClick={() => changeSelectedDateBy(1)}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 8,
+                  border: '1px solid #444',
+                  background: '#1f1f1f',
+                  color: 'white',
+                  cursor: 'pointer',
+                }}
+              >
+                다음 날짜
+              </button>
+            </div>
+          ) : null}
+
           <button
             onClick={() => setShowOnlySelectedDate((prev) => !prev)}
             style={{
@@ -402,8 +517,8 @@ export default function CalendarSection(props) {
               : null
             const remainingLessons = isGroupRow || isPrivateReservationRow
               ? '—'
-              : lesson.packageId && pkgForRemaining
-                ? Number(pkgForRemaining.remainingCount ?? 0)
+              : lesson.packageId
+                ? formatRemainingCountFromPackage(pkgForRemaining)
                 : matchedStudent
                   ? Number(matchedStudent.paidLessons || 0) -
                     Number(matchedStudent.attendanceCount || 0)

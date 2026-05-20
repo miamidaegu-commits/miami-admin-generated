@@ -193,6 +193,7 @@ async function setAttendanceStateAndWait({
   groupStudentId,
   syncGuardStudentId,
   deducted,
+  totalCount,
   expectedState,
   diagnostics,
 }) {
@@ -206,6 +207,7 @@ async function setAttendanceStateAndWait({
         groupStudentId,
         syncGuardStudentId,
         deducted,
+        totalCount,
         firebaseTaskTimeoutMs: 10000,
       });
       lastError = null;
@@ -344,6 +346,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       tempPackageTitle,
       packageId: tempPackageId,
       groupStudentId: tempGroupStudentId,
+      totalCount: 8,
     });
     await openDashboardSection(page, '단체반 관리');
     const groupRow = await clickGroupRow(page, groupName);
@@ -382,6 +385,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
     );
 
     expect(isDeductReady(snapshot)).toBe(true);
+    await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('8');
     snapshot = await setAttendanceStateAndWait({
       page,
       attendanceDialog,
@@ -393,11 +397,13 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       groupStudentId: tempGroupStudentId,
       syncGuardStudentId: attendanceSyncGuardId,
       deducted: true,
+      totalCount: 8,
       expectedState: isRestoreReady,
       diagnostics: attendanceDiagnostics,
     });
 
     expect(isRestoreReady(snapshot)).toBe(true);
+    await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('7');
     snapshot = await setAttendanceStateAndWait({
       page,
       attendanceDialog,
@@ -409,11 +415,13 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       groupStudentId: tempGroupStudentId,
       syncGuardStudentId: attendanceSyncGuardId,
       deducted: false,
+      totalCount: 8,
       expectedState: isDeductReady,
       diagnostics: attendanceDiagnostics,
     });
 
     expect(isDeductReady(snapshot)).toBe(true);
+    await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('8');
   } finally {
     try {
       if (attendanceDialog && (await attendanceDialog.isVisible().catch(() => false))) {

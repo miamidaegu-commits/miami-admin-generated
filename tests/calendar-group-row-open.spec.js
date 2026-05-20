@@ -15,6 +15,16 @@ function formatYmd(date) {
   return `${year}-${month}-${day}`;
 }
 
+function formatDisplayYmd(date) {
+  return formatYmd(date).replaceAll('-', '.');
+}
+
+function addDays(baseDate, days) {
+  const next = new Date(baseDate);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
 async function collectCalendarDiagnostics(page, selectedDate) {
   const [calendarRows, groupRows, bodyText, currentUrl] = await Promise.all([
     page
@@ -165,6 +175,31 @@ test('단체반 관리 선택 날짜 수업 목록은 개인 수업을 제외하
     await expect(calendarPrivateRow.first()).toContainText(tempPrivateSubject);
 
     await openDashboardSection(page, '단체반 관리');
+
+    const todaySchedulePanel = page.getByTestId('today-schedule-panel');
+    await expect(
+      todaySchedulePanel.getByRole('heading', { name: '오늘의 단체반 일정', exact: true })
+    ).toBeVisible();
+    await expect(todaySchedulePanel).toContainText(tempGroupSubject);
+    await expect(todaySchedulePanel).toContainText(tempGroupName);
+    await expect(todaySchedulePanel).not.toContainText(tempPrivateStudentName);
+    await expect(todaySchedulePanel).not.toContainText(tempPrivateSubject);
+
+    const selectedDateControl = page.getByTestId('group-selected-date-control');
+    await expect(selectedDateControl).toBeVisible();
+    await expect(page.getByTestId('group-selected-date-label')).toContainText(
+      `선택 날짜: ${formatDisplayYmd(new Date(`${lessonDate}T00:00:00`))}`
+    );
+
+    await selectedDateControl.getByRole('button', { name: '다음 날짜', exact: true }).click();
+    await expect(page.getByTestId('group-selected-date-label')).toContainText(
+      `선택 날짜: ${formatDisplayYmd(addDays(new Date(`${lessonDate}T00:00:00`), 1))}`
+    );
+
+    await selectedDateControl.getByRole('button', { name: '이전 날짜', exact: true }).click();
+    await expect(page.getByTestId('group-selected-date-label')).toContainText(
+      `선택 날짜: ${formatDisplayYmd(new Date(`${lessonDate}T00:00:00`))}`
+    );
 
     const groupSectionGroupRow = page.locator(
       `[data-testid="calendar-lesson-row"][data-row-kind="group"][data-group-name="${tempGroupName}"]`

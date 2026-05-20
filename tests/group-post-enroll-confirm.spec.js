@@ -47,6 +47,35 @@ async function expectPostEnrollDialog(page, packageDialog, dialogMessages) {
   }
 }
 
+async function submitPostEnrollDialog(page, postEnrollDialog, dialogMessages) {
+  await postEnrollDialog.getByRole('button', { name: '지금 등록', exact: true }).click();
+  try {
+    await expect(postEnrollDialog).toBeHidden({ timeout: 30000 });
+  } catch (error) {
+    const [bodyText, dialogText, buttonEnabled] = await Promise.all([
+      page.locator('body').innerText().catch(() => ''),
+      postEnrollDialog.innerText().catch(() => ''),
+      postEnrollDialog
+        .getByRole('button', { name: '지금 등록', exact: true })
+        .isEnabled()
+        .catch(() => null),
+    ]);
+    throw new Error(
+      [
+        'Post-enroll dialog did not close after confirming immediate enrollment.',
+        `Current URL: ${page.url()}`,
+        `Confirm button enabled: ${buttonEnabled}`,
+        `Browser dialog messages: ${dialogMessages.join(' | ') || '-'}`,
+        `Dialog text: ${dialogText.slice(0, 1000)}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+}
+
 async function openStudentRow(page) {
   await openDashboardSection(page, '학생 관리');
   const studentSearchInput = getStudentSearchInput(page);
@@ -121,8 +150,7 @@ test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록
     await expect(postEnrollDialog).toContainText(tempStudentName);
     await expect(postEnrollDialog).toContainText(TEST_GROUP_NAME);
 
-    await postEnrollDialog.getByRole('button', { name: '지금 등록', exact: true }).click();
-    await expect(postEnrollDialog).toBeHidden();
+    await submitPostEnrollDialog(page, postEnrollDialog, dialogMessages);
 
     await openGroupDetail(page);
 

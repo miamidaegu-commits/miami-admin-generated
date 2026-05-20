@@ -24,6 +24,7 @@ test('관리자가 그룹 학생 등록을 실제로 저장하고 다시 제거�
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
 
   const uniqueToken = Date.now();
   const tempStudentId = `e2e-group-student-add-${uniqueToken}`;

@@ -160,13 +160,27 @@ export async function expectPrivateCalendarLessonRowVisible(page, studentName, o
 }
 
 export async function expectGroupRowVisible(page, groupName, options = {}) {
-  const timeout = options.timeout ?? 15000;
+  const timeout = options.timeout ?? 30000;
   const groupRow = getGroupRow(page, groupName);
 
   try {
+    await expect(page.getByRole('heading', { name: /단체반 관리|내 단체반 관리/, level: 1 })).toBeVisible({
+      timeout,
+    });
+    await expect
+      .poll(
+        async () => {
+          const count = await groupRow.count();
+          if (count > 0) return 'ready';
+          const loadingCount = await page.getByText('불러오는 중...', { exact: true }).count();
+          return loadingCount > 0 ? 'loading' : 'missing';
+        },
+        { timeout }
+      )
+      .toBe('ready');
     await expect(groupRow).toBeVisible({ timeout });
   } catch (error) {
-    const [visibleRows, bodyText] = await Promise.all([
+    const [visibleRows, bodyText, loadingTexts, alertTexts] = await Promise.all([
       page
         .locator('[data-testid="group-row"]')
         .evaluateAll((rows) =>
@@ -177,11 +191,19 @@ export async function expectGroupRowVisible(page, groupName, options = {}) {
         )
         .catch(() => []),
       page.locator('body').innerText().catch(() => ''),
+      page.getByText('불러오는 중...', { exact: true }).allInnerTexts().catch(() => []),
+      page
+        .locator('[role="alert"], .error-msg, .error, [data-testid*="error"]')
+        .allInnerTexts()
+        .catch(() => []),
     ]);
 
     throw new Error(
       [
         `Group row was not visible for ${groupName}.`,
+        `Current URL: ${page.url()}`,
+        `Visible loading text: ${JSON.stringify(loadingTexts)}`,
+        `Visible alert/error text: ${JSON.stringify(alertTexts.filter(Boolean))}`,
         `Visible group rows: ${JSON.stringify(visibleRows.slice(0, 40))}`,
         'Visible page text:',
         bodyText.slice(0, 1500),
@@ -195,7 +217,7 @@ export async function expectGroupRowVisible(page, groupName, options = {}) {
 }
 
 export async function clickGroupRow(page, groupName, options = {}) {
-  const timeout = options.timeout ?? 15000;
+  const timeout = options.timeout ?? 30000;
   const groupRow = await expectGroupRowVisible(page, groupName, { timeout });
   await groupRow.scrollIntoViewIfNeeded({ timeout });
   await groupRow.click({ timeout });

@@ -3,6 +3,7 @@ export default function TodaySchedulePanel({
   summary,
   loading = false,
   showStudent = true,
+  title = '오늘의 일정',
 }) {
   const rows = Array.isArray(items) ? items : []
   const summaryItems = [
@@ -22,7 +23,7 @@ export default function TodaySchedulePanel({
         padding: 18,
       }}
     >
-      <h2 style={{ margin: 0, fontSize: '1.1rem' }}>오늘의 일정</h2>
+      <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h2>
       {summaryItems.length > 0 ? (
         <div
           data-testid="today-schedule-summary"
