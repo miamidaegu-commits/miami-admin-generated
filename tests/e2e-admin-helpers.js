@@ -469,6 +469,137 @@ export async function cleanupAdminSeededCalendarGroupLessonSetup(fixture = {}) {
   await deleteKnownAcademyDoc(db, 'groupClasses', groupClassId, academyId);
 }
 
+export async function cleanupAdminGroupClassByName(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupName = String(params.groupName || '').trim();
+  if (!groupName) return;
+  if (!groupName.startsWith('E2E 그룹 ')) {
+    throw new Error(`Refusing to cleanup non-E2E group by name: ${groupName}`);
+  }
+
+  const groupSnap = await db
+    .collection('groupClasses')
+    .where('academyId', '==', academyId)
+    .where('name', '==', groupName)
+    .get();
+
+  const groupClassIds = new Set(groupSnap.docs.map((docSnap) => docSnap.id));
+  const lessonRefs = new Map();
+
+  const byNameSnap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', academyId)
+    .where('groupClassName', '==', groupName)
+    .get();
+  byNameSnap.docs.forEach((docSnap) => lessonRefs.set(docSnap.id, docSnap.ref));
+
+  for (const groupClassId of groupClassIds) {
+    const [byGroupClassId, byGroupClassID] = await Promise.all([
+      db
+        .collection('groupLessons')
+        .where('academyId', '==', academyId)
+        .where('groupClassId', '==', groupClassId)
+        .get(),
+      db
+        .collection('groupLessons')
+        .where('academyId', '==', academyId)
+        .where('groupClassID', '==', groupClassId)
+        .get(),
+    ]);
+    byGroupClassId.docs.forEach((docSnap) => lessonRefs.set(docSnap.id, docSnap.ref));
+    byGroupClassID.docs.forEach((docSnap) => lessonRefs.set(docSnap.id, docSnap.ref));
+  }
+
+  await Promise.all(Array.from(lessonRefs.values()).map((ref) => ref.delete()));
+  await Promise.all(groupSnap.docs.map((docSnap) => docSnap.ref.delete()));
+}
+
+export async function getAdminSeededCalendarGroupLessonState(fixture = {}) {
+  const db = getDb();
+  const academyId = String(fixture.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(fixture.groupClassId || '').trim();
+  const groupLessonId = String(fixture.groupLessonId || '').trim();
+
+  async function readKnownDoc(collectionName, docId) {
+    if (!docId) return { exists: false };
+    const snap = await db.collection(collectionName).doc(docId).get();
+    const data = snap.exists ? snap.data() || {} : {};
+    return {
+      exists: snap.exists,
+      id: docId,
+      academyId: data.academyId || '',
+      groupClassId: data.groupClassId || data.groupClassID || '',
+      groupClassName: data.groupClassName || data.name || '',
+      date: data.date || '',
+      time: data.time || '',
+      subject: data.subject || '',
+      teacher: data.teacher || data.teacherName || '',
+      groupCourseType: data.groupCourseType || '',
+      belongsToAcademy: String(data.academyId || '').trim() === academyId,
+    };
+  }
+
+  const [groupClass, groupLesson] = await Promise.all([
+    readKnownDoc('groupClasses', groupClassId),
+    readKnownDoc('groupLessons', groupLessonId),
+  ]);
+
+  return {
+    academyId,
+    groupClass,
+    groupLesson,
+  };
+}
+
+export async function cleanupAdminTempGroupStudentAddSetup(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const packageId = String(params.packageId || '').trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const studentId = String(params.tempStudentId || params.studentId || '').trim();
+
+  if (studentId && groupClassId) {
+    const snap = await db
+      .collection('groupStudents')
+      .where('academyId', '==', academyId)
+      .where('studentId', '==', studentId)
+      .where('groupClassId', '==', groupClassId)
+      .get();
+
+    await Promise.all(
+      snap.docs
+        .filter((docSnap) => {
+          const data = docSnap.data() || {};
+          if (String(data.academyId || '').trim() !== academyId) return false;
+          if (String(data.studentId || '').trim() !== studentId) return false;
+          if (String(data.groupClassId || '').trim() !== groupClassId) return false;
+          if (packageId && String(data.packageId || '').trim() !== packageId) return false;
+          return true;
+        })
+        .map((docSnap) => docSnap.ref.delete())
+    );
+  }
+
+  if (packageId) {
+    const packageRef = db.collection('studentPackages').doc(packageId);
+    const packageSnap = await packageRef.get();
+    if (packageSnap.exists) {
+      const data = packageSnap.data() || {};
+      if (String(data.academyId || '').trim() !== academyId) {
+        throw new Error(`Refusing to delete studentPackages/${packageId}: academyId mismatch.`);
+      }
+      if (studentId && String(data.studentId || '').trim() !== studentId) {
+        throw new Error(`Refusing to delete studentPackages/${packageId}: studentId mismatch.`);
+      }
+      if (groupClassId && String(data.groupClassId || '').trim() !== groupClassId) {
+        throw new Error(`Refusing to delete studentPackages/${packageId}: groupClassId mismatch.`);
+      }
+      await packageRef.delete();
+    }
+  }
+}
+
 export async function getAdminLessonsForStudentTeacher(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();

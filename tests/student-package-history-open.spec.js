@@ -38,6 +38,24 @@ function addDays(date, days) {
   return next;
 }
 
+const pageDiagnostics = new WeakMap();
+
+test.beforeEach(async ({ page }) => {
+  const diagnostics = {
+    consoleMessages: [],
+    pageErrors: [],
+  };
+  pageDiagnostics.set(page, diagnostics);
+  page.on('console', (message) => {
+    diagnostics.consoleMessages.push(`${message.type()}: ${message.text()}`);
+    diagnostics.consoleMessages = diagnostics.consoleMessages.slice(-50);
+  });
+  page.on('pageerror', (error) => {
+    diagnostics.pageErrors.push(error?.message || String(error));
+    diagnostics.pageErrors = diagnostics.pageErrors.slice(-20);
+  });
+});
+
 function getFirebaseConfigFromEnv() {
   return {
     apiKey: process.env.VITE_FIREBASE_API_KEY,
@@ -47,6 +65,125 @@ function getFirebaseConfigFromEnv() {
     messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
     appId: process.env.VITE_FIREBASE_APP_ID,
   };
+}
+
+async function readStudentFixtureDocs(page, fixtureIds = {}) {
+  const studentId = String(fixtureIds.studentId || '').trim();
+  const packageIds = Array.isArray(fixtureIds.packageIds)
+    ? fixtureIds.packageIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+
+  if (!studentId && packageIds.length === 0) return null;
+
+  return page
+    .evaluate(
+      async ({ firebaseConfig, studentId, packageIds }) => {
+        const [{ getApp, getApps, initializeApp }, { getAuth, onAuthStateChanged }, firestore] =
+          await Promise.all([
+            import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
+            import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
+            import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'),
+          ]);
+
+        const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        if (!auth.currentUser) {
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Auth user not ready.')), 15000);
+            const unsubscribe = onAuthStateChanged(auth, (user) => {
+              if (!user) return;
+              clearTimeout(timeout);
+              unsubscribe();
+              resolve();
+            });
+          });
+        }
+
+        const db = firestore.getFirestore(app);
+        async function readDoc(collectionName, docId) {
+          if (!docId) return null;
+          const snap = await firestore.getDoc(firestore.doc(db, collectionName, docId));
+          const data = snap.exists() ? snap.data() || {} : {};
+          return {
+            collection: collectionName,
+            id: docId,
+            exists: snap.exists(),
+            academyId: data.academyId || '',
+            studentId: data.studentId || '',
+            studentName: data.studentName || data.name || '',
+            packageType: data.packageType || '',
+            teacher: data.teacher || data.teacherName || '',
+            totalCount: data.totalCount ?? null,
+            usedCount: data.usedCount ?? null,
+            remainingCount: data.remainingCount ?? null,
+            status: data.status || '',
+          };
+        }
+
+        const [studentDoc, packageDocs] = await Promise.all([
+          readDoc('privateStudents', studentId),
+          Promise.all(packageIds.map((id) => readDoc('studentPackages', id))),
+        ]);
+        return {
+          privateStudent: studentDoc,
+          studentPackages: packageDocs.filter(Boolean),
+        };
+      },
+      {
+        firebaseConfig: getFirebaseConfigFromEnv(),
+        studentId,
+        packageIds,
+      }
+    )
+    .catch((error) => ({ error: error?.message || String(error) }));
+}
+
+async function collectStudentSearchDiagnostics(page, studentName, fixtureIds = {}) {
+  const diagnostics = pageDiagnostics.get(page) || {
+    consoleMessages: [],
+    pageErrors: [],
+  };
+  const input = getStudentSearchInput(page);
+  const [bodyText, studentRows, loadingTexts, alertTexts, inputState, fixtureDocs] =
+    await Promise.all([
+      page.locator('body').innerText().catch(() => ''),
+      page
+        .locator('[data-testid="student-row"]')
+        .evaluateAll((rows) =>
+          rows.map((rowEl) => ({
+            studentName: rowEl.getAttribute('data-student-name') || '',
+            text: rowEl.textContent || '',
+          }))
+        )
+        .catch(() => []),
+      page.getByText('불러오는 중...', { exact: true }).allInnerTexts().catch(() => []),
+      page
+        .locator('[role="alert"], .error-msg, .error, [data-testid*="error"]')
+        .allInnerTexts()
+        .catch(() => []),
+      input
+        .evaluate((el) => ({
+          disabled: Boolean(el.disabled),
+          value: el.value || '',
+          visible: Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length),
+        }))
+        .catch((error) => ({ error: error?.message || String(error) })),
+      readStudentFixtureDocs(page, fixtureIds),
+    ]);
+
+  return [
+    `Student search input was not ready for query ${studentName}.`,
+    `Current URL: ${page.url()}`,
+    `Input state: ${JSON.stringify(inputState)}`,
+    `Visible loading text: ${JSON.stringify(loadingTexts)}`,
+    `Visible alert/error text: ${JSON.stringify(alertTexts.filter(Boolean))}`,
+    `Visible student rows: ${JSON.stringify(studentRows.slice(0, 40))}`,
+    `Fixture docs: ${JSON.stringify(fixtureDocs)}`,
+    `Console messages: ${diagnostics.consoleMessages.slice(-25).join(' || ') || '-'}`,
+    `Page errors: ${diagnostics.pageErrors.slice(-10).join(' || ') || '-'}`,
+    'Visible page text:',
+    bodyText.slice(0, 1500),
+  ].join('\n');
 }
 
 async function ensureStudentGroupAccessSummary(page, { studentId }) {
@@ -124,32 +261,24 @@ async function openStudentPackageHistory(page) {
   await historyButton.click();
 }
 
-async function searchStudent(page, studentName) {
+async function searchStudent(page, studentName, options = {}) {
   const studentSearchInput = getStudentSearchInput(page);
   try {
+    await expect(page.getByRole('heading', { name: '학생 관리', level: 1 })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(studentSearchInput).toBeVisible({ timeout: 15000 });
     await expect(studentSearchInput).toBeEditable({ timeout: 15000 });
     await studentSearchInput.fill(studentName, { timeout: 15000 });
   } catch (error) {
-    const [bodyText, studentRows] = await Promise.all([
-      page.locator('body').innerText().catch(() => ''),
-      page
-        .locator('[data-testid="student-row"]')
-        .evaluateAll((rows) =>
-          rows.map((rowEl) => ({
-            studentName: rowEl.getAttribute('data-student-name') || '',
-            text: rowEl.textContent || '',
-          }))
-        )
-        .catch(() => []),
-    ]);
-
+    const diagnostics = await collectStudentSearchDiagnostics(
+      page,
+      studentName,
+      options.fixtureIds || {}
+    );
     throw new Error(
       [
-        `Student search input was not editable for query ${studentName}.`,
-        `Visible student rows: ${JSON.stringify(studentRows.slice(0, 40))}`,
-        'Visible page text:',
-        bodyText.slice(0, 1500),
-        '',
+        diagnostics,
         `Original error: ${error.message}`,
       ].join('\n')
     );
@@ -242,7 +371,15 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '학생 관리');
 
-  await searchStudent(page, studentName);
+  await searchStudent(page, studentName, {
+    fixtureIds: {
+      studentId,
+      packageIds: [
+        `e2e-private-package-don1-${suffix}`,
+        `e2e-private-package-jenny-${suffix}`,
+      ],
+    },
+  });
 
   const studentRow = getStudentRow(page, studentName);
   await expect(studentRow).toBeVisible();
@@ -300,7 +437,11 @@ test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '학생 관리');
 
-  await searchStudent(page, studentName);
+  await searchStudent(page, studentName, {
+    fixtureIds: {
+      studentId,
+    },
+  });
 
   const studentRow = getStudentRow(page, studentName);
   await expect(studentRow).toBeVisible();
@@ -336,7 +477,11 @@ test('관리자가 프리토킹 그룹 수강권을 만들면 summary에 groupCo
     await ensureStudentGroupAccessSummary(page, { studentId: tempStudent.studentId });
 
     await openDashboardSection(page, '학생 관리');
-    await searchStudent(page, tempStudentName);
+    await searchStudent(page, tempStudentName, {
+      fixtureIds: {
+        studentId: tempStudent.studentId,
+      },
+    });
     const studentRow = getStudentRow(page, tempStudentName);
     await expect(studentRow).toBeVisible();
     await studentRow.getByRole('button', { name: '수강권 추가' }).click();

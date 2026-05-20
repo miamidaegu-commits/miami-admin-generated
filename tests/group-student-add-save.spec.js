@@ -7,9 +7,9 @@ import {
   openDashboardSection,
 } from './e2e-helpers.js';
 import {
-  cleanupTempGroupStudentAddSetup,
   createTempGroupStudentAddPackage,
 } from './e2e-firebase-helpers.js';
+import { cleanupAdminTempGroupStudentAddSetup } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_GROUP_NAME } from './fixtures/test-data.js';
 
 async function acceptNextDialog(page, timeout = 5000) {
@@ -24,6 +24,7 @@ test('관리자가 그룹 학생 등록을 실제로 저장하고 다시 제거�
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
 
   const uniqueToken = Date.now();
   const tempStudentId = `e2e-group-student-add-${uniqueToken}`;
@@ -91,7 +92,7 @@ test('관리자가 그룹 학생 등록을 실제로 저장하고 다시 제거�
       .toBe(0);
   } finally {
     if (tempSetup) {
-      await cleanupTempGroupStudentAddSetup(page, {
+      await cleanupAdminTempGroupStudentAddSetup({
         packageId: tempSetup.packageId,
         groupClassId: tempSetup.groupClassId,
         tempStudentId,

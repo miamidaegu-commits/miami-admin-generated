@@ -375,7 +375,7 @@ async function recomputePrivatePackageUsage(packageId, academyId) {
 
 
 /**
- * groupClassId + date + time 기준 중복은 건너뜀. Firestore addDoc 순차 호출.
+ * groupClassId + date + time 기준 중복은 건너뜀.
  */
 async function createGroupLessonsInDateRange({
   academyId,
@@ -406,6 +406,16 @@ async function createGroupLessonsInDateRange({
   if (weekdaySet.size === 0 || !timeStr || !subjectStr) return { created, skippedDup }
 
   const prior = Array.isArray(existingLessons) ? existingLessons : []
+  const commitBatchSize = 20
+  let batch = writeBatch(db)
+  let pendingWrites = 0
+
+  async function commitPendingWrites() {
+    if (pendingWrites === 0) return
+    await batch.commit()
+    batch = writeBatch(db)
+    pendingWrites = 0
+  }
 
   for (const dateStr of iterateYmdRangeInclusive(startYmd, endYmd)) {
     const dt = parseYmdToLocalDate(dateStr)
@@ -422,7 +432,8 @@ async function createGroupLessonsInDateRange({
       continue
     }
 
-    await addDoc(collection(db, 'groupLessons'), {
+    const lessonRef = doc(collection(db, 'groupLessons'))
+    batch.set(lessonRef, {
       academyId: scopedAcademyId,
       groupClassId,
       groupClassName: groupClassName || '',
@@ -443,7 +454,13 @@ async function createGroupLessonsInDateRange({
       updatedAt: serverTimestamp(),
     })
     created += 1
+    pendingWrites += 1
+    if (pendingWrites >= commitBatchSize) {
+      await commitPendingWrites()
+    }
   }
+
+  await commitPendingWrites()
 
   return { created, skippedDup }
 }
@@ -529,6 +546,7 @@ export default function Dashboard() {
   const [lessons, setLessons] = useState([])
   const [privateStudents, setPrivateStudents] = useState([])
   const [loading, setLoading] = useState(true)
+  const [privateStudentsLoading, setPrivateStudentsLoading] = useState(true)
   const [migrating, setMigrating] = useState(false)
   const [busyGroupLegacyBackfill, setBusyGroupLegacyBackfill] = useState(false)
   const [busyLessonId, setBusyLessonId] = useState(null)
@@ -788,9 +806,13 @@ export default function Dashboard() {
       setLessons([])
       setPrivateStudents([])
       setLoading(false)
+      setPrivateStudentsLoading(false)
       return
     }
     if (!userProfile?.role) return
+
+    setLoading(true)
+    setPrivateStudentsLoading(true)
 
     const roleKey = String(userProfile.role).trim().toLowerCase()
     const teacherNameRaw = userProfile.teacherName
@@ -810,6 +832,7 @@ export default function Dashboard() {
 
     const markStudentsLoaded = () => {
       studentsLoaded = true
+      setPrivateStudentsLoading(false)
       if (lessonsLoaded) setLoading(false)
     }
 
@@ -939,6 +962,7 @@ export default function Dashboard() {
       setLessons([])
       setPrivateStudents([])
       setLoading(false)
+      setPrivateStudentsLoading(false)
     }
 
     return () => {
@@ -2272,6 +2296,20 @@ export default function Dashboard() {
     }
   }, [todayScheduleItems])
 
+  const todaySchedulePanelItems = useMemo(() => {
+    if (activeSection !== 'groups') return todayScheduleItems
+    return todayScheduleItems.filter((item) => item.sourceKind === 'groupLesson')
+  }, [activeSection, todayScheduleItems])
+
+  const todaySchedulePanelSummary = useMemo(() => {
+    if (activeSection !== 'groups') return todayScheduleSummary
+    return {
+      groupLessonCount: todaySchedulePanelItems.filter(
+        (item) => item.sourceKind === 'groupLesson'
+      ).length,
+    }
+  }, [activeSection, todaySchedulePanelItems, todayScheduleSummary])
+
   const todayScheduleLoading =
     loading ||
     groupClassesLoading ||
@@ -3483,7 +3521,9 @@ export default function Dashboard() {
       view: 'lessons',
       activeSection,
       showOnlySelectedDate,
+      selectedDateString,
       selectedDateDisplayString,
+      setSelectedDate,
       setShowOnlySelectedDate,
       showPrivateLessonAddInCalendar,
       openPrivateLessonModal,
@@ -3519,7 +3559,7 @@ export default function Dashboard() {
 
   const studentsSectionProps = {
     ...studentsSectionViewModel,
-    loading,
+    loading: privateStudentsLoading,
     currentAcademyId,
     privateStudents,
     isAdmin,
@@ -3910,10 +3950,11 @@ export default function Dashboard() {
 
           <div style={{ marginBottom: 20 }}>
             <TodaySchedulePanel
-              items={todayScheduleItems}
-              summary={todayScheduleSummary}
+              items={todaySchedulePanelItems}
+              summary={todaySchedulePanelSummary}
               loading={todayScheduleLoading}
-              showStudent
+              showStudent={activeSection !== 'groups'}
+              title={activeSection === 'groups' ? '오늘의 단체반 일정' : '오늘의 일정'}
             />
           </div>
 
