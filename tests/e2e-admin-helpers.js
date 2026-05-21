@@ -171,7 +171,7 @@ export async function createAdminSeededLessonRequest(params = {}) {
   const studentId = String(params.studentId || `e2e_request_student_${Date.now()}`).trim();
   const studentName = String(params.studentName || `E2E 요청학생 ${Date.now()}`).trim();
 
-  await requestRef.set({
+  const requestPayload = {
     academyId,
     teacherUID: teacherUser.uid,
     teacherName,
@@ -192,7 +192,34 @@ export async function createAdminSeededLessonRequest(params = {}) {
     createdAt: timestampNow(),
     rejectionReason: '',
     seriesID: String(params.seriesID || ''),
+  };
+
+  [
+    'fixedPrivateTotalCount',
+    'paidLessons',
+    'totalCount',
+    'lessonCount',
+    'numberOfLessons',
+    'recurrenceCount',
+    'repeatCount',
+    'count',
+    'sessions',
+    'durationWeeks',
+  ].forEach((fieldName) => {
+    if (params[fieldName] !== undefined) {
+      requestPayload[fieldName] = params[fieldName];
+    }
   });
+  ['repeat', 'isRecurring', 'repeatEnabled'].forEach((fieldName) => {
+    if (params[fieldName] !== undefined) {
+      requestPayload[fieldName] = params[fieldName] === true;
+    }
+  });
+  if (params.status !== undefined) {
+    requestPayload.status = String(params.status || '').trim();
+  }
+
+  await requestRef.set(requestPayload);
 
   return {
     requestId: requestRef.id,
@@ -223,6 +250,8 @@ export async function getAdminSeededLessonRequest(requestId) {
     subject: data.subject || null,
     repeatWeekly: data.repeatWeekly === true,
     repeatWeeks: data.repeatWeeks || null,
+    fixedPrivateTotalCount: data.fixedPrivateTotalCount || null,
+    raw: data,
   };
 }
 

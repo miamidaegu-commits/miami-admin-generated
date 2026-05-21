@@ -390,6 +390,9 @@ export default function TeacherPrivateLessonRequestsSection({
           rejectionReason: '',
           seriesID,
         }
+        if (paidLessonCount) {
+          requestPayload.fixedPrivateTotalCount = paidLessonCount
+        }
         batch.set(requestRef, requestPayload)
       })
 

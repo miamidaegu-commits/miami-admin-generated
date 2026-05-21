@@ -49,7 +49,7 @@ function timestampSortValue(value) {
 function sortPendingRequests(snapshot) {
   return snapshot.docs
     .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
-    .filter((row) => row.approvalStatus === 'pending')
+    .filter((row) => getApprovalStatus(row) === 'pending')
     .sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt))
 }
 
@@ -69,9 +69,31 @@ function addWeeksToYmd(ymd, weeks) {
 }
 
 function getRepeatWeeks(request) {
-  const parsed = Number.parseInt(String(request?.repeatWeeks ?? '1'), 10)
-  if (!Number.isInteger(parsed) || parsed < 1) return 1
-  return Math.min(parsed, 60)
+  const candidates = [
+    request?.repeatWeeks,
+    request?.repeatCount,
+    request?.recurrenceCount,
+    request?.lessonCount,
+    request?.numberOfLessons,
+    request?.sessions,
+    request?.durationWeeks,
+    request?.count,
+  ]
+  let fallback = 1
+  for (const candidate of candidates) {
+    const parsed = Number.parseInt(String(candidate ?? ''), 10)
+    if (Number.isInteger(parsed) && parsed > 1) return Math.min(parsed, 60)
+    if (Number.isInteger(parsed) && parsed === 1) fallback = 1
+  }
+  return fallback
+}
+
+function isRecurringRequest(request) {
+  return request?.repeatWeekly === true ||
+    request?.repeat === true ||
+    request?.isRecurring === true ||
+    request?.repeatEnabled === true ||
+    getRepeatWeeks(request) > 1
 }
 
 function getLessonTime(lesson) {
@@ -170,7 +192,7 @@ function planSessionNumberWrites({ existingLessons, newLessons }) {
 function buildLessonDates(request) {
   const date = String(request?.date || '').trim()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return []
-  const repeatWeekly = request?.repeatWeekly === true
+  const repeatWeekly = isRecurringRequest(request)
   const repeatWeeks = repeatWeekly ? getRepeatWeeks(request) : 1
 
   const dates = []
@@ -256,6 +278,13 @@ function getFixedPrivateTotalCount(lessonRequest, fallbackCount = 0) {
     lessonRequest?.fixedPrivateTotalCount,
     lessonRequest?.paidLessons,
     lessonRequest?.totalCount,
+    lessonRequest?.lessonCount,
+    lessonRequest?.numberOfLessons,
+    lessonRequest?.sessions,
+    lessonRequest?.recurrenceCount,
+    lessonRequest?.repeatCount,
+    lessonRequest?.count,
+    lessonRequest?.durationWeeks,
   ]
   for (const candidate of candidates) {
     const parsed = Number(candidate)
@@ -264,9 +293,49 @@ function getFixedPrivateTotalCount(lessonRequest, fallbackCount = 0) {
   return fallbackCount > 0 ? fallbackCount : 0
 }
 
+function getApprovalStatus(request) {
+  return String(request?.approvalStatus || request?.status || '').trim().toLowerCase()
+}
+
+function describeFirestoreRef(ref) {
+  const path = ref?.path || ''
+  const parts = path.split('/').filter(Boolean)
+  return {
+    path,
+    collection: parts.length >= 2 ? parts[parts.length - 2] : parts[0] || '',
+    docId: parts[parts.length - 1] || '',
+  }
+}
+
+function makeApprovalStepLogger(baseContext) {
+  const steps = []
+  return {
+    steps,
+    record(stepName, ref, operation = 'write') {
+      steps.push({
+        ...baseContext,
+        stepName,
+        operation,
+        ...describeFirestoreRef(ref),
+      })
+    },
+  }
+}
+
+function logApprovalFailure(error, context, plannedSteps) {
+  const diagnostic = {
+    ...context,
+    stepName: 'batch.commit',
+    firebaseCode: error?.code || '',
+    firebaseMessage: error?.message || String(error || ''),
+    plannedSteps,
+  }
+  console.error('수업 요청 승인 Firestore 진단:', diagnostic)
+}
+
 function validateRequestForApproval(request, academyId) {
   assertSameAcademy(request, academyId, '수업 요청')
-  if (request.approvalStatus !== 'pending') {
+  if (getApprovalStatus(request) !== 'pending') {
     throw new Error('이미 처리된 수업 요청입니다.')
   }
   const dates = buildLessonDates(request)
@@ -353,10 +422,12 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
     }
     if (!lessonRequest?.id || busyRequestId) return
 
+    let plannedApprovalSteps = []
+
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       const dates = validateRequestForApproval(lessonRequest, scopedAcademyId)
-      const isRepeat = lessonRequest.repeatWeekly === true && dates.length > 1
+      const isRepeat = isRecurringRequest(lessonRequest) && dates.length > 1
       const seriesID = isRepeat
         ? cleanText(
             lessonRequest.seriesID,
@@ -367,10 +438,18 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
       const teacher = cleanText(lessonRequest.teacher || lessonRequest.teacherName, '')
       const studentName = cleanText(lessonRequest.studentName || lessonRequest.student, '-')
       const reviewerName = reviewerNameFor(user, userProfile)
+      const diagnostics = makeApprovalStepLogger({
+        requestId: lessonRequest.id,
+        academyId: scopedAcademyId,
+        studentId,
+        studentName,
+        teacher,
+      })
+      plannedApprovalSteps = diagnostics.steps
       const batch = writeBatch(db)
       const createdLessonRefs = dates.map(() => doc(collection(db, 'lessons')))
       setBusyRequestId(lessonRequest.id)
-      let fixedPrivateTotalCount = getFixedPrivateTotalCount(lessonRequest)
+      let fixedPrivateTotalCount = getFixedPrivateTotalCount(lessonRequest, dates.length)
       if (fixedPrivateTotalCount <= 0) {
         const studentSnap = await getDocs(
           query(
@@ -404,12 +483,18 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
         }
         if (packageResult.created) {
           batch.set(packageResult.packageRef, packageResult.packageData)
+          diagnostics.record('studentPackages.create', packageResult.packageRef, 'set')
           addStudentPrivateTeacherAccessBatch(batch, db, {
             academyId: scopedAcademyId,
             studentId,
             teacher,
             packageId: packageResult.packageId,
           })
+          diagnostics.record(
+            'studentPrivateAccessSummary.upsert',
+            doc(db, 'studentPrivateAccessSummary', `${scopedAcademyId}__${studentId}`),
+            'set'
+          )
           const creditRef = doc(collection(db, 'creditTransactions'))
           batch.set(creditRef, {
             academyId: scopedAcademyId,
@@ -429,6 +514,7 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
             actorRole: 'admin',
             createdAt: serverTimestamp(),
           })
+          diagnostics.record('creditTransactions.create', creditRef, 'set')
         }
       } else {
         const matchingPackages = await fetchActivePrivatePackagesForTeacher({
@@ -483,6 +569,7 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
             userProfile,
           })
         )
+        diagnostics.record('lessons.create', lessonRef, 'set')
       })
 
       existingUpdates.forEach((update) => {
@@ -490,6 +577,7 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
           sessionNumber: update.sessionNumber,
           updatedAt: serverTimestamp(),
         })
+        diagnostics.record('lessons.sessionNumber.update', update.ref, 'update')
       })
 
       const requestPatch = {
@@ -505,6 +593,9 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
         approvedByUID: user?.uid || '',
         approvedByName: reviewerName,
       }
+      if (Object.prototype.hasOwnProperty.call(lessonRequest, 'status')) {
+        requestPatch.status = 'approved'
+      }
       if (selectedPackage?.id) {
         requestPatch.fixedPrivatePackageId = selectedPackage.id
       }
@@ -513,11 +604,30 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
         requestPatch.lessonID = createdLessonRefs[0].id
       }
 
-      batch.update(doc(db, 'lessonRequests', lessonRequest.id), requestPatch)
+      const requestRef = doc(db, 'lessonRequests', lessonRequest.id)
+      batch.update(requestRef, requestPatch)
+      diagnostics.record('lessonRequests.approve.update', requestRef, 'update')
       await batch.commit()
     } catch (error) {
+      const studentId = cleanText(lessonRequest.studentId || lessonRequest.studentID, '')
+      const teacher = cleanText(lessonRequest.teacher || lessonRequest.teacherName, '')
+      logApprovalFailure(
+        error,
+        {
+          requestId: lessonRequest?.id || '',
+          academyId: currentAcademyId || '',
+          studentId,
+          studentName: cleanText(lessonRequest.studentName || lessonRequest.student, '-'),
+          teacher,
+        },
+        plannedApprovalSteps
+      )
       console.error('수업 요청 승인 실패:', error)
-      alert(error.message || '수업 요청 승인에 실패했습니다.')
+      alert(
+        error?.code
+          ? `${error.code}: ${error.message || '수업 요청 승인에 실패했습니다.'}`
+          : error.message || '수업 요청 승인에 실패했습니다.'
+      )
     } finally {
       setBusyRequestId('')
     }
@@ -549,6 +659,9 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
       setBusyRequestId(lessonRequest.id)
       await updateDoc(doc(db, 'lessonRequests', lessonRequest.id), {
         approvalStatus: 'rejected',
+        ...(Object.prototype.hasOwnProperty.call(lessonRequest, 'status')
+          ? { status: 'rejected' }
+          : {}),
         rejectionReason: trimmedReason,
         updatedAt: serverTimestamp(),
         reviewedAt: serverTimestamp(),
@@ -632,8 +745,8 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
                 <span>{cleanText(request.date)}</span>
                 <span>{cleanText(request.time)}</span>
                 <span>{cleanText(request.subject)}</span>
-                <span>{request.repeatWeekly === true ? '반복' : '단일'}</span>
-                <span>{request.repeatWeekly === true ? request.repeatWeeksValue : 1}</span>
+                <span>{isRecurringRequest(request) ? '반복' : '단일'}</span>
+                <span>{isRecurringRequest(request) ? request.repeatWeeksValue : 1}</span>
                 <span>{formatTimestamp(request.createdAt)}</span>
                 <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button

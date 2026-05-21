@@ -1130,6 +1130,7 @@ service cloud.firestore {
           "repeatWeekly",
           "repeatWeeks",
           "approvalStatus",
+          "fixedPrivateTotalCount",
           "createdAt",
           "rejectionReason",
           "seriesID"
@@ -1137,7 +1138,15 @@ service cloud.firestore {
         validLessonRequestCoreShape(request.resource.data) &&
         validLessonRequestTeacherFields(request.resource.data) &&
         request.resource.data.teacherUID == currentUid() &&
-        request.resource.data.approvalStatus == "pending";
+        request.resource.data.approvalStatus == "pending" &&
+        (
+          !("fixedPrivateTotalCount" in request.resource.data.keys()) ||
+          (
+            request.resource.data.fixedPrivateTotalCount is int &&
+            request.resource.data.fixedPrivateTotalCount >= 1 &&
+            request.resource.data.fixedPrivateTotalCount <= 300
+          )
+        );
     }
 
     function validTeacherQuickPrivateStudentCreateShape() {
@@ -1193,6 +1202,10 @@ service cloud.firestore {
 
     function validLessonRequestReviewFields(data) {
       return (
+          !("status" in data.keys()) ||
+          data.status in ["pending", "approved", "rejected"]
+        ) &&
+        (
           !("updatedAt" in data.keys()) ||
           data.updatedAt is timestamp
         ) &&
@@ -1251,12 +1264,17 @@ service cloud.firestore {
         (
           !("lessonID" in data.keys()) ||
           data.lessonID is string
+        ) &&
+        (
+          !("fixedPrivatePackageId" in data.keys()) ||
+          data.fixedPrivatePackageId is string
         );
     }
 
     function lessonRequestReviewUpdateFields() {
       return [
         "approvalStatus",
+        "status",
         "rejectionReason",
         "updatedAt",
         "reviewedAt",
@@ -1272,7 +1290,8 @@ service cloud.firestore {
         "rejectedByUID",
         "rejectedByName",
         "lessonId",
-        "lessonID"
+        "lessonID",
+        "fixedPrivatePackageId"
       ];
     }
 
@@ -1295,7 +1314,20 @@ service cloud.firestore {
           "subject",
           "repeatWeekly",
           "repeatWeeks",
+          "repeat",
+          "isRecurring",
+          "repeatEnabled",
+          "repeatCount",
+          "count",
+          "totalCount",
+          "lessonCount",
+          "numberOfLessons",
+          "recurrenceCount",
+          "sessions",
+          "durationWeeks",
           "approvalStatus",
+          "status",
+          "fixedPrivateTotalCount",
           "createdAt",
           "rejectionReason",
           "seriesID",
@@ -1313,7 +1345,8 @@ service cloud.firestore {
           "rejectedByUID",
           "rejectedByName",
           "lessonId",
-          "lessonID"
+          "lessonID",
+          "fixedPrivatePackageId"
         ]) &&
         validLessonRequestCoreShape(request.resource.data) &&
         validLessonRequestStoredTeacherFields(request.resource.data) &&

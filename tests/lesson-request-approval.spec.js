@@ -219,6 +219,94 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
   await expect(requestRow).toHaveCount(0);
 });
 
+test('admin approval of fixed recurring private request creates and links package', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', 'This test is intended for chromium.');
+
+  const now = Date.now();
+  const studentName = `E2E 고정패키지 ${now}`;
+  const studentId = `e2e_fixed_private_request_${now}`;
+  const subject = `E2E 고정 1:1 ${now}`;
+  const lessonDate = addDays(formatYmd(new Date()), 21);
+  const lessonTime = '18:50';
+  const expectedDates = [
+    lessonDate,
+    addDays(lessonDate, 7),
+    addDays(lessonDate, 14),
+    addDays(lessonDate, 21),
+  ];
+
+  const createdRequest = await createAdminSeededLessonRequest({
+    studentId,
+    studentName,
+    date: lessonDate,
+    time: lessonTime,
+    subject,
+    repeatWeekly: false,
+    repeatWeeks: 1,
+    repeatEnabled: true,
+    recurrenceCount: 4,
+    status: 'pending',
+  });
+
+  const dialogs = [];
+  page.on('dialog', async (dialog) => {
+    dialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+
+  await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+  await openDashboardSection(page, '수업 요청 관리');
+
+  const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
+  await expect(requestRow).toContainText('반복');
+  await expect(requestRow).toContainText('4');
+  await requestRow.getByRole('button', { name: '승인', exact: true }).click();
+
+  await expect
+    .poll(
+      async () =>
+        getLessonRequestApprovalState(page, {
+          requestId: createdRequest.requestId,
+        }),
+      { timeout: 20000 }
+    )
+    .toMatchObject({
+      exists: true,
+      approvalStatus: 'approved',
+      status: 'approved',
+      packages: [
+        {
+          packageType: 'private',
+          teacher: createdRequest.teacherName,
+          totalCount: 4,
+          usedCount: 0,
+          remainingCount: 4,
+          status: 'active',
+        },
+      ],
+    });
+
+  const state = await getLessonRequestApprovalState(page, {
+    requestId: createdRequest.requestId,
+  });
+  expect(dialogs).toEqual([]);
+  expect(state.packages).toHaveLength(1);
+  const [createdPackage] = state.packages;
+  expect(state.fixedPrivatePackageId).toBe(createdPackage.id);
+  expect(state.lessons).toHaveLength(4);
+  expect(state.lessons.map((lesson) => lesson.date)).toEqual(expectedDates);
+  expect(state.lessons.map((lesson) => lesson.packageId)).toEqual([
+    createdPackage.id,
+    createdPackage.id,
+    createdPackage.id,
+    createdPackage.id,
+  ]);
+  expect(state.lessons.map((lesson) => lesson.sessionNumber)).toEqual([1, 2, 3, 4]);
+});
+
 test('admin approval assigns continuous private lesson session numbers across requests', async ({
   page,
   browserName,
