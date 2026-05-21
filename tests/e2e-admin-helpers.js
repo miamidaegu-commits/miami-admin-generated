@@ -189,6 +189,7 @@ export async function createAdminSeededLessonRequest(params = {}) {
         ? Number(params.repeatWeeks)
         : 1,
     approvalStatus: 'pending',
+    status: String(params.status || 'pending').trim(),
     createdAt: timestampNow(),
     rejectionReason: '',
     seriesID: String(params.seriesID || ''),
@@ -215,10 +216,6 @@ export async function createAdminSeededLessonRequest(params = {}) {
       requestPayload[fieldName] = params[fieldName] === true;
     }
   });
-  if (params.status !== undefined) {
-    requestPayload.status = String(params.status || '').trim();
-  }
-
   await requestRef.set(requestPayload);
 
   return {
@@ -242,6 +239,8 @@ export async function getAdminSeededLessonRequest(requestId) {
     id: snap.id,
     academyId: data.academyId || null,
     approvalStatus: data.approvalStatus || null,
+    status: data.status || null,
+    requestStatus: data.requestStatus || null,
     studentId: data.studentId || data.studentID || null,
     studentName: data.studentName || data.student || null,
     teacherName: data.teacherName || data.teacher || null,

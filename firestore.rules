@@ -1130,6 +1130,7 @@ service cloud.firestore {
           "repeatWeekly",
           "repeatWeeks",
           "approvalStatus",
+          "status",
           "fixedPrivateTotalCount",
           "createdAt",
           "rejectionReason",
@@ -1139,6 +1140,10 @@ service cloud.firestore {
         validLessonRequestTeacherFields(request.resource.data) &&
         request.resource.data.teacherUID == currentUid() &&
         request.resource.data.approvalStatus == "pending" &&
+        (
+          !("status" in request.resource.data.keys()) ||
+          request.resource.data.status == "pending"
+        ) &&
         (
           !("fixedPrivateTotalCount" in request.resource.data.keys()) ||
           (
@@ -1204,6 +1209,10 @@ service cloud.firestore {
       return (
           !("status" in data.keys()) ||
           data.status in ["pending", "approved", "rejected"]
+        ) &&
+        (
+          !("requestStatus" in data.keys()) ||
+          data.requestStatus in ["pending", "approved", "rejected"]
         ) &&
         (
           !("updatedAt" in data.keys()) ||
@@ -1275,6 +1284,7 @@ service cloud.firestore {
       return [
         "approvalStatus",
         "status",
+        "requestStatus",
         "rejectionReason",
         "updatedAt",
         "reviewedAt",
@@ -1327,6 +1337,7 @@ service cloud.firestore {
           "durationWeeks",
           "approvalStatus",
           "status",
+          "requestStatus",
           "fixedPrivateTotalCount",
           "createdAt",
           "rejectionReason",

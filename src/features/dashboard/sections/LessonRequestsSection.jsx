@@ -47,8 +47,13 @@ function timestampSortValue(value) {
 }
 
 function sortPendingRequests(snapshot) {
-  return snapshot.docs
-    .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+  return sortPendingRequestRows(
+    snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+  )
+}
+
+function sortPendingRequestRows(rows) {
+  return rows
     .filter((row) => getApprovalStatus(row) === 'pending')
     .sort((a, b) => timestampSortValue(b.createdAt) - timestampSortValue(a.createdAt))
 }
@@ -294,7 +299,9 @@ function getFixedPrivateTotalCount(lessonRequest, fallbackCount = 0) {
 }
 
 function getApprovalStatus(request) {
-  return String(request?.approvalStatus || request?.status || '').trim().toLowerCase()
+  return String(request?.approvalStatus || request?.status || request?.requestStatus || '')
+    .trim()
+    .toLowerCase()
 }
 
 function describeFirestoreRef(ref) {
@@ -379,8 +386,22 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
     }
 
     setLoading(true)
-    const handleSnapshot = (snapshot) => {
-      setLessonRequests(sortPendingRequests(snapshot))
+    const rowsBySource = {
+      approvalStatus: new Map(),
+      status: new Map(),
+      requestStatus: new Map(),
+    }
+    const syncRows = (snapshot, sourceField) => {
+      rowsBySource[sourceField] = new Map(
+        sortPendingRequests(snapshot).map((request) => [request.id, request])
+      )
+
+      const rowsById = new Map([
+        ...rowsBySource.approvalStatus.entries(),
+        ...rowsBySource.status.entries(),
+        ...rowsBySource.requestStatus.entries(),
+      ])
+      setLessonRequests(sortPendingRequestRows(Array.from(rowsById.values())))
       setLoading(false)
     }
     const handleError = (error) => {
@@ -389,18 +410,39 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
       setLoading(false)
     }
 
-    const unsubscribe = onSnapshot(
+    const baseCollection = collection(db, 'lessonRequests')
+    const unsubscribeApprovalStatus = onSnapshot(
       query(
-        collection(db, 'lessonRequests'),
+        baseCollection,
         where('academyId', '==', scopedAcademyId),
         where('approvalStatus', '==', 'pending')
       ),
-      handleSnapshot,
+      (snapshot) => syncRows(snapshot, 'approvalStatus'),
+      handleError
+    )
+    const unsubscribeStatus = onSnapshot(
+      query(
+        baseCollection,
+        where('academyId', '==', scopedAcademyId),
+        where('status', '==', 'pending')
+      ),
+      (snapshot) => syncRows(snapshot, 'status'),
+      handleError
+    )
+    const unsubscribeRequestStatus = onSnapshot(
+      query(
+        baseCollection,
+        where('academyId', '==', scopedAcademyId),
+        where('requestStatus', '==', 'pending')
+      ),
+      (snapshot) => syncRows(snapshot, 'requestStatus'),
       handleError
     )
 
     return () => {
-      unsubscribe()
+      unsubscribeApprovalStatus()
+      unsubscribeStatus()
+      unsubscribeRequestStatus()
     }
   }, [canReviewRequests, currentAcademyId])
 
@@ -582,6 +624,7 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
 
       const requestPatch = {
         approvalStatus: 'approved',
+        status: 'approved',
         rejectionReason: String(lessonRequest.rejectionReason || ''),
         updatedAt: serverTimestamp(),
         reviewedAt: serverTimestamp(),
@@ -593,8 +636,8 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
         approvedByUID: user?.uid || '',
         approvedByName: reviewerName,
       }
-      if (Object.prototype.hasOwnProperty.call(lessonRequest, 'status')) {
-        requestPatch.status = 'approved'
+      if (Object.prototype.hasOwnProperty.call(lessonRequest, 'requestStatus')) {
+        requestPatch.requestStatus = 'approved'
       }
       if (selectedPackage?.id) {
         requestPatch.fixedPrivatePackageId = selectedPackage.id
@@ -651,7 +694,7 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(lessonRequest, scopedAcademyId, '수업 요청')
-      if (lessonRequest.approvalStatus !== 'pending') {
+      if (getApprovalStatus(lessonRequest) !== 'pending') {
         throw new Error('이미 처리된 수업 요청입니다.')
       }
 
@@ -659,8 +702,9 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
       setBusyRequestId(lessonRequest.id)
       await updateDoc(doc(db, 'lessonRequests', lessonRequest.id), {
         approvalStatus: 'rejected',
-        ...(Object.prototype.hasOwnProperty.call(lessonRequest, 'status')
-          ? { status: 'rejected' }
+        status: 'rejected',
+        ...(Object.prototype.hasOwnProperty.call(lessonRequest, 'requestStatus')
+          ? { requestStatus: 'rejected' }
           : {}),
         rejectionReason: trimmedReason,
         updatedAt: serverTimestamp(),

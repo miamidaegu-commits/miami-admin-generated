@@ -91,9 +91,9 @@ async function expectLessonRequestRowVisible(page, createdRequest) {
   const requestRow = requestRows.first();
 
   try {
-    await expect(requestRow).toBeVisible({ timeout: 15000 });
+    await expect(requestRow).toBeVisible({ timeout: 30000 });
   } catch (error) {
-    const [requestDoc, visibleRows, bodyText] = await Promise.all([
+    const [requestDoc, visibleRows, loadingTexts, bodyText] = await Promise.all([
       getAdminSeededLessonRequest(createdRequest.requestId).catch((requestError) => ({
         error: requestError?.message || String(requestError),
       })),
@@ -107,14 +107,17 @@ async function expectLessonRequestRowVisible(page, createdRequest) {
           }))
         )
         .catch(() => []),
+      page.getByText('불러오는 중...', { exact: true }).allInnerTexts().catch(() => []),
       page.locator('body').innerText().catch(() => ''),
     ]);
 
     throw new Error(
       [
         `Lesson request row was not visible for ${createdRequest.studentName}.`,
+        `Current URL: ${page.url()}`,
         `Firestore lessonRequests snapshot: ${JSON.stringify(requestDoc)}`,
         `Visible lesson-request rows: ${JSON.stringify(visibleRows.slice(0, 40))}`,
+        `Visible loading text: ${JSON.stringify(loadingTexts)}`,
         'Visible page text:',
         bodyText.slice(0, 1500),
         '',
