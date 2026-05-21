@@ -10,6 +10,7 @@ import {
   getStorageDateStringFromDate,
   isSameStorageDate,
 } from '../dashboardViewUtils.js'
+import { findActivePrivatePackageForTeacher } from '../privatePackageHelpers.js'
 
 function calendarTimestampToMillis(value) {
   if (!value) return null
@@ -512,16 +513,23 @@ export default function CalendarSection(props) {
             const isPrivateReservationRow = lesson._calendarRowKind === 'privateReservation'
             const lessonDate = getLessonDate(lesson)
             const matchedStudent = getMatchedStudent(lesson)
+            const matchedStudentId = getMatchedStudentId(lesson)
             const pkgForRemaining = lesson.packageId
               ? studentPackages.find((p) => p.id === lesson.packageId)
-              : null
+              : matchedStudentId
+                ? findActivePrivatePackageForTeacher({
+                    studentPackages,
+                    academyId: lesson.academyId,
+                    studentId: matchedStudentId,
+                    teacher: getTeacherName(lesson),
+                  })
+                : null
             const remainingLessons = isGroupRow || isPrivateReservationRow
               ? '—'
-              : lesson.packageId
+              : pkgForRemaining
                 ? formatRemainingCountFromPackage(pkgForRemaining)
                 : matchedStudent
-                  ? Number(matchedStudent.paidLessons || 0) -
-                    Number(matchedStudent.attendanceCount || 0)
+                  ? '수강권 없음'
                   : '-'
             const todayString = getTodayStorageDateString()
             const lessonDateStr = getLessonStorageDateString(lesson)
@@ -537,7 +545,7 @@ export default function CalendarSection(props) {
               (isDeductedPrivateLesson || lesson.isDeductCancelled === true) &&
               (lesson.packageId
                 ? Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private')
-                : Boolean(getMatchedStudentId(lesson)))
+                : Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private'))
             const privateReservationStatus = String(lesson.status || '').trim()
             const statusLabel = isGroupRow
               ? '예정'
@@ -549,8 +557,10 @@ export default function CalendarSection(props) {
                     : '예약됨'
                 : lesson.isDeductCancelled
                   ? '차감취소'
-                  : isDeductedPrivateLesson
+                  : isDeductedPrivateLesson && pkgForRemaining
                     ? '정상 차감'
+                    : isDeductedPrivateLesson
+                      ? '수강권 없음'
                     : '예정'
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
             const reservationCompleteBusy =

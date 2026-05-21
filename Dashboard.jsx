@@ -28,7 +28,6 @@ import { useAuth } from './AuthContext'
 import { debugLog } from './src/utils/debugLog.js'
 import {
   SCHOOL_TIME_ZONE,
-  countUsedAsOfTodayForStudent,
   formatCreditTransactionActionTypeLabel,
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
@@ -122,6 +121,7 @@ import {
   addStudentPrivateSlotAccessBatch,
   removeStudentPrivateSlotAccessBatch,
 } from './src/features/private-booking/studentPrivateAccessSummaryClient.js'
+import { findActivePrivatePackageForTeacher } from './src/features/dashboard/privatePackageHelpers.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -820,20 +820,46 @@ export default function Dashboard() {
 
     debugLog('[Dashboard] userProfile.role normalized:', roleKey)
 
+    let active = true
     let lessonsLoaded = false
     let studentsLoaded = false
+    let initialStudentsReadStarted = false
     let lessonsByTeacherNameRows = []
     let lessonsByLegacyTeacherRows = []
 
     const markLessonsLoaded = () => {
+      if (!active) return
       lessonsLoaded = true
       if (studentsLoaded) setLoading(false)
     }
 
     const markStudentsLoaded = () => {
+      if (!active) return
       studentsLoaded = true
       setPrivateStudentsLoading(false)
       if (lessonsLoaded) setLoading(false)
+    }
+
+    const applyStudentSnapshot = (snapshot, label) => {
+      if (!active) return
+      const rows = snapshot.docs.map((docItem) => ({
+        id: docItem.id,
+        ...docItem.data(),
+      }))
+      debugLog(`[Dashboard] privateStudents(${label}) snapshot row count:`, rows.length)
+      setPrivateStudents(rows)
+      markStudentsLoaded()
+    }
+
+    const startInitialStudentsRead = (studentsQuery, label) => {
+      if (initialStudentsReadStarted) return
+      initialStudentsReadStarted = true
+      getDocs(studentsQuery)
+        .then((snapshot) => applyStudentSnapshot(snapshot, `${label} initial`))
+        .catch((error) => {
+          if (!active) return
+          console.warn(`privateStudents(${label}) 초기 조회 실패:`, error)
+        })
     }
 
     const mergeTeacherLessons = () => {
@@ -848,6 +874,12 @@ export default function Dashboard() {
     let unsubscribeStudents = () => {}
 
     if (isAdminProfile) {
+      const studentsQuery = query(
+        collection(db, 'privateStudents'),
+        where('academyId', '==', currentAcademyId)
+      )
+      startInitialStudentsRead(studentsQuery, 'admin')
+
       unsubscribeLessons = onSnapshot(
         query(
           collection(db, 'lessons'),
@@ -869,19 +901,8 @@ export default function Dashboard() {
       )
 
       unsubscribeStudents = onSnapshot(
-        query(
-          collection(db, 'privateStudents'),
-          where('academyId', '==', currentAcademyId)
-        ),
-        (snapshot) => {
-          const rows = snapshot.docs.map((docItem) => ({
-            id: docItem.id,
-            ...docItem.data(),
-          }))
-          debugLog('[Dashboard] privateStudents(admin) snapshot row count:', rows.length)
-          setPrivateStudents(rows)
-          markStudentsLoaded()
-        },
+        studentsQuery,
+        (snapshot) => applyStudentSnapshot(snapshot, 'admin'),
         (error) => {
           console.error('privateStudents(admin) 불러오기 실패:', error)
           setPrivateStudents([])
@@ -893,6 +914,13 @@ export default function Dashboard() {
       teacherNameRaw != null &&
       String(teacherNameRaw).length > 0
     ) {
+      const studentsQuery = query(
+        collection(db, 'privateStudents'),
+        where('academyId', '==', currentAcademyId),
+        where('teacher', '==', teacherNameRaw)
+      )
+      startInitialStudentsRead(studentsQuery, 'teacher')
+
       unsubscribeLessons = onSnapshot(
         query(
           collection(db, 'lessons'),
@@ -938,20 +966,8 @@ export default function Dashboard() {
       )
 
       unsubscribeStudents = onSnapshot(
-        query(
-          collection(db, 'privateStudents'),
-          where('academyId', '==', currentAcademyId),
-          where('teacher', '==', teacherNameRaw)
-        ),
-        (snapshot) => {
-          const rows = snapshot.docs.map((docItem) => ({
-            id: docItem.id,
-            ...docItem.data(),
-          }))
-          debugLog('[Dashboard] privateStudents(teacher) snapshot row count:', rows.length)
-          setPrivateStudents(rows)
-          markStudentsLoaded()
-        },
+        studentsQuery,
+        (snapshot) => applyStudentSnapshot(snapshot, 'teacher'),
         (error) => {
           console.error('privateStudents(teacher) 불러오기 실패:', error)
           setPrivateStudents([])
@@ -966,6 +982,7 @@ export default function Dashboard() {
     }
 
     return () => {
+      active = false
       unsubscribeLessons()
       unsubscribeLessonsLegacy()
       unsubscribeStudents()
@@ -2736,20 +2753,29 @@ export default function Dashboard() {
       return
     }
 
-    const packageId = String(lesson.packageId || '').trim()
-    const usePackagePath = Boolean(packageId)
-
     const studentId = getMatchedStudentId(lesson)
     const resolvedStudentId = String(lesson.studentId || '').trim() || studentId || ''
+    const currentlyCancelled = Boolean(lesson.isDeductCancelled)
+    const fallbackPackage =
+      !String(lesson.packageId || '').trim() && resolvedStudentId
+        ? findActivePrivatePackageForTeacher({
+            studentPackages,
+            academyId: currentAcademyId,
+            studentId: resolvedStudentId,
+            teacher: getTeacherName(lesson),
+            requireRemaining: currentlyCancelled,
+          })
+        : null
+    const packageId = String(lesson.packageId || fallbackPackage?.id || '').trim()
+    const usePackagePath = Boolean(packageId)
 
-    if (!usePackagePath && !studentId) {
+    if (!usePackagePath) {
       alert(
-        '이 수업은 학생 정보와 연결되어 있지 않아 차감할 수 없습니다. 관리자에게 문의해 주세요.'
+        '이 수업은 연결된 개인 수강권이 없어 차감할 수 없습니다. 먼저 같은 선생님의 개인 수강권을 연결해 주세요.'
       )
       return
     }
 
-    const currentlyCancelled = Boolean(lesson.isDeductCancelled)
     let nextCancelled
     let nextMemo
 
@@ -2768,12 +2794,6 @@ export default function Dashboard() {
       assertSameAcademy(lesson, scopedAcademyId, '수업')
       setBusyLessonId(lesson.id)
 
-      const nextLessons = lessons.map((item) =>
-        item.id === lesson.id
-          ? { ...item, isDeductCancelled: nextCancelled, deductMemo: nextMemo }
-          : item
-      )
-
       const batch = writeBatch(db)
       const lessonRef = doc(db, 'lessons', lesson.id)
       const lessonSnap = await getDoc(lessonRef)
@@ -2781,7 +2801,7 @@ export default function Dashboard() {
       assertSameAcademy(lessonSnap.data(), scopedAcademyId, '수업')
 
       if (usePackagePath) {
-        const selectedPackage = studentPackages.find((p) => p.id === packageId)
+        const selectedPackage = studentPackages.find((p) => p.id === packageId) || fallbackPackage
         if (!selectedPackage) {
           alert('연결된 수강권을 찾을 수 없습니다.')
           return
@@ -2821,37 +2841,21 @@ export default function Dashboard() {
           }
         }
 
-        batch.update(lessonRef, {
+        const lessonPatch = {
           isDeductCancelled: nextCancelled,
           deductMemo: nextMemo,
           updatedAt: serverTimestamp(),
-        })
-      } else {
-        const nextAttendanceCount = countUsedAsOfTodayForStudent(
-          nextLessons,
-          getStudentName(lesson)
-        )
-
-        const studentRef = doc(db, 'privateStudents', studentId)
-        const studentSnap = await getDoc(studentRef)
-        if (!studentSnap.exists()) throw new Error('학생 정보를 찾을 수 없습니다.')
-        assertSameAcademy(studentSnap.data(), scopedAcademyId, '학생')
-        const selectedStudent = privateStudents.find((s) => s.id === studentId)
-        assertSameAcademy(selectedStudent, scopedAcademyId, '학생')
-
-        batch.update(lessonRef, {
-          isDeductCancelled: nextCancelled,
-          deductMemo: nextMemo,
-          updatedAt: serverTimestamp(),
-          studentId,
+          studentId: resolvedStudentId,
           studentName: getStudentName(lesson),
           teacherName: normalizeText(getTeacherName(lesson)),
-        })
-
-        batch.update(studentRef, {
-          attendanceCount: nextAttendanceCount,
-          updatedAt: serverTimestamp(),
-        })
+        }
+        if (!String(lesson.packageId || '').trim()) {
+          lessonPatch.packageId = packageId
+          lessonPatch.packageType = 'private'
+          lessonPatch.packageTitle = String(selectedPackage.title || '고정 1:1')
+          lessonPatch.billingType = 'private'
+        }
+        batch.update(lessonRef, lessonPatch)
       }
 
       await batch.commit()

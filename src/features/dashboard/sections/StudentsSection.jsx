@@ -109,7 +109,7 @@ function formatPrivatePackageTeacherSummary(packages) {
   })
 }
 
-function PrivateLessonProgressSummary({ progress }) {
+function PrivateLessonProgressSummary({ progress, scheduleOnly = false }) {
   if (!progress) return null
   return (
     <span
@@ -124,6 +124,7 @@ function PrivateLessonProgressSummary({ progress }) {
         opacity: 0.82,
       }}
     >
+      {scheduleOnly ? <span>일정 기준</span> : null}
       <span>총 {Number(progress.totalRegistered) || 0}회</span>
       <span>지난 {Number(progress.pastLessons) || 0}회</span>
       <span>예정 {Number(progress.remainingScheduled ?? progress.upcomingLessons) || 0}회</span>
@@ -1122,7 +1123,10 @@ export default function StudentsSection({
                 ) : (
                   <span>개인 수강권 없음</span>
                 )}
-                <PrivateLessonProgressSummary progress={privateLessonProgress} />
+                <PrivateLessonProgressSummary
+                  progress={privateLessonProgress}
+                  scheduleOnly={privatePackageTeacherSummary.length === 0}
+                />
               </span>
               <span>
                 {formatStudentPackageCellSummary(

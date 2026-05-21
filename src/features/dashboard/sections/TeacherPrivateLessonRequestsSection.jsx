@@ -371,7 +371,7 @@ export default function TeacherPrivateLessonRequestsSection({
 
       requestPlans.forEach((plan) => {
         const requestRef = doc(collection(db, 'lessonRequests'))
-        batch.set(requestRef, {
+        const requestPayload = {
           academyId: currentAcademyId,
           teacherUID: user.uid,
           teacherName,
@@ -389,7 +389,8 @@ export default function TeacherPrivateLessonRequestsSection({
           createdAt: timestamp,
           rejectionReason: '',
           seriesID,
-        })
+        }
+        batch.set(requestRef, requestPayload)
       })
 
       await batch.commit()

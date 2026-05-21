@@ -14,6 +14,11 @@ import {
 import { db } from '../../../../firebase.js'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import { parseLegacyLessonToDate } from '../dashboardViewUtils.js'
+import {
+  ensurePrivatePackageForFixedLessons,
+  fetchActivePrivatePackagesForTeacher,
+} from '../privatePackageHelpers.js'
+import { addStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 
 function cleanText(value, fallback = '-') {
   const text = String(value || '').trim()
@@ -200,6 +205,7 @@ function buildLessonPayload({
   lessonDate,
   seriesID,
   sessionNumber,
+  selectedPackage,
   user,
   userProfile,
 }) {
@@ -226,6 +232,14 @@ function buildLessonPayload({
     deductMemo: '',
     lessonRequestId,
     sourceType: 'lessonRequest',
+    ...(selectedPackage
+      ? {
+          packageId: selectedPackage.id,
+          packageType: 'private',
+          packageTitle: String(selectedPackage.title || '고정 1:1'),
+          billingType: 'private',
+        }
+      : {}),
     createdBy: reviewerName,
     createdByUID: user?.uid || '',
     createdByUid: user?.uid || '',
@@ -235,6 +249,19 @@ function buildLessonPayload({
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   }
+}
+
+function getFixedPrivateTotalCount(lessonRequest, fallbackCount = 0) {
+  const candidates = [
+    lessonRequest?.fixedPrivateTotalCount,
+    lessonRequest?.paidLessons,
+    lessonRequest?.totalCount,
+  ]
+  for (const candidate of candidates) {
+    const parsed = Number(candidate)
+    if (Number.isInteger(parsed) && parsed > 0) return parsed
+  }
+  return fallbackCount > 0 ? fallbackCount : 0
 }
 
 function validateRequestForApproval(request, academyId) {
@@ -338,10 +365,84 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
         : ''
       const studentId = cleanText(lessonRequest.studentId || lessonRequest.studentID, '')
       const teacher = cleanText(lessonRequest.teacher || lessonRequest.teacherName, '')
+      const studentName = cleanText(lessonRequest.studentName || lessonRequest.student, '-')
       const reviewerName = reviewerNameFor(user, userProfile)
       const batch = writeBatch(db)
       const createdLessonRefs = dates.map(() => doc(collection(db, 'lessons')))
       setBusyRequestId(lessonRequest.id)
+      let fixedPrivateTotalCount = getFixedPrivateTotalCount(lessonRequest)
+      if (fixedPrivateTotalCount <= 0) {
+        const studentSnap = await getDocs(
+          query(
+            collection(db, 'privateStudents'),
+            where('academyId', '==', scopedAcademyId)
+          )
+        )
+        const studentDoc = studentSnap.docs.find((docItem) => docItem.id === studentId)
+        if (studentDoc) {
+          const studentData = studentDoc.data() || {}
+          assertSameAcademy(studentData, scopedAcademyId, '학생')
+          const paidLessons = Number(studentData.paidLessons || 0)
+          if (Number.isInteger(paidLessons) && paidLessons > 0) {
+            fixedPrivateTotalCount = paidLessons
+          }
+        }
+      }
+      let selectedPackage = null
+      if (fixedPrivateTotalCount > 0) {
+        const packageResult = await ensurePrivatePackageForFixedLessons({
+          db,
+          academyId: scopedAcademyId,
+          studentId,
+          studentName,
+          teacher,
+          totalCount: fixedPrivateTotalCount,
+        })
+        selectedPackage = {
+          id: packageResult.packageId,
+          ...(packageResult.packageData || {}),
+        }
+        if (packageResult.created) {
+          batch.set(packageResult.packageRef, packageResult.packageData)
+          addStudentPrivateTeacherAccessBatch(batch, db, {
+            academyId: scopedAcademyId,
+            studentId,
+            teacher,
+            packageId: packageResult.packageId,
+          })
+          const creditRef = doc(collection(db, 'creditTransactions'))
+          batch.set(creditRef, {
+            academyId: scopedAcademyId,
+            studentId,
+            studentName,
+            teacher,
+            packageId: packageResult.packageId,
+            packageType: 'private',
+            packageTitle: '고정 1:1',
+            groupClassName: '',
+            sourceType: 'studentPackage',
+            sourceId: packageResult.packageId,
+            actionType: 'package_created',
+            deltaCount: fixedPrivateTotalCount,
+            memo: '고정 1:1 수강권 자동 생성',
+            actorUid: user?.uid || '',
+            actorRole: 'admin',
+            createdAt: serverTimestamp(),
+          })
+        }
+      } else {
+        const matchingPackages = await fetchActivePrivatePackagesForTeacher({
+          db,
+          academyId: scopedAcademyId,
+          studentId,
+          teacher,
+        })
+        if (matchingPackages.length === 1) {
+          selectedPackage = matchingPackages[0]
+        } else if (matchingPackages.length > 1) {
+          throw new Error('같은 선생님의 활성 개인 수강권이 여러 개 있어 자동 연결할 수 없습니다.')
+        }
+      }
       const existingLessons = await fetchExistingSessionLessons({
         academyId: scopedAcademyId,
         studentId,
@@ -377,6 +478,7 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
             lessonDate: dates[index],
             seriesID,
             sessionNumber,
+            selectedPackage,
             user,
             userProfile,
           })
@@ -402,6 +504,9 @@ export default function LessonRequestsSection({ currentAcademyId, user, userProf
         approvedBy: reviewerName,
         approvedByUID: user?.uid || '',
         approvedByName: reviewerName,
+      }
+      if (selectedPackage?.id) {
+        requestPatch.fixedPrivatePackageId = selectedPackage.id
       }
       if (createdLessonRefs.length === 1) {
         requestPatch.lessonId = createdLessonRefs[0].id
