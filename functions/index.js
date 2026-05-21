@@ -1052,14 +1052,6 @@ exports.reservePrivateLessonSlot = onCall(
           }
           const summary = summarySnap.exists ? summarySnap.data() || {} : null;
           requirePrivateSlotBookingPilotEnabled(summary);
-
-          if (!hasSlotAccess({slot, summary, slotId, studentId})) {
-            throw new HttpsError(
-                "permission-denied",
-                "Student is not eligible for this private lesson slot.",
-            );
-          }
-
           const date = requireString(slot, "date");
           const time = requireString(slot, "time");
           const teacher = requireString(slot, "teacher");
@@ -1072,6 +1064,17 @@ exports.reservePrivateLessonSlot = onCall(
             teacherKey,
             candidatePackageIds: summary && summary.activePackageIds,
           });
+
+          if (
+            !hasSlotAccess({slot, summary, slotId, studentId}) &&
+            !packageResult.ok
+          ) {
+            throw new HttpsError(
+                "permission-denied",
+                "Student is not eligible for this private lesson slot.",
+            );
+          }
+
           if (!packageResult.ok) {
             throw new HttpsError(
                 "failed-precondition",

@@ -754,11 +754,64 @@ test('released fixed private slot behavior is wired server-side', async () => {
   expect(source).toMatch(
     /exports\.reservePrivateLessonSlot[\s\S]*findActivePrivatePackageForTeacher/
   );
+  expect(source).toMatch(
+    /exports\.reservePrivateLessonSlot[\s\S]*!hasSlotAccess\(\{slot, summary, slotId, studentId\}\)[\s\S]*!packageResult\.ok/
+  );
   const sanitizeSource = source.match(
     /function sanitizePrivateSlotAvailabilityRow[\s\S]*?\n}\n/
   )?.[0] || '';
   expect(sanitizeSource).toContain('isReleasedFixedSlot');
   expect(sanitizeSource).not.toContain('fixedStudentName');
+});
+
+test('fixed private lesson approval creates and links private packages', async () => {
+  const helperSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/privatePackageHelpers.js'),
+    'utf8'
+  );
+  expect(helperSource).toContain('findActivePrivatePackageForTeacher');
+  expect(helperSource).toContain('ensurePrivatePackageForFixedLessons');
+  expect(helperSource).toContain("title: '고정 1:1'");
+  expect(helperSource).toContain("packageType: 'private'");
+  expect(helperSource).toContain("sourceType: 'fixedPrivateLesson'");
+
+  const teacherRequestSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/TeacherPrivateLessonRequestsSection.jsx'),
+    'utf8'
+  );
+  expect(teacherRequestSource).toContain('studentPayload.paidLessons = paidLessonCount');
+  expect(teacherRequestSource).toContain('weeklyFrequency: frequency');
+
+  const approvalSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/LessonRequestsSection.jsx'),
+    'utf8'
+  );
+  expect(approvalSource).toContain('ensurePrivatePackageForFixedLessons');
+  expect(approvalSource).toContain('addStudentPrivateTeacherAccessBatch');
+  expect(approvalSource).toContain('actionType: \'package_created\'');
+  expect(approvalSource).toContain('studentData.paidLessons');
+  expect(approvalSource).toMatch(/buildLessonPayload[\s\S]*packageId: selectedPackage\.id/);
+  expect(approvalSource).toContain('fixedPrivatePackageId');
+
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  expect(dashboardSource).toContain('findActivePrivatePackageForTeacher');
+  expect(dashboardSource).toContain('연결된 개인 수강권이 없어 차감할 수 없습니다');
+  expect(dashboardSource).toContain('lessonPatch.packageId = packageId');
+
+  const calendarSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/CalendarSection.jsx'),
+    'utf8'
+  );
+  expect(calendarSource).toContain('수강권 없음');
+  expect(calendarSource).toContain('formatRemainingCountFromPackage(pkgForRemaining)');
+
+  const dryRunSource = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/dry-run-fixed-private-package-backfill.cjs'),
+    'utf8'
+  );
+  expect(dryRunSource).toContain('writesPerformed: false');
+  expect(dryRunSource).toContain('wouldCreatePackage');
+  expect(dryRunSource).toContain('lessonsToLinkPackageId');
 });
 
 test('intended flexible private slot visibility honors teacher access and pilot gate', async ({
