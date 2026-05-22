@@ -1128,7 +1128,7 @@ export default function StudentsSection({
                   scheduleOnly={privatePackageTeacherSummary.length === 0}
                 />
               </span>
-              <span>
+              <span data-testid="student-group-package-cell">
                 {formatStudentPackageCellSummary(
                   pkgSum.groupCount,
                   pkgSum.groupRemainingTotal

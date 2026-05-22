@@ -2914,7 +2914,7 @@ export default function Dashboard() {
 
   function formatStudentPackageCellSummary(count, remainingTotal) {
     const c = Number(count) || 0
-    if (c <= 0) return '수강권 없음'
+    if (c <= 0) return '그룹 수강권 없음'
     const rem = Number(remainingTotal) || 0
     return `${c}개 / 남은 ${rem}회`
   }

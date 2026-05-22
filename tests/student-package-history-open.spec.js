@@ -361,9 +361,9 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
       title: 'E2E jenny 개인 수강권',
       packageType: 'private',
       teacher: 'jenny',
-      totalCount: 5,
-      usedCount: 0,
-      remainingCount: 5,
+      totalCount: 4,
+      usedCount: 1,
+      remainingCount: 3,
       status: 'active',
     }),
   ]);
@@ -388,7 +388,10 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
   await expect(privatePackageCell).toContainText('don1');
   await expect(privatePackageCell).toContainText('잔여 3회 / 총 3회 · 사용 0회');
   await expect(privatePackageCell).toContainText('jenny');
-  await expect(privatePackageCell).toContainText('잔여 5회 / 총 5회 · 사용 0회');
+  await expect(privatePackageCell).toContainText('jenny · 잔여 3회 / 총 4회 · 사용 1회');
+  await expect(studentRow.getByTestId('student-group-package-cell')).toHaveText(
+    '그룹 수강권 없음'
+  );
 });
 
 test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행 요약이 표시된다', async ({ page, browserName }) => {
