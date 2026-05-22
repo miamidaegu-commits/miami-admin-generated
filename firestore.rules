@@ -96,7 +96,10 @@ service cloud.firestore {
 
     function studentPackageBelongsToTeacher(data) {
       return isAcademyTeacherOrStaff(data.academyId) &&
-        (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId));
+        (
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId))
+        );
     }
 
     function creditTransactionBelongsToTeacher(data) {
@@ -147,6 +150,11 @@ service cloud.firestore {
       return isAcademyTeacherOrStaff(academyId) &&
         myMembership(academyId).permissions.canCreateLessonDirectly == true &&
         myMembership(academyId).permissions.requiresLessonApproval != true;
+    }
+
+    function canEditStudentPackageCounts(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canEditStudentPackageCounts == true;
     }
 
     function canTeacherUpdateStudentPackageUsage(academyId) {
@@ -202,6 +210,22 @@ service cloud.firestore {
           (data.uid is string && data.uid == currentUid()) ||
           isAcademyAdmin(data.academyId)
         );
+    }
+
+    function validTeacherPackageCountPermissionUpdate() {
+      return resource.data.academyId is string &&
+        request.resource.data.academyId == resource.data.academyId &&
+        isAcademyAdmin(resource.data.academyId) &&
+        resource.data.role == "teacher" &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.teacherName == resource.data.teacherName &&
+        changedOnly(["permissions", "updatedAt"]) &&
+        resource.data.permissions is map &&
+        request.resource.data.permissions is map &&
+        request.resource.data.permissions.diff(resource.data.permissions).affectedKeys()
+          .hasOnly(["canEditStudentPackageCounts"]) &&
+        request.resource.data.permissions.canEditStudentPackageCounts is bool;
     }
 
     function myStudentId(academyId) {
@@ -1386,7 +1410,8 @@ service cloud.firestore {
 
     match /academyMemberships/{membershipId} {
       allow read: if canReadAcademyMembership(resource.data);
-      allow create, update, delete: if false;
+      allow create, delete: if false;
+      allow update: if validTeacherPackageCountPermissionUpdate();
     }
 
     match /teachers/{teacherId} {
@@ -2010,6 +2035,10 @@ service cloud.firestore {
           studentPackageBelongsToTeacher(resource.data) &&
           studentPackageBelongsToTeacher(request.resource.data) &&
           changedOnly(["usedCount", "remainingCount", "status", "updatedAt"])
+        ) || (
+          canEditStudentPackageCounts(resource.data.academyId) &&
+          studentPackageBelongsToTeacher(resource.data) &&
+          changedOnly(["totalCount", "remainingCount", "updatedAt"])
         )
       );
       allow delete: if sameAcademyOnRead() &&

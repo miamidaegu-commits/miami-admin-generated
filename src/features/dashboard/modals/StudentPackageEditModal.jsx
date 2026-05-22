@@ -7,9 +7,12 @@ export default function StudentPackageEditModal({
   setStudentPackageEditForm,
   studentPackageEditFormErrors,
   busyStudentPackageActionId,
+  studentPackageEditMode = 'admin',
   closeStudentPackageEditModal,
   submitStudentPackageEditModal,
 }) {
+  const countOnly = studentPackageEditMode === 'teacherCount'
+
   return (
         <div
           role="dialog"
@@ -67,12 +70,36 @@ export default function StudentPackageEditModal({
               사용 횟수(usedCount): {Number(studentPackageEditModalPackage.usedCount ?? 0)} (수정
               불가)
             </p>
+            {countOnly ? (
+              <p
+                data-testid="student-package-count-edit-limited-note"
+                style={{
+                  margin: '0 0 12px 0',
+                  padding: 10,
+                  borderRadius: 8,
+                  border: '1px solid #335544',
+                  background: '#17251d',
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                }}
+              >
+                선생님 권한으로는 총 횟수만 수정할 수 있습니다.
+              </p>
+            ) : null}
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <form
+              id="student-package-edit-form"
+              onSubmit={(event) => {
+                event.preventDefault()
+                submitStudentPackageEditModal()
+              }}
+              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+            >
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>제목</span>
                 <input
                   type="text"
+                  disabled={countOnly}
                   value={studentPackageEditForm.title}
                   onChange={(e) =>
                     setStudentPackageEditForm((prev) => ({ ...prev, title: e.target.value }))
@@ -81,8 +108,9 @@ export default function StudentPackageEditModal({
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
-                    background: '#1f1f1f',
+                    background: countOnly ? '#171717' : '#1f1f1f',
                     color: 'white',
+                    opacity: countOnly ? 0.7 : 1,
                   }}
                 />
                 {studentPackageEditFormErrors.title ? (
@@ -123,6 +151,7 @@ export default function StudentPackageEditModal({
                 <span style={{ opacity: 0.85 }}>만료일 (선택)</span>
                 <input
                   type="date"
+                  disabled={countOnly}
                   value={studentPackageEditForm.expiresAt}
                   onChange={(e) =>
                     setStudentPackageEditForm((prev) => ({
@@ -134,8 +163,9 @@ export default function StudentPackageEditModal({
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
-                    background: '#1f1f1f',
+                    background: countOnly ? '#171717' : '#1f1f1f',
                     color: 'white',
+                    opacity: countOnly ? 0.7 : 1,
                   }}
                 />
                 {studentPackageEditFormErrors.expiresAt ? (
@@ -150,6 +180,7 @@ export default function StudentPackageEditModal({
                 <input
                   type="text"
                   inputMode="decimal"
+                  disabled={countOnly}
                   value={studentPackageEditForm.amountPaid}
                   onChange={(e) =>
                     setStudentPackageEditForm((prev) => ({
@@ -162,8 +193,9 @@ export default function StudentPackageEditModal({
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
-                    background: '#1f1f1f',
+                    background: countOnly ? '#171717' : '#1f1f1f',
                     color: 'white',
+                    opacity: countOnly ? 0.7 : 1,
                   }}
                 />
                 {studentPackageEditFormErrors.amountPaid ? (
@@ -176,6 +208,7 @@ export default function StudentPackageEditModal({
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>메모 (선택)</span>
                 <textarea
+                  disabled={countOnly}
                   value={studentPackageEditForm.memo}
                   onChange={(e) =>
                     setStudentPackageEditForm((prev) => ({ ...prev, memo: e.target.value }))
@@ -185,13 +218,13 @@ export default function StudentPackageEditModal({
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
-                    background: '#1f1f1f',
+                    background: countOnly ? '#171717' : '#1f1f1f',
                     color: 'white',
                     resize: 'vertical',
+                    opacity: countOnly ? 0.7 : 1,
                   }}
                 />
               </label>
-            </div>
 
             <div
               style={{
@@ -222,8 +255,9 @@ export default function StudentPackageEditModal({
               </button>
               <button
                 type="button"
-                onClick={submitStudentPackageEditModal}
+                onClick={() => submitStudentPackageEditModal()}
                 disabled={busyStudentPackageActionId === studentPackageEditModalPackage.id}
+                data-testid="student-package-edit-save-button"
                 style={{
                   padding: '10px 16px',
                   borderRadius: 8,
@@ -241,6 +275,7 @@ export default function StudentPackageEditModal({
                   : '저장'}
               </button>
             </div>
+            </form>
           </div>
         </div>
 

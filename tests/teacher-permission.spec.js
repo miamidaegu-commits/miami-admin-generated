@@ -255,10 +255,136 @@ async function loginAsAdmin(page) {
   await loginAsDashboardUser(page, ADMIN_EMAIL, ADMIN_PASSWORD);
 }
 
+async function openDashboardSectionByName(page, sectionName) {
+  await page.getByRole('button', { name: sectionName, exact: true }).click();
+  await expect(page.getByRole('heading', { name: sectionName, level: 1 })).toBeVisible();
+}
+
 async function getTeacherNameFromWelcome(page) {
   const welcomeText = (await page.getByTestId('dashboard-welcome-subtitle').textContent()) || '';
   const match = welcomeText.match(/(.*)\s님,?\s환영합니다/);
   return match?.[1]?.trim() || '';
+}
+
+async function getTeacherMembershipRef() {
+  const userRecord = await getAdminApp().auth().getUserByEmail(TEST_TEACHER_EMAIL);
+  return getDb().collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${userRecord.uid}`);
+}
+
+async function setTeacherCountEditPermission(enabled) {
+  const membershipRef = await getTeacherMembershipRef();
+  await membershipRef.set(
+    {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      email: TEST_TEACHER_EMAIL,
+      role: 'teacher',
+      teacherName: 'teacher',
+      status: 'active',
+      permissions: {
+        canEditStudentPackageCounts: enabled === true,
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
+async function ensureTeacherPackageCountFixture() {
+  const db = getDb();
+  const now = admin.firestore.Timestamp.now();
+  await db.collection('teachers').doc('e2e-count-edit-teacher').set(
+    {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      name: 'Teacher E2E',
+      teacherName: 'teacher',
+      teacherKey: 'teacher',
+      status: 'active',
+      updatedAt: now,
+      createdAt: now,
+    },
+    { merge: true }
+  );
+
+  await db.collection('privateStudents').doc('e2e-count-edit-student').set(
+    {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      name: 'E2E 횟수수정 학생',
+      studentName: 'E2E 횟수수정 학생',
+      phone: '010-0000-5100',
+      teacher: 'teacher',
+      teacherName: 'teacher',
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+
+  await db.collection('studentPackages').doc('e2e-count-edit-own-package').set(
+    {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: 'e2e-count-edit-student',
+      studentName: 'E2E 횟수수정 학생',
+      title: 'E2E teacher package count edit',
+      packageType: 'private',
+      teacher: 'teacher',
+      teacherName: 'teacher',
+      totalCount: 4,
+      usedCount: 1,
+      remainingCount: 3,
+      status: 'active',
+      amountPaid: 0,
+      memo: '',
+      createdAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+
+  await db.collection('studentPackages').doc('e2e-count-edit-other-package').set(
+    {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: 'e2e-count-edit-student',
+      studentName: 'E2E 횟수수정 학생',
+      title: 'E2E other teacher package count edit',
+      packageType: 'private',
+      teacher: 'other-teacher',
+      teacherName: 'other-teacher',
+      totalCount: 8,
+      usedCount: 2,
+      remainingCount: 6,
+      status: 'active',
+      amountPaid: 0,
+      memo: '',
+      createdAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+}
+
+async function openTeacherCountEditStudentPackage(page) {
+  await openDashboardSectionByName(page, '학생 관리');
+  const searchInput = page.getByTestId('student-search-input');
+  await searchInput.fill('E2E 횟수수정 학생');
+
+  const studentRow = page
+    .locator('[data-testid="student-row"][data-student-name="E2E 횟수수정 학생"]')
+    .first();
+  await expect(studentRow).toBeVisible({ timeout: 15000 });
+  await studentRow.getByRole('button', { name: '수강권 보기', exact: true }).click();
+
+  const studentDetail = page
+    .locator('[data-testid="student-detail-panel"][data-student-name="E2E 횟수수정 학생"]')
+    .first();
+  await expect(studentDetail).toBeVisible({ timeout: 15000 });
+
+  const packageCard = studentDetail
+    .getByTestId('student-package-card')
+    .filter({ hasText: 'E2E teacher package count edit' })
+    .first();
+  await expect(packageCard).toBeVisible({ timeout: 15000 });
+  return { studentDetail, packageCard };
 }
 
 test('teacher 계정은 웹 대시보드에서 캘린더, 내 1:1 관리, 내 단체반 관리만 볼 수 있다', async ({
@@ -266,6 +392,10 @@ test('teacher 계정은 웹 대시보드에서 캘린더, 내 1:1 관리, 내 �
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+
+  if (hasServiceAccount()) {
+    await setTeacherCountEditPermission(false);
+  }
 
   await loginAsTeacher(page);
 
@@ -297,6 +427,168 @@ test('teacher 계정은 웹 대시보드에서 캘린더, 내 1:1 관리, 내 �
   const rowCount = await groupRows.count();
   for (let i = 0; i < rowCount; i += 1) {
     await expect(groupRows.nth(i).locator(':scope > span').nth(1)).toContainText(teacherName);
+  }
+});
+
+test('admin can toggle teacher student package count edit permission', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 Firestore 권한 검증을 실행합니다.');
+
+  await ensureTeacherPackageCountFixture();
+  await setTeacherCountEditPermission(false);
+
+  await loginAsAdmin(page);
+  await openDashboardSectionByName(page, '선생님 관리');
+
+  await expect
+    .poll(async () => page.getByTestId('teacher-management-row').count(), { timeout: 30000 })
+    .toBeGreaterThan(0);
+  const teacherRow = page.locator('[data-testid="teacher-management-row"][data-teacher-key="teacher"]').first();
+  await expect(teacherRow).toBeVisible({ timeout: 15000 });
+  await expect(teacherRow.getByTestId('teacher-count-edit-permission-status')).toContainText(
+    '횟수 수정 차단',
+    { timeout: 15000 }
+  );
+
+  await teacherRow.getByTestId('teacher-count-edit-permission-toggle').click();
+  await expect
+    .poll(async () => {
+      const snap = await (await getTeacherMembershipRef()).get();
+      return snap.data()?.permissions?.canEditStudentPackageCounts;
+    }, { timeout: 15000 })
+    .toBe(true);
+  await expect(teacherRow.getByTestId('teacher-count-edit-permission-status')).toContainText(
+    '횟수 수정 허용',
+    { timeout: 15000 }
+  );
+
+  await teacherRow.getByTestId('teacher-count-edit-permission-toggle').click();
+  await expect
+    .poll(async () => {
+      const snap = await (await getTeacherMembershipRef()).get();
+      return snap.data()?.permissions?.canEditStudentPackageCounts;
+    }, { timeout: 15000 })
+    .toBe(false);
+  await expect(teacherRow.getByTestId('teacher-count-edit-permission-status')).toContainText(
+    '횟수 수정 차단',
+    { timeout: 15000 }
+  );
+});
+
+test('teacher without count edit permission cannot open student package count editing', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 Firestore 권한 검증을 실행합니다.');
+
+  await ensureTeacherPackageCountFixture();
+  await setTeacherCountEditPermission(false);
+
+  await loginAsTeacher(page);
+  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
+});
+
+test('teacher with count edit permission can edit only own teacher package counts', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 Firestore 권한 검증을 실행합니다.');
+
+  await ensureTeacherPackageCountFixture();
+  await setTeacherCountEditPermission(true);
+  const dialogMessages = [];
+  const consoleMessages = [];
+  const pageErrors = [];
+
+  try {
+    page.on('dialog', async (dialog) => {
+      dialogMessages.push(dialog.message());
+      await dialog.accept();
+    });
+    page.on('console', (message) => {
+      if (['error', 'warning'].includes(message.type())) {
+        consoleMessages.push(`${message.type()}: ${message.text()}`);
+      }
+    });
+    page.on('pageerror', (error) => {
+      pageErrors.push(error.message || String(error));
+    });
+
+    await loginAsTeacher(page);
+    await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+
+    const { studentDetail, packageCard } = await openTeacherCountEditStudentPackage(page);
+    await expect(packageCard).toContainText('총 횟수');
+    await expect(packageCard).toContainText('4');
+    await expect(packageCard).toContainText('사용 횟수');
+    await expect(packageCard).toContainText('1');
+    await expect(packageCard).toContainText('남은 횟수');
+    await expect(packageCard).toContainText('3');
+    await expect(studentDetail.getByText('E2E other teacher package count edit')).toHaveCount(0);
+    await expect(packageCard.getByTestId('student-package-history-button')).toHaveCount(0);
+
+    await packageCard.getByTestId('student-package-edit-button').click();
+    const editDialog = page.getByRole('dialog', { name: '수강권 수정' });
+    await expect(editDialog).toBeVisible({ timeout: 15000 });
+    await expect(editDialog.getByTestId('student-package-count-edit-limited-note')).toBeVisible();
+    await expect(editDialog.getByLabel('제목')).toBeDisabled();
+    await editDialog.getByLabel('총 횟수 (totalCount)').fill('5');
+    await expect(editDialog.getByTestId('student-package-edit-save-button')).toBeEnabled();
+    await editDialog.getByTestId('student-package-edit-save-button').click();
+    await expect
+      .poll(async () => {
+        const snap = await getDb()
+          .collection('studentPackages')
+          .doc('e2e-count-edit-own-package')
+          .get();
+        return snap.data()?.totalCount;
+      }, { timeout: 15000 })
+      .toBe(5);
+    await expect(
+      editDialog,
+      [
+        `dialog messages: ${dialogMessages.join(' | ') || '(none)'}`,
+        `console: ${consoleMessages.slice(-10).join(' | ') || '(none)'}`,
+        `page errors: ${pageErrors.slice(-5).join(' | ') || '(none)'}`,
+      ].join('\n')
+    ).toBeHidden({
+      timeout: 15000,
+    });
+
+    await expect
+      .poll(async () => {
+        const snap = await getDb()
+          .collection('studentPackages')
+          .doc('e2e-count-edit-own-package')
+          .get();
+        const data = snap.data() || {};
+        return {
+          totalCount: data.totalCount,
+          usedCount: data.usedCount,
+          remainingCount: data.remainingCount,
+          title: data.title,
+          teacher: data.teacher,
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        totalCount: 5,
+        usedCount: 1,
+        remainingCount: 4,
+        title: 'E2E teacher package count edit',
+        teacher: 'teacher',
+      });
+
+    await expect(packageCard).toContainText('5', { timeout: 15000 });
+    await expect(packageCard).toContainText('4', { timeout: 15000 });
+  } finally {
+    await setTeacherCountEditPermission(false);
   }
 });
 

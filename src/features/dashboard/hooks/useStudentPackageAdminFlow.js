@@ -70,8 +70,39 @@ export default function useStudentPackageAdminFlow({
     setStudentPackageHistoryLoading(false)
   }
 
+  function isAdminPackageEditor() {
+    return userProfile?.role === 'admin'
+  }
+
+  function packageBelongsToCurrentTeacher(pkg) {
+    const teacherKey = normalizeText(userProfile?.teacherName || '')
+    if (!teacherKey || !pkg) return false
+    if (String(pkg.academyId || '').trim() !== String(currentAcademyId || '').trim()) {
+      return false
+    }
+    return (
+      normalizeText(pkg.teacher || '') === teacherKey ||
+      normalizeText(pkg.teacherName || '') === teacherKey
+    )
+  }
+
+  function canEditStudentPackageCountsForPackage(pkg) {
+    if (!pkg?.id) return false
+    if (isAdminPackageEditor()) return true
+    return (
+      userProfile?.role === 'teacher' &&
+      userProfile?.canEditStudentPackageCounts === true &&
+      packageBelongsToCurrentTeacher(pkg)
+    )
+  }
+
+  function getStudentPackageEditMode(pkg) {
+    if (!pkg?.id) return 'none'
+    return isAdminPackageEditor() ? 'admin' : 'teacherCount'
+  }
+
   async function openStudentPackageHistoryModal(pkg) {
-    if (userProfile?.role !== 'admin' || !pkg?.id) return
+    if (!isAdminPackageEditor() || !pkg?.id) return
     setStudentPackageHistoryModalPackage(pkg)
     setStudentPackageHistoryRows([])
     setStudentPackageHistoryLoading(true)
@@ -104,8 +135,8 @@ export default function useStudentPackageAdminFlow({
   }
 
   function openStudentPackageEditModal(pkg) {
-    if (userProfile?.role !== 'admin') return
     if (!pkg?.id) return
+    if (!canEditStudentPackageCountsForPackage(pkg)) return
     setStudentPackageEditModalPackage(pkg)
     setStudentPackageEditForm(
       createDefaultStudentPackageEditForm({
@@ -189,13 +220,32 @@ export default function useStudentPackageAdminFlow({
   async function submitStudentPackageEditModal() {
     const pkg = studentPackageEditModalPackage
     if (!pkg?.id) return
-    if (userProfile?.role !== 'admin') {
-      alert('관리자만 수강권을 수정할 수 있습니다.')
+    if (!canEditStudentPackageCountsForPackage(pkg)) {
+      alert('수강권 횟수를 수정할 권한이 없습니다.')
       return
     }
 
     const usedCount = Number(pkg.usedCount ?? 0)
-    const result = validateStudentPackageEditFormFields(studentPackageEditForm, usedCount)
+    const isAdminEdit = isAdminPackageEditor()
+    const result = isAdminEdit
+      ? validateStudentPackageEditFormFields(studentPackageEditForm, usedCount)
+      : (() => {
+          const errors = {}
+          if (!Number.isFinite(usedCount) || usedCount < 0) {
+            errors._used = '사용 횟수가 올바르지 않습니다.'
+          }
+          const totalParsed = parseRequiredMinOneIntField(studentPackageEditForm.totalCount)
+          if (!totalParsed.ok) {
+            errors.totalCount = '1 이상의 정수를 입력해주세요.'
+          } else if (Number.isFinite(usedCount) && totalParsed.value < usedCount) {
+            errors.totalCount = `총 횟수는 사용 횟수(${usedCount}) 이상이어야 합니다.`
+          }
+          return {
+            valid: Object.keys(errors).length === 0,
+            errors,
+            totalCount: totalParsed.ok ? totalParsed.value : 0,
+          }
+        })()
     setStudentPackageEditFormErrors(result.errors)
     if (!result.valid) return
 
@@ -205,6 +255,16 @@ export default function useStudentPackageAdminFlow({
       setBusyStudentPackageActionId(pkg.id)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
       const remainingCount = Math.max(0, result.totalCount - usedCount)
+      if (!isAdminEdit) {
+        await updateDoc(pkgRef, {
+          totalCount: result.totalCount,
+          remainingCount,
+          updatedAt: serverTimestamp(),
+        })
+        closeStudentPackageEditModal()
+        return
+      }
+
       const status = getNextStudentPackageStatus(pkg.status, remainingCount)
       const updates = {
         title: result.title,
@@ -302,7 +362,7 @@ export default function useStudentPackageAdminFlow({
   }
 
   async function endStudentPackage(pkg) {
-    if (userProfile?.role !== 'admin') {
+    if (!isAdminPackageEditor()) {
       alert('관리자만 수강권을 종료할 수 있습니다.')
       return
     }
@@ -418,6 +478,8 @@ export default function useStudentPackageAdminFlow({
     studentPackageHistoryRows,
     studentPackageHistoryLoading,
     openStudentPackageEditModal,
+    canEditStudentPackageCountsForPackage,
+    studentPackageEditMode: getStudentPackageEditMode(studentPackageEditModalPackage),
     closeStudentPackageEditModal,
     submitStudentPackageEditModal,
     validateStudentPackageEditFormFields,
