@@ -1107,6 +1107,24 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       reservationId: expectedReservationId,
       teacher: fixture.teacherKey,
     });
+    await expectPrivateSlotCardCount(
+      eligiblePage,
+      fixture.date,
+      0,
+      'reserved private slot should disappear from the available slot list'
+    );
+    await expect(privateReservationCard(eligiblePage, fixture.date)).toBeVisible({
+      timeout: 15000,
+    });
+    const privateHistoryCard = eligiblePage
+      .locator('[data-testid="student-lesson-history-card"]')
+      .filter({ hasText: fixture.date })
+      .filter({ hasText: fixture.teacherKey });
+    await expect(
+      privateHistoryCard,
+      'reserved private slot should remain visible in lesson history'
+    ).toHaveCount(1, { timeout: 15000 });
+    await expect(privateHistoryCard.first()).toContainText('예약 완료');
 
     const secondContext = await browser.newContext();
     contexts.push(secondContext);

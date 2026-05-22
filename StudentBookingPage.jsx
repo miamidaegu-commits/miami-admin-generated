@@ -1076,6 +1076,16 @@ export default function StudentBookingPage() {
     return bySlotId
   }, [privateReservations])
 
+  const activePrivateReservationSlotIds = useMemo(() => {
+    const slotIds = new Set()
+    privateReservations.forEach((reservation) => {
+      if (reservation.status !== 'active') return
+      const slotId = String(reservation.slotId || '').trim()
+      if (slotId) slotIds.add(slotId)
+    })
+    return slotIds
+  }, [privateReservations])
+
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
@@ -1095,12 +1105,14 @@ export default function StudentBookingPage() {
   }, [lessonsById, reservations])
 
   const sortedPrivateSlots = useMemo(() => {
-    return [...privateSlots].sort((a, b) => {
-      const aKey = `${a.date || ''} ${a.time || ''} ${a.teacher || ''}`
-      const bKey = `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`
-      return aKey.localeCompare(bKey, 'ko')
-    })
-  }, [privateSlots])
+    return privateSlots
+      .filter((slot) => !activePrivateReservationSlotIds.has(String(slot.id || '').trim()))
+      .sort((a, b) => {
+        const aKey = `${a.date || ''} ${a.time || ''} ${a.teacher || ''}`
+        const bKey = `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`
+        return aKey.localeCompare(bKey, 'ko')
+      })
+  }, [activePrivateReservationSlotIds, privateSlots])
 
   const sortedPrivateReservations = useMemo(() => {
     return privateReservations
