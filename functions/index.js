@@ -471,6 +471,33 @@ function sortPrivatePackageCandidates(a, b) {
   return aCreated - bCreated;
 }
 
+function sanitizePrivatePackageSummary(docSnap) {
+  const data = docSnap.data() || {};
+  const totalCount = Number(data.totalCount || 0);
+  const remainingCount = Number(data.remainingCount || 0);
+  const usedFallback = Math.max(
+      (Number.isFinite(totalCount) ? totalCount : 0) -
+        (Number.isFinite(remainingCount) ? remainingCount : 0),
+      0,
+  );
+  const rawUsedCount = data.usedCount;
+  const usedCount =
+    rawUsedCount !== undefined && rawUsedCount !== null &&
+      String(rawUsedCount).trim() !== "" ?
+      Number(rawUsedCount) :
+      usedFallback;
+
+  return {
+    id: docSnap.id,
+    teacher: normalizeId(data.teacher),
+    teacherName: normalizeId(data.teacherName),
+    totalCount: Number.isFinite(totalCount) ? totalCount : 0,
+    usedCount: Number.isFinite(usedCount) ? usedCount : 0,
+    remainingCount: Number.isFinite(remainingCount) ? remainingCount : 0,
+    status: normalizeId(data.status || "active"),
+  };
+}
+
 async function findActivePrivatePackageForTeacher({
   transaction,
   db,
@@ -822,6 +849,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
         const summary = summarySnap.exists ? summarySnap.data() || {} : null;
         const packageTeacherKeys = [];
         const packageIds = [];
+        const privatePackageSummaries = [];
         packageSnap.docs.forEach((docSnap) => {
           const packageData = docSnap.data() || {};
           const packageType = normalizeId(packageData.packageType)
@@ -836,9 +864,10 @@ exports.listPrivateLessonSlotAvailability = onCall(
           ) {
             return;
           }
-          if (!Number.isFinite(remainingCount) || remainingCount <= 0) return;
           const teacherKey = getPrivatePackageTeacherKey(packageData);
           if (!teacherKey) return;
+          privatePackageSummaries.push(sanitizePrivatePackageSummary(docSnap));
+          if (!Number.isFinite(remainingCount) || remainingCount <= 0) return;
           packageTeacherKeys.push(teacherKey);
           packageIds.push(docSnap.id);
         });
@@ -973,7 +1002,16 @@ exports.listPrivateLessonSlotAvailability = onCall(
             })
             .slice(0, PRIVATE_SLOT_AVAILABILITY_LIMIT);
 
-        return {ok: true, academyId, slots};
+        return {
+          ok: true,
+          academyId,
+          slots,
+          privatePackages: privatePackageSummaries.sort((a, b) => {
+            const aKey = `${a.teacher || a.teacherName || ""} ${a.id}`;
+            const bKey = `${b.teacher || b.teacherName || ""} ${b.id}`;
+            return aKey.localeCompare(bKey, "ko");
+          }),
+        };
       } catch (error) {
         throw asHttpsError(error);
       }

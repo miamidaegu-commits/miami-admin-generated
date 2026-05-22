@@ -168,6 +168,54 @@ function isActivePrivatePackage(pkg) {
   )
 }
 
+function toPrivatePackageCount(value) {
+  const count = Number(value)
+  return Number.isFinite(count) && count >= 0 ? count : 0
+}
+
+function getPrivatePackageSummaryTeacherLabel(pkg) {
+  return String(pkg?.teacher || pkg?.teacherName || '').trim() || '선생님 미지정'
+}
+
+function formatPrivatePackageUsageSummary(pkg) {
+  const remaining = toPrivatePackageCount(pkg?.remainingCount)
+  const total = toPrivatePackageCount(pkg?.totalCount)
+  const used =
+    pkg?.usedCount != null && String(pkg.usedCount).trim() !== ''
+      ? toPrivatePackageCount(pkg.usedCount)
+      : Math.max(total - remaining, 0)
+  return `잔여 ${remaining}회 / 총 ${total}회 · 사용 ${used}회`
+}
+
+function getPrivatePackageSummariesFromValue(value) {
+  if (Array.isArray(value?.privatePackages)) return value.privatePackages
+  if (Array.isArray(value?.privatePackageSummaries)) return value.privatePackageSummaries
+  return null
+}
+
+function findPrivatePackageSummaryForTeacher(packages, teacherValue) {
+  const teacherKey = normalizePrivateAccessKey(teacherValue)
+  if (!teacherKey) return null
+
+  const matches = (Array.isArray(packages) ? packages : []).filter((pkg) => {
+    const packageTeacherKey = normalizePrivateAccessKey(pkg?.teacher)
+    const packageTeacherNameKey = normalizePrivateAccessKey(pkg?.teacherName)
+    return packageTeacherKey === teacherKey || packageTeacherNameKey === teacherKey
+  })
+  if (matches.length === 0) return null
+
+  const withRemaining = matches.filter((pkg) => toPrivatePackageCount(pkg?.remainingCount) > 0)
+  return (withRemaining.length > 0 ? withRemaining : matches).sort((a, b) => {
+    const aRemaining = toPrivatePackageCount(a?.remainingCount)
+    const bRemaining = toPrivatePackageCount(b?.remainingCount)
+    if (aRemaining !== bRemaining) return bRemaining - aRemaining
+    return getPrivatePackageSummaryTeacherLabel(a).localeCompare(
+      getPrivatePackageSummaryTeacherLabel(b),
+      'ko'
+    )
+  })[0]
+}
+
 function getLessonHistoryStatusLabel(item) {
   if (item.status !== 'active') return '예약 취소'
   if (item.startsAtMs !== null && item.startsAtMs < Date.now()) return '지난 수업'
@@ -226,6 +274,7 @@ export default function StudentBookingPage() {
   const [privateSlotsLoading, setPrivateSlotsLoading] = useState(false)
   const [privateSlotsError, setPrivateSlotsError] = useState('')
   const [privateSlotsRefreshKey, setPrivateSlotsRefreshKey] = useState(0)
+  const [privatePackageSummaries, setPrivatePackageSummaries] = useState([])
   const [privateReservations, setPrivateReservations] = useState([])
   const [privateReservationsLoading, setPrivateReservationsLoading] = useState(false)
   const [privateReservationsResolved, setPrivateReservationsResolved] = useState(false)
@@ -361,6 +410,7 @@ export default function StudentBookingPage() {
     setPrivateAccessLoading(true)
     setPrivateAccessResolved(false)
     setPrivateAccessError('')
+    setPrivatePackageSummaries([])
 
     const summaryRef = doc(
       db,
@@ -399,6 +449,7 @@ export default function StudentBookingPage() {
         const activePackageIds = Array.isArray(summaryData?.activePackageIds)
           ? summaryData.activePackageIds
           : []
+        const summaryPackageRows = getPrivatePackageSummariesFromValue(summaryData)
         const summaryAllowedSlotIds = [
           ...(Array.isArray(summaryData?.allowedSlotIds) ? summaryData.allowedSlotIds : []),
           ...(Array.isArray(summaryData?.allowedPrivateLessonSlotIds)
@@ -415,6 +466,9 @@ export default function StudentBookingPage() {
           console.error('student private packages 불러오기 실패:', error)
         }
         if (cancelled) return
+        if (Array.isArray(summaryPackageRows)) {
+          setPrivatePackageSummaries(summaryPackageRows)
+        }
         setPrivateSlotBookingPilotEnabled(summaryData?.privateSlotBookingPilotEnabled === true)
         const nextKeys = new Set()
         if (hasActivePrivateAccess || packageTeacherKeys.length > 0) {
@@ -600,6 +654,7 @@ export default function StudentBookingPage() {
   async function loadPrivateSlotAvailability() {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
       setPrivateSlots([])
+      setPrivatePackageSummaries([])
       setPrivateSlotsLoading(false)
       setPrivateSlotsError('')
       return []
@@ -623,6 +678,8 @@ export default function StudentBookingPage() {
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
       const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+      const packageRows = getPrivatePackageSummariesFromValue(response?.data)
+      if (Array.isArray(packageRows)) setPrivatePackageSummaries(packageRows)
       if (rows.length === 0) {
         const fallbackRows = await loadDirectOpenPrivateSlotsFallback()
         if (fallbackRows.length > 0) {
@@ -728,6 +785,7 @@ export default function StudentBookingPage() {
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
       setPrivateSlots([])
+      setPrivatePackageSummaries([])
       setPrivateSlotsLoading(false)
       setPrivateSlotsError('')
       return
@@ -834,6 +892,8 @@ export default function StudentBookingPage() {
         })
         if (cancelled) return
         const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+        const packageRows = getPrivatePackageSummariesFromValue(response?.data)
+        if (Array.isArray(packageRows)) setPrivatePackageSummaries(packageRows)
         if (rows.length === 0 && Array.isArray(latestFallbackRows) && latestFallbackRows.length > 0) {
           setPrivateSlots(latestFallbackRows)
         } else {
@@ -1996,6 +2056,50 @@ export default function StudentBookingPage() {
             </section>
 
             <section
+              data-testid="student-private-package-summary-section"
+              style={{
+                border: '1px solid #2e3240',
+                borderRadius: 16,
+                background: '#151922',
+                padding: 20,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 1:1 수강권</h2>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
+                예약은 수강권을 바로 차감하지 않습니다. 실제 수업 후 차감됩니다.
+              </p>
+              {!privateAccessResolved || privateAccessLoading || privateSlotsLoading ? (
+                <p style={{ opacity: 0.8, marginTop: 16, marginBottom: 0 }}>불러오는 중...</p>
+              ) : privatePackageSummaries.length === 0 ? (
+                <p style={{ opacity: 0.78, marginTop: 16, marginBottom: 0 }}>
+                  개인 수강권이 없습니다. 학원에 문의해 주세요.
+                </p>
+              ) : (
+                <div style={{ display: 'grid', gap: 10, marginTop: 16 }}>
+                  {privatePackageSummaries.map((pkg) => (
+                    <article
+                      key={pkg.id}
+                      data-testid="student-private-package-summary-card"
+                      style={{
+                        border: '1px solid #283042',
+                        borderRadius: 12,
+                        padding: 14,
+                        background: '#1a1f2b',
+                      }}
+                    >
+                      <strong style={{ display: 'block', fontSize: '1rem' }}>
+                        {getPrivatePackageSummaryTeacherLabel(pkg)}
+                      </strong>
+                      <div style={{ marginTop: 6, opacity: 0.76, fontSize: 14 }}>
+                        {formatPrivatePackageUsageSummary(pkg)}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section
               style={{
                 border: '1px solid #2e3240',
                 borderRadius: 16,
@@ -2046,6 +2150,9 @@ export default function StudentBookingPage() {
                     const hasActivePrivateReservation = reservation?.status === 'active'
                     const isReservedByAnyone =
                       slot.isReserved === true || String(slot.status || '').trim() === 'reserved'
+                    const matchingPackage =
+                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot.teacher) ||
+                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot.teacherName)
                     const canReserve =
                       PRIVATE_SLOT_BOOKING_ENABLED &&
                       privateSlotBookingPilotEnabled &&
@@ -2082,6 +2189,15 @@ export default function StudentBookingPage() {
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               {Number(slot.durationMinutes || 0) || 50}분 · 오프라인 결제
                             </div>
+                            {matchingPackage ? (
+                              <div
+                                data-testid="student-private-slot-package-summary"
+                                style={{ marginTop: 6, opacity: 0.78, fontSize: 13 }}
+                              >
+                                사용 가능 수강권: 잔여{' '}
+                                {toPrivatePackageCount(matchingPackage.remainingCount)}회
+                              </div>
+                            ) : null}
                             {slot.releasedFromFixed === true ||
                             String(slot.slotType || '').trim() === 'released_fixed' ? (
                               <div style={{ marginTop: 6, opacity: 0.78, fontSize: 13 }}>
@@ -2164,6 +2280,11 @@ export default function StudentBookingPage() {
                     })
                     const isBusy = busyPrivateReservationId === reservationId
                     const isActive = reservation.status === 'active'
+                    const matchingPackage =
+                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, reservation.teacher) ||
+                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, reservation.teacherName) ||
+                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot?.teacher) ||
+                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot?.teacherName)
 
                     return (
                       <article
@@ -2202,21 +2323,23 @@ export default function StudentBookingPage() {
                                 결제는 학원 안내에 따라 진행됩니다.
                               </div>
                             ) : null}
+                            {matchingPackage ? (
+                              <div
+                                data-testid="student-private-reservation-package-summary"
+                                style={{ marginTop: 6, opacity: 0.78, fontSize: 13 }}
+                              >
+                                수강권: {getPrivatePackageSummaryTeacherLabel(matchingPackage)} · 잔여{' '}
+                                {toPrivatePackageCount(matchingPackage.remainingCount)}회
+                              </div>
+                            ) : null}
                           </div>
                           {isActive && PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled ? (
                             <button
                               type="button"
+                              className="student-danger-button"
                               onClick={() => cancelPrivateReservation(reservation)}
                               disabled={Boolean(busyPrivateReservationId)}
                               data-testid="student-private-reservation-cancel-button"
-                              style={{
-                                padding: '10px 14px',
-                                borderRadius: 10,
-                                border: '1px solid #744242',
-                                background: '#4a2a2a',
-                                color: 'white',
-                                cursor: busyPrivateReservationId ? 'not-allowed' : 'pointer',
-                              }}
                             >
                               {isBusy ? '취소 중...' : '예약 취소'}
                             </button>

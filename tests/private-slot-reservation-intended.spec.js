@@ -330,6 +330,19 @@ async function createStudentFixture(db, auth, {
       studentId,
       teacherKeys: teacherAccess ? [teacherKey] : [],
       activePackageIds: teacherAccess ? [packageId] : [],
+      privatePackages: teacherAccess
+        ? [
+            {
+              id: packageId,
+              teacher: teacherKey,
+              teacherName: teacherKey,
+              totalCount: Math.max(Number(paidLessons || 0), 1),
+              usedCount: 0,
+              remainingCount: Math.max(Number(paidLessons || 0), 1),
+              status: 'active',
+            },
+          ]
+        : [],
       allowedSlotIds,
       allowedPrivateLessonSlotIds: allowedSlotIds,
       privateSlotBookingPilotEnabled,
@@ -666,6 +679,16 @@ async function getReservation(db, slotId, studentId) {
   return snap.exists ? snap.data() : null;
 }
 
+async function getPrivatePackageCounts(db, packageId) {
+  const snap = await db.collection('studentPackages').doc(packageId).get();
+  const data = snap.exists ? snap.data() || {} : {};
+  return {
+    totalCount: Number(data.totalCount || 0),
+    usedCount: Number(data.usedCount || 0),
+    remainingCount: Number(data.remainingCount || 0),
+  };
+}
+
 async function countGeneratedStudentRows(db, collectionName, fixture) {
   const snap = await db
     .collection(collectionName)
@@ -983,6 +1006,18 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     contexts.push(eligibleContext);
     const eligiblePage = await eligibleContext.newPage();
     await loginAsStudentWithPrivateBooking(eligiblePage, fixture.eligibleStudent.email);
+    const packageSummarySection = eligiblePage.getByTestId(
+      'student-private-package-summary-section'
+    );
+    await expect(packageSummarySection).toContainText('내 1:1 수강권');
+    await expect(packageSummarySection).toContainText(
+      '예약은 수강권을 바로 차감하지 않습니다. 실제 수업 후 차감됩니다.'
+    );
+    const packageSummaryCard = packageSummarySection
+      .getByTestId('student-private-package-summary-card')
+      .filter({ hasText: fixture.teacherKey });
+    await expect(packageSummaryCard).toHaveCount(1, { timeout: 15000 });
+    await expect(packageSummaryCard.first()).toContainText('잔여 1회 / 총 1회 · 사용 0회');
     const slotCards = await expectPrivateSlotCardCount(
       eligiblePage,
       fixture.date,
@@ -1001,6 +1036,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'eligible pilot-enabled student should have an enabled private slot reserve button'
     );
     await expect(eligibleReserveButton).toHaveText('1:1 수업 예약');
+    await expect(slotCard).toContainText('사용 가능 수강권: 잔여 1회');
     const initialSlotSnap = await db.collection('privateLessonSlots').doc(fixture.slotId).get();
     const initialSlot = initialSlotSnap.data() || {};
     expect(Array.isArray(initialSlot.eligibleStudentIds) ? initialSlot.eligibleStudentIds : []).toEqual([]);
@@ -1113,9 +1149,24 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       0,
       'reserved private slot should disappear from the available slot list'
     );
-    await expect(privateReservationCard(eligiblePage, fixture.date)).toBeVisible({
+    const activeReservationCard = privateReservationCard(eligiblePage, fixture.date);
+    await expect(activeReservationCard).toBeVisible({
       timeout: 15000,
     });
+    await expect(activeReservationCard).toContainText('수강권:');
+    await expect(activeReservationCard).toContainText(`${fixture.teacherKey} · 잔여 1회`);
+    const privateCancelButton = activeReservationCard.getByTestId(
+      'student-private-reservation-cancel-button'
+    );
+    await expect(privateCancelButton).toHaveText('예약 취소');
+    await expect(privateCancelButton).toHaveClass(/student-danger-button/);
+    await expect
+      .poll(
+        () => getPrivatePackageCounts(db, fixture.eligibleStudent.packageId),
+        { timeout: 15000 }
+      )
+      .toEqual({ totalCount: 1, usedCount: 0, remainingCount: 1 });
+    await expect(packageSummaryCard.first()).toContainText('잔여 1회 / 총 1회 · 사용 0회');
     const privateHistoryCard = eligiblePage
       .locator('[data-testid="student-lesson-history-card"]')
       .filter({ hasText: fixture.date })
@@ -1175,6 +1226,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'eligible student should see the reopened private slot after cancellation'
     );
     const reopenedSlotCard = reopenedSlotCards.first();
+    await expect(reopenedSlotCard).toContainText('사용 가능 수강권: 잔여 1회');
     await reopenedSlotCard.getByTestId('student-private-slot-reserve-button').click();
     await expectReservationStatus(
       db,

@@ -228,6 +228,34 @@ body {
 }
 .btn-signout:hover { border-color: var(--danger); color: var(--danger); }
 
+.student-danger-button {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid #dc2626;
+  background: #b91c1c;
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 700;
+  transition: background 0.12s, border-color 0.12s, opacity 0.12s;
+}
+.student-danger-button:hover,
+.student-danger-button:focus-visible {
+  border-color: #991b1b;
+  background: #7f1d1d;
+}
+.student-danger-button:focus-visible {
+  outline: 2px solid rgba(248, 113, 113, 0.45);
+  outline-offset: 2px;
+}
+.student-danger-button:disabled {
+  border-color: #7f1d1d;
+  background: #581c1c;
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
 /* Public class intro */
 .public-class-page {
   min-height: 100vh;
