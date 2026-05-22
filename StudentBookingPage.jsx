@@ -479,54 +479,61 @@ export default function StudentBookingPage() {
         values,
       })),
     ]
-    const chunkMaps = new Map()
-    const unsubs = []
+    let cancelled = false
 
-    const mergeRows = () => {
+    async function loadGroupLessonAvailability() {
       const byId = new Map()
-      for (let i = 0; i < querySpecs.length; i += 1) {
-        const chunkMap = chunkMaps.get(i)
-        if (!chunkMap) continue
-        for (const row of chunkMap.values()) {
-          byId.set(row.id, row)
-        }
-      }
-      setLessons(Array.from(byId.values()))
-      setLessonsLoading(false)
-    }
-
-    querySpecs.forEach((spec, chunkIndex) => {
-      const unsubscribe = onSnapshot(
-        query(
-          collection(db, 'groupLessons'),
-          where('academyId', '==', currentAcademyId),
-          where('isBookable', '==', true),
-          where(spec.type, 'in', spec.values)
-        ),
-        (snapshot) => {
-          const rows = new Map()
-          snapshot.docs.forEach((docItem) => {
-            rows.set(docItem.id, {
-              id: docItem.id,
-              ...docItem.data(),
-            })
-          })
-          chunkMaps.set(chunkIndex, rows)
-          mergeRows()
-        },
-        (error) => {
-          console.error('student groupLessons 불러오기 실패:', error)
-          chunkMaps.set(chunkIndex, new Map())
-          setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
-          mergeRows()
-        }
+      const results = await Promise.allSettled(
+        querySpecs.map((spec) =>
+          getDocs(
+            query(
+              collection(db, 'groupLessons'),
+              where('academyId', '==', currentAcademyId),
+              where('isBookable', '==', true),
+              where(spec.type, 'in', spec.values)
+            )
+          )
+        )
       )
 
-      unsubs.push(unsubscribe)
-    })
+      const rejectedResults = results.filter((result) => result.status === 'rejected')
+      if (rejectedResults.length === results.length) {
+        throw rejectedResults[0]?.reason || new Error('groupLessons unavailable')
+      }
+      rejectedResults.forEach((result) => {
+        console.error('student groupLessons 일부 조회 실패:', result.reason)
+      })
+
+      results.forEach((result) => {
+        if (result.status !== 'fulfilled') return
+        result.value.docs.forEach((docItem) => {
+          const row = {
+            id: docItem.id,
+            ...docItem.data(),
+          }
+          byId.set(row.id, row)
+        })
+      })
+
+      return Array.from(byId.values())
+    }
+
+    loadGroupLessonAvailability()
+      .then((rows) => {
+        if (cancelled) return
+        setLessons(rows)
+        setLessonsLoading(false)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error('student groupLessons 불러오기 실패:', error)
+        setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
+        setLessons([])
+        setLessonsLoading(false)
+      })
 
     return () => {
-      unsubs.forEach((unsubscribe) => unsubscribe())
+      cancelled = true
     }
   }, [
     allowedGroupClassIds,
@@ -536,6 +543,22 @@ export default function StudentBookingPage() {
     role,
     scopedStudentId,
   ])
+
+  function updateGroupLessonBookedCount(lessonId, delta) {
+    const scopedLessonId = String(lessonId || '').trim()
+    if (!scopedLessonId) return
+    setLessons((previous) =>
+      previous.map((lesson) => {
+        if (String(lesson.id || '').trim() !== scopedLessonId) return lesson
+        const rawBookedCount = Number(lesson.bookedCount ?? 0)
+        const bookedCount = Number.isFinite(rawBookedCount) ? rawBookedCount : 0
+        return {
+          ...lesson,
+          bookedCount: Math.max(0, bookedCount + delta),
+        }
+      })
+    )
+  }
 
   async function loadDirectOpenPrivateSlotsFallback() {
     const byId = new Map()
@@ -1457,6 +1480,7 @@ export default function StudentBookingPage() {
         lessonId: lesson.id,
         studentId: scopedStudentId,
       })
+      updateGroupLessonBookedCount(lesson.id, 1)
     } catch (error) {
       console.error('학생 그룹 수업 예약 실패:', error)
       logStudentBookingEvent('reserve_failure', {
@@ -1608,6 +1632,7 @@ export default function StudentBookingPage() {
         lessonId: reservation.lessonId,
         studentId: scopedStudentId,
       })
+      updateGroupLessonBookedCount(reservation.lessonId, -1)
     } catch (error) {
       console.error('학생 그룹 수업 예약 취소 실패:', error)
       logStudentBookingEvent('cancel_failure', {

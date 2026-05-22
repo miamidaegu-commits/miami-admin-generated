@@ -1721,12 +1721,14 @@ export default function Dashboard() {
     const teacherName = String(userProfile.teacherName ?? '').trim()
 
     if (role === 'admin') {
+      let active = true
       const unsubGs = onSnapshot(
         query(
           collection(db, 'groupStudents'),
           where('academyId', '==', currentAcademyId)
         ),
         (snapshot) => {
+          if (!active) return
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
             ...docItem.data(),
@@ -1734,34 +1736,38 @@ export default function Dashboard() {
           setStudentSummaryGroupStudents(rows)
         },
         (error) => {
+          if (!active) return
           console.error('studentSummary groupStudents 불러오기 실패:', error)
           setStudentSummaryGroupStudents([])
         }
       )
-      const unsubGl = onSnapshot(
+      getDocs(
         query(
           collection(db, 'groupLessons'),
           where('academyId', '==', currentAcademyId)
-        ),
-        (snapshot) => {
+        )
+      )
+        .then((snapshot) => {
+          if (!active) return
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
             ...docItem.data(),
           }))
           setStudentSummaryGroupLessons(rows)
-        },
-        (error) => {
+        })
+        .catch((error) => {
+          if (!active) return
           console.error('studentSummary groupLessons 불러오기 실패:', error)
           setStudentSummaryGroupLessons([])
-        }
-      )
+        })
       return () => {
+        active = false
         unsubGs()
-        unsubGl()
       }
     }
 
     if (role === 'teacher' && teacherName) {
+      let active = true
       const ids = groupClasses.map((g) => g.id).filter(Boolean)
       if (ids.length === 0) {
         setStudentSummaryGroupStudents([])
@@ -1813,6 +1819,7 @@ export default function Dashboard() {
           onSnapshot(
             qGs,
             (snapshot) => {
+              if (!active) return
               const m = new Map()
               snapshot.docs.forEach((docItem) => {
                 m.set(docItem.id, { id: docItem.id, ...docItem.data() })
@@ -1821,6 +1828,7 @@ export default function Dashboard() {
               mergeGs()
             },
             (error) => {
+              if (!active) return
               console.error('studentSummary groupStudents 불러오기 실패:', error)
               chunkMapsGs.set(chunkIndex, new Map())
               mergeGs()
@@ -1835,27 +1843,26 @@ export default function Dashboard() {
             or(where('groupClassId', 'in', chunk), where('groupClassID', 'in', chunk))
           )
         )
-        unsubs.push(
-          onSnapshot(
-            qGl,
-            (snapshot) => {
-              const m = new Map()
-              snapshot.docs.forEach((docItem) => {
-                m.set(docItem.id, { id: docItem.id, ...docItem.data() })
-              })
-              chunkMapsGl.set(chunkIndex, m)
-              mergeGl()
-            },
-            (error) => {
-              console.error('studentSummary groupLessons 불러오기 실패:', error)
-              chunkMapsGl.set(chunkIndex, new Map())
-              mergeGl()
-            }
-          )
-        )
+        getDocs(qGl)
+          .then((snapshot) => {
+            if (!active) return
+            const m = new Map()
+            snapshot.docs.forEach((docItem) => {
+              m.set(docItem.id, { id: docItem.id, ...docItem.data() })
+            })
+            chunkMapsGl.set(chunkIndex, m)
+            mergeGl()
+          })
+          .catch((error) => {
+            if (!active) return
+            console.error('studentSummary groupLessons 불러오기 실패:', error)
+            chunkMapsGl.set(chunkIndex, new Map())
+            mergeGl()
+          })
       })
 
       return () => {
+        active = false
         unsubs.forEach((u) => u())
       }
     }
@@ -1895,58 +1902,60 @@ export default function Dashboard() {
       return
     }
 
+    let active = true
     setTodayDashboardGroupLessonsLoading(true)
     const chunks = chunkArray(groupClassIds, TODAY_RESERVATION_QUERY_CHUNK_SIZE)
-    const chunkMaps = new Map()
-    const unsubs = []
 
-    const mergeRows = () => {
-      if (chunkMaps.size < chunks.length) return
-      const byId = new Map()
-      for (const chunkMap of chunkMaps.values()) {
-        for (const lesson of chunkMap.values()) byId.set(lesson.id, lesson)
-      }
-      setTodayDashboardGroupLessons(Array.from(byId.values()))
-      setTodayDashboardGroupLessonsLoading(false)
-    }
-
-    chunks.forEach((chunk, chunkIndex) => {
-      const q = query(
-        collection(db, 'groupLessons'),
-        where('academyId', '==', currentAcademyId),
-        where('groupClassId', 'in', chunk)
-      )
-
-      unsubs.push(
-        onSnapshot(
-          q,
-          (snapshot) => {
-            const rows = new Map()
-            snapshot.docs.forEach((docItem) => {
-              const lesson = { id: docItem.id, ...docItem.data() }
-              const lessonAcademyId = String(lesson.academyId || '').trim()
-              const lessonTeacher = String(lesson.teacher || lesson.teacherName || '').trim()
-              if (lessonAcademyId !== String(currentAcademyId || '').trim()) return
-              if (String(lesson.date || '').trim() !== todayYmd) return
-              if (lessonTeacher && lessonTeacher !== teacherName) return
-              rows.set(docItem.id, lesson)
-            })
-            chunkMaps.set(chunkIndex, rows)
-            mergeRows()
-          },
-          (error) => {
-            console.error('today teacher groupLessons 불러오기 실패:', error)
-            chunkMaps.set(chunkIndex, new Map())
-            mergeRows()
-          }
+    Promise.allSettled(
+      chunks.map((chunk) =>
+        getDocs(
+          query(
+            collection(db, 'groupLessons'),
+            where('academyId', '==', currentAcademyId),
+            where('groupClassId', 'in', chunk)
+          )
         )
       )
-    })
+    )
+      .then((results) => {
+        if (!active) return
+        const byId = new Map()
+        results.forEach((result) => {
+          if (result.status !== 'fulfilled') {
+            console.error('today teacher groupLessons 불러오기 실패:', result.reason)
+            return
+          }
+          result.value.docs.forEach((docItem) => {
+            const lesson = { id: docItem.id, ...docItem.data() }
+            const lessonAcademyId = String(lesson.academyId || '').trim()
+            const lessonTeacher = String(lesson.teacher || lesson.teacherName || '').trim()
+            if (lessonAcademyId !== String(currentAcademyId || '').trim()) return
+            if (String(lesson.date || '').trim() !== todayYmd) return
+            if (lessonTeacher && lessonTeacher !== teacherName) return
+            byId.set(docItem.id, lesson)
+          })
+        })
+        setTodayDashboardGroupLessons(Array.from(byId.values()))
+        setTodayDashboardGroupLessonsLoading(false)
+      })
+      .catch((error) => {
+        if (!active) return
+        console.error('today teacher groupLessons 불러오기 실패:', error)
+        setTodayDashboardGroupLessons([])
+        setTodayDashboardGroupLessonsLoading(false)
+      })
 
     return () => {
-      unsubs.forEach((unsubscribe) => unsubscribe())
+      active = false
     }
-  }, [currentAcademyId, groupClasses, todayYmd, user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [
+    currentAcademyId,
+    groupClasses,
+    todayYmd,
+    user?.uid,
+    userProfile?.role,
+    userProfile?.teacherName,
+  ])
 
   const todayGroupLessons = useMemo(() => {
     const role = String(userProfile?.role || '').trim().toLowerCase()
