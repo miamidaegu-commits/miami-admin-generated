@@ -682,6 +682,31 @@ export default function Dashboard() {
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ko'))
   }, [teacherDirectoryMemberships, teacherRecords])
 
+  const teacherManagementTeachers = useMemo(() => {
+    const membershipByTeacherKey = new Map()
+    for (const membership of teacherDirectoryMemberships) {
+      const role = String(membership?.role || '').trim().toLowerCase()
+      if (role !== 'teacher') continue
+      const teacherKey = normalizeText(membership.teacherName || '')
+      if (!teacherKey || membershipByTeacherKey.has(teacherKey)) continue
+      membershipByTeacherKey.set(teacherKey, membership)
+    }
+
+    return teacherRecords.map((teacher) => {
+      const teacherKey = normalizeText(
+        teacher.teacherKey || teacher.teacherName || teacher.name || ''
+      )
+      const membership = teacherKey ? membershipByTeacherKey.get(teacherKey) : null
+      return {
+        ...teacher,
+        teacherMembershipId: membership?.id || '',
+        teacherMembershipUid: membership?.uid || '',
+        countEditPermissionEnabled:
+          membership?.permissions?.canEditStudentPackageCounts === true,
+      }
+    })
+  }, [teacherDirectoryMemberships, teacherRecords])
+
   const validateTeacherForm = (form) => {
     const name = String(form.name || '').trim()
     const teacherKey = normalizeText(form.teacherKey || name)
@@ -796,6 +821,35 @@ export default function Dashboard() {
     } catch (error) {
       console.error('선생님 상태 변경 실패:', error)
       alert(error.message || '선생님 상태 변경에 실패했습니다.')
+    } finally {
+      setBusyTeacherId('')
+    }
+  }
+
+  const updateTeacherCountEditPermission = async (teacher, enabled) => {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 선생님 권한을 관리할 수 있습니다.')
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      if (String(teacher.academyId || '').trim() !== scopedAcademyId) {
+        throw new Error('선생님 문서가 현재 학원에 속하지 않습니다.')
+      }
+      if (!teacher.teacherMembershipId) {
+        throw new Error('선생님 로그인 연결 정보를 찾을 수 없습니다.')
+      }
+
+      setBusyTeacherId(`${teacher.id}__count_edit_permission`)
+      await updateDoc(doc(db, 'academyMemberships', teacher.teacherMembershipId), {
+        'permissions.canEditStudentPackageCounts': enabled === true,
+        updatedAt: serverTimestamp(),
+      })
+    } catch (error) {
+      console.error('선생님 수강권 횟수 수정 권한 변경 실패:', error)
+      alert(error.message || '선생님 권한 변경에 실패했습니다.')
+      throw error
     } finally {
       setBusyTeacherId('')
     }
@@ -1234,26 +1288,57 @@ export default function Dashboard() {
         setStudentPackages([])
         return
       }
-      const q = query(
-        collection(db, 'studentPackages'),
-        where('academyId', '==', currentAcademyId),
-        where('teacher', '==', teacherKey)
-      )
-      const unsubscribe = onSnapshot(
-        q,
+      let teacherSnapshot = null
+      let teacherNameSnapshot = null
+      const mergeTeacherPackageRows = () => {
+        if (!teacherSnapshot || !teacherNameSnapshot) return
+        const rowsById = new Map()
+        ;[teacherSnapshot, teacherNameSnapshot].forEach((snapshot) => {
+          snapshot.docs.forEach((docItem) => {
+            rowsById.set(docItem.id, {
+              id: docItem.id,
+              ...docItem.data(),
+            })
+          })
+        })
+        setStudentPackages([...rowsById.values()])
+      }
+      const unsubscribeTeacher = onSnapshot(
+        query(
+          collection(db, 'studentPackages'),
+          where('academyId', '==', currentAcademyId),
+          where('teacher', '==', teacherKey)
+        ),
         (snapshot) => {
-          const rows = snapshot.docs.map((docItem) => ({
-            id: docItem.id,
-            ...docItem.data(),
-          }))
-          setStudentPackages(rows)
+          teacherSnapshot = snapshot
+          mergeTeacherPackageRows()
         },
         (error) => {
-          console.error('studentPackages 불러오기 실패:', error)
-          setStudentPackages([])
+          console.error('studentPackages(teacher) 불러오기 실패:', error)
+          teacherSnapshot = { docs: [] }
+          mergeTeacherPackageRows()
         }
       )
-      return () => unsubscribe()
+      const unsubscribeTeacherName = onSnapshot(
+        query(
+          collection(db, 'studentPackages'),
+          where('academyId', '==', currentAcademyId),
+          where('teacherName', '==', teacherKey)
+        ),
+        (snapshot) => {
+          teacherNameSnapshot = snapshot
+          mergeTeacherPackageRows()
+        },
+        (error) => {
+          console.error('studentPackages(teacherName) 불러오기 실패:', error)
+          teacherNameSnapshot = { docs: [] }
+          mergeTeacherPackageRows()
+        }
+      )
+      return () => {
+        unsubscribeTeacher()
+        unsubscribeTeacherName()
+      }
     }
 
     setStudentPackages([])
@@ -1338,17 +1423,24 @@ export default function Dashboard() {
     const canUseTeacherGroupSection =
       isDashboardTeacherProfile(userProfile) && normalizeText(userProfile?.teacherName || '')
     const canUseTeacherPrivateRequestsSection = canUseTeacherGroupSection
+    const canUseTeacherPackageCountSection =
+      canUseTeacherGroupSection && userProfile?.canEditStudentPackageCounts === true
     if (
       !isDashboardAdminProfile(userProfile) &&
-      (['students', 'privateSlots', 'lessonRequests', 'teachers', 'dailyMaterials'].includes(
-        activeSection
-      ) ||
+      ((activeSection === 'students' && !canUseTeacherPackageCountSection) ||
+        ['privateSlots', 'lessonRequests', 'teachers', 'dailyMaterials'].includes(activeSection) ||
         (activeSection === 'groups' && !canUseTeacherGroupSection) ||
         (activeSection === 'teacherPrivateRequests' && !canUseTeacherPrivateRequestsSection))
     ) {
       setActiveSection('calendar')
     }
-  }, [activeSection, userProfile?.membershipRole, userProfile?.role, userProfile?.teacherName])
+  }, [
+    activeSection,
+    userProfile?.canEditStudentPackageCounts,
+    userProfile?.membershipRole,
+    userProfile?.role,
+    userProfile?.teacherName,
+  ])
 
   useEffect(() => {
     if (!selectedGroupClass?.id || !isValidOperationalAcademyId(currentAcademyId)) {
@@ -2102,6 +2194,8 @@ export default function Dashboard() {
   const teacherGroupClassKey = normalizeText(userProfile?.teacherName || '')
   const canManageOwnGroupClasses =
     !isAdmin && isDashboardTeacherProfile(userProfile) && Boolean(teacherGroupClassKey)
+  const canUseStudentPackageCountSection =
+    canManageOwnGroupClasses && userProfile?.canEditStudentPackageCounts === true
   const canAddStudent = isAdmin
   const canEditStudent = isAdmin
   const canDeleteStudent = isAdmin
@@ -2412,6 +2506,8 @@ export default function Dashboard() {
     studentPackageHistoryRows,
     studentPackageHistoryLoading,
     openStudentPackageEditModal,
+    canEditStudentPackageCountsForPackage,
+    studentPackageEditMode,
     closeStudentPackageEditModal,
     submitStudentPackageEditModal,
     endStudentPackage,
@@ -3582,6 +3678,7 @@ export default function Dashboard() {
     handleDeleteStudent,
     openStudentPackageModal,
     openStudentPackageEditModal,
+    canEditStudentPackageCountsForPackage,
     endStudentPackage,
     openStudentPackageHistoryModal,
     openStudentPackageReRegisterModal,
@@ -3699,6 +3796,7 @@ export default function Dashboard() {
     setStudentPackageEditForm,
     studentPackageEditFormErrors,
     busyStudentPackageActionId,
+    studentPackageEditMode,
     closeStudentPackageEditModal,
     submitStudentPackageEditModal,
   }
@@ -3852,7 +3950,7 @@ export default function Dashboard() {
 
   const teacherManagementSectionProps = {
     currentAcademyId,
-    teachers: teacherRecords,
+    teachers: teacherManagementTeachers,
     teachersLoading,
     teacherForm,
     setTeacherForm,
@@ -3862,6 +3960,7 @@ export default function Dashboard() {
     editTeacher,
     cancelTeacherEdit: resetTeacherForm,
     updateTeacherStatus,
+    updateTeacherCountEditPermission,
     busyTeacherId,
   }
 
@@ -3876,7 +3975,7 @@ export default function Dashboard() {
         <nav className="sidebar-nav">
   {[
     { key: 'calendar', label: '캘린더' },
-    ...(isAdmin ? [{ key: 'students', label: '학생 관리' }] : []),
+    ...(isAdmin || canUseStudentPackageCountSection ? [{ key: 'students', label: '학생 관리' }] : []),
     ...(canManageOwnGroupClasses
       ? [{ key: 'teacherPrivateRequests', label: TEACHER_PRIVATE_LESSON_REQUESTS_LABEL }]
       : []),
@@ -3972,7 +4071,7 @@ export default function Dashboard() {
 	          {activeSection === 'calendar' && (
             <CalendarSection {...calendarSectionProps.month} />
           )}
-          {activeSection === 'students' && isAdmin ? (
+          {activeSection === 'students' && (isAdmin || canUseStudentPackageCountSection) ? (
             <StudentsSection {...studentsSectionProps} />
           ) : null}
           {activeSection === 'groups' && (isAdmin || canManageOwnGroupClasses) ? (
@@ -4022,7 +4121,7 @@ export default function Dashboard() {
       {activeSection === 'students' && isAdmin && studentPackageModalStudent ? (
         <StudentPackageModal {...studentPackageModalProps} />
       ) : null}
-      {activeSection === 'students' && isAdmin && studentPackageEditModalPackage ? (
+      {activeSection === 'students' && studentPackageEditModalPackage ? (
         <StudentPackageEditModal {...studentPackageEditModalProps} />
       ) : null}
 

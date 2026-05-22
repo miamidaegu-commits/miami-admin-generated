@@ -313,6 +313,7 @@ export default function StudentsSection({
   handleDeleteStudent,
   openStudentPackageModal,
   openStudentPackageEditModal,
+  canEditStudentPackageCountsForPackage = () => false,
   endStudentPackage,
   openStudentPackageHistoryModal,
   openStudentPackageReRegisterModal,
@@ -1765,7 +1766,7 @@ export default function StudentsSection({
                             {formatStudentPackageDetailMemo(pkg.memo)}
                           </span>
                         </div>
-                        {isAdmin ? (
+                        {isAdmin || canEditStudentPackageCountsForPackage(pkg) ? (
                           <div
                             style={{
                               display: 'flex',
@@ -1774,29 +1775,32 @@ export default function StudentsSection({
                               flexWrap: 'wrap',
                             }}
                           >
-                            <button
-                              type="button"
-                              onClick={() => openStudentPackageEditModal(pkg)}
-                              data-testid="student-package-edit-button"
-                              disabled={
-                                busyStudentPackageActionId != null || busyStudentPackageSubmit
-                              }
-                              style={{
-                                padding: '6px 12px',
-                                borderRadius: 8,
-                                border: '1px solid #555',
-                                background: '#1f2a44',
-                                color: 'white',
-                                cursor:
+                            {canEditStudentPackageCountsForPackage(pkg) ? (
+                              <button
+                                type="button"
+                                onClick={() => openStudentPackageEditModal(pkg)}
+                                data-testid="student-package-edit-button"
+                                disabled={
                                   busyStudentPackageActionId != null || busyStudentPackageSubmit
-                                    ? 'not-allowed'
-                                    : 'pointer',
-                                fontSize: 13,
-                              }}
-                            >
-                              수정
-                            </button>
-                            <button
+                                }
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 8,
+                                  border: '1px solid #555',
+                                  background: '#1f2a44',
+                                  color: 'white',
+                                  cursor:
+                                    busyStudentPackageActionId != null || busyStudentPackageSubmit
+                                      ? 'not-allowed'
+                                      : 'pointer',
+                                  fontSize: 13,
+                                }}
+                              >
+                                수정
+                              </button>
+                            ) : null}
+                            {isAdmin ? (
+                              <button
                               type="button"
                               onClick={() => openStudentPackageHistoryModal(pkg)}
                               data-testid="student-package-history-button"
@@ -1818,7 +1822,9 @@ export default function StudentsSection({
                             >
                               이력 보기
                             </button>
-                            <button
+                            ) : null}
+                            {isAdmin ? (
+                              <button
                               type="button"
                               onClick={() => endStudentPackage(pkg)}
                               disabled={
@@ -1843,7 +1849,9 @@ export default function StudentsSection({
                             >
                               종료
                             </button>
-                            {String(pkg.status || 'active').toLowerCase() === 'exhausted' ||
+                            ) : null}
+                            {isAdmin &&
+                            (String(pkg.status || 'active').toLowerCase() === 'exhausted' ||
                             String(pkg.status || 'active').toLowerCase() === 'ended' ? (
                               <button
                                 type="button"
@@ -1866,7 +1874,7 @@ export default function StudentsSection({
                               >
                                 재등록
                               </button>
-                            ) : null}
+                            ) : null)}
                           </div>
                         ) : null}
                       </div>

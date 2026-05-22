@@ -110,6 +110,7 @@ export default function TeacherManagementSection({
   editTeacher,
   cancelTeacherEdit,
   updateTeacherStatus,
+  updateTeacherCountEditPermission,
   busyTeacherId,
 }) {
   const isEditing = Boolean(teacherForm.id)
@@ -120,6 +121,8 @@ export default function TeacherManagementSection({
   const [inviteError, setInviteError] = useState('')
   const [inviteResult, setInviteResult] = useState(null)
   const [inviteCopied, setInviteCopied] = useState(false)
+  const [permissionMessage, setPermissionMessage] = useState('')
+  const [permissionError, setPermissionError] = useState('')
 
   const invitationMessage = useMemo(() => {
     const resetLink = String(inviteResult?.passwordResetLink || inviteResult?.resetLink || '').trim()
@@ -187,6 +190,24 @@ export default function TeacherManagementSection({
       setInviteCopied(true)
     } catch (error) {
       console.warn('선생님 로그인 초대 안내문 복사 실패:', error)
+    }
+  }
+
+  async function toggleCountEditPermission(teacher) {
+    if (!updateTeacherCountEditPermission) return
+    const nextEnabled = teacher.countEditPermissionEnabled !== true
+    setPermissionMessage('')
+    setPermissionError('')
+    try {
+      await updateTeacherCountEditPermission(teacher, nextEnabled)
+      setPermissionMessage(
+        nextEnabled
+          ? '학생 수강권 횟수 수정 권한을 허용했습니다.'
+          : '학생 수강권 횟수 수정 권한을 차단했습니다.'
+      )
+    } catch (error) {
+      console.error('학생 수강권 횟수 수정 권한 변경 실패:', error)
+      setPermissionError('권한 변경에 실패했습니다. 잠시 후 다시 시도해 주세요.')
     }
   }
 
@@ -318,30 +339,92 @@ export default function TeacherManagementSection({
         <p style={{ opacity: 0.8 }}>등록된 선생님이 없습니다.</p>
       ) : (
         <div className="activity-table">
+          {permissionMessage ? (
+            <p
+              data-testid="teacher-count-edit-permission-success"
+              style={{ margin: '0 0 10px 0', color: '#9ee6b2', fontSize: 13 }}
+            >
+              {permissionMessage}
+            </p>
+          ) : null}
+          {permissionError ? (
+            <p
+              data-testid="teacher-count-edit-permission-error"
+              style={{ margin: '0 0 10px 0', color: '#f4a7a7', fontSize: 13 }}
+            >
+              {permissionError}
+            </p>
+          ) : null}
           <div
             className="table-head"
-            style={{ gridTemplateColumns: '1fr 1fr 0.7fr 1fr minmax(150px, auto)' }}
+            style={{
+              gridTemplateColumns: '1fr 1fr 0.7fr 1fr minmax(180px, 1.1fr) minmax(150px, auto)',
+            }}
           >
             <span>이름</span>
             <span>teacherKey</span>
             <span>상태</span>
             <span>수정일</span>
+            <span>학생 수강권 횟수 수정 권한</span>
             <span>작업</span>
           </div>
           {teachers.map((teacher) => {
             const teacherKey = getTeacherKey(teacher)
             const active = String(teacher.status || 'active') === 'active'
+            const countEditEnabled = teacher.countEditPermissionEnabled === true
+            const permissionBusy = busyTeacherId === `${teacher.id}__count_edit_permission`
+            const hasLinkedMembership = Boolean(teacher.teacherMembershipId)
             return (
             <div
               key={teacher.id}
               className="table-row"
-              style={{ gridTemplateColumns: '1fr 1fr 0.7fr 1fr minmax(150px, auto)' }}
+              style={{
+                gridTemplateColumns:
+                  '1fr 1fr 0.7fr 1fr minmax(180px, 1.1fr) minmax(150px, auto)',
+              }}
               data-testid="teacher-management-row"
+              data-teacher-key={teacherKey}
             >
               <span>{cleanText(teacher.name || teacher.teacherName)}</span>
               <span className="cell-user">{cleanText(teacherKey)}</span>
               <span>{statusLabel(teacher.status)}</span>
               <span className="cell-time">{formatDateTime(teacher.updatedAt)}</span>
+              <span style={{ display: 'grid', gap: 6, alignContent: 'start' }}>
+                <span
+                  data-testid="teacher-count-edit-permission-status"
+                  style={{
+                    fontSize: 12,
+                    color: countEditEnabled ? '#9ee6b2' : '#f4c7a1',
+                  }}
+                >
+                  {hasLinkedMembership
+                    ? countEditEnabled
+                      ? '횟수 수정 허용'
+                      : '횟수 수정 차단'
+                    : '로그인 연결 필요'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleCountEditPermission(teacher)}
+                  disabled={!hasLinkedMembership || permissionBusy}
+                  data-testid="teacher-count-edit-permission-toggle"
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: 8,
+                    border: countEditEnabled ? '1px solid #7a3636' : '1px solid #335544',
+                    background: countEditEnabled ? '#3f1f25' : '#243528',
+                    color: 'white',
+                    cursor: !hasLinkedMembership || permissionBusy ? 'not-allowed' : 'pointer',
+                    opacity: !hasLinkedMembership ? 0.65 : 1,
+                  }}
+                >
+                  {permissionBusy
+                    ? '변경 중...'
+                    : countEditEnabled
+                    ? '횟수 수정 차단'
+                    : '횟수 수정 허용'}
+                </button>
+              </span>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {active ? (
                   <button
