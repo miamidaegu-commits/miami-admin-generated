@@ -1344,19 +1344,52 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
               deductMemo: String(data.deductMemo || ''),
               seriesID: String(data.seriesID || ''),
               sessionNumber: data.sessionNumber || null,
+              packageId: String(data.packageId || ''),
             };
           })
           .sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
 
+        const packageSnap = requestData
+          ? await getDocs(
+              query(
+                collection(db, 'studentPackages'),
+                where('academyId', '==', academyId),
+                where('studentId', '==', String(requestData.studentId || requestData.studentID || ''))
+              )
+            )
+          : { docs: [] };
+        const requestTeacher = String(requestData?.teacher || requestData?.teacherName || '');
+        const packages = packageSnap.docs
+          .map((packageDoc) => {
+            const data = packageDoc.data() || {};
+            return {
+              id: packageDoc.id,
+              academyId: String(data.academyId || ''),
+              studentId: String(data.studentId || ''),
+              studentName: String(data.studentName || ''),
+              teacher: String(data.teacher || data.teacherName || ''),
+              packageType: String(data.packageType || ''),
+              totalCount: data.totalCount ?? null,
+              usedCount: data.usedCount ?? null,
+              remainingCount: data.remainingCount ?? null,
+              status: String(data.status || ''),
+            };
+          })
+          .filter((pkg) => !requestTeacher || pkg.teacher === requestTeacher)
+          .sort((a, b) => a.id.localeCompare(b.id));
+
         return {
           exists: requestSnap.exists(),
           approvalStatus: String(requestData?.approvalStatus || ''),
+          status: String(requestData?.status || ''),
           rejectionReason: String(requestData?.rejectionReason || ''),
           lessonId: String(requestData?.lessonId || requestData?.lessonID || ''),
+          fixedPrivatePackageId: String(requestData?.fixedPrivatePackageId || ''),
           reviewedByUID: String(requestData?.reviewedByUID || ''),
           approvedByUID: String(requestData?.approvedByUID || ''),
           rejectedByUID: String(requestData?.rejectedByUID || ''),
           lessons,
+          packages,
         };
       }
       function formatYmdFromDate(date) {

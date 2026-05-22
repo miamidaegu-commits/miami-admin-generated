@@ -2,7 +2,15 @@ name: E2E
 
 on:
   push:
+    branches:
+      - product-version
   pull_request:
+    branches:
+      - product-version
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-e2e:

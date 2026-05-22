@@ -386,9 +386,13 @@ export default function TeacherPrivateLessonRequestsSection({
           repeatWeekly: plan.repeatWeekly,
           repeatWeeks: plan.repeatWeeks,
           approvalStatus: 'pending',
+          status: 'pending',
           createdAt: timestamp,
           rejectionReason: '',
           seriesID,
+        }
+        if (paidLessonCount) {
+          requestPayload.fixedPrivateTotalCount = paidLessonCount
         }
         batch.set(requestRef, requestPayload)
       })

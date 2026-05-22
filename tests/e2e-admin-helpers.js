@@ -171,7 +171,7 @@ export async function createAdminSeededLessonRequest(params = {}) {
   const studentId = String(params.studentId || `e2e_request_student_${Date.now()}`).trim();
   const studentName = String(params.studentName || `E2E 요청학생 ${Date.now()}`).trim();
 
-  await requestRef.set({
+  const requestPayload = {
     academyId,
     teacherUID: teacherUser.uid,
     teacherName,
@@ -189,10 +189,34 @@ export async function createAdminSeededLessonRequest(params = {}) {
         ? Number(params.repeatWeeks)
         : 1,
     approvalStatus: 'pending',
+    status: String(params.status || 'pending').trim(),
     createdAt: timestampNow(),
     rejectionReason: '',
     seriesID: String(params.seriesID || ''),
+  };
+
+  [
+    'fixedPrivateTotalCount',
+    'paidLessons',
+    'totalCount',
+    'lessonCount',
+    'numberOfLessons',
+    'recurrenceCount',
+    'repeatCount',
+    'count',
+    'sessions',
+    'durationWeeks',
+  ].forEach((fieldName) => {
+    if (params[fieldName] !== undefined) {
+      requestPayload[fieldName] = params[fieldName];
+    }
   });
+  ['repeat', 'isRecurring', 'repeatEnabled'].forEach((fieldName) => {
+    if (params[fieldName] !== undefined) {
+      requestPayload[fieldName] = params[fieldName] === true;
+    }
+  });
+  await requestRef.set(requestPayload);
 
   return {
     requestId: requestRef.id,
@@ -215,6 +239,8 @@ export async function getAdminSeededLessonRequest(requestId) {
     id: snap.id,
     academyId: data.academyId || null,
     approvalStatus: data.approvalStatus || null,
+    status: data.status || null,
+    requestStatus: data.requestStatus || null,
     studentId: data.studentId || data.studentID || null,
     studentName: data.studentName || data.student || null,
     teacherName: data.teacherName || data.teacher || null,
@@ -223,6 +249,8 @@ export async function getAdminSeededLessonRequest(requestId) {
     subject: data.subject || null,
     repeatWeekly: data.repeatWeekly === true,
     repeatWeeks: data.repeatWeeks || null,
+    fixedPrivateTotalCount: data.fixedPrivateTotalCount || null,
+    raw: data,
   };
 }
 
