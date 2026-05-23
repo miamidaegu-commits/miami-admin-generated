@@ -20,6 +20,19 @@ function reservationStatusLabel(status) {
   return status === 'active' ? '예약 완료' : '예약 취소됨'
 }
 
+const WEEKDAY_OPTIONS = [
+  { value: '1', label: '월요일' },
+  { value: '2', label: '화요일' },
+  { value: '3', label: '수요일' },
+  { value: '4', label: '목요일' },
+  { value: '5', label: '금요일' },
+  { value: '6', label: '토요일' },
+]
+
+function weekdayLabel(value) {
+  return WEEKDAY_OPTIONS.find((option) => option.value === String(value))?.label || '-'
+}
+
 function normalizeEligibleStudentIds(values) {
   const out = []
   const seen = new Set()
@@ -48,6 +61,14 @@ export default function PrivateLessonSlotsSection({
   setPrivateSlotForm,
   privateSlotFormErrors,
   privateSlotCreateResult,
+  privateAvailabilityTemplateForm,
+  setPrivateAvailabilityTemplateForm,
+  privateAvailabilityTemplateErrors,
+  createPrivateAvailabilityTemplate,
+  updatePrivateAvailabilityTemplateStatus,
+  privateAvailabilityTemplates = [],
+  privateAvailabilityTemplatesLoading,
+  busyPrivateAvailabilityTemplateId,
   privateStudents = [],
   createPrivateSlot,
   updatePrivateSlotEligibility,
@@ -104,23 +125,224 @@ export default function PrivateLessonSlotsSection({
       </div>
 
       {canManagePrivateSlots ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault()
-            createPrivateSlot()
-          }}
-          data-testid="private-slot-form"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-            gap: 12,
-            padding: 16,
-            border: '1px solid #2e3240',
-            borderRadius: 12,
-            background: '#151922',
-            marginBottom: 20,
-          }}
-        >
+        <>
+          <section
+            data-testid="private-availability-template-section"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 8,
+              background: '#151922',
+              marginBottom: 20,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 16 }}>주간 1:1 가능 시간</h3>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                createPrivateAvailabilityTemplate()
+              }}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                gap: 12,
+              }}
+            >
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                선생님
+                <select
+                  value={privateAvailabilityTemplateForm.teacher}
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      teacher: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="">선택</option>
+                  {teacherSelectOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {privateAvailabilityTemplateErrors.teacher ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.teacher}
+                  </span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                요일
+                <select
+                  value={privateAvailabilityTemplateForm.weekday}
+                  data-testid="private-availability-template-weekday"
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      weekday: event.target.value,
+                    }))
+                  }
+                >
+                  {WEEKDAY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {privateAvailabilityTemplateErrors.weekday ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.weekday}
+                  </span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                시간
+                <input
+                  type="time"
+                  value={privateAvailabilityTemplateForm.time}
+                  data-testid="private-availability-template-time"
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      time: event.target.value,
+                    }))
+                  }
+                />
+                {privateAvailabilityTemplateErrors.time ? (
+                  <span style={{ color: '#f4a7a7' }}>{privateAvailabilityTemplateErrors.time}</span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                분
+                <input
+                  type="number"
+                  min="10"
+                  max="240"
+                  step="5"
+                  value={privateAvailabilityTemplateForm.durationMinutes}
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      durationMinutes: event.target.value,
+                    }))
+                  }
+                />
+                {privateAvailabilityTemplateErrors.durationMinutes ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.durationMinutes}
+                  </span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                상태
+                <select
+                  value={privateAvailabilityTemplateForm.status}
+                  data-testid="private-availability-template-status"
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      status: event.target.value,
+                    }))
+                  }
+                >
+                  <option value="active">사용</option>
+                  <option value="inactive">중지</option>
+                </select>
+              </label>
+              <div style={{ display: 'flex', alignItems: 'end' }}>
+                <button
+                  type="submit"
+                  disabled={busyPrivateAvailabilityTemplateId === '__add__'}
+                  data-testid="private-availability-template-add-button"
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #456034',
+                    background: '#2d4d2d',
+                    color: 'white',
+                    cursor:
+                      busyPrivateAvailabilityTemplateId === '__add__' ? 'not-allowed' : 'pointer',
+                    width: '100%',
+                  }}
+                >
+                  {busyPrivateAvailabilityTemplateId === '__add__' ? '추가 중...' : '추가'}
+                </button>
+              </div>
+            </form>
+            {privateAvailabilityTemplatesLoading ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>불러오는 중...</p>
+            ) : privateAvailabilityTemplates.length === 0 ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 가능 시간이 없습니다.</p>
+            ) : (
+              <div style={{ display: 'grid', gap: 8 }}>
+                {privateAvailabilityTemplates.map((template) => {
+                  const busy = busyPrivateAvailabilityTemplateId === template.id
+                  const status = String(template.status || 'active') === 'active' ? 'active' : 'inactive'
+                  return (
+                    <div
+                      key={template.id}
+                      data-testid="private-availability-template-row"
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 0.8fr 0.8fr 0.8fr auto',
+                        gap: 8,
+                        alignItems: 'center',
+                        border: '1px solid #2e3240',
+                        borderRadius: 8,
+                        padding: 10,
+                      }}
+                    >
+                      <span>{template.teacherName || template.teacher || '-'}</span>
+                      <span>{weekdayLabel(template.weekday)}</span>
+                      <span>{template.time || '-'}</span>
+                      <span>{status === 'active' ? '사용' : '중지'}</span>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          updatePrivateAvailabilityTemplateStatus(
+                            template,
+                            status === 'active' ? 'inactive' : 'active'
+                          )
+                        }
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #444',
+                          background: '#1f2a44',
+                          color: 'white',
+                          cursor: busy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {busy ? '처리 중...' : status === 'active' ? '중지' : '사용'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              createPrivateSlot()
+            }}
+            data-testid="private-slot-form"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              background: '#151922',
+              marginBottom: 20,
+            }}
+          >
           {isAdmin ? (
             <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
               선생님
@@ -288,7 +510,8 @@ export default function PrivateLessonSlotsSection({
                 : ''}
             </div>
           ) : null}
-        </form>
+          </form>
+        </>
       ) : null}
 
       {privateLessonSlotsLoading || privateLessonReservationsLoading ? (
