@@ -4,11 +4,13 @@ const DAY_MS = 24 * HOUR_MS
 export const PRIVATE_BOOKING_CUTOFF_HOURS = 7
 export const PRIVATE_BOOKING_STATUS_LABELS = {
   available: '예약 가능',
+  busy: '수업 있음',
   not_open: '예약 오픈 대기',
   closed: '예약 마감 · 수업 준비 중',
+  my_reservation: '내 예약',
   reserved_by_me: '내 예약',
-  reserved: '예약 완료',
-  blocked: '예약 중지',
+  reserved: '수업 있음',
+  blocked: '수업 있음',
   no_package: '수강권 없음',
 }
 
@@ -123,7 +125,8 @@ export function getPrivateBookingStatus({
   isReservedByMe = false,
 }) {
   const rawStatus = String(slot?.status || '').trim()
-  if (isReservedByMe) return 'reserved_by_me'
+  if (isReservedByMe) return 'my_reservation'
+  if (slot?.isBusy === true) return String(slot?.bookingStatus || 'busy').trim() || 'busy'
   if (rawStatus === 'reserved') return 'reserved'
   if (rawStatus === 'blocked' || rawStatus === 'closed' || rawStatus === 'cancelled') return 'blocked'
   if (!hasPackage || Number(slot?.packageRemainingCount ?? 1) <= 0) return 'no_package'

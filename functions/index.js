@@ -335,7 +335,11 @@ function hasSlotAccess({slot, summary, slotId, studentId}) {
   return eligibleStudentIds.includes(studentId) ||
     allowedSlotIds.includes(slotId) ||
     allowedPrivateLessonSlotIds.includes(slotId) ||
-    hasTeacherPackageAccess;
+    (eligibleStudentIds.length === 0 && hasTeacherPackageAccess);
+}
+
+function hasExplicitSlotEligibility(slot) {
+  return normalizeIdList(slot && slot.eligibleStudentIds).length > 0;
 }
 
 function isActivePrivateReservation(data) {
@@ -748,10 +752,13 @@ function timestampFromMillis(millis) {
 
 function getPrivateBookingStatusLabel(status) {
   if (status === "available") return "예약 가능";
+  if (status === "busy") return "수업 있음";
   if (status === "not_open") return "예약 오픈 대기";
   if (status === "closed") return "예약 마감 · 수업 준비 중";
+  if (status === "my_reservation") return "내 예약";
   if (status === "reserved_by_me") return "내 예약";
-  if (status === "reserved") return "예약 완료";
+  if (status === "reserved") return "수업 있음";
+  if (status === "blocked") return "수업 있음";
   if (status === "no_package") return "수강권 없음";
   return "예약 중지";
 }
@@ -777,10 +784,12 @@ function computePrivateBookingStatus({
       activeReservation && activeReservation.studentId,
   );
   if (reservationStudentId && reservationStudentId === studentId) {
-    return "reserved_by_me";
+    return "my_reservation";
   }
-  const status = normalizeId(slot && slot.status);
+  const status = normalizeId(slot && slot.status).toLowerCase();
+  if (slot && slot.isBusy === true) return "busy";
   if (status === "reserved") return "reserved";
+  if (status === "blocked") return "blocked";
   if (status !== "open") return "blocked";
   if (!packageSummary || Number(packageSummary.remainingCount || 0) <= 0) {
     return "no_package";
@@ -909,14 +918,29 @@ function sanitizePrivateSlotAvailabilityRow({
     studentId,
   });
   const isBookable = bookingStatus === "available";
+  const isBusy =
+    bookingStatus === "busy" ||
+    bookingStatus === "reserved" ||
+    status === "blocked";
   const bookingOpensAt = window ? window.bookingOpensAt : null;
   const bookingClosesAt = window ? window.bookingClosesAt : null;
   const startsAt = window ? window.startsAt : null;
+  const packageRemainingCount = packageSummary ?
+    Number(packageSummary.remainingCount || 0) :
+    0;
+  const safePackageSummary = packageSummary ? {
+    packageId: packageSummary.packageId || "",
+    teacherKey: packageSummary.teacherKey || "",
+    remainingCount: packageRemainingCount,
+  } : null;
 
   return {
     id: slotId,
     academyId: normalizeId(slot && slot.academyId),
     teacher: normalizeId(slot && slot.teacher),
+    teacherKey:
+      normalizeTeacherKey(slot && slot.teacher) ||
+      normalizeTeacherKey(slot && slot.teacherName),
     teacherName: normalizeId(slot && slot.teacherName),
     date: normalizeId(slot && slot.date),
     time: normalizeId(slot && slot.time),
@@ -929,6 +953,8 @@ function sanitizePrivateSlotAvailabilityRow({
     statusLabel: getPrivateBookingStatusLabel(bookingStatus),
     isReserved,
     isBookable,
+    isReservable: isBookable,
+    isBusy,
     bookingStatus,
     bookingStatusLabel: getPrivateBookingStatusLabel(bookingStatus),
     bookingOpensAtMillis: bookingOpensAt,
@@ -947,9 +973,8 @@ function sanitizePrivateSlotAvailabilityRow({
         getPrivateBookingOpenRelativeLabel(bookingOpensAt, nowMillis) :
         "",
     packageId: packageSummary ? packageSummary.packageId : "",
-    packageRemainingCount: packageSummary ?
-      Number(packageSummary.remainingCount || 0) :
-      0,
+    packageRemainingCount,
+    packageSummary: safePackageSummary,
     slotType: normalizeId(slot && slot.slotType),
     releasedFromFixed: slot && slot.releasedFromFixed === true,
     availabilityTemplateId: normalizeId(slot && slot.availabilityTemplateId),
@@ -958,6 +983,248 @@ function sanitizePrivateSlotAvailabilityRow({
       normalizeId(slot && slot.slotType) === "released_fixed" ||
       (slot && slot.releasedFromFixed === true),
   };
+}
+
+function isPrivateScheduleDateInRange(value, startDate, endDate) {
+  const date = normalizeId(value);
+  return (
+    /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    date >= startDate &&
+    date <= endDate
+  );
+}
+
+function getPrivateScheduleDurationMinutes(row) {
+  const duration = Number(
+      row && (
+        row.durationMinutes ||
+        row.duration ||
+        row.lessonDurationMinutes ||
+        row.classDurationMinutes
+      ),
+  );
+  if (Number.isFinite(duration) && duration > 0) return Math.floor(duration);
+  return 50;
+}
+
+function getPrivateScheduleTeacherKey(row) {
+  return normalizeTeacherKey(
+      (row && row.teacherKey) ||
+      (row && row.teacher) ||
+      (row && row.teacherName),
+  );
+}
+
+function isCancelledScheduleRow(row) {
+  const status = normalizeId(row && row.status).toLowerCase();
+  const approvalStatus = normalizeId(row && row.approvalStatus).toLowerCase();
+  if (status === "cancelled" || status === "canceled") return true;
+  if (row && row.completed === "cancelled") return true;
+  if (row && row.isDeductCancelled === true) return true;
+  if (approvalStatus && approvalStatus !== "approved") return true;
+  return false;
+}
+
+function buildBusyPrivateScheduleRow({
+  id,
+  academyId,
+  teacherKey,
+  teacherName,
+  date,
+  time,
+  durationMinutes,
+  packageSummary,
+  status = "busy",
+}) {
+  const startsAt = getSeoulDateTimeMillis(date, time);
+  const window = computePrivateBookingWindow({date, time});
+  const safeStatus = status === "reserved" || status === "blocked" ?
+    status :
+    "busy";
+  const packageRemainingCount = packageSummary ?
+    Number(packageSummary.remainingCount || 0) :
+    0;
+  return {
+    id,
+    academyId,
+    teacher: teacherKey,
+    teacherKey,
+    teacherName: normalizeId(teacherName || teacherKey),
+    date,
+    time,
+    durationMinutes,
+    status: safeStatus,
+    statusLabel: getPrivateBookingStatusLabel(safeStatus),
+    isReserved: safeStatus === "reserved",
+    isBookable: false,
+    isReservable: false,
+    isBusy: true,
+    bookingStatus: safeStatus,
+    bookingStatusLabel: getPrivateBookingStatusLabel(safeStatus),
+    bookingOpensAtMillis: window ? window.bookingOpensAt : null,
+    bookingClosesAtMillis: window ? window.bookingClosesAt : null,
+    startsAtMillis: startsAt,
+    bookingOpensAt: window && window.bookingOpensAt ?
+      timestampFromMillis(window.bookingOpensAt) :
+      null,
+    bookingClosesAt: window && window.bookingClosesAt ?
+      timestampFromMillis(window.bookingClosesAt) :
+      null,
+    startsAt: startsAt ? timestampFromMillis(startsAt) : null,
+    bookingOpenDisplay: window && window.bookingOpensAt ?
+      formatSeoulOpenDateTime(window.bookingOpensAt) :
+      "",
+    bookingOpenRelativeLabel: "",
+    packageId: packageSummary ? packageSummary.packageId : "",
+    packageRemainingCount,
+    packageSummary: packageSummary ? {
+      packageId: packageSummary.packageId || "",
+      teacherKey: packageSummary.teacherKey || "",
+      remainingCount: packageRemainingCount,
+    } : null,
+    slotType: "busy",
+    availabilityTemplateId: "",
+    isGeneratedFromTemplate: false,
+    isReleasedFixedSlot: false,
+  };
+}
+
+function addBusyRowsFromQuerySnapshot({
+  snap,
+  busyRowsByKey,
+  academyId,
+  packageByTeacherKey,
+  rangeStart,
+  rangeEnd,
+  source,
+}) {
+  snap.docs.forEach((docSnap) => {
+    const row = docSnap.data() || {};
+    if (normalizeId(row.academyId) !== academyId) return;
+    if (isCancelledScheduleRow(row)) return;
+    const date = normalizeId(row.date || row.scheduleDate);
+    const time = normalizeId(row.time || row.startTime || row.scheduleTime);
+    if (!isPrivateScheduleDateInRange(date, rangeStart, rangeEnd)) return;
+    if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) return;
+    const teacherKey = getPrivateScheduleTeacherKey(row);
+    const packageSummary = packageByTeacherKey.get(teacherKey);
+    if (!teacherKey || !packageSummary) return;
+    const key = getPrivateSlotConflictKey({
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      date,
+      time,
+    });
+    if (busyRowsByKey.has(key)) return;
+    busyRowsByKey.set(key, buildBusyPrivateScheduleRow({
+      id: `busy__${source}__${docSnap.id}`,
+      academyId,
+      teacherKey,
+      teacherName: row.teacherName || row.teacher || teacherKey,
+      date,
+      time,
+      durationMinutes: getPrivateScheduleDurationMinutes(row),
+      packageSummary,
+      status: source === "privateLessonSlots" ? "reserved" : "busy",
+    }));
+  });
+}
+
+async function loadBusyPrivateScheduleRows(db, {
+  academyId,
+  teacherKeys,
+  packageByTeacherKey,
+  rangeStart,
+  rangeEnd,
+}) {
+  const busyRowsByKey = new Map();
+  const queryPromises = [];
+  for (const chunk of chunkValues(teacherKeys, PRIVATE_SLOT_QUERY_CHUNK_SIZE)) {
+    queryPromises.push({
+      source: "lessons",
+      promise: db
+          .collection("lessons")
+          .where("academyId", "==", academyId)
+          .where("teacher", "in", chunk)
+          .get(),
+    });
+    queryPromises.push({
+      source: "lessons",
+      promise: db
+          .collection("lessons")
+          .where("academyId", "==", academyId)
+          .where("teacherName", "in", chunk)
+          .get(),
+    });
+    queryPromises.push({
+      source: "groupLessons",
+      promise: db
+          .collection("groupLessons")
+          .where("academyId", "==", academyId)
+          .where("teacher", "in", chunk)
+          .get(),
+    });
+    queryPromises.push({
+      source: "groupLessons",
+      promise: db
+          .collection("groupLessons")
+          .where("academyId", "==", academyId)
+          .where("teacherName", "in", chunk)
+          .get(),
+    });
+    queryPromises.push({
+      source: "privateLessonReservations",
+      promise: db
+          .collection("privateLessonReservations")
+          .where("academyId", "==", academyId)
+          .where("teacher", "in", chunk)
+          .where("status", "==", "active")
+          .get(),
+    });
+    queryPromises.push({
+      source: "privateLessonReservations",
+      promise: db
+          .collection("privateLessonReservations")
+          .where("academyId", "==", academyId)
+          .where("teacherName", "in", chunk)
+          .where("status", "==", "active")
+          .get(),
+    });
+    ["reserved", "blocked"].forEach((status) => {
+      queryPromises.push({
+        source: "privateLessonSlots",
+        promise: db
+            .collection("privateLessonSlots")
+            .where("academyId", "==", academyId)
+            .where("status", "==", status)
+            .where("teacher", "in", chunk)
+            .get(),
+      });
+      queryPromises.push({
+        source: "privateLessonSlots",
+        promise: db
+            .collection("privateLessonSlots")
+            .where("academyId", "==", academyId)
+            .where("status", "==", status)
+            .where("teacherName", "in", chunk)
+            .get(),
+      });
+    });
+  }
+
+  const results = await Promise.all(queryPromises.map((item) => item.promise));
+  results.forEach((snap, index) => {
+    addBusyRowsFromQuerySnapshot({
+      snap,
+      busyRowsByKey,
+      academyId,
+      packageByTeacherKey,
+      rangeStart,
+      rangeEnd,
+      source: queryPromises[index].source,
+    });
+  });
+  return busyRowsByKey;
 }
 
 function getPackageSummaryByTeacherKey(packageSnap, {
@@ -1014,119 +1281,6 @@ function getPrivateSlotConflictKey({teacher, teacherName, date, time}) {
   const teacherKey =
     normalizeTeacherKey(teacher) || normalizeTeacherKey(teacherName);
   return `${teacherKey}__${normalizeId(date)}__${normalizeId(time)}`;
-}
-
-function addConflictKeysFromRows(rows, conflictKeys) {
-  rows.forEach((row) => {
-    const status = normalizeId(row && row.status).toLowerCase();
-    const approvalStatus = normalizeId(row && row.approvalStatus)
-        .toLowerCase();
-    if (
-      status === "cancelled" ||
-      status === "canceled" ||
-      status === "completed" ||
-      row.completed === "cancelled" ||
-      row.isDeductCancelled === true
-    ) {
-      return;
-    }
-    if (approvalStatus && approvalStatus !== "approved") return;
-    conflictKeys.add(getPrivateSlotConflictKey(row || {}));
-  });
-}
-
-async function loadPrivateTemplateConflictKeys(db, {
-  academyId,
-  teacherKeys,
-}) {
-  const conflictKeys = new Set();
-  const privateSlotSnaps = [];
-  const reservationSnaps = [];
-  const lessonSnaps = [];
-  for (const chunk of chunkValues(teacherKeys, PRIVATE_SLOT_QUERY_CHUNK_SIZE)) {
-    privateSlotSnaps.push(
-        db
-            .collection("privateLessonSlots")
-            .where("academyId", "==", academyId)
-            .where("teacher", "in", chunk)
-            .get(),
-    );
-    privateSlotSnaps.push(
-        db
-            .collection("privateLessonSlots")
-            .where("academyId", "==", academyId)
-            .where("teacherName", "in", chunk)
-            .get(),
-    );
-    lessonSnaps.push(
-        db
-            .collection("lessons")
-            .where("academyId", "==", academyId)
-            .where("teacher", "in", chunk)
-            .get(),
-    );
-    lessonSnaps.push(
-        db
-            .collection("lessons")
-            .where("academyId", "==", academyId)
-            .where("teacherName", "in", chunk)
-            .get(),
-    );
-    reservationSnaps.push(
-        db
-            .collection("privateLessonReservations")
-            .where("academyId", "==", academyId)
-            .where("teacher", "in", chunk)
-            .where("status", "==", "active")
-            .get(),
-    );
-    reservationSnaps.push(
-        db
-            .collection("privateLessonReservations")
-            .where("academyId", "==", academyId)
-            .where("teacherName", "in", chunk)
-            .where("status", "==", "active")
-            .get(),
-    );
-  }
-  const [
-    slotResults,
-    lessonResults,
-    reservationResults,
-    groupLessonSnap,
-  ] = await Promise.all([
-    Promise.all(privateSlotSnaps),
-    Promise.all(lessonSnaps),
-    Promise.all(reservationSnaps),
-    db.collection("groupLessons").where("academyId", "==", academyId).get(),
-  ]);
-
-  slotResults.forEach((snap) => {
-    snap.docs.forEach((docSnap) => {
-      const slot = docSnap.data() || {};
-      const status = normalizeId(slot.status);
-      if (status === "open" || status === "reserved" || status === "blocked") {
-        conflictKeys.add(getPrivateSlotConflictKey(slot));
-      }
-    });
-  });
-  lessonResults.forEach((snap) => {
-    addConflictKeysFromRows(
-        snap.docs.map((docSnap) => docSnap.data() || {}),
-        conflictKeys,
-    );
-  });
-  reservationResults.forEach((snap) => {
-    addConflictKeysFromRows(
-        snap.docs.map((docSnap) => docSnap.data() || {}),
-        conflictKeys,
-    );
-  });
-  addConflictKeysFromRows(
-      groupLessonSnap.docs.map((docSnap) => docSnap.data() || {}),
-      conflictKeys,
-  );
-  return conflictKeys;
 }
 
 async function hasTeacherExactConflict(transaction, db, {
@@ -1357,6 +1511,9 @@ exports.listPrivateLessonSlotAvailability = onCall(
         const pilotBookable =
           summary && summary.privateSlotBookingPilotEnabled === true;
         const today = getSeoulTodayDateString();
+        const currentMonday = getSeoulMondayForDate(today);
+        const rangeStart = currentMonday;
+        const rangeEnd = addSeoulDays(currentMonday, 12);
         const nowMillis = Date.now();
         const byId = new Map();
 
@@ -1367,18 +1524,28 @@ exports.listPrivateLessonSlotAvailability = onCall(
           const status = String(slot.status || "").trim();
           const date = normalizeId(slot.date);
           if (normalizeId(slot.academyId) !== academyId) return;
-          if (!(status === "open" || status === "reserved")) return;
-          if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date < today) return;
+          if (!(status === "open" ||
+            status === "reserved" ||
+            status === "blocked")) {
+            return;
+          }
+          if (!isPrivateScheduleDateInRange(date, rangeStart, rangeEnd)) {
+            return;
+          }
           const matchingPackage = getSlotTeacherPackageSummary(
               slot,
               packageSummary.byTeacherKey,
           );
-          if (!hasSlotAccess({
+          const hasAccess = hasSlotAccess({
             slot,
             summary: effectiveSummary,
             slotId,
             studentId,
-          }) && !matchingPackage) {
+          });
+          if (hasExplicitSlotEligibility(slot) && !hasAccess) {
+            return;
+          }
+          if (!hasAccess && !matchingPackage) {
             return;
           }
           byId.set(slotId, slot);
@@ -1386,7 +1553,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
 
         if (hasTeacherPackageAccess) {
           const queryPromises = [];
-          ["open", "reserved"].forEach((status) => {
+          ["open", "reserved", "blocked"].forEach((status) => {
             chunkValues(teacherKeys, PRIVATE_SLOT_QUERY_CHUNK_SIZE)
                 .forEach((chunk) => {
                   queryPromises.push(
@@ -1445,7 +1612,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
             }),
         );
 
-        const manualSlots = visibleSlotEntries
+        let manualSlots = visibleSlotEntries
             .filter(([slotId, slot]) => {
               const status = String(slot.status || "").trim();
               if (status === "open") {
@@ -1476,6 +1643,25 @@ exports.listPrivateLessonSlotAvailability = onCall(
               }),
             );
 
+        const busyRowsByKey = packageTeacherKeys.length > 0 ?
+          await loadBusyPrivateScheduleRows(db, {
+            academyId,
+            teacherKeys: packageTeacherKeys,
+            packageByTeacherKey: packageSummary.byTeacherKey,
+            rangeStart,
+            rangeEnd,
+          }) :
+          new Map();
+        manualSlots = manualSlots.filter((row) => {
+          const key = getPrivateSlotConflictKey(row || {});
+          if (!key) return true;
+          if (row.bookingStatus === "my_reservation") {
+            busyRowsByKey.delete(key);
+            return true;
+          }
+          return !busyRowsByKey.has(key);
+        });
+
         const templateRows = [];
         if (packageTeacherKeys.length > 0) {
           const templateSnap = await db
@@ -1486,9 +1672,9 @@ exports.listPrivateLessonSlotAvailability = onCall(
             id: docSnap.id,
             data: docSnap.data() || {},
           }));
-          const conflictKeys = await loadPrivateTemplateConflictKeys(db, {
-            academyId,
-            teacherKeys: packageTeacherKeys,
+          const conflictKeys = new Set(busyRowsByKey.keys());
+          visibleSlotEntries.forEach(([, slot]) => {
+            conflictKeys.add(getPrivateSlotConflictKey(slot || {}));
           });
           buildTemplateSlots({
             templates,
@@ -1509,7 +1695,11 @@ exports.listPrivateLessonSlotAvailability = onCall(
           });
         }
 
-        const slots = [...manualSlots, ...templateRows]
+        const slots = [
+          ...manualSlots,
+          ...templateRows,
+          ...Array.from(busyRowsByKey.values()),
+        ]
             .sort((a, b) => {
               const aKey = `${a.date || ""} ${a.time || ""} ${a.teacher || ""}`;
               const bKey = `${b.date || ""} ${b.time || ""} ${b.teacher || ""}`;
@@ -1665,11 +1855,16 @@ exports.reservePrivateLessonSlot = onCall(
             teacherKey,
             candidatePackageIds: summary && summary.activePackageIds,
           });
+          const hasAccess = hasSlotAccess({slot, summary, slotId, studentId});
 
-          if (
-            !hasSlotAccess({slot, summary, slotId, studentId}) &&
-            !packageResult.ok
-          ) {
+          if (hasExplicitSlotEligibility(slot) && !hasAccess) {
+            throw new HttpsError(
+                "permission-denied",
+                "Student is not eligible for this private lesson slot.",
+            );
+          }
+
+          if (!hasAccess && !packageResult.ok) {
             throw new HttpsError(
                 "permission-denied",
                 "Student is not eligible for this private lesson slot.",

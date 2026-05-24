@@ -260,6 +260,7 @@ export default function StudentBookingPage() {
   const [privateSlotsLoading, setPrivateSlotsLoading] = useState(false)
   const [privateSlotsError, setPrivateSlotsError] = useState('')
   const [privateSlotsRefreshKey, setPrivateSlotsRefreshKey] = useState(0)
+  const [privateSlotViewMode, setPrivateSlotViewMode] = useState('all')
   const [privateReservations, setPrivateReservations] = useState([])
   const [privateReservationsLoading, setPrivateReservationsLoading] = useState(false)
   const [privateReservationsResolved, setPrivateReservationsResolved] = useState(false)
@@ -1143,6 +1144,8 @@ export default function StudentBookingPage() {
     return slotIds
   }, [privateReservations])
 
+  const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
+
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
@@ -1164,12 +1167,22 @@ export default function StudentBookingPage() {
   const sortedPrivateSlots = useMemo(() => {
     return privateSlots
       .filter((slot) => !activePrivateReservationSlotIds.has(String(slot.id || '').trim()))
+      .filter((slot) => {
+        if (privateSlotViewMode !== 'available') return true
+        const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
+        return (
+          bookingStatus === 'available' &&
+          slot.isBookable === true &&
+          slot.isBusy !== true &&
+          String(slot.status || '').trim() === 'open'
+        )
+      })
       .sort((a, b) => {
         const aKey = `${a.date || ''} ${a.time || ''} ${a.teacher || ''}`
         const bKey = `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`
         return aKey.localeCompare(bKey, 'ko')
       })
-  }, [activePrivateReservationSlotIds, privateSlots])
+  }, [activePrivateReservationSlotIds, canUsePrivateBooking, privateSlotViewMode, privateSlots])
 
   const privateCalendarWeeks = useMemo(() => {
     const weekStarts = []
@@ -2087,8 +2100,54 @@ export default function StudentBookingPage() {
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>1:1 수업 예약</h2>
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                내 개인 수강권 선생님의 예약 가능한 시간만 표시됩니다.
+                내 개인 수강권 선생님의 주간 예약 일정이 표시됩니다.
               </p>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  gap: 4,
+                  marginTop: 12,
+                  padding: 4,
+                  border: '1px solid #30384b',
+                  borderRadius: 8,
+                  background: '#111722',
+                }}
+              >
+                <button
+                  type="button"
+                  data-testid="private-slot-view-mode-all"
+                  onClick={() => setPrivateSlotViewMode('all')}
+                  aria-pressed={privateSlotViewMode === 'all'}
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: 6,
+                    border: '1px solid transparent',
+                    background: privateSlotViewMode === 'all' ? '#26344a' : 'transparent',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                  }}
+                >
+                  전체 시간 보기
+                </button>
+                <button
+                  type="button"
+                  data-testid="private-slot-view-mode-available"
+                  onClick={() => setPrivateSlotViewMode('available')}
+                  aria-pressed={privateSlotViewMode === 'available'}
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: 6,
+                    border: '1px solid transparent',
+                    background: privateSlotViewMode === 'available' ? '#26344a' : 'transparent',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                  }}
+                >
+                  예약 가능한 시간만
+                </button>
+              </div>
               <div
                 data-testid="student-private-booking-policy-notice"
                 style={{
@@ -2161,12 +2220,15 @@ export default function StudentBookingPage() {
                                   })
                                   const isBusy = busyPrivateReservationId === reservationId
                                   const hasActivePrivateReservation = reservation?.status === 'active'
-                                  const canUsePrivateBooking =
-                                    PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
                                   const bookingStatus = getStudentPrivateSlotStatus(
                                     slot,
                                     canUsePrivateBooking
                                   )
+                                  const isBusySlot =
+                                    slot.isBusy === true ||
+                                    bookingStatus === 'busy' ||
+                                    bookingStatus === 'reserved' ||
+                                    String(slot.status || '').trim() === 'blocked'
                                   const canReserve =
                                     canUsePrivateBooking &&
                                     bookingStatus === 'available' &&
@@ -2178,6 +2240,35 @@ export default function StudentBookingPage() {
                                     slot.bookingStatusLabel ||
                                     getPrivateBookingStatusLabel(bookingStatus)
                                   const remainingCount = Number(slot.packageRemainingCount || 0)
+
+                                  if (isBusySlot) {
+                                    return (
+                                      <article
+                                        key={slot.id}
+                                        data-testid="student-private-busy-slot-card"
+                                        data-slot-id={slot.id}
+                                        style={{
+                                          border: '1px solid #3a3348',
+                                          borderRadius: 8,
+                                          padding: 12,
+                                          background: '#211c2b',
+                                        }}
+                                      >
+                                        <div style={{ display: 'grid', gap: 6 }}>
+                                          <strong style={{ fontSize: 14 }}>
+                                            {slot.teacherName || slot.teacher || '1:1 수업'}
+                                          </strong>
+                                          <div style={{ opacity: 0.74, fontSize: 13 }}>
+                                            {slot.date || day.date} · {slot.time || '-'} ·{' '}
+                                            {Number(slot.durationMinutes || 0) || 60}분
+                                          </div>
+                                          <div style={{ opacity: 0.84, fontSize: 13 }}>
+                                            수업 있음
+                                          </div>
+                                        </div>
+                                      </article>
+                                    )
+                                  }
 
                                   return (
                                     <article
