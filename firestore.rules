@@ -680,12 +680,16 @@ service cloud.firestore {
           "capacity",
           "reservedCount",
           "startAt",
+          "bookingOpensAt",
+          "bookingClosesAt",
           "durationMinutes",
           "status",
           "eligibleStudentIds",
           "reservedStudentId",
           "reservationId",
           "slotType",
+          "availabilityTemplateId",
+          "isGeneratedFromTemplate",
           "fixedStudentId",
           "fixedStudentName",
           "releasedFromFixed",
@@ -712,11 +716,18 @@ service cloud.firestore {
         (!("capacity" in data.keys()) || data.capacity is int) &&
         (!("reservedCount" in data.keys()) || data.reservedCount is int) &&
         data.startAt is timestamp &&
+        (!("bookingOpensAt" in data.keys()) || data.bookingOpensAt is timestamp) &&
+        (!("bookingClosesAt" in data.keys()) || data.bookingClosesAt is timestamp) &&
         data.durationMinutes is int &&
         data.durationMinutes >= 10 &&
         data.durationMinutes <= 240 &&
         (!("eligibleStudentIds" in data.keys()) || data.eligibleStudentIds is list) &&
-        (!("slotType" in data.keys()) || data.slotType in ["fixed", "open", "released_fixed"]) &&
+        (!("slotType" in data.keys()) ||
+          data.slotType in ["fixed", "open", "released_fixed", "template"]) &&
+        (!("availabilityTemplateId" in data.keys()) ||
+          data.availabilityTemplateId is string) &&
+        (!("isGeneratedFromTemplate" in data.keys()) ||
+          data.isGeneratedFromTemplate is bool) &&
         (!("fixedStudentId" in data.keys()) || data.fixedStudentId is string) &&
         (!("fixedStudentName" in data.keys()) || data.fixedStudentName is string) &&
         (!("releasedFromFixed" in data.keys()) || data.releasedFromFixed is bool) &&
@@ -924,6 +935,37 @@ service cloud.firestore {
         resource.data.status in ["open", "reserved", "cancelled"] &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.eligibleStudentIds is list;
+    }
+
+    function validPrivateAvailabilityTemplateShape(data) {
+      return data.keys().hasOnly([
+          "academyId",
+          "teacher",
+          "teacherName",
+          "teacherKey",
+          "weekday",
+          "time",
+          "durationMinutes",
+          "status",
+          "createdAt",
+          "updatedAt"
+        ]) &&
+        data.academyId is string &&
+        data.academyId != "" &&
+        data.teacher is string &&
+        data.teacher != "" &&
+        data.teacherKey is string &&
+        data.teacherKey != "" &&
+        (!("teacherName" in data.keys()) || data.teacherName is string) &&
+        data.weekday is int &&
+        data.weekday >= 1 &&
+        data.weekday <= 6 &&
+        data.time is string &&
+        data.time.matches("^\\d{2}:\\d{2}$") &&
+        data.durationMinutes is int &&
+        data.durationMinutes >= 10 &&
+        data.durationMinutes <= 240 &&
+        data.status in ["active", "inactive"];
     }
 
     function validPrivateReservationStudentCreate(reservationId) {
@@ -1783,6 +1825,32 @@ service cloud.firestore {
           )
         )
       );
+
+      allow delete: if false;
+    }
+
+    match /privateLessonAvailabilityTemplates/{templateId} {
+      allow read: if sameAcademyOnRead() &&
+        isAcademyAdmin(resource.data.academyId);
+
+      allow create: if sameAcademyOnCreate() &&
+        isAcademyAdmin(request.resource.data.academyId) &&
+        validPrivateAvailabilityTemplateShape(request.resource.data) &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.updatedAt == request.time;
+
+      allow update: if sameAcademyOnUpdate() &&
+        isAcademyAdmin(resource.data.academyId) &&
+        validPrivateAvailabilityTemplateShape(request.resource.data) &&
+        request.resource.data.academyId == resource.data.academyId &&
+        request.resource.data.teacher == resource.data.teacher &&
+        request.resource.data.teacherKey == resource.data.teacherKey &&
+        request.resource.data.weekday == resource.data.weekday &&
+        request.resource.data.time == resource.data.time &&
+        request.resource.data.durationMinutes == resource.data.durationMinutes &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        changedOnly(["status", "updatedAt"]) &&
+        request.resource.data.updatedAt == request.time;
 
       allow delete: if false;
     }

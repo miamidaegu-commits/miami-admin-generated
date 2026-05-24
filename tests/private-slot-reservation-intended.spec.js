@@ -68,6 +68,14 @@ function formatSeoulDateTime(date) {
   };
 }
 
+function ensureMondaySaturdayYmd(date) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  while (parsed.getUTCDay() === 0) {
+    parsed.setUTCDate(parsed.getUTCDate() + 1);
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
 function studentSlotCard(page, date) {
   return page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: date }).first();
 }
@@ -350,7 +358,7 @@ async function createFixture(unique) {
   const numericUnique = Number.parseInt(String(unique).split('-')[0], 10) || Date.now();
   const day = 10 + (numericUnique % 18);
   const minute = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
-  const date = `2099-09-${String(day).padStart(2, '0')}`;
+  const date = ensureMondaySaturdayYmd(`2099-09-${String(day).padStart(2, '0')}`);
   const time = `13:${String(minute % 10).padStart(2, '0')}`;
   const slotId = `e2e-flex-private-slot-${unique}`;
   const eligibleStudentId = `e2e-flex-private-eligible-${unique}`;
@@ -363,10 +371,17 @@ async function createFixture(unique) {
   const pilotDisabledSlotId = `e2e-flex-private-pilot-disabled-slot-${unique}`;
   const subject = `E2E Flexible Private Slot ${unique}`;
   const noRemainingExistingSubject = `E2E Existing Active Reservation ${unique}`;
-  const noRemainingExistingDate = `2099-10-${String(day).padStart(2, '0')}`;
+  const noRemainingExistingDate = ensureMondaySaturdayYmd(
+    `2099-10-${String(day).padStart(2, '0')}`
+  );
   const noRemainingOpenSubject = `E2E Flexible No Remaining Slot ${unique}`;
-  const noRemainingOpenDate = `2099-11-${String(day).padStart(2, '0')}`;
+  const noRemainingOpenDate = ensureMondaySaturdayYmd(
+    `2099-11-${String(day).padStart(2, '0')}`
+  );
   const noRemainingFixedLessonDate = `2099-12-${String(day).padStart(2, '0')}`;
+  const pilotDisabledDate = ensureMondaySaturdayYmd(
+    `2099-08-${String(day).padStart(2, '0')}`
+  );
 
   await db.collection('academies').doc(DEFAULT_E2E_ACADEMY_ID).set(
     {
@@ -420,6 +435,8 @@ async function createFixture(unique) {
     paidLessons: 1,
     privateSlotBookingPilotEnabled: false,
   });
+  const bookingOpensAt = admin.firestore.Timestamp.fromMillis(Date.now() - 60 * 60 * 1000);
+  const bookingClosesAt = admin.firestore.Timestamp.fromMillis(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
   await Promise.all([
     db.collection('privateLessonSlots').doc(slotId).set({
@@ -432,6 +449,8 @@ async function createFixture(unique) {
       capacity: 1,
       reservedCount: 0,
       startAt: admin.firestore.Timestamp.fromDate(new Date(`${date}T${time}:00`)),
+      bookingOpensAt,
+      bookingClosesAt,
       durationMinutes: 50,
       status: 'open',
       reservedStudentId: '',
@@ -454,6 +473,8 @@ async function createFixture(unique) {
       capacity: 1,
       reservedCount: 0,
       startAt: admin.firestore.Timestamp.fromDate(new Date(`${noRemainingOpenDate}T10:40:00`)),
+      bookingOpensAt,
+      bookingClosesAt,
       durationMinutes: 50,
       status: 'open',
       eligibleStudentIds: [noRemainingStudentId],
@@ -484,6 +505,8 @@ async function createFixture(unique) {
       reservationId: reservationId(noRemainingExistingSlotId, noRemainingStudentId),
       createdByUid: 'e2e-admin-sdk',
       reservedAt: nowTs,
+      bookingOpensAt,
+      bookingClosesAt,
       cancelledAt: null,
       createdAt: nowTs,
       updatedAt: nowTs,
@@ -492,11 +515,16 @@ async function createFixture(unique) {
       academyId: DEFAULT_E2E_ACADEMY_ID,
       teacher: teacherKey,
       teacherName: teacherKey,
-      date: `2099-08-${String(day).padStart(2, '0')}`,
+      date: pilotDisabledDate,
       time: '14:40',
       subject: `E2E Pilot Disabled Private Slot ${unique}`,
       capacity: 1,
       reservedCount: 0,
+      startAt: admin.firestore.Timestamp.fromDate(
+        new Date(`${pilotDisabledDate}T14:40:00`)
+      ),
+      bookingOpensAt,
+      bookingClosesAt,
       durationMinutes: 50,
       status: 'open',
       reservedStudentId: '',
@@ -565,7 +593,7 @@ async function createFixture(unique) {
     ineligibleStudent,
     pilotDisabledStudent,
     pilotDisabledSlotId,
-    pilotDisabledDate: `2099-08-${String(day).padStart(2, '0')}`,
+    pilotDisabledDate,
     noRemainingExistingSlotId,
     noRemainingExistingDate,
     noRemainingOpenSlotId,
@@ -739,6 +767,65 @@ test('student booking page passes private slot e2e override to callable actions'
   );
 });
 
+test('weekly private booking window helper is deterministic for Monday-Saturday', async () => {
+  const helper = await import('../src/features/booking/privateBookingWindow.js');
+  const window = helper.getBookingWindowForPrivateLesson('2026-06-08', '15:00');
+  expect(window.weekStartsOn).toBe('2026-06-08');
+  expect(window.weekEndsOn).toBe('2026-06-13');
+  expect(helper.formatKstDotDateTime(window.bookingOpensAt)).toBe('2026.06.05 00:00');
+  expect(window.bookingClosesAt).toBe(window.startsAt - 7 * 60 * 60 * 1000);
+  expect(helper.getKstWeekday('2026-06-14')).toBe(7);
+  expect(helper.buildMondaySaturdayWeekDays('2026-06-08')).toEqual([
+    '2026-06-08',
+    '2026-06-09',
+    '2026-06-10',
+    '2026-06-11',
+    '2026-06-12',
+    '2026-06-13',
+  ]);
+});
+
+test('weekly private booking templates are wired through UI, rules, and callables', async () => {
+  const functionSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const pageSource = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const sectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+  const helperSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/booking/privateBookingWindow.js'),
+    'utf8'
+  );
+  const rulesSource = fs.readFileSync(path.join(process.cwd(), 'firestore.rules'), 'utf8');
+
+  expect(functionSource).toContain('privateLessonAvailabilityTemplates');
+  expect(functionSource).toContain('PRIVATE_SLOT_BOOKING_CUTOFF_MS = 7 * 60 * 60 * 1000');
+  expect(functionSource).toContain('not-open-yet');
+  expect(functionSource).toContain('booking-closed');
+  expect(functionSource).toContain('no-remaining-package');
+  expect(functionSource).toContain('buildPrivateTemplateSlotId');
+  expect(functionSource).toMatch(/reservePrivateLessonSlot[\s\S]*computePrivateBookingWindow/);
+  expect(functionSource).toMatch(/reservePrivateLessonSlot[\s\S]*window\.weekday < 1/);
+  expect(functionSource).toMatch(/reservePrivateLessonSlot[\s\S]*window\.weekday > 6/);
+  expect(functionSource).toMatch(/transaction\.set\(slotRef[\s\S]*slotReservationUpdate/);
+
+  expect(pageSource).toContain('student-private-calendar');
+  expect(pageSource).toContain('예약은 수업 시작 7시간 전까지만 가능합니다.');
+  expect(pageSource).toContain('예약 마감 · 수업 준비 중');
+  expect(pageSource).toContain('사용 가능 수강권: 잔여');
+  expect(helperSource).toContain("not_open: '예약 오픈 대기'");
+
+  expect(dashboardSource).toContain('createPrivateAvailabilityTemplate');
+  expect(sectionSource).toContain('private-availability-template-section');
+  expect(sectionSource).toContain('주간 1:1 가능 시간');
+  expect(sectionSource).toContain('private-availability-template-add-button');
+
+  expect(rulesSource).toContain('match /privateLessonAvailabilityTemplates/{templateId}');
+  expect(rulesSource).toMatch(/data\.weekday >= 1[\s\S]*data\.weekday <= 6/);
+  expect(rulesSource).toMatch(/allow create:[\s\S]*isAcademyAdmin/);
+});
+
 test('released fixed private slot behavior is wired server-side', async () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   expect(source).toContain('function findActivePrivatePackageForTeacher');
@@ -833,7 +920,10 @@ test('intended flexible private slot visibility honors teacher access and pilot 
     const eligiblePage = await eligibleContext.newPage();
     await loginAsStudentWithPrivateBooking(eligiblePage, fixture.eligibleStudent.email);
     await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
-      '예약은 수업 시작 6시간 전까지만 취소할 수 있습니다.'
+      '예약은 수업 시작 7시간 전까지만 가능합니다.'
+    );
+    await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
+      '취소는 수업 시작 6시간 전까지만 가능합니다.'
     );
     await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
       '학생 직접 취소는 최대 2회까지 가능합니다.'

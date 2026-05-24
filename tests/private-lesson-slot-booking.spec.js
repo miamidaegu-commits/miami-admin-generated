@@ -430,11 +430,39 @@ async function createFixture(unique) {
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
+    db.collection('studentPackages').doc(`pkg-private-a-${unique}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: firstStudentId,
+      title: `E2E Private Slot Package A ${unique}`,
+      packageType: 'private',
+      teacher: TEACHER_NAME,
+      teacherName: TEACHER_NAME,
+      status: 'active',
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId: secondStudentId })).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       studentId: secondStudentId,
       teacherKeys: [TEACHER_NAME],
       activePackageIds: [`pkg-private-b-${unique}`],
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPackages').doc(`pkg-private-b-${unique}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: secondStudentId,
+      title: `E2E Private Slot Package B ${unique}`,
+      packageType: 'private',
+      teacher: TEACHER_NAME,
+      teacherName: TEACHER_NAME,
+      status: 'active',
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
@@ -533,6 +561,7 @@ async function createFixture(unique) {
   });
 
   return {
+    unique,
     firstEmail,
     firstUid: firstStudentUser.uid,
     firstAuthCreated: firstStudentAuthCreated,
@@ -568,6 +597,8 @@ async function cleanupFixture(fixture) {
     db.collection('privateStudents').doc(fixture.secondStudentId),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId: fixture.firstStudentId })),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId: fixture.secondStudentId })),
+    db.collection('studentPackages').doc(`pkg-private-a-${fixture.unique}`),
+    db.collection('studentPackages').doc(`pkg-private-b-${fixture.unique}`),
     db.collection('privateLessonSlots').doc(fixture.hiddenSlotId),
     db.collection('privateLessonSlots').doc(fixture.otherAcademySlotId),
     db.collection('lessons').doc(fixture.approvedLessonId),
@@ -693,7 +724,7 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     ).toBeDisabled();
     await expect(
       privateSlotCard(studentPage, fixture.createdDate).getByTestId('student-private-slot-reserve-button')
-    ).toHaveText('예약 중지');
+    ).toHaveText('예약 오픈 대기');
     await expectSlotStatus(db, fixture.createdSlotId, 'open');
 
     await openDashboardSection(page, '1:1 예약 시간 관리');

@@ -576,6 +576,9 @@ export default function Dashboard() {
   const [todayGroupLessonReservationsLoading, setTodayGroupLessonReservationsLoading] = useState(false)
   const [privateLessonSlots, setPrivateLessonSlots] = useState([])
   const [privateLessonSlotsLoading, setPrivateLessonSlotsLoading] = useState(false)
+  const [privateAvailabilityTemplates, setPrivateAvailabilityTemplates] = useState([])
+  const [privateAvailabilityTemplatesLoading, setPrivateAvailabilityTemplatesLoading] =
+    useState(false)
   const [privateLessonReservations, setPrivateLessonReservations] = useState([])
   const [privateLessonReservationsLoading, setPrivateLessonReservationsLoading] = useState(false)
   const [busyPrivateReservationOutcomeId, setBusyPrivateReservationOutcomeId] = useState('')
@@ -595,6 +598,15 @@ export default function Dashboard() {
   const [privateSlotFormErrors, setPrivateSlotFormErrors] = useState({})
   const [privateSlotCreateResult, setPrivateSlotCreateResult] = useState(null)
   const [busyPrivateSlotActionId, setBusyPrivateSlotActionId] = useState('')
+  const [privateAvailabilityTemplateForm, setPrivateAvailabilityTemplateForm] = useState({
+    teacher: '',
+    weekday: '1',
+    time: '',
+    durationMinutes: '60',
+    status: 'active',
+  })
+  const [privateAvailabilityTemplateErrors, setPrivateAvailabilityTemplateErrors] = useState({})
+  const [busyPrivateAvailabilityTemplateId, setBusyPrivateAvailabilityTemplateId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
 
@@ -1608,6 +1620,40 @@ export default function Dashboard() {
     )
     return () => unsubscribe()
   }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    const isAdminProfile = isDashboardAdminProfile(userProfile)
+    if (!isAdminProfile || !isValidOperationalAcademyId(currentAcademyId)) {
+      setPrivateAvailabilityTemplates([])
+      setPrivateAvailabilityTemplatesLoading(false)
+      return
+    }
+
+    setPrivateAvailabilityTemplatesLoading(true)
+    const unsubscribe = onSnapshot(
+      query(
+        collection(db, 'privateLessonAvailabilityTemplates'),
+        where('academyId', '==', currentAcademyId)
+      ),
+      (snapshot) => {
+        const rows = snapshot.docs
+          .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+          .sort((a, b) => {
+            const aKey = `${a.teacher || a.teacherName || ''} ${a.weekday || ''} ${a.time || ''}`
+            const bKey = `${b.teacher || b.teacherName || ''} ${b.weekday || ''} ${b.time || ''}`
+            return aKey.localeCompare(bKey, 'ko')
+          })
+        setPrivateAvailabilityTemplates(rows)
+        setPrivateAvailabilityTemplatesLoading(false)
+      },
+      (error) => {
+        console.error('privateLessonAvailabilityTemplates 불러오기 실패:', error)
+        setPrivateAvailabilityTemplates([])
+        setPrivateAvailabilityTemplatesLoading(false)
+      }
+    )
+    return () => unsubscribe()
+  }, [currentAcademyId, userProfile])
 
   useEffect(() => {
     if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
@@ -3397,6 +3443,92 @@ export default function Dashboard() {
     }
   }
 
+  function validatePrivateAvailabilityTemplateForm() {
+    const errors = {}
+    const teacher = normalizeText(privateAvailabilityTemplateForm.teacher || '')
+    const weekday = Number.parseInt(String(privateAvailabilityTemplateForm.weekday || ''), 10)
+    const time = String(privateAvailabilityTemplateForm.time || '').trim()
+    const durationMinutes = Number.parseInt(
+      String(privateAvailabilityTemplateForm.durationMinutes || ''),
+      10
+    )
+    const status = String(privateAvailabilityTemplateForm.status || 'active').trim()
+    if (!teacher) errors.teacher = '선생님을 선택해주세요.'
+    if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) {
+      errors.weekday = '월요일부터 토요일까지만 선택할 수 있습니다.'
+    }
+    if (!/^\d{2}:\d{2}$/.test(time)) errors.time = '시간을 선택해주세요.'
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 10 || durationMinutes > 240) {
+      errors.durationMinutes = '10~240분 사이로 입력해주세요.'
+    }
+    if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      value: { teacher, weekday, time, durationMinutes, status },
+    }
+  }
+
+  async function createPrivateAvailabilityTemplate() {
+    if (!isAdmin) {
+      alert('주간 1:1 가능 시간은 관리자만 설정할 수 있습니다.')
+      return
+    }
+    const result = validatePrivateAvailabilityTemplateForm()
+    setPrivateAvailabilityTemplateErrors(result.errors)
+    if (!result.valid) return
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const { teacher, weekday, time, durationMinutes, status } = result.value
+      const teacherOption = teacherSelectOptions.find((option) => option.value === teacher)
+      const teacherName = String(teacherOption?.label || teacher).trim()
+      setBusyPrivateAvailabilityTemplateId('__add__')
+      await addDoc(collection(db, 'privateLessonAvailabilityTemplates'), {
+        academyId: scopedAcademyId,
+        teacher,
+        teacherName,
+        teacherKey: teacher,
+        weekday,
+        time,
+        durationMinutes,
+        status,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+      setPrivateAvailabilityTemplateForm((prev) => ({
+        ...prev,
+        time: '',
+        durationMinutes: prev.durationMinutes || '60',
+        status: 'active',
+      }))
+    } catch (error) {
+      console.error('주간 1:1 가능 시간 생성 실패:', error)
+      alert(`주간 1:1 가능 시간 생성 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateAvailabilityTemplateId('')
+    }
+  }
+
+  async function updatePrivateAvailabilityTemplateStatus(template, status) {
+    if (!isAdmin || !template?.id) return
+    const nextStatus = status === 'active' ? 'active' : 'inactive'
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(template, scopedAcademyId, '주간 1:1 가능 시간')
+      setBusyPrivateAvailabilityTemplateId(template.id)
+      await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      })
+    } catch (error) {
+      console.error('주간 1:1 가능 시간 상태 변경 실패:', error)
+      alert(`주간 1:1 가능 시간 상태 변경 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateAvailabilityTemplateId('')
+    }
+  }
+
   async function updatePrivateSlotEligibility(slot, nextEligibleStudentIds) {
     if (!isAdmin) {
       alert('대상 학생 수정 권한이 없습니다.')
@@ -3753,6 +3885,14 @@ export default function Dashboard() {
     setPrivateSlotForm,
     privateSlotFormErrors,
     privateSlotCreateResult,
+    privateAvailabilityTemplateForm,
+    setPrivateAvailabilityTemplateForm,
+    privateAvailabilityTemplateErrors,
+    createPrivateAvailabilityTemplate,
+    updatePrivateAvailabilityTemplateStatus,
+    privateAvailabilityTemplates,
+    privateAvailabilityTemplatesLoading,
+    busyPrivateAvailabilityTemplateId,
     privateStudents,
     createPrivateSlot,
     updatePrivateSlotEligibility,

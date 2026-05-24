@@ -39,6 +39,15 @@ import {
   normalizePrivateTeacherKey,
 } from './src/features/private-booking/privateBookingModel.js'
 import {
+  buildMondaySaturdayWeekDays,
+  formatKstDotDateTime,
+  getBookingWindowForPrivateLesson,
+  getMondayForKstDate,
+  getPrivateBookingStatusLabel,
+  getPrivateBookingStatus,
+  getRelativeOpenLabel,
+} from './src/features/booking/privateBookingWindow.js'
+import {
   getGroupCourseTypeLabel,
   normalizeGroupCourseType,
 } from './src/features/group-booking/groupCourseTypes.js'
@@ -166,6 +175,31 @@ function isActivePrivatePackage(pkg) {
     remainingCount > 0 &&
     Boolean(getPrivatePackageTeacherKey(pkg))
   )
+}
+
+function formatPrivateSlotOpenDisplay(slot) {
+  const millis = Number(slot?.bookingOpensAtMillis)
+  if (Number.isFinite(millis) && millis > 0) return formatKstDotDateTime(millis)
+  const window = getBookingWindowForPrivateLesson(slot?.date, slot?.time)
+  return window ? formatKstDotDateTime(window.bookingOpensAt) : ''
+}
+
+function getPrivateSlotOpenRelativeDisplay(slot) {
+  if (slot?.bookingOpenRelativeLabel) return slot.bookingOpenRelativeLabel
+  const millis = Number(slot?.bookingOpensAtMillis)
+  if (Number.isFinite(millis) && millis > 0) return getRelativeOpenLabel(millis)
+  const window = getBookingWindowForPrivateLesson(slot?.date, slot?.time)
+  return window ? getRelativeOpenLabel(window.bookingOpensAt) : ''
+}
+
+function getStudentPrivateSlotStatus(slot, canUsePrivateBooking) {
+  if (slot?.bookingStatus) return slot.bookingStatus
+  const status = getPrivateBookingStatus({
+    slot,
+    hasPackage: Number(slot?.packageRemainingCount ?? 1) > 0,
+    isReservedByMe: false,
+  })
+  return status === 'available' && !canUsePrivateBooking ? 'blocked' : status
 }
 
 function getLessonHistoryStatusLabel(item) {
@@ -1137,6 +1171,26 @@ export default function StudentBookingPage() {
       })
   }, [activePrivateReservationSlotIds, privateSlots])
 
+  const privateCalendarWeeks = useMemo(() => {
+    const weekStarts = []
+    sortedPrivateSlots.forEach((slot) => {
+      const weekStart = getMondayForKstDate(slot.date)
+      if (weekStart && !weekStarts.includes(weekStart)) weekStarts.push(weekStart)
+    })
+    weekStarts.sort((a, b) => a.localeCompare(b))
+    return weekStarts.map((weekStart) => {
+      const days = buildMondaySaturdayWeekDays(weekStart).map((date) => ({
+        date,
+        slots: sortedPrivateSlots.filter((slot) => String(slot.date || '').trim() === date),
+      }))
+      return {
+        weekStart,
+        weekEnd: days[days.length - 1]?.date || weekStart,
+        days,
+      }
+    })
+  }, [sortedPrivateSlots])
+
   const sortedPrivateReservations = useMemo(() => {
     return privateReservations
       .filter((reservation) => reservation.status === 'active')
@@ -1553,6 +1607,9 @@ export default function StudentBookingPage() {
       await reservePrivateLessonSlot({
         academyId: scopedAcademyId,
         slotId: slot.id,
+        availabilityTemplateId: slot.availabilityTemplateId || '',
+        date: slot.date || '',
+        time: slot.time || '',
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
       logStudentPrivateBookingEvent('reserve_success', {
@@ -2045,7 +2102,8 @@ export default function StudentBookingPage() {
                   lineHeight: 1.6,
                 }}
               >
-                <div>예약은 수업 시작 6시간 전까지만 취소할 수 있습니다.</div>
+                <div>예약은 수업 시작 7시간 전까지만 가능합니다.</div>
+                <div>취소는 수업 시작 6시간 전까지만 가능합니다.</div>
                 <div>학생 직접 취소는 최대 2회까지 가능합니다.</div>
                 <div>2회를 초과하면 학원에 문의해 주세요.</div>
               </div>
@@ -2059,99 +2117,139 @@ export default function StudentBookingPage() {
                   지금 예약 가능한 1:1 수업 시간이 없습니다. 학원 안내 후 다시 확인해 주세요.
                 </p>
               ) : (
-                <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-                  {sortedPrivateSlots.map((slot) => {
-                    const reservation = privateReservationBySlotId.get(slot.id) || null
-                    const reservationId = buildPrivateLessonReservationId({
-                      academyId: currentAcademyId,
-                      slotId: slot.id,
-                      studentId: scopedStudentId,
-                    })
-                    const isBusy = busyPrivateReservationId === reservationId
-                    const hasActivePrivateReservation = reservation?.status === 'active'
-                    const isReservedByAnyone =
-                      slot.isReserved === true || String(slot.status || '').trim() === 'reserved'
-                    const canReserve =
-                      PRIVATE_SLOT_BOOKING_ENABLED &&
-                      privateSlotBookingPilotEnabled &&
-                      slot.isBookable === true &&
-                      !hasActivePrivateReservation &&
-                      !busyPrivateReservationId &&
-                      slot.status === 'open'
-
-                    return (
-                      <article
-                        key={slot.id}
-                        data-testid="student-private-slot-card"
-                        data-slot-id={slot.id}
+                <div
+                  data-testid="student-private-calendar"
+                  style={{ display: 'grid', gap: 18, marginTop: 16 }}
+                >
+                  {privateCalendarWeeks.map((week) => (
+                    <div key={week.weekStart} style={{ display: 'grid', gap: 10 }}>
+                      <div style={{ opacity: 0.76, fontSize: 13 }}>
+                        {week.weekStart} - {week.weekEnd}
+                      </div>
+                      <div
                         style={{
-                          border: '1px solid #283042',
-                          borderRadius: 14,
-                          padding: 16,
-                          background: '#1a1f2b',
+                          display: 'grid',
+                          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                          gap: 10,
                         }}
                       >
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            gap: 12,
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <div>
-                            <strong style={{ fontSize: '1rem' }}>{slot.teacher || '1:1 수업'}</strong>
-                            <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
-                              {[slot.date, slot.time].filter(Boolean).join(' · ') || slot.id}
+                        {week.days.map((day) => (
+                          <div
+                            key={day.date}
+                            data-testid="student-private-calendar-day"
+                            style={{
+                              border: '1px solid #283042',
+                              borderRadius: 8,
+                              padding: 10,
+                              background: '#171c27',
+                              minHeight: 120,
+                            }}
+                          >
+                            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
+                              {day.date}
                             </div>
-                            <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {Number(slot.durationMinutes || 0) || 50}분 · 오프라인 결제
-                            </div>
-                            {slot.releasedFromFixed === true ||
-                            String(slot.slotType || '').trim() === 'released_fixed' ? (
-                              <div style={{ marginTop: 6, opacity: 0.78, fontSize: 13 }}>
-                                예약 가능 1:1 시간
+                            {day.slots.length === 0 ? (
+                              <div style={{ opacity: 0.55, fontSize: 13 }}>-</div>
+                            ) : (
+                              <div style={{ display: 'grid', gap: 8 }}>
+                                {day.slots.map((slot) => {
+                                  const reservation = privateReservationBySlotId.get(slot.id) || null
+                                  const reservationId = buildPrivateLessonReservationId({
+                                    academyId: currentAcademyId,
+                                    slotId: slot.id,
+                                    studentId: scopedStudentId,
+                                  })
+                                  const isBusy = busyPrivateReservationId === reservationId
+                                  const hasActivePrivateReservation = reservation?.status === 'active'
+                                  const canUsePrivateBooking =
+                                    PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
+                                  const bookingStatus = getStudentPrivateSlotStatus(
+                                    slot,
+                                    canUsePrivateBooking
+                                  )
+                                  const canReserve =
+                                    canUsePrivateBooking &&
+                                    bookingStatus === 'available' &&
+                                    slot.isBookable === true &&
+                                    !hasActivePrivateReservation &&
+                                    !busyPrivateReservationId &&
+                                    slot.status === 'open'
+                                  const statusLabel =
+                                    slot.bookingStatusLabel ||
+                                    getPrivateBookingStatusLabel(bookingStatus)
+                                  const remainingCount = Number(slot.packageRemainingCount || 0)
+
+                                  return (
+                                    <article
+                                      key={slot.id}
+                                      data-testid="student-private-slot-card"
+                                      data-slot-id={slot.id}
+                                      style={{
+                                        border: '1px solid #30384b',
+                                        borderRadius: 8,
+                                        padding: 12,
+                                        background: canReserve ? '#1d2a22' : '#1a1f2b',
+                                      }}
+                                    >
+                                      <div style={{ display: 'grid', gap: 6 }}>
+                                        <strong style={{ fontSize: 14 }}>
+                                          {slot.teacherName || slot.teacher || '1:1 수업'}
+                                        </strong>
+                                        <div style={{ opacity: 0.74, fontSize: 13 }}>
+                                          {slot.date || day.date} · {slot.time || '-'} ·{' '}
+                                          {Number(slot.durationMinutes || 0) || 60}분
+                                        </div>
+                                        <div style={{ opacity: 0.8, fontSize: 13 }}>
+                                          {statusLabel}
+                                        </div>
+                                        {bookingStatus === 'not_open' ? (
+                                          <div style={{ opacity: 0.72, fontSize: 12, lineHeight: 1.5 }}>
+                                            <div>{formatPrivateSlotOpenDisplay(slot)} 오픈</div>
+                                            <div>{getPrivateSlotOpenRelativeDisplay(slot)}</div>
+                                          </div>
+                                        ) : null}
+                                        {bookingStatus === 'closed' ? (
+                                          <div style={{ opacity: 0.72, fontSize: 12 }}>
+                                            예약 마감 · 수업 준비 중
+                                          </div>
+                                        ) : null}
+                                        {canReserve ? (
+                                          <div style={{ opacity: 0.72, fontSize: 12 }}>
+                                            사용 가능 수강권: 잔여 {remainingCount}회
+                                          </div>
+                                        ) : null}
+                                        <button
+                                          type="button"
+                                          onClick={() => reservePrivateSlot(slot)}
+                                          disabled={!canReserve}
+                                          data-testid="student-private-slot-reserve-button"
+                                          style={{
+                                            marginTop: 4,
+                                            padding: '9px 10px',
+                                            borderRadius: 8,
+                                            border: '1px solid #48643a',
+                                            background: canReserve ? '#20351f' : '#242b3a',
+                                            color: 'white',
+                                            cursor: canReserve ? 'pointer' : 'not-allowed',
+                                          }}
+                                        >
+                                          {isBusy
+                                            ? '예약 중...'
+                                            : canReserve
+                                              ? '1:1 수업 예약'
+                                              : statusLabel}
+                                        </button>
+                                      </div>
+                                    </article>
+                                  )
+                                })}
                               </div>
-                            ) : null}
+                            )}
                           </div>
-                          {isReservedByAnyone ? (
-                            <span
-                              data-testid="student-private-slot-reserved-badge"
-                              style={{
-                                alignSelf: 'center',
-                                border: '1px solid #445066',
-                                borderRadius: 999,
-                                padding: '8px 12px',
-                                background: '#242b3a',
-                                color: 'white',
-                                fontSize: 14,
-                                fontWeight: 700,
-                              }}
-                            >
-                              예약 완료
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => reservePrivateSlot(slot)}
-                              disabled={!canReserve}
-                              data-testid="student-private-slot-reserve-button"
-                              style={{
-                                padding: '10px 14px',
-                                borderRadius: 10,
-                                border: '1px solid #48643a',
-                                background: '#20351f',
-                                color: 'white',
-                                cursor: canReserve ? 'pointer' : 'not-allowed',
-                              }}
-                            >
-                              {isBusy ? '예약 중...' : canReserve ? '1:1 수업 예약' : '예약 중지'}
-                            </button>
-                          )}
-                        </div>
-                      </article>
-                    )
-                  })}
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </section>
