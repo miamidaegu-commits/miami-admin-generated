@@ -76,8 +76,21 @@ function ensureMondaySaturdayYmd(date) {
   return parsed.toISOString().slice(0, 10);
 }
 
+function upcomingMondaySaturdayYmd(daysFromNow) {
+  return ensureMondaySaturdayYmd(
+    formatSeoulDateTime(new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000)).date
+  );
+}
+
 function studentSlotCard(page, date) {
   return page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: date }).first();
+}
+
+function studentBusySlotCard(page, date) {
+  return page
+    .locator('[data-testid="student-private-busy-slot-card"]')
+    .filter({ hasText: date })
+    .first();
 }
 
 function privateReservationCard(page, text) {
@@ -89,8 +102,10 @@ async function expectPrivateSlotCardCount(page, date, expected, message) {
   try {
     await expect(cards, message).toHaveCount(expected, { timeout: 15000 });
   } catch (error) {
-    const [cardTexts, bodyText] = await Promise.all([
+    const [cardTexts, busyTexts, packageTexts, bodyText] = await Promise.all([
       page.locator('[data-testid="student-private-slot-card"]').allInnerTexts().catch(() => []),
+      page.locator('[data-testid="student-private-busy-slot-card"]').allInnerTexts().catch(() => []),
+      page.locator('[data-testid="student-private-package-summary"]').allInnerTexts().catch(() => []),
       page.locator('body').innerText().catch(() => ''),
     ]);
     throw new Error(
@@ -100,6 +115,40 @@ async function expectPrivateSlotCardCount(page, date, expected, message) {
         `Date filter: ${date}`,
         `Current URL: ${page.url()}`,
         `Visible private slot cards: ${JSON.stringify(cardTexts)}`,
+        `Visible busy cards: ${JSON.stringify(busyTexts)}`,
+        `Visible package summary: ${JSON.stringify(packageTexts)}`,
+        'Visible page text:',
+        bodyText.slice(0, 1500),
+        '',
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+  return cards;
+}
+
+async function expectPrivateBusyCardCount(page, date, expected, message) {
+  const cards = page
+    .locator('[data-testid="student-private-busy-slot-card"]')
+    .filter({ hasText: date });
+  try {
+    await expect(cards, message).toHaveCount(expected, { timeout: 15000 });
+  } catch (error) {
+    const [slotTexts, busyTexts, packageTexts, bodyText] = await Promise.all([
+      page.locator('[data-testid="student-private-slot-card"]').allInnerTexts().catch(() => []),
+      page.locator('[data-testid="student-private-busy-slot-card"]').allInnerTexts().catch(() => []),
+      page.locator('[data-testid="student-private-package-summary"]').allInnerTexts().catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+    throw new Error(
+      [
+        message,
+        `Expected count: ${expected}`,
+        `Date filter: ${date}`,
+        `Current URL: ${page.url()}`,
+        `Visible private slot cards: ${JSON.stringify(slotTexts)}`,
+        `Visible busy cards: ${JSON.stringify(busyTexts)}`,
+        `Visible package summary: ${JSON.stringify(packageTexts)}`,
         'Visible page text:',
         bodyText.slice(0, 1500),
         '',
@@ -355,10 +404,8 @@ async function createFixture(unique) {
   const nowTs = admin.firestore.Timestamp.now();
   const teacherKey = `teacher-${unique}`;
   const ineligibleTeacherKey = `other-private-teacher-${unique}`;
-  const numericUnique = Number.parseInt(String(unique).split('-')[0], 10) || Date.now();
-  const day = 10 + (numericUnique % 18);
   const minute = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
-  const date = ensureMondaySaturdayYmd(`2099-09-${String(day).padStart(2, '0')}`);
+  const date = upcomingMondaySaturdayYmd(1);
   const time = `13:${String(minute % 10).padStart(2, '0')}`;
   const slotId = `e2e-flex-private-slot-${unique}`;
   const eligibleStudentId = `e2e-flex-private-eligible-${unique}`;
@@ -369,19 +416,26 @@ async function createFixture(unique) {
   const noRemainingFixedLessonId = `e2e-flex-private-fixed-lesson-${unique}`;
   const pilotDisabledStudentId = `e2e-flex-private-pilot-disabled-${unique}`;
   const pilotDisabledSlotId = `e2e-flex-private-pilot-disabled-slot-${unique}`;
+  const busyPrivateLessonId = `e2e-flex-private-busy-lesson-${unique}`;
+  const busyGroupLessonId = `e2e-flex-private-busy-group-${unique}`;
+  const otherTeacherBusyLessonId = `e2e-flex-private-other-busy-${unique}`;
   const subject = `E2E Flexible Private Slot ${unique}`;
   const noRemainingExistingSubject = `E2E Existing Active Reservation ${unique}`;
-  const noRemainingExistingDate = ensureMondaySaturdayYmd(
-    `2099-10-${String(day).padStart(2, '0')}`
-  );
+  const noRemainingExistingDate = upcomingMondaySaturdayYmd(2);
   const noRemainingOpenSubject = `E2E Flexible No Remaining Slot ${unique}`;
-  const noRemainingOpenDate = ensureMondaySaturdayYmd(
-    `2099-11-${String(day).padStart(2, '0')}`
-  );
-  const noRemainingFixedLessonDate = `2099-12-${String(day).padStart(2, '0')}`;
-  const pilotDisabledDate = ensureMondaySaturdayYmd(
-    `2099-08-${String(day).padStart(2, '0')}`
-  );
+  const noRemainingOpenDate = upcomingMondaySaturdayYmd(3);
+  const noRemainingFixedLessonDate = upcomingMondaySaturdayYmd(4);
+  const pilotDisabledDate = upcomingMondaySaturdayYmd(5);
+  const busyPrivateLessonDate = upcomingMondaySaturdayYmd(2);
+  const busyPrivateLessonTime = '15:00';
+  const busyGroupLessonDate = upcomingMondaySaturdayYmd(3);
+  const busyGroupLessonTime = '16:00';
+  const otherTeacherBusyDate = upcomingMondaySaturdayYmd(4);
+  const otherTeacherBusyTime = '17:00';
+  const otherStudentName = `Other Private Student ${unique}`;
+  const busyPrivateSubject = `Private Subject Leak ${unique}`;
+  const busyGroupClassName = `Group Class Leak ${unique}`;
+  const busyGroupSubject = `Group Subject Leak ${unique}`;
 
   await db.collection('academies').doc(DEFAULT_E2E_ACADEMY_ID).set(
     {
@@ -571,6 +625,55 @@ async function createFixture(unique) {
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
+    db.collection('lessons').doc(busyPrivateLessonId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      studentId: `other-private-student-${unique}`,
+      studentName: otherStudentName,
+      student: otherStudentName,
+      date: busyPrivateLessonDate,
+      time: busyPrivateLessonTime,
+      subject: busyPrivateSubject,
+      durationMinutes: 50,
+      sessionNumber: 1,
+      completed: false,
+      isDeductCancelled: false,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('groupLessons').doc(busyGroupLessonId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      date: busyGroupLessonDate,
+      time: busyGroupLessonTime,
+      subject: busyGroupSubject,
+      groupClassName: busyGroupClassName,
+      groupClassId: `e2e-busy-group-class-${unique}`,
+      capacity: 4,
+      bookedCount: 2,
+      durationMinutes: 60,
+      status: 'active',
+      isBookable: true,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('lessons').doc(otherTeacherBusyLessonId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: ineligibleTeacherKey,
+      teacherName: ineligibleTeacherKey,
+      studentId: `other-teacher-student-${unique}`,
+      studentName: `Other Teacher Student ${unique}`,
+      date: otherTeacherBusyDate,
+      time: otherTeacherBusyTime,
+      subject: `Other Teacher Private Subject ${unique}`,
+      durationMinutes: 50,
+      completed: false,
+      isDeductCancelled: false,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(noRemainingStudentId)).set(
       {
         allowedSlotIds: [noRemainingOpenSlotId, noRemainingExistingSlotId],
@@ -599,6 +702,19 @@ async function createFixture(unique) {
     noRemainingOpenSlotId,
     noRemainingOpenDate,
     noRemainingFixedLessonId,
+    busyPrivateLessonId,
+    busyPrivateLessonDate,
+    busyPrivateLessonTime,
+    busyPrivateSubject,
+    otherStudentName,
+    busyGroupLessonId,
+    busyGroupLessonDate,
+    busyGroupLessonTime,
+    busyGroupClassName,
+    busyGroupSubject,
+    otherTeacherBusyLessonId,
+    otherTeacherBusyDate,
+    otherTeacherBusyTime,
   };
 }
 
@@ -626,6 +742,9 @@ async function cleanupFixture(fixture) {
       reservationId(fixture.pilotDisabledSlotId, pilotDisabledStudent.studentId)
     ),
     db.collection('lessons').doc(fixture.noRemainingFixedLessonId),
+    db.collection('lessons').doc(fixture.busyPrivateLessonId),
+    db.collection('lessons').doc(fixture.otherTeacherBusyLessonId),
+    db.collection('groupLessons').doc(fixture.busyGroupLessonId),
     db.collection('privateStudents').doc(eligibleStudent.studentId),
     db.collection('privateStudents').doc(noRemainingStudent.studentId),
     db.collection('privateStudents').doc(ineligibleStudent.studentId),
@@ -962,14 +1081,144 @@ test('intended flexible private slot visibility honors teacher access and pilot 
     ).toBeDisabled();
     await expect(
       pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
-    ).toHaveText('예약 중지');
+    ).toHaveText('수업 있음');
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));
     await cleanupFixture(fixture).catch(() => {});
   }
 });
 
-test('student sees matching open private slots but not another student reserved private slot', async ({
+test('student sees anonymized busy private and group teacher times', async ({
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private reservation setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  let fixture = null;
+  const contexts = [];
+
+  try {
+    fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-busy-visible`);
+
+    const context = await browser.newContext();
+    contexts.push(context);
+    const page = await context.newPage();
+    await loginAsStudentWithPrivateBooking(page, fixture.eligibleStudent.email);
+
+    const privateBusyCards = await expectPrivateBusyCardCount(
+      page,
+      `${fixture.busyPrivateLessonDate} · ${fixture.busyPrivateLessonTime}`,
+      1,
+      'eligible student should see one anonymized private lesson busy block'
+    );
+    const privateBusyCard = privateBusyCards.first();
+    await expect(privateBusyCard).toContainText(fixture.teacherKey);
+    await expect(privateBusyCard).toContainText(fixture.busyPrivateLessonTime);
+    await expect(privateBusyCard).toContainText('수업 있음');
+    await expect(privateBusyCard).not.toContainText(fixture.otherStudentName);
+    await expect(privateBusyCard).not.toContainText(fixture.busyPrivateSubject);
+    await expect(privateBusyCard.locator('button')).toHaveCount(0);
+
+    const groupBusyCards = await expectPrivateBusyCardCount(
+      page,
+      `${fixture.busyGroupLessonDate} · ${fixture.busyGroupLessonTime}`,
+      1,
+      'eligible student should see one anonymized group lesson busy block'
+    );
+    const groupBusyCard = groupBusyCards.first();
+    await expect(groupBusyCard).toContainText(fixture.teacherKey);
+    await expect(groupBusyCard).toContainText(fixture.busyGroupLessonTime);
+    await expect(groupBusyCard).toContainText('수업 있음');
+    await expect(groupBusyCard).not.toContainText(fixture.busyGroupClassName);
+    await expect(groupBusyCard).not.toContainText(fixture.busyGroupSubject);
+    await expect(groupBusyCard.locator('button')).toHaveCount(0);
+
+    await expect(page.locator('body')).not.toContainText(fixture.otherStudentName);
+    await expect(page.locator('body')).not.toContainText(fixture.busyPrivateSubject);
+    await expect(page.locator('body')).not.toContainText(fixture.busyGroupClassName);
+    await expect(page.locator('body')).not.toContainText(fixture.busyGroupSubject);
+    await expectPrivateBusyCardCount(
+      page,
+      `${fixture.otherTeacherBusyDate} · ${fixture.otherTeacherBusyTime}`,
+      0,
+      'eligible student should not see busy blocks for teachers without package access'
+    );
+  } finally {
+    await Promise.all(contexts.map((context) => context.close().catch(() => {})));
+    await cleanupFixture(fixture).catch(() => {});
+  }
+});
+
+test('student private slot view mode toggles busy and available schedules', async ({
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private reservation setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  let fixture = null;
+  const contexts = [];
+
+  try {
+    fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-view-mode`);
+
+    const context = await browser.newContext();
+    contexts.push(context);
+    const page = await context.newPage();
+    await loginAsStudentWithPrivateBooking(page, fixture.eligibleStudent.email);
+
+    await expect(page.getByTestId('private-slot-view-mode-all')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await expectPrivateBusyCardCount(
+      page,
+      `${fixture.busyPrivateLessonDate} · ${fixture.busyPrivateLessonTime}`,
+      1,
+      'all view should show busy teacher time'
+    );
+    await expectPrivateSlotCardCount(
+      page,
+      fixture.date,
+      1,
+      'all view should show available teacher time'
+    );
+
+    await page.getByTestId('private-slot-view-mode-available').click();
+    await expect(page.getByTestId('private-slot-view-mode-available')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await expectPrivateBusyCardCount(
+      page,
+      `${fixture.busyPrivateLessonDate} · ${fixture.busyPrivateLessonTime}`,
+      0,
+      'available-only view should hide busy teacher time'
+    );
+    await expectPrivateSlotCardCount(
+      page,
+      fixture.date,
+      1,
+      'available-only view should keep reservable teacher time'
+    );
+
+    await page.getByTestId('private-slot-view-mode-all').click();
+    await expectPrivateBusyCardCount(
+      page,
+      `${fixture.busyPrivateLessonDate} · ${fixture.busyPrivateLessonTime}`,
+      1,
+      'all view should restore busy teacher time'
+    );
+  } finally {
+    await Promise.all(contexts.map((context) => context.close().catch(() => {})));
+    await cleanupFixture(fixture).catch(() => {});
+  }
+});
+
+test('student sees matching open private slots and anonymized reserved teacher time', async ({
   browser,
   browserName,
 }, testInfo) => {
@@ -997,6 +1246,9 @@ test('student sees matching open private slots but not another student reserved 
     await expect(page.locator('[data-testid="student-private-slot-card"]').filter({
       hasText: fixture.noRemainingExistingDate,
     })).toHaveCount(0);
+    const reservedBusyCard = studentBusySlotCard(page, fixture.noRemainingExistingDate);
+    await expect(reservedBusyCard).toBeVisible({ timeout: 15000 });
+    await expect(reservedBusyCard).toContainText('수업 있음');
     await expect(page.locator('body')).not.toContainText(fixture.noRemainingStudent.displayName);
     await expect(page.locator('body')).not.toContainText(fixture.noRemainingStudent.studentId);
     await expect(page.locator('body')).not.toContainText(
@@ -1039,7 +1291,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     const disabledCard = disabledCards.first();
     await expect(disabledCard).toBeVisible();
     await expect(disabledCard.getByTestId('student-private-slot-reserve-button')).toBeDisabled();
-    await expect(disabledCard.getByTestId('student-private-slot-reserve-button')).toHaveText('예약 중지');
+    await expect(disabledCard.getByTestId('student-private-slot-reserve-button')).toHaveText('수업 있음');
 
     const pilotDisabledContext = await browser.newContext();
     contexts.push(pilotDisabledContext);
@@ -1060,7 +1312,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     ).toBeDisabled();
     await expect(
       pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
-    ).toHaveText('예약 중지');
+    ).toHaveText('수업 있음');
     expect(
       await getReservation(
         db,
