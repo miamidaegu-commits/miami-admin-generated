@@ -202,6 +202,120 @@ function getStudentPrivateSlotStatus(slot, canUsePrivateBooking) {
   return status === 'available' && !canUsePrivateBooking ? 'blocked' : status
 }
 
+function getPrivateSlotDisplayLabel(status, fallbackLabel = '') {
+  if (
+    [
+      'available',
+      'busy',
+      'reserved',
+      'blocked',
+      'not_open',
+      'closed',
+      'my_reservation',
+      'reserved_by_me',
+    ].includes(status)
+  ) {
+    return getPrivateBookingStatusLabel(status)
+  }
+  return String(fallbackLabel || '').trim() || getPrivateBookingStatusLabel(status)
+}
+
+function getPrivateSlotStatusTone(status) {
+  if (status === 'available') {
+    return {
+      border: '#427a4e',
+      background: '#193323',
+      badgeBorder: '#5ba765',
+      badgeBackground: '#22462d',
+      badgeColor: '#d9ffe0',
+    }
+  }
+  if (status === 'not_open') {
+    return {
+      border: '#6f5a2e',
+      background: '#282315',
+      badgeBorder: '#9c7a33',
+      badgeBackground: '#3a2f18',
+      badgeColor: '#ffe5a8',
+    }
+  }
+  if (status === 'closed') {
+    return {
+      border: '#6a3f4b',
+      background: '#281d25',
+      badgeBorder: '#9a5865',
+      badgeBackground: '#3a242b',
+      badgeColor: '#ffd6de',
+    }
+  }
+  if (status === 'my_reservation' || status === 'reserved_by_me') {
+    return {
+      border: '#356b85',
+      background: '#182a36',
+      badgeBorder: '#4f9cbc',
+      badgeBackground: '#203c4d',
+      badgeColor: '#d8f5ff',
+    }
+  }
+  if (status === 'busy' || status === 'reserved' || status === 'blocked') {
+    return {
+      border: '#4e4261',
+      background: '#211c2b',
+      badgeBorder: '#78639b',
+      badgeBackground: '#30283e',
+      badgeColor: '#eadfff',
+    }
+  }
+  return {
+    border: '#30384b',
+    background: '#1a1f2b',
+    badgeBorder: '#4a5570',
+    badgeBackground: '#252d3d',
+    badgeColor: '#eef3ff',
+  }
+}
+
+function getPrivateSlotCardStyle(status) {
+  const tone = getPrivateSlotStatusTone(status)
+  return {
+    border: `1px solid ${tone.border}`,
+    borderRadius: 8,
+    padding: 12,
+    background: tone.background,
+  }
+}
+
+function getPrivateSlotBadgeStyle(status) {
+  const tone = getPrivateSlotStatusTone(status)
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    border: `1px solid ${tone.badgeBorder}`,
+    borderRadius: 999,
+    background: tone.badgeBackground,
+    color: tone.badgeColor,
+    padding: '4px 8px',
+    fontSize: 12,
+    fontWeight: 800,
+    lineHeight: 1.2,
+    whiteSpace: 'nowrap',
+  }
+}
+
+function getPrivateSlotViewModeButtonStyle(isSelected) {
+  return {
+    padding: '8px 12px',
+    borderRadius: 7,
+    border: `1px solid ${isSelected ? '#6ea8ff' : 'transparent'}`,
+    background: isSelected ? '#263f67' : 'transparent',
+    color: isSelected ? 'white' : '#b6c0d0',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: isSelected ? 800 : 600,
+    boxShadow: isSelected ? '0 0 0 1px rgba(110, 168, 255, 0.18) inset' : 'none',
+  }
+}
+
 function getLessonHistoryStatusLabel(item) {
   if (item.status !== 'active') return '예약 취소'
   if (item.startsAtMs !== null && item.startsAtMs < Date.now()) return '지난 수업'
@@ -2100,7 +2214,7 @@ export default function StudentBookingPage() {
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>1:1 수업 예약</h2>
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                내 개인 수강권 선생님의 주간 예약 일정이 표시됩니다.
+                선생님의 주간 1:1 시간표입니다. 수업이 있는 시간은 ‘수업 있음’으로 표시됩니다.
               </p>
               <div
                 style={{
@@ -2118,15 +2232,7 @@ export default function StudentBookingPage() {
                   data-testid="private-slot-view-mode-all"
                   onClick={() => setPrivateSlotViewMode('all')}
                   aria-pressed={privateSlotViewMode === 'all'}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: 6,
-                    border: '1px solid transparent',
-                    background: privateSlotViewMode === 'all' ? '#26344a' : 'transparent',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: 13,
-                  }}
+                  style={getPrivateSlotViewModeButtonStyle(privateSlotViewMode === 'all')}
                 >
                   전체 시간 보기
                 </button>
@@ -2135,15 +2241,7 @@ export default function StudentBookingPage() {
                   data-testid="private-slot-view-mode-available"
                   onClick={() => setPrivateSlotViewMode('available')}
                   aria-pressed={privateSlotViewMode === 'available'}
-                  style={{
-                    padding: '7px 10px',
-                    borderRadius: 6,
-                    border: '1px solid transparent',
-                    background: privateSlotViewMode === 'available' ? '#26344a' : 'transparent',
-                    color: 'white',
-                    cursor: 'pointer',
-                    fontSize: 13,
-                  }}
+                  style={getPrivateSlotViewModeButtonStyle(privateSlotViewMode === 'available')}
                 >
                   예약 가능한 시간만
                 </button>
@@ -2208,7 +2306,9 @@ export default function StudentBookingPage() {
                               {day.date}
                             </div>
                             {day.slots.length === 0 ? (
-                              <div style={{ opacity: 0.55, fontSize: 13 }}>-</div>
+                              <div style={{ opacity: 0.68, fontSize: 13 }}>
+                                가능한 시간이 없습니다
+                              </div>
                             ) : (
                               <div style={{ display: 'grid', gap: 8 }}>
                                 {day.slots.map((slot) => {
@@ -2237,8 +2337,7 @@ export default function StudentBookingPage() {
                                     !busyPrivateReservationId &&
                                     slot.status === 'open'
                                   const statusLabel =
-                                    slot.bookingStatusLabel ||
-                                    getPrivateBookingStatusLabel(bookingStatus)
+                                    getPrivateSlotDisplayLabel(bookingStatus, slot.bookingStatusLabel)
                                   const remainingCount = Number(slot.packageRemainingCount || 0)
 
                                   if (isBusySlot) {
@@ -2247,23 +2346,27 @@ export default function StudentBookingPage() {
                                         key={slot.id}
                                         data-testid="student-private-busy-slot-card"
                                         data-slot-id={slot.id}
-                                        style={{
-                                          border: '1px solid #3a3348',
-                                          borderRadius: 8,
-                                          padding: 12,
-                                          background: '#211c2b',
-                                        }}
+                                        style={getPrivateSlotCardStyle(bookingStatus)}
                                       >
                                         <div style={{ display: 'grid', gap: 6 }}>
-                                          <strong style={{ fontSize: 14 }}>
-                                            {slot.teacherName || slot.teacher || '1:1 수업'}
-                                          </strong>
+                                          <div
+                                            style={{
+                                              display: 'flex',
+                                              alignItems: 'flex-start',
+                                              justifyContent: 'space-between',
+                                              gap: 8,
+                                            }}
+                                          >
+                                            <strong style={{ fontSize: 14 }}>
+                                              {slot.teacherName || slot.teacher || '1:1 수업'}
+                                            </strong>
+                                            <span style={getPrivateSlotBadgeStyle(bookingStatus)}>
+                                              {statusLabel}
+                                            </span>
+                                          </div>
                                           <div style={{ opacity: 0.74, fontSize: 13 }}>
                                             {slot.date || day.date} · {slot.time || '-'} ·{' '}
                                             {Number(slot.durationMinutes || 0) || 60}분
-                                          </div>
-                                          <div style={{ opacity: 0.84, fontSize: 13 }}>
-                                            수업 있음
                                           </div>
                                         </div>
                                       </article>
@@ -2275,23 +2378,27 @@ export default function StudentBookingPage() {
                                       key={slot.id}
                                       data-testid="student-private-slot-card"
                                       data-slot-id={slot.id}
-                                      style={{
-                                        border: '1px solid #30384b',
-                                        borderRadius: 8,
-                                        padding: 12,
-                                        background: canReserve ? '#1d2a22' : '#1a1f2b',
-                                      }}
+                                      style={getPrivateSlotCardStyle(bookingStatus)}
                                     >
                                       <div style={{ display: 'grid', gap: 6 }}>
-                                        <strong style={{ fontSize: 14 }}>
-                                          {slot.teacherName || slot.teacher || '1:1 수업'}
-                                        </strong>
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'flex-start',
+                                            justifyContent: 'space-between',
+                                            gap: 8,
+                                          }}
+                                        >
+                                          <strong style={{ fontSize: 14 }}>
+                                            {slot.teacherName || slot.teacher || '1:1 수업'}
+                                          </strong>
+                                          <span style={getPrivateSlotBadgeStyle(bookingStatus)}>
+                                            {statusLabel}
+                                          </span>
+                                        </div>
                                         <div style={{ opacity: 0.74, fontSize: 13 }}>
                                           {slot.date || day.date} · {slot.time || '-'} ·{' '}
                                           {Number(slot.durationMinutes || 0) || 60}분
-                                        </div>
-                                        <div style={{ opacity: 0.8, fontSize: 13 }}>
-                                          {statusLabel}
                                         </div>
                                         {bookingStatus === 'not_open' ? (
                                           <div style={{ opacity: 0.72, fontSize: 12, lineHeight: 1.5 }}>
@@ -2400,16 +2507,26 @@ export default function StudentBookingPage() {
                           }}
                         >
                           <div>
-                            <strong style={{ fontSize: '1rem' }}>
-                              {reservation.teacher || slot?.teacher || '1:1 수업'}
-                            </strong>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                flexWrap: 'wrap',
+                              }}
+                            >
+                              <strong style={{ fontSize: '1rem' }}>
+                                {reservation.teacher || slot?.teacher || '1:1 수업'}
+                              </strong>
+                              <span style={getPrivateSlotBadgeStyle('my_reservation')}>내 예약</span>
+                            </div>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {[reservation.date || slot?.date, reservation.time || slot?.time]
                                 .filter(Boolean)
                                 .join(' · ') || `slotId: ${reservation.slotId}`}
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {getReservationStatusLabel(reservation)}
+                              {isActive ? '내 예약' : getReservationStatusLabel(reservation)}
                             </div>
                             {isActive ? (
                               <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
@@ -2424,12 +2541,15 @@ export default function StudentBookingPage() {
                               disabled={Boolean(busyPrivateReservationId)}
                               data-testid="student-private-reservation-cancel-button"
                               style={{
-                                padding: '10px 14px',
-                                borderRadius: 10,
-                                border: '1px solid #744242',
-                                background: '#4a2a2a',
-                                color: 'white',
+                                alignSelf: 'flex-start',
+                                padding: '6px 10px',
+                                borderRadius: 999,
+                                border: '1px solid #9a3f48',
+                                background: '#3a1f24',
+                                color: '#ffd8dc',
                                 cursor: busyPrivateReservationId ? 'not-allowed' : 'pointer',
+                                fontSize: 12,
+                                fontWeight: 800,
                               }}
                             >
                               {isBusy ? '취소 중...' : '예약 취소'}
