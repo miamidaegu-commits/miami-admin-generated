@@ -3,6 +3,7 @@ import { formatGroupStudentStartDate } from '../dashboardViewUtils.js'
 export default function GroupStudentAddModal({
   selectedGroupClass,
   isAdmin,
+  canViewPaymentFields = false,
   groupStudentForm,
   setGroupStudentForm,
   groupStudentFormErrors,
@@ -123,8 +124,12 @@ export default function GroupStudentAddModal({
                 <div>usedCount: {pkg.usedCount ?? '-'}</div>
                 <div>남은 횟수: {pkg.remainingCount ?? '-'}</div>
                 <div>expiresAt: {formatGroupStudentStartDate(pkg.expiresAt)}</div>
-                <div>amountPaid: {pkg.amountPaid ?? 0}</div>
-                <div style={{ whiteSpace: 'pre-wrap' }}>memo: {pkg.memo || '—'}</div>
+                {canViewPaymentFields ? (
+                  <>
+                    <div>amountPaid: {pkg.amountPaid ?? 0}</div>
+                    <div style={{ whiteSpace: 'pre-wrap' }}>memo: {pkg.memo || '—'}</div>
+                  </>
+                ) : null}
               </div>
             )
           })()}

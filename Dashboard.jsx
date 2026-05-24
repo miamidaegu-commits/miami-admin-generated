@@ -122,6 +122,10 @@ import {
   removeStudentPrivateSlotAccessBatch,
 } from './src/features/private-booking/studentPrivateAccessSummaryClient.js'
 import { findActivePrivatePackageForTeacher } from './src/features/dashboard/privatePackageHelpers.js'
+import {
+  canViewBillingFields,
+  stripBillingFieldsForRestrictedViewer,
+} from './src/features/dashboard/billingPermissions.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -141,12 +145,7 @@ const TEACHER_GROUP_MANAGEMENT_LABEL = '내 단체반 관리'
 const TEACHER_PRIVATE_LESSON_REQUESTS_LABEL = '내 1:1 관리'
 
 function isDashboardAdminProfile(profile) {
-  return (
-    profile?.role === 'admin' ||
-    profile?.role === 'owner' ||
-    profile?.membershipRole === 'admin' ||
-    profile?.membershipRole === 'owner'
-  )
+  return canViewBillingFields(profile)
 }
 
 function isDashboardTeacherProfile(profile) {
@@ -1309,7 +1308,7 @@ export default function Dashboard() {
           snapshot.docs.forEach((docItem) => {
             rowsById.set(docItem.id, {
               id: docItem.id,
-              ...docItem.data(),
+              ...stripBillingFieldsForRestrictedViewer(docItem.data()),
             })
           })
         })
@@ -2246,6 +2245,7 @@ export default function Dashboard() {
   })
 
   const isAdmin = isDashboardAdminProfile(userProfile)
+  const canViewPaymentFields = canViewBillingFields(userProfile)
   const teacherGroupClassKey = normalizeText(userProfile?.teacherName || '')
   const canManageOwnGroupClasses =
     !isAdmin && isDashboardTeacherProfile(userProfile) && Boolean(teacherGroupClassKey)
@@ -3814,6 +3814,7 @@ export default function Dashboard() {
     canAddStudent,
     canEditStudent,
     canDeleteStudent,
+    canViewPaymentFields,
     openStudentAddModal,
     openStudentEditModal,
     handleDeleteStudent,
@@ -3850,6 +3851,7 @@ export default function Dashboard() {
     openGroupLessonAddModal,
     openGroupLessonSeriesModal,
     isAdmin,
+    canViewPaymentFields,
     openGroupLessonPurgeModal,
     busyGroupLessonPurge,
     sortedGroupStudentsForSelectedClass,
@@ -3930,6 +3932,7 @@ export default function Dashboard() {
     studentPackageForm,
     setStudentPackageForm,
     studentPackageFormErrors,
+    canViewPaymentFields,
     sortedGroupClasses,
     nextGroupLessonDateByGroupId,
     studentPackageGroupAutoSummary,
@@ -3946,6 +3949,7 @@ export default function Dashboard() {
     studentPackageEditFormErrors,
     busyStudentPackageActionId,
     studentPackageEditMode,
+    canViewPaymentFields,
     closeStudentPackageEditModal,
     submitStudentPackageEditModal,
   }
@@ -4007,6 +4011,7 @@ export default function Dashboard() {
   const groupStudentAddModalProps = {
     selectedGroupClass,
     isAdmin,
+    canViewPaymentFields,
     groupStudentForm,
     setGroupStudentForm,
     groupStudentFormErrors,
@@ -4076,6 +4081,7 @@ export default function Dashboard() {
 
   const privateLessonModalProps = {
     isAdmin,
+    canViewPaymentFields,
     privateLessonForm,
     setPrivateLessonForm,
     privateLessonFormErrors,

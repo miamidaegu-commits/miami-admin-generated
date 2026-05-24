@@ -2106,6 +2106,7 @@ service cloud.firestore {
         ) || (
           canEditStudentPackageCounts(resource.data.academyId) &&
           studentPackageBelongsToTeacher(resource.data) &&
+          studentPackageBelongsToTeacher(request.resource.data) &&
           changedOnly(["totalCount", "remainingCount", "updatedAt"])
         )
       );

@@ -306,6 +306,7 @@ export default function StudentsSection({
   canAddStudent,
   canEditStudent,
   canDeleteStudent,
+  canViewPaymentFields = false,
   copiedStudentPhoneId,
   copyStudentPhone,
   openStudentAddModal,
@@ -1759,12 +1760,16 @@ export default function StudentsSection({
                           </span>
                           <span style={{ opacity: 0.72 }}>만료일</span>
                           <span>{formatGroupStudentStartDate(pkg.expiresAt)}</span>
-                          <span style={{ opacity: 0.72 }}>결제 금액</span>
-                          <span>{formatStudentPackageDetailAmountPaid(pkg.amountPaid)}</span>
-                          <span style={{ opacity: 0.72 }}>메모</span>
-                          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {formatStudentPackageDetailMemo(pkg.memo)}
-                          </span>
+                          {canViewPaymentFields ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>결제 금액</span>
+                              <span>{formatStudentPackageDetailAmountPaid(pkg.amountPaid)}</span>
+                              <span style={{ opacity: 0.72 }}>메모</span>
+                              <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                {formatStudentPackageDetailMemo(pkg.memo)}
+                              </span>
+                            </>
+                          ) : null}
                         </div>
                         {isAdmin || canEditStudentPackageCountsForPackage(pkg) ? (
                           <div

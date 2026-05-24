@@ -61,6 +61,7 @@ export default function GroupsSection({
   openGroupLessonAddModal,
   openGroupLessonSeriesModal,
   isAdmin,
+  canViewPaymentFields = false,
   openGroupLessonPurgeModal,
   busyGroupLessonPurge,
   sortedGroupStudentsForSelectedClass,
@@ -434,7 +435,7 @@ export default function GroupsSection({
                 >
                   <span>학생 이름</span>
                   <span>차감 횟수</span>
-                  <span>결제 횟수</span>
+                  <span>{canViewPaymentFields ? '결제 횟수' : '총 횟수'}</span>
                   <span>시작일</span>
                   <span>작업</span>
                 </div>

@@ -64,9 +64,11 @@ test('관리자가 학생 수강권 수정 모달에서 값을 저장하고 다�
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   const { packageCard } = await openStudentPackageSection(page);
+  await expect(packageCard).toContainText('결제 금액');
 
   try {
     const editDialog = await openStudentPackageEditModal(packageCard);
+    await expect(editDialog.getByLabel('결제 금액 (선택)')).toBeVisible();
     const memoInput = editDialog.getByLabel('메모 (선택)');
     await expect(memoInput).toBeVisible();
 

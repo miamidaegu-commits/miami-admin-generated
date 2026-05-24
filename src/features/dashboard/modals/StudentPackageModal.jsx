@@ -16,6 +16,7 @@ export default function StudentPackageModal({
   studentPackageForm,
   setStudentPackageForm,
   studentPackageFormErrors,
+  canViewPaymentFields = false,
   sortedGroupClasses,
   nextGroupLessonDateByGroupId,
   studentPackageGroupAutoSummary,
@@ -600,49 +601,53 @@ export default function StudentPackageModal({
                 ) : null}
               </label>
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={studentPackageForm.amountPaid}
-                  onChange={(e) =>
-                    setStudentPackageForm((prev) => ({ ...prev, amountPaid: e.target.value }))
-                  }
-                  placeholder="0"
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {studentPackageFormErrors.amountPaid ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {studentPackageFormErrors.amountPaid}
-                  </span>
-                ) : null}
-              </label>
+              {canViewPaymentFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={studentPackageForm.amountPaid}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({ ...prev, amountPaid: e.target.value }))
+                    }
+                    placeholder="0"
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  {studentPackageFormErrors.amountPaid ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageFormErrors.amountPaid}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>메모 (선택)</span>
-                <textarea
-                  value={studentPackageForm.memo}
-                  onChange={(e) =>
-                    setStudentPackageForm((prev) => ({ ...prev, memo: e.target.value }))
-                  }
-                  rows={3}
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                    resize: 'vertical',
-                  }}
-                />
-              </label>
+              {canViewPaymentFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>메모 (선택)</span>
+                  <textarea
+                    value={studentPackageForm.memo}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({ ...prev, memo: e.target.value }))
+                    }
+                    rows={3}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                      resize: 'vertical',
+                    }}
+                  />
+                </label>
+              ) : null}
             </div>
 
             {studentPackageModalActiveSameScopeDuplicates.length > 0 ? (
