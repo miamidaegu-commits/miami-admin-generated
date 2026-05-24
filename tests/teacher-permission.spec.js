@@ -333,8 +333,10 @@ async function ensureTeacherPackageCountFixture() {
       usedCount: 1,
       remainingCount: 3,
       status: 'active',
-      amountPaid: 0,
-      memo: '',
+      amountPaid: 12345,
+      paymentStatus: 'paid',
+      paymentMethod: 'cash',
+      memo: 'teacher-hidden billing memo',
       createdAt: now,
       updatedAt: now,
     },
@@ -354,8 +356,9 @@ async function ensureTeacherPackageCountFixture() {
       usedCount: 2,
       remainingCount: 6,
       status: 'active',
-      amountPaid: 0,
-      memo: '',
+      amountPaid: 67890,
+      paymentStatus: 'unpaid',
+      memo: 'other teacher-hidden billing memo',
       createdAt: now,
       updatedAt: now,
     },
@@ -418,6 +421,7 @@ test('teacher 계정은 웹 대시보드에서 캘린더, 내 1:1 관리, 내 �
   await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
   await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 2 })).toBeVisible();
+  await expect(page.getByText('결제 횟수')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '삭제', exact: true })).toHaveCount(0);
@@ -531,6 +535,8 @@ test('teacher with count edit permission can edit only own teacher package count
     await expect(packageCard).toContainText('1');
     await expect(packageCard).toContainText('남은 횟수');
     await expect(packageCard).toContainText('3');
+    await expect(packageCard).not.toContainText(/결제|금액|amountPaid|payment|price|tuition|fee|billing/i);
+    await expect(packageCard).not.toContainText('teacher-hidden billing memo');
     await expect(studentDetail.getByText('E2E other teacher package count edit')).toHaveCount(0);
     await expect(packageCard.getByTestId('student-package-history-button')).toHaveCount(0);
 
@@ -538,7 +544,9 @@ test('teacher with count edit permission can edit only own teacher package count
     const editDialog = page.getByRole('dialog', { name: '수강권 수정' });
     await expect(editDialog).toBeVisible({ timeout: 15000 });
     await expect(editDialog.getByTestId('student-package-count-edit-limited-note')).toBeVisible();
-    await expect(editDialog.getByLabel('제목')).toBeDisabled();
+    await expect(editDialog.getByLabel('제목')).toHaveCount(0);
+    await expect(editDialog).not.toContainText(/결제|금액|amountPaid|payment|price|tuition|fee|billing/i);
+    await expect(editDialog).not.toContainText('teacher-hidden billing memo');
     await editDialog.getByLabel('총 횟수 (totalCount)').fill('5');
     await expect(editDialog.getByTestId('student-package-edit-save-button')).toBeEnabled();
     await editDialog.getByTestId('student-package-edit-save-button').click();
@@ -575,6 +583,10 @@ test('teacher with count edit permission can edit only own teacher package count
           remainingCount: data.remainingCount,
           title: data.title,
           teacher: data.teacher,
+          amountPaid: data.amountPaid,
+          paymentStatus: data.paymentStatus,
+          paymentMethod: data.paymentMethod,
+          memo: data.memo,
         };
       }, { timeout: 15000 })
       .toEqual({
@@ -583,6 +595,10 @@ test('teacher with count edit permission can edit only own teacher package count
         remainingCount: 4,
         title: 'E2E teacher package count edit',
         teacher: 'teacher',
+        amountPaid: 12345,
+        paymentStatus: 'paid',
+        paymentMethod: 'cash',
+        memo: 'teacher-hidden billing memo',
       });
 
     await expect(packageCard).toContainText('5', { timeout: 15000 });
@@ -664,7 +680,7 @@ test('teacher 고정 1:1 요청은 lessonRequests만 생성한다', async ({ pag
 
   await page.getByLabel('새 학생 빠른 등록').check();
   await page.getByLabel('새 학생 이름').fill(studentName);
-  await page.getByLabel('결제 수업 수').fill('4');
+  await page.getByLabel('총 수업 수').fill('4');
   await page.getByLabel('주당 횟수').selectOption('1');
   await page.getByLabel('날짜 1').fill(date);
   await page.getByLabel('시간 1').fill(time);

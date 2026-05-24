@@ -25,6 +25,7 @@ import {
 } from '../../group-booking/studentGroupAccessClient.js'
 import { syncStudentGroupCourseTypeAccessSummary } from '../../group-booking/studentGroupAccessSummaryClient.js'
 import { removeStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
+import { canViewBillingFields } from '../billingPermissions.js'
 
 const DEFAULT_STUDENT_PACKAGE_EDIT_FORM = {
   title: '',
@@ -71,7 +72,7 @@ export default function useStudentPackageAdminFlow({
   }
 
   function isAdminPackageEditor() {
-    return userProfile?.role === 'admin'
+    return canViewBillingFields(userProfile)
   }
 
   function packageBelongsToCurrentTeacher(pkg) {

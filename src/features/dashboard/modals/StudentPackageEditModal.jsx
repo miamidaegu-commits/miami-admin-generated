@@ -8,10 +8,13 @@ export default function StudentPackageEditModal({
   studentPackageEditFormErrors,
   busyStudentPackageActionId,
   studentPackageEditMode = 'admin',
+  canViewPaymentFields = false,
   closeStudentPackageEditModal,
   submitStudentPackageEditModal,
 }) {
   const countOnly = studentPackageEditMode === 'teacherCount'
+  const showAdminFields = !countOnly
+  const showBillingFields = showAdminFields && canViewPaymentFields
 
   return (
         <div
@@ -95,30 +98,30 @@ export default function StudentPackageEditModal({
               }}
               style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
             >
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>제목</span>
-                <input
-                  type="text"
-                  disabled={countOnly}
-                  value={studentPackageEditForm.title}
-                  onChange={(e) =>
-                    setStudentPackageEditForm((prev) => ({ ...prev, title: e.target.value }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: countOnly ? '#171717' : '#1f1f1f',
-                    color: 'white',
-                    opacity: countOnly ? 0.7 : 1,
-                  }}
-                />
-                {studentPackageEditFormErrors.title ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {studentPackageEditFormErrors.title}
-                  </span>
-                ) : null}
-              </label>
+              {showAdminFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>제목</span>
+                  <input
+                    type="text"
+                    value={studentPackageEditForm.title}
+                    onChange={(e) =>
+                      setStudentPackageEditForm((prev) => ({ ...prev, title: e.target.value }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  {studentPackageEditFormErrors.title ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageEditFormErrors.title}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>총 횟수 (totalCount)</span>
@@ -147,84 +150,84 @@ export default function StudentPackageEditModal({
                 ) : null}
               </label>
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>만료일 (선택)</span>
-                <input
-                  type="date"
-                  disabled={countOnly}
-                  value={studentPackageEditForm.expiresAt}
-                  onChange={(e) =>
-                    setStudentPackageEditForm((prev) => ({
-                      ...prev,
-                      expiresAt: e.target.value,
-                    }))
-                  }
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: countOnly ? '#171717' : '#1f1f1f',
-                    color: 'white',
-                    opacity: countOnly ? 0.7 : 1,
-                  }}
-                />
-                {studentPackageEditFormErrors.expiresAt ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {studentPackageEditFormErrors.expiresAt}
-                  </span>
-                ) : null}
-              </label>
+              {showAdminFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>만료일 (선택)</span>
+                  <input
+                    type="date"
+                    value={studentPackageEditForm.expiresAt}
+                    onChange={(e) =>
+                      setStudentPackageEditForm((prev) => ({
+                        ...prev,
+                        expiresAt: e.target.value,
+                      }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  {studentPackageEditFormErrors.expiresAt ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageEditFormErrors.expiresAt}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  disabled={countOnly}
-                  value={studentPackageEditForm.amountPaid}
-                  onChange={(e) =>
-                    setStudentPackageEditForm((prev) => ({
-                      ...prev,
-                      amountPaid: e.target.value,
-                    }))
-                  }
-                  placeholder="0"
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: countOnly ? '#171717' : '#1f1f1f',
-                    color: 'white',
-                    opacity: countOnly ? 0.7 : 1,
-                  }}
-                />
-                {studentPackageEditFormErrors.amountPaid ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {studentPackageEditFormErrors.amountPaid}
-                  </span>
-                ) : null}
-              </label>
+              {showBillingFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={studentPackageEditForm.amountPaid}
+                    onChange={(e) =>
+                      setStudentPackageEditForm((prev) => ({
+                        ...prev,
+                        amountPaid: e.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  {studentPackageEditFormErrors.amountPaid ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageEditFormErrors.amountPaid}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>메모 (선택)</span>
-                <textarea
-                  disabled={countOnly}
-                  value={studentPackageEditForm.memo}
-                  onChange={(e) =>
-                    setStudentPackageEditForm((prev) => ({ ...prev, memo: e.target.value }))
-                  }
-                  rows={3}
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: countOnly ? '#171717' : '#1f1f1f',
-                    color: 'white',
-                    resize: 'vertical',
-                    opacity: countOnly ? 0.7 : 1,
-                  }}
-                />
-              </label>
+              {showBillingFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>메모 (선택)</span>
+                  <textarea
+                    value={studentPackageEditForm.memo}
+                    onChange={(e) =>
+                      setStudentPackageEditForm((prev) => ({ ...prev, memo: e.target.value }))
+                    }
+                    rows={3}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                      resize: 'vertical',
+                    }}
+                  />
+                </label>
+              ) : null}
 
             <div
               style={{
