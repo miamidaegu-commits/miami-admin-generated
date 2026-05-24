@@ -115,6 +115,31 @@ function addDaysToYmd(date, days) {
   return formatYmd(next);
 }
 
+function formatSeoulYmd(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`;
+}
+
+function ensureMondaySaturdayYmd(date) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  while (parsed.getUTCDay() === 0) {
+    parsed.setUTCDate(parsed.getUTCDate() + 1);
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function upcomingMondaySaturdayYmd(daysFromNow) {
+  return ensureMondaySaturdayYmd(
+    formatSeoulYmd(new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000))
+  );
+}
+
 function futureTuesdayYmd(unique) {
   const offsetWeeks = (Number.parseInt(String(unique).split('-')[0], 10) || Date.now()) % 400;
   const date = new Date('2098-01-01T00:00:00');
@@ -125,6 +150,13 @@ function futureTuesdayYmd(unique) {
 
 function privateSlotCard(page, text) {
   return page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: text }).first();
+}
+
+function privateBusySlotCard(page, text) {
+  return page
+    .locator('[data-testid="student-private-busy-slot-card"]')
+    .filter({ hasText: text })
+    .first();
 }
 
 function privateReservationCard(page, text) {
@@ -237,9 +269,7 @@ async function createFixture(unique) {
   const firstStudentName = `개인예약학생 A ${unique}`;
   const secondStudentName = `개인예약학생 B ${unique}`;
   const numericUnique = Number.parseInt(String(unique).split('-')[0], 10) || Date.now();
-  const createdDateBase = new Date('2099-04-01T00:00:00');
-  createdDateBase.setDate(createdDateBase.getDate() + (numericUnique % 5000));
-  const createdDate = formatYmd(createdDateBase);
+  const createdDate = upcomingMondaySaturdayYmd(3);
   const workerSuffix = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
   const createdHour = 8 + ((Math.floor(numericUnique / 60000) + workerSuffix) % 10);
   const createdTime = `${String(createdHour).padStart(2, '0')}:${String(numericUnique % 60).padStart(2, '0')}`;
@@ -717,14 +747,31 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     await expect(pastApprovedLessonCard).toContainText('1:1 수업');
     await expect(pastApprovedLessonCard).toContainText(fixture.pastApprovedLessonDate);
     await expect(pastApprovedLessonCard).toContainText('지난 수업');
-    await expect(privateSlotCard(studentPage, fixture.createdDate)).toBeVisible({ timeout: 15000 });
+    await expect(
+      studentPage.locator('[data-testid="student-private-slot-card"]').filter({
+        hasText: fixture.createdDate,
+      })
+    ).toHaveCount(0);
+    await expect(
+      studentPage.locator('[data-testid="student-private-busy-slot-card"]').filter({
+        hasText: fixture.createdDate,
+      })
+    ).toHaveCount(0);
     await expect(studentPage.getByText(fixture.hiddenDate)).toHaveCount(0);
+    await expect(studentPage.locator('body')).not.toContainText(fixture.secondStudentName);
+
+    const secondStudentContext = await browser.newContext();
+    contexts.push(secondStudentContext);
+    const secondStudentPage = await secondStudentContext.newPage();
+    await loginAsStudent(secondStudentPage, fixture.secondEmail, TEST_STUDENT_PASSWORD);
+    const secondStudentSlotCard = privateSlotCard(secondStudentPage, fixture.createdDate);
+    await expect(secondStudentSlotCard).toBeVisible({ timeout: 15000 });
+    await expect(secondStudentSlotCard).toContainText(fixture.createdTime);
+    await expect(secondStudentSlotCard).toContainText('Teacher E2E');
+    await expect(privateBusySlotCard(secondStudentPage, fixture.createdDate)).toHaveCount(0);
     await expect(
-      privateSlotCard(studentPage, fixture.createdDate).getByTestId('student-private-slot-reserve-button')
+      secondStudentSlotCard.getByTestId('student-private-slot-reserve-button')
     ).toBeDisabled();
-    await expect(
-      privateSlotCard(studentPage, fixture.createdDate).getByTestId('student-private-slot-reserve-button')
-    ).toHaveText('예약 오픈 대기');
     await expectSlotStatus(db, fixture.createdSlotId, 'open');
 
     await openDashboardSection(page, '1:1 예약 시간 관리');

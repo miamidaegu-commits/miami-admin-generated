@@ -961,7 +961,10 @@ test('released fixed private slot behavior is wired server-side', async () => {
     /exports\.reservePrivateLessonSlot[\s\S]*findActivePrivatePackageForTeacher/
   );
   expect(source).toMatch(
-    /exports\.reservePrivateLessonSlot[\s\S]*!hasSlotAccess\(\{slot, summary, slotId, studentId\}\)[\s\S]*!packageResult\.ok/
+    /exports\.reservePrivateLessonSlot[\s\S]*const hasAccess = hasSlotAccess\(\{slot, summary, slotId, studentId\}\)[\s\S]*!hasAccess && !packageResult\.ok/
+  );
+  expect(source).toMatch(
+    /exports\.reservePrivateLessonSlot[\s\S]*hasExplicitSlotEligibility\(slot\)[\s\S]*!hasAccess/
   );
   const sanitizeSource = source.match(
     /function sanitizePrivateSlotAvailabilityRow[\s\S]*?\n}\n/

@@ -335,7 +335,11 @@ function hasSlotAccess({slot, summary, slotId, studentId}) {
   return eligibleStudentIds.includes(studentId) ||
     allowedSlotIds.includes(slotId) ||
     allowedPrivateLessonSlotIds.includes(slotId) ||
-    hasTeacherPackageAccess;
+    (eligibleStudentIds.length === 0 && hasTeacherPackageAccess);
+}
+
+function hasExplicitSlotEligibility(slot) {
+  return normalizeIdList(slot && slot.eligibleStudentIds).length > 0;
 }
 
 function isActivePrivateReservation(data) {
@@ -1532,12 +1536,16 @@ exports.listPrivateLessonSlotAvailability = onCall(
               slot,
               packageSummary.byTeacherKey,
           );
-          if (!hasSlotAccess({
+          const hasAccess = hasSlotAccess({
             slot,
             summary: effectiveSummary,
             slotId,
             studentId,
-          }) && !matchingPackage) {
+          });
+          if (hasExplicitSlotEligibility(slot) && !hasAccess) {
+            return;
+          }
+          if (!hasAccess && !matchingPackage) {
             return;
           }
           byId.set(slotId, slot);
@@ -1847,11 +1855,16 @@ exports.reservePrivateLessonSlot = onCall(
             teacherKey,
             candidatePackageIds: summary && summary.activePackageIds,
           });
+          const hasAccess = hasSlotAccess({slot, summary, slotId, studentId});
 
-          if (
-            !hasSlotAccess({slot, summary, slotId, studentId}) &&
-            !packageResult.ok
-          ) {
+          if (hasExplicitSlotEligibility(slot) && !hasAccess) {
+            throw new HttpsError(
+                "permission-denied",
+                "Student is not eligible for this private lesson slot.",
+            );
+          }
+
+          if (!hasAccess && !packageResult.ok) {
             throw new HttpsError(
                 "permission-denied",
                 "Student is not eligible for this private lesson slot.",
