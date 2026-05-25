@@ -843,6 +843,14 @@ function buildReleasedPrivateSlotUpdates({slot, reservation, studentId, now}) {
   };
 }
 
+function buildAdminCancelledPrivateSlotUpdates({now}) {
+  return {
+    status: "cancelled",
+    cancelledAt: now,
+    updatedAt: now,
+  };
+}
+
 function getTimestampMillis(value) {
   if (!value) return null;
   if (typeof value.toMillis === "function") {
@@ -3096,10 +3104,7 @@ exports.adminCancelPrivateLessonReservation = onCall(
               }),
           );
           if (normalizeId(slot.reservationId) === reservationId) {
-            transaction.update(slotRef, buildReleasedPrivateSlotUpdates({
-              slot,
-              reservation,
-              studentId,
+            transaction.update(slotRef, buildAdminCancelledPrivateSlotUpdates({
               now,
             }));
           }
