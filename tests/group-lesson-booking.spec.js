@@ -300,6 +300,133 @@ test('admin can create a group class when start date differs from selected weekd
   }
 });
 
+test('admin deleting a group class cancels future lessons and preserves past lessons', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 group delete setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  initializeAdmin();
+  const db = admin.firestore();
+  const nowTs = admin.firestore.Timestamp.now();
+  const unique = `${Date.now()}-${testInfo.workerIndex}`;
+  const groupClassId = `e2e-delete-group-class-${unique}`;
+  const groupName = `E2E 삭제반 ${unique}`;
+  const futureSubject = `Delete Future ${unique}`;
+  const pastSubject = `Delete Past ${unique}`;
+  const futureLessonId = `e2e-delete-future-lesson-${unique}`;
+  const pastLessonId = `e2e-delete-past-lesson-${unique}`;
+  const futureYmd = nextWeekdayYmd(1);
+  const pastYmd = '2000-01-03';
+  const dialogMessages = [];
+
+  page.on('dialog', async (dialog) => {
+    dialogMessages.push(dialog.message());
+    await dialog.accept();
+  });
+
+  try {
+    await Promise.all([
+      db.collection('groupClasses').doc(groupClassId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: groupName,
+        teacher: TEACHER_NAME,
+        teacherName: TEACHER_NAME,
+        maxStudents: 4,
+        time: '15:00',
+        subject: '삭제 테스트',
+        groupCourseType: 'free_talking',
+        weekdays: ['월'],
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(futureLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId,
+        groupClassName: groupName,
+        teacher: TEACHER_NAME,
+        date: futureYmd,
+        time: '15:00',
+        subject: futureSubject,
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(pastLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId,
+        groupClassName: groupName,
+        teacher: TEACHER_NAME,
+        date: pastYmd,
+        time: '15:00',
+        subject: pastSubject,
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+    ]);
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
+
+    const groupRow = getGroupRow(page, groupName);
+    await expect(groupRow).toBeVisible({ timeout: 15000 });
+    await groupRow.click();
+    await expect(getLessonRow(page, futureSubject)).toBeVisible({ timeout: 15000 });
+
+    await groupRow.getByRole('button', { name: '삭제', exact: true }).click();
+
+    await expect(groupRow).toHaveCount(0, { timeout: 15000 });
+    await expect(getLessonRow(page, futureSubject)).toHaveCount(0);
+    await expect
+      .poll(async () => {
+        const snap = await db.collection('groupLessons').doc(futureLessonId).get();
+        const data = snap.data() || {};
+        return {
+          exists: snap.exists,
+          status: data.status || '',
+          groupClassDeleted: data.groupClassDeleted === true,
+          cancelledReason: data.cancelledReason || '',
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        exists: true,
+        status: 'cancelled',
+        groupClassDeleted: true,
+        cancelledReason: 'group_class_deleted',
+      });
+    await expect
+      .poll(async () => {
+        const snap = await db.collection('groupLessons').doc(pastLessonId).get();
+        const data = snap.data() || {};
+        return {
+          exists: snap.exists,
+          status: data.status || '',
+          groupClassDeleted: data.groupClassDeleted === true,
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        exists: true,
+        status: '',
+        groupClassDeleted: false,
+      });
+    expect(dialogMessages.join('\n')).toContain('과거 수업 기록은 유지됩니다.');
+    expect(dialogMessages.join('\n')).toContain('앞으로 예정된 수업 1건을 취소했습니다.');
+  } finally {
+    await Promise.all([
+      db.collection('groupLessons').doc(futureLessonId).delete().catch(() => {}),
+      db.collection('groupLessons').doc(pastLessonId).delete().catch(() => {}),
+      db.collection('groupClasses').doc(groupClassId).delete().catch(() => {}),
+    ]);
+  }
+});
+
 function reservationId({ lessonId, studentId }) {
   return `${DEFAULT_E2E_ACADEMY_ID}__${lessonId}__${studentId}`;
 }

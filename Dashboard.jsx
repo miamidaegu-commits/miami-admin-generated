@@ -49,6 +49,8 @@ import {
   getGroupWeeklyClassCountFromWeekdaysDoc,
   getTodayStorageDateString,
   groupLessonNextSortKey,
+  isActiveGroupClassRow,
+  isCancelledOrDeletedGroupLesson,
   isGroupStudentRowActive,
   isGroupStudentStartedByYmd,
   isSameStorageDate,
@@ -263,6 +265,10 @@ function chunkArray(values, size) {
     out.push(values.slice(i, i + size))
   }
   return out
+}
+
+function isVisibleGroupLessonForActiveViews(lesson) {
+  return !isCancelledOrDeletedGroupLesson(lesson)
 }
 
 function normalizePrivateSlotEligibleStudentIds(values, privateStudents) {
@@ -502,6 +508,7 @@ function buildGroupPackageCoverageLessons({
 
   const sorted = [...groupLessons]
     .filter((gl) => {
+      if (!isVisibleGroupLessonForActiveViews(gl)) return false
       if (getGroupLessonGroupId(gl) !== gid) return false
       const dateStr = String(gl.date || '').trim()
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false
@@ -1517,7 +1524,7 @@ export default function Dashboard() {
         const rows = snapshot.docs.map((docItem) => ({
           id: docItem.id,
           ...docItem.data(),
-        }))
+        })).filter(isVisibleGroupLessonForActiveViews)
         setGroupLessons(rows)
         setGroupLessonsLoading(false)
       },
@@ -1797,7 +1804,7 @@ export default function Dashboard() {
           const rows = snapshot.docs.map((docItem) => ({
             id: docItem.id,
             ...docItem.data(),
-          }))
+          })).filter(isVisibleGroupLessonForActiveViews)
           setStudentSummaryGroupLessons(rows)
         })
         .catch((error) => {
@@ -1893,7 +1900,10 @@ export default function Dashboard() {
             if (!active) return
             const m = new Map()
             snapshot.docs.forEach((docItem) => {
-              m.set(docItem.id, { id: docItem.id, ...docItem.data() })
+              const row = { id: docItem.id, ...docItem.data() }
+              if (isVisibleGroupLessonForActiveViews(row)) {
+                m.set(docItem.id, row)
+              }
             })
             chunkMapsGl.set(chunkIndex, m)
             mergeGl()
@@ -1918,12 +1928,24 @@ export default function Dashboard() {
 
   const todayYmd = getTodayStorageDateString()
 
+  const activeGroupClassIds = useMemo(() => {
+    return new Set(
+      groupClasses
+        .filter(isActiveGroupClassRow)
+        .map((groupClass) => String(groupClass.id || '').trim())
+        .filter(Boolean)
+    )
+  }, [groupClasses])
+
   const studentSummaryTodayGroupLessons = useMemo(() => {
     return studentSummaryGroupLessons.filter((lesson) => {
       if (String(lesson.academyId || '').trim() !== String(currentAcademyId || '').trim()) return false
+      if (!isVisibleGroupLessonForActiveViews(lesson)) return false
+      const groupClassId = getGroupLessonGroupId(lesson)
+      if (!groupClassId || !activeGroupClassIds.has(groupClassId)) return false
       return String(lesson.date || '').trim() === todayYmd
     })
-  }, [currentAcademyId, studentSummaryGroupLessons, todayYmd])
+  }, [activeGroupClassIds, currentAcademyId, studentSummaryGroupLessons, todayYmd])
 
   useEffect(() => {
     const role = String(userProfile?.role || '').trim().toLowerCase()
@@ -1940,7 +1962,10 @@ export default function Dashboard() {
       return
     }
 
-    const groupClassIds = groupClasses.map((groupClass) => String(groupClass.id || '').trim()).filter(Boolean)
+    const groupClassIds = groupClasses
+      .filter(isActiveGroupClassRow)
+      .map((groupClass) => String(groupClass.id || '').trim())
+      .filter(Boolean)
     if (groupClassIds.length === 0) {
       setTodayDashboardGroupLessons([])
       setTodayDashboardGroupLessonsLoading(false)
@@ -1975,6 +2000,7 @@ export default function Dashboard() {
             const lessonAcademyId = String(lesson.academyId || '').trim()
             const lessonTeacher = String(lesson.teacher || lesson.teacherName || '').trim()
             if (lessonAcademyId !== String(currentAcademyId || '').trim()) return
+            if (!isVisibleGroupLessonForActiveViews(lesson)) return
             if (String(lesson.date || '').trim() !== todayYmd) return
             if (lessonTeacher && lessonTeacher !== teacherName) return
             byId.set(docItem.id, lesson)
@@ -3184,13 +3210,53 @@ export default function Dashboard() {
     }
 
     const label = `${group.name || ''} (${group.teacher || ''})`.trim()
-    if (!window.confirm(`이 반을 삭제할까요?\n${label}`)) return
+    if (
+      !window.confirm(
+        `이 반을 삭제할까요?\n${label}\n\n` +
+          '이 반을 삭제하면 앞으로 생성된 수업 일정도 캘린더와 예약 화면에서 숨겨집니다. 과거 수업 기록은 유지됩니다.'
+      )
+    ) {
+      return
+    }
 
     try {
-      assertSameAcademy(group, currentAcademyId, '그룹')
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(group, scopedAcademyId, '그룹')
       setBusyGroupId(group.id)
-      await deleteDoc(doc(db, 'groupClasses', group.id))
+      const todayYmd = getTodayStorageDateString()
+      const relatedLessons = await fetchGroupLessonsForClassIdMerge(group.id)
+      const futureLessons = relatedLessons.filter((lesson) => {
+        if (isCancelledOrDeletedGroupLesson(lesson)) return false
+        const lessonDate = String(lesson.date || '').trim()
+        return /^\d{4}-\d{2}-\d{2}$/.test(lessonDate) && lessonDate >= todayYmd
+      })
+      const lessonChunks = chunkArray(futureLessons, 450)
+      const groupRef = doc(db, 'groupClasses', group.id)
+      const now = serverTimestamp()
+
+      if (lessonChunks.length === 0) {
+        await deleteDoc(groupRef)
+      } else {
+        for (let chunkIndex = 0; chunkIndex < lessonChunks.length; chunkIndex += 1) {
+          const batch = writeBatch(db)
+          if (chunkIndex === 0) {
+            batch.delete(groupRef)
+          }
+          lessonChunks[chunkIndex].forEach((lesson) => {
+            batch.update(doc(db, 'groupLessons', lesson.id), {
+              status: 'cancelled',
+              groupClassDeleted: true,
+              cancelledReason: 'group_class_deleted',
+              cancelledAt: now,
+              cancelledByUid: user?.uid || '',
+              updatedAt: now,
+            })
+          })
+          await batch.commit()
+        }
+      }
       setSelectedGroupClass((prev) => (prev?.id === group.id ? null : prev))
+      alert(`반을 삭제했습니다. 앞으로 예정된 수업 ${futureLessons.length}건을 취소했습니다.`)
     } catch (error) {
       console.error('그룹 삭제 실패:', error)
       alert(`그룹 삭제 실패: ${error.message}`)

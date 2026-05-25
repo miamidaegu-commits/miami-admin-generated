@@ -321,7 +321,31 @@ function groupLessonReservationDocId({academyId, lessonId, studentId}) {
 }
 
 function getGroupLessonGroupId(data) {
-  return normalizeId(data && (data.groupClassId || data.classID));
+  return normalizeId(
+      data && (data.groupClassId || data.groupClassID || data.classID),
+  );
+}
+
+function isCancelledOrDeletedGroupLesson(data) {
+  const status = normalizeId(data && data.status).toLowerCase();
+  return (
+    status === "cancelled" ||
+    status === "canceled" ||
+    Boolean(data && data.groupClassDeleted === true)
+  );
+}
+
+function isActiveGroupClass(data) {
+  const status = normalizeId(data && data.status).toLowerCase() || "active";
+  return (
+    data &&
+    data.deleted !== true &&
+    data.groupClassDeleted !== true &&
+    status !== "deleted" &&
+    status !== "cancelled" &&
+    status !== "canceled" &&
+    status !== "inactive"
+  );
 }
 
 function getGroupStudentGroupId(data) {
@@ -1680,18 +1704,25 @@ exports.listGroupLessonAvailability = onCall(
             .get();
         const summary = summarySnap.exists ? summarySnap.data() || {} : {};
 
-        const [lessonSnap, groupStudentsSnap, reservationsSnap] =
-          await Promise.all([
-            db.collection("groupLessons")
-                .where("academyId", "==", academyId)
-                .get(),
-            db.collection("groupStudents")
-                .where("academyId", "==", academyId)
-                .get(),
-            db.collection("groupLessonReservations")
-                .where("academyId", "==", academyId)
-                .get(),
-          ]);
+        const [
+          lessonSnap,
+          groupClassesSnap,
+          groupStudentsSnap,
+          reservationsSnap,
+        ] = await Promise.all([
+          db.collection("groupLessons")
+              .where("academyId", "==", academyId)
+              .get(),
+          db.collection("groupClasses")
+              .where("academyId", "==", academyId)
+              .get(),
+          db.collection("groupStudents")
+              .where("academyId", "==", academyId)
+              .get(),
+          db.collection("groupLessonReservations")
+              .where("academyId", "==", academyId)
+              .get(),
+        ]);
 
         const groupStudents = groupStudentsSnap.docs.map((docSnap) => ({
           id: docSnap.id,
@@ -1701,11 +1732,20 @@ exports.listGroupLessonAvailability = onCall(
           id: docSnap.id,
           ...docSnap.data(),
         }));
+        const activeGroupClassIds = new Set(
+            groupClassesSnap.docs
+                .filter((docSnap) => isActiveGroupClass(docSnap.data() || {}))
+                .map((docSnap) => docSnap.id),
+        );
 
         const lessons = lessonSnap.docs
             .filter((docSnap) => {
               const lesson = docSnap.data() || {};
+              const lessonGroupId = getGroupLessonGroupId(lesson);
               return lesson.isBookable === true &&
+                !isCancelledOrDeletedGroupLesson(lesson) &&
+                lessonGroupId &&
+                activeGroupClassIds.has(lessonGroupId) &&
                 hasGroupLessonAccess({summary, lesson});
             })
             .map((docSnap) => {
@@ -1780,8 +1820,28 @@ exports.reserveGroupLessonSeat = onCall(
           if (lesson.isBookable !== true) {
             throw new HttpsError("failed-precondition", "예약 불가 수업입니다.");
           }
+          if (isCancelledOrDeletedGroupLesson(lesson)) {
+            throw new HttpsError("failed-precondition", "취소된 수업입니다.");
+          }
 
           const lessonGroupId = getGroupLessonGroupId(lesson);
+          if (!lessonGroupId) {
+            throw new HttpsError(
+                "failed-precondition",
+                "수업에 연결된 반 정보를 찾을 수 없습니다.",
+            );
+          }
+          const groupClassSnap = await transaction.get(
+              db.collection("groupClasses").doc(lessonGroupId),
+          );
+          if (!groupClassSnap.exists ||
+              normalizeId(groupClassSnap.data().academyId) !== academyId ||
+              !isActiveGroupClass(groupClassSnap.data() || {})) {
+            throw new HttpsError(
+                "failed-precondition",
+                "삭제되었거나 비활성화된 반의 수업입니다.",
+            );
+          }
           let studentId = "";
           let source = "student";
           let studentName = "";

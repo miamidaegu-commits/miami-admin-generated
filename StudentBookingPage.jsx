@@ -445,6 +445,7 @@ export default function StudentBookingPage() {
         })
         setAllowedGroupClassIds(Array.from(nextIds.values()))
         setAllowedGroupCourseTypes(Array.from(nextCourseTypes.values()))
+        setGroupLessonsRefreshKey((previous) => previous + 1)
         setAccessLoading(false)
         setAccessResolved(true)
       },

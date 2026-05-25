@@ -6,6 +6,8 @@ import {
   formatLessonSessionNumber,
   getStudentName,
   getTeacherName,
+  isActiveGroupClassRow,
+  isCancelledOrDeletedGroupLesson,
   normalizeText,
 } from '../dashboardViewUtils.js'
 
@@ -51,15 +53,26 @@ export default function useCalendarSectionViewModel({
     const rows = Array.isArray(studentSummaryGroupLessons)
       ? studentSummaryGroupLessons
       : []
+    const activeGroupClassById = new Map(
+      groupClasses
+        .filter(isActiveGroupClassRow)
+        .map((groupClass) => [String(groupClass.id || ''), groupClass])
+    )
+    const activeRows = rows.filter((gl) => {
+      if (isCancelledOrDeletedGroupLesson(gl)) return false
+      const gcid = getGroupLessonGroupId(gl)
+      if (!gcid) return false
+      return activeGroupClassById.has(String(gcid))
+    })
     if (userProfile?.role === 'teacher' && userProfile?.teacherName) {
       const myTeacherName = normalizeText(userProfile.teacherName)
-      return rows.filter((gl) => {
+      return activeRows.filter((gl) => {
         const gcid = getGroupLessonGroupId(gl)
-        const gc = groupClasses.find((g) => String(g.id) === String(gcid))
+        const gc = activeGroupClassById.get(String(gcid))
         return gc && normalizeText(gc.teacher || '') === myTeacherName
       })
     }
-    return rows
+    return activeRows
   }, [studentSummaryGroupLessons, groupClasses, userProfile])
 
   const calendarGroupLessonRows = useMemo(() => {
