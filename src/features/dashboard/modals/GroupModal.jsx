@@ -19,6 +19,7 @@ export default function GroupModal({
     normalizedTeacher && !hasTeacherOption
       ? [{ value: normalizedTeacher, label: `기존 값: ${normalizedTeacher}` }, ...teacherSelectOptions]
       : teacherSelectOptions
+  const validationMessages = Object.values(groupFormErrors || {}).filter(Boolean)
 
   return (
     <div
@@ -61,9 +62,31 @@ export default function GroupModal({
 
         {groupModal.type === 'add' ? (
           <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.72, lineHeight: 1.45 }}>
-            반 정보·수업 시간·반복 요일을 저장하면, 시작일부터 약 1년간 수업 일정이 자동으로
-            만들어집니다.
+            수업 시작일은 자동 일정 생성 범위의 시작일입니다. 실제 수업일은 선택한 반복
+            요일에 맞춰 시작일 이후 첫 해당 요일부터 만들어집니다.
           </p>
+        ) : null}
+
+        {validationMessages.length > 0 ? (
+          <div
+            role="alert"
+            data-testid="group-modal-validation-summary"
+            style={{
+              margin: '0 0 14px 0',
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid #7a3d3d',
+              background: '#3a1f1f',
+              color: '#ffd4d4',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ display: 'block', marginBottom: 4 }}>저장할 수 없습니다.</strong>
+            {validationMessages.map((message) => (
+              <div key={message}>{message}</div>
+            ))}
+          </div>
         ) : null}
 
         <div

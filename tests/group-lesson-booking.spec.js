@@ -141,6 +141,14 @@ function nextWeekdayYmd(targetDay) {
   return formatLocalYmd(date);
 }
 
+function firstWeekdayOnOrAfterYmd(startYmd, targetDay) {
+  const date = new Date(`${startYmd}T00:00:00`);
+  while (date.getDay() !== targetDay) {
+    date.setDate(date.getDate() + 1);
+  }
+  return formatLocalYmd(date);
+}
+
 async function deleteGroupClassLessons(db, groupClassId) {
   if (!groupClassId) return;
   const snap = await db
@@ -183,7 +191,7 @@ async function clickExpectingNoDialog(page, locator) {
   await dialogPromise;
 }
 
-test('admin can create a free_talking group class and generated lessons inherit groupCourseType', async ({
+test('admin can create a group class when start date differs from selected weekdays', async ({
   page,
   browserName,
 }, testInfo) => {
@@ -194,6 +202,9 @@ test('admin can create a free_talking group class and generated lessons inherit 
   initializeAdmin();
   const db = admin.firestore();
   const groupName = `E2E 프리토킹반 ${Date.now()}-${testInfo.workerIndex}`;
+  const startYmd = nextWeekdayYmd(1);
+  const firstTuesdayYmd = firstWeekdayOnOrAfterYmd(startYmd, 2);
+  const firstThursdayYmd = firstWeekdayOnOrAfterYmd(startYmd, 4);
   let groupClassId = '';
 
   page.on('dialog', async (dialog) => {
@@ -209,12 +220,13 @@ test('admin can create a free_talking group class and generated lessons inherit 
     await expect(dialog).toBeVisible();
     await dialog.getByLabel('반 이름').fill(groupName);
     await dialog.getByLabel('담당 선생님').selectOption(TEACHER_NAME);
-    await dialog.getByLabel('정원 (명)').fill('3');
-    await dialog.getByLabel('수업 시작일 (자동 일정 기준)').fill(nextWeekdayYmd(0));
-    await dialog.getByLabel('기본 시간 (HH:mm)').fill('10:30');
-    await dialog.getByLabel('과목').fill('E2E Course Type');
+    await dialog.getByLabel('정원 (명)').fill('4');
+    await dialog.getByLabel('수업 시작일 (자동 일정 기준)').fill(startYmd);
+    await dialog.getByLabel('기본 시간 (HH:mm)').fill('15:00');
+    await dialog.getByLabel('과목').fill('테스트과목');
     await dialog.getByLabel('코스 유형').selectOption('free_talking');
-    await dialog.getByRole('button', { name: '일', exact: true }).click();
+    await dialog.getByRole('button', { name: '화', exact: true }).click();
+    await dialog.getByRole('button', { name: '목', exact: true }).click();
     await dialog.getByRole('button', { name: '저장' }).click();
 
     await expect
@@ -238,11 +250,31 @@ test('admin can create a free_talking group class and generated lessons inherit 
           .collection('groupLessons')
           .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
           .where('groupClassId', '==', groupClassId)
-          .limit(3)
           .get();
-        return snap.docs.filter((docSnap) => docSnap.data().groupCourseType === 'free_talking').length;
+        const lessons = snap.docs.map((docSnap) => docSnap.data() || {});
+        const matchingDates = lessons
+          .filter(
+            (lesson) =>
+              lesson.groupCourseType === 'free_talking' &&
+              lesson.subject === '테스트과목' &&
+              lesson.time === '15:00'
+          )
+          .map((lesson) => lesson.date)
+          .sort();
+        const generatedWeekdays = new Set(
+          matchingDates.map((date) => new Date(`${date}T00:00:00`).getDay())
+        );
+        return {
+          hasFirstTuesday: matchingDates.includes(firstTuesdayYmd),
+          hasFirstThursday: matchingDates.includes(firstThursdayYmd),
+          weekdays: Array.from(generatedWeekdays).sort(),
+        };
       }, { timeout: 90000 })
-      .toBeGreaterThan(0);
+      .toEqual({
+        hasFirstTuesday: true,
+        hasFirstThursday: true,
+        weekdays: [2, 4],
+      });
 
     await expect(dialog)
       .toBeHidden({ timeout: 90000 })
