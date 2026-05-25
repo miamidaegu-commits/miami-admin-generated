@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import {
   countWeekdayHitsInRange,
+  isCancelledOrDeletedGroupLesson,
   isGroupStudentOperationallyEligibleOnYmd,
   normalizeGroupWeekdaysFromDoc,
   parseYmdToLocalDate,
@@ -23,7 +24,7 @@ export default function useGroupsSectionViewModel({
   groupLessonReservations = [],
 }) {
   const sortedGroupLessonsForSelectedClass = useMemo(() => {
-    return [...groupLessons].sort((a, b) => {
+    return groupLessons.filter((lesson) => !isCancelledOrDeletedGroupLesson(lesson)).sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || ''}`
       const bKey = `${b.date || ''} ${b.time || ''}`
       return aKey.localeCompare(bKey)

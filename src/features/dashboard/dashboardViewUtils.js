@@ -396,6 +396,24 @@ export function jsDateToGroupWeekdayCode(date) {
   return day === 0 ? 1 : day + 1
 }
 
+export function isCancelledOrDeletedGroupLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  return status === 'cancelled' || status === 'canceled' || lesson?.groupClassDeleted === true
+}
+
+export function isActiveGroupClassRow(groupClass) {
+  if (!groupClass) return false
+  const status = String(groupClass.status || 'active').trim().toLowerCase()
+  return (
+    groupClass.deleted !== true &&
+    groupClass.groupClassDeleted !== true &&
+    status !== 'deleted' &&
+    status !== 'cancelled' &&
+    status !== 'canceled' &&
+    status !== 'inactive'
+  )
+}
+
 export function parseYmdToLocalDate(ymd) {
   const [y, mo, d] = String(ymd).split('-').map(Number)
   if (!y || !mo || !d) return null
