@@ -7,7 +7,8 @@ import {
   getStudentName,
   getTeacherName,
   isActiveGroupClassRow,
-  isCancelledOrDeletedGroupLesson,
+  isClassClosureCancelledGroupLesson,
+  isNoDeductionCancelledGroupLesson,
   normalizeText,
 } from '../dashboardViewUtils.js'
 
@@ -59,7 +60,7 @@ export default function useCalendarSectionViewModel({
         .map((groupClass) => [String(groupClass.id || ''), groupClass])
     )
     const activeRows = rows.filter((gl) => {
-      if (isCancelledOrDeletedGroupLesson(gl)) return false
+      if (isClassClosureCancelledGroupLesson(gl)) return false
       const gcid = getGroupLessonGroupId(gl)
       if (!gcid) return false
       return activeGroupClassById.has(String(gcid))
@@ -86,6 +87,7 @@ export default function useCalendarSectionViewModel({
         _calendarRowKind: 'group',
         groupClassDisplayName: name,
         teacher: String(gl.teacher || gc?.teacher || '').trim() || '-',
+        calendarStatusLabel: isNoDeductionCancelledGroupLesson(gl) ? '휴강 · 차감 없음' : '예정',
       }
     })
   }, [visibleGroupLessons, groupClasses])

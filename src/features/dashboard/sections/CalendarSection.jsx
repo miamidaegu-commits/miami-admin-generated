@@ -279,6 +279,7 @@ export default function CalendarSection(props) {
     canEditLesson,
     canDeleteLesson,
     onOpenCalendarGroupLessonAttendance,
+    onOpenGroupLessonNoDeductionCancel,
   } = props
   const displayedLessonRows =
     activeSection === 'groups'
@@ -548,7 +549,7 @@ export default function CalendarSection(props) {
                 : Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private'))
             const privateReservationStatus = String(lesson.status || '').trim()
             const statusLabel = isGroupRow
-              ? '예정'
+              ? lesson.calendarStatusLabel || '예정'
               : isPrivateReservationRow
                 ? privateReservationStatus === 'completed'
                   ? '완료'
@@ -731,10 +732,28 @@ export default function CalendarSection(props) {
                     </button>
                   ) : null}
                   {isGroupRow ? (
-                    <span style={{ fontSize: 12, opacity: 0.65 }}>
-                      읽기 전용
-                      {canOpenGroupAttendance ? ' · 클릭해 출결 열기' : ''}
-                    </span>
+                    <>
+                      <span style={{ fontSize: 12, opacity: 0.65 }}>
+                        읽기 전용
+                        {canOpenGroupAttendance ? ' · 클릭해 출결 열기' : ''}
+                      </span>
+                      {isAdmin && canEditLesson && lesson.status !== 'cancelled' ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenGroupLessonNoDeductionCancel?.(lesson)}
+                          style={{
+                            padding: '6px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #665533',
+                            background: '#3a321f',
+                            color: '#ffe8b8',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          휴강 처리
+                        </button>
+                      ) : null}
+                    </>
                   ) : null}
                   {isPrivateReservationRow ? (
                     <span style={{ fontSize: 12, opacity: 0.65 }}>읽기 전용</span>

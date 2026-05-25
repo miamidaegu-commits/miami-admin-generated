@@ -196,6 +196,13 @@ export default function useGroupAttendanceFlow({
         const lData = lessonSnap.data()
         assertSameAcademy(lData, scopedAcademyId, '그룹 수업')
         if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
+        const lessonStatus = String(lData.status || '').trim().toLowerCase()
+        if (
+          (lessonStatus === 'cancelled' || lessonStatus === 'canceled') &&
+          lData.noDeduction === true
+        ) {
+          throw new Error('휴강 처리된 수업은 차감할 수 없습니다.')
+        }
 
         const pData = pkgSnap.data()
         assertSameAcademy(pData, scopedAcademyId, '수강권')
