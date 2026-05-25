@@ -1,7 +1,12 @@
-import { formatGroupStudentStartDate, formatGroupWeekdaysDisplay } from '../dashboardViewUtils.js'
+import {
+  formatGroupStudentStartDate,
+  formatGroupWeekdaysDisplay,
+  isNoDeductionCancelledGroupLesson,
+} from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
 
 function getLessonReservationStatusLabel(lesson, seatAvailability) {
+  if (isNoDeductionCancelledGroupLesson(lesson)) return '휴강'
   if (lesson?.isBookable !== true) return '비활성'
   if (seatAvailability) return seatAvailability.isFull ? '마감' : '예약 가능'
   const capacity = Number(lesson?.capacity ?? 0)
@@ -85,6 +90,7 @@ export default function GroupsSection({
   openGroupLessonAttendanceModal,
   canEditLesson,
   openGroupLessonEditModal,
+  openGroupLessonNoDeductionCancelModal,
   canDeleteLesson,
   handleDeleteGroupLesson,
   getGroupStudentDisplayName,
@@ -242,7 +248,7 @@ export default function GroupsSection({
                         cursor: rowBusy || busyGroupId === '__add__' ? 'not-allowed' : 'pointer',
                       }}
                     >
-                      {rowBusy ? '처리 중...' : '삭제'}
+                      {rowBusy ? '처리 중...' : '반 운영 종료'}
                     </button>
                   ) : null}
                 </span>
@@ -547,6 +553,7 @@ export default function GroupsSection({
 
                   {sortedGroupLessonsForSelectedClass.map((gl) => {
                     const rowBusy = busyGroupLessonId === gl.id
+                    const isNoDeductionCancelled = isNoDeductionCancelledGroupLesson(gl)
                     const seatAvailability = groupLessonSeatAvailabilityById[gl.id] || null
                     const reservationStatusLabel = getLessonReservationStatusLabel(gl, seatAvailability)
                     const attendanceBusyThisLesson =
@@ -557,6 +564,7 @@ export default function GroupsSection({
                         key={gl.id}
                         className="table-row"
                         data-testid="group-lesson-row"
+                        data-lesson-id={gl.id || ''}
                         data-lesson-date={gl.date || ''}
                         data-lesson-time={gl.time || ''}
                         data-lesson-subject={gl.subject || ''}
@@ -586,7 +594,14 @@ export default function GroupsSection({
                             남은 자리 {seatAvailability?.remainingSeats ?? '-'}명
                           </span>
                         </span>
-                        <span>{reservationStatusLabel}</span>
+                        <span style={{ display: 'grid', gap: 3 }}>
+                          <span>{reservationStatusLabel}</span>
+                          {isNoDeductionCancelled ? (
+                            <span style={{ fontSize: 12, color: '#f1d38a', fontWeight: 700 }}>
+                              차감 없음
+                            </span>
+                          ) : null}
+                        </span>
                         <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           {canManageGroupReservations ? (
                             <button
@@ -667,6 +682,34 @@ export default function GroupsSection({
                               }}
                             >
                               {attendanceBusyThisLesson ? '처리 중' : '출결/차감'}
+                            </button>
+                          ) : null}
+                          {isAdmin && canEditLesson && !isNoDeductionCancelled ? (
+                            <button
+                              type="button"
+                              onClick={() => openGroupLessonNoDeductionCancelModal(gl)}
+                              disabled={
+                                rowBusy ||
+                                busyGroupLessonId === '__add__' ||
+                                busyGroupId === '__add__' ||
+                                busyGroupId === selectedGroupClass.id
+                              }
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #665533',
+                                background: '#3a321f',
+                                color: '#ffe8b8',
+                                cursor:
+                                  rowBusy ||
+                                  busyGroupLessonId === '__add__' ||
+                                  busyGroupId === '__add__' ||
+                                  busyGroupId === selectedGroupClass.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                              }}
+                            >
+                              휴강 처리
                             </button>
                           ) : null}
                           {canEditLesson ? (

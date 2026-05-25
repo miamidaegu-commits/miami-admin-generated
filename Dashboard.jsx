@@ -50,7 +50,9 @@ import {
   getTodayStorageDateString,
   groupLessonNextSortKey,
   isActiveGroupClassRow,
+  isClassClosureCancelledGroupLesson,
   isCancelledOrDeletedGroupLesson,
+  isNoDeductionCancelledGroupLesson,
   isGroupStudentRowActive,
   isGroupStudentStartedByYmd,
   isSameStorageDate,
@@ -268,7 +270,7 @@ function chunkArray(values, size) {
 }
 
 function isVisibleGroupLessonForActiveViews(lesson) {
-  return !isCancelledOrDeletedGroupLesson(lesson)
+  return !isClassClosureCancelledGroupLesson(lesson)
 }
 
 function normalizePrivateSlotEligibleStudentIds(values, privateStudents) {
@@ -508,7 +510,7 @@ function buildGroupPackageCoverageLessons({
 
   const sorted = [...groupLessons]
     .filter((gl) => {
-      if (!isVisibleGroupLessonForActiveViews(gl)) return false
+      if (isCancelledOrDeletedGroupLesson(gl)) return false
       if (getGroupLessonGroupId(gl) !== gid) return false
       const dateStr = String(gl.date || '').trim()
       if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return false
@@ -567,6 +569,13 @@ export default function Dashboard() {
   const [groupClasses, setGroupClasses] = useState([])
   const [groupClassesLoading, setGroupClassesLoading] = useState(true)
   const [busyGroupId, setBusyGroupId] = useState(null)
+  const [groupClosureModal, setGroupClosureModal] = useState(null)
+  const [groupClosureForm, setGroupClosureForm] = useState({
+    closedFromDate: '',
+    closedReason: '',
+    cancelFutureLessons: true,
+  })
+  const [groupClosureErrors, setGroupClosureErrors] = useState({})
   const [selectedGroupClass, setSelectedGroupClass] = useState(null)
   const [groupStudents, setGroupStudents] = useState([])
   const [groupStudentsLoading, setGroupStudentsLoading] = useState(false)
@@ -576,6 +585,12 @@ export default function Dashboard() {
   const [groupLessonsLoading, setGroupLessonsLoading] = useState(false)
   const [groupLessonReservations, setGroupLessonReservations] = useState([])
   const [groupLessonReservationsLoading, setGroupLessonReservationsLoading] = useState(false)
+  const [groupLessonNoDeductionCancelModal, setGroupLessonNoDeductionCancelModal] = useState(null)
+  const [groupLessonNoDeductionCancelForm, setGroupLessonNoDeductionCancelForm] = useState({
+    cancelledReason: 'holiday',
+    cancellationNote: '',
+  })
+  const [groupLessonNoDeductionCancelErrors, setGroupLessonNoDeductionCancelErrors] = useState({})
   const [todayDashboardGroupLessons, setTodayDashboardGroupLessons] = useState([])
   const [todayDashboardGroupLessonsLoading, setTodayDashboardGroupLessonsLoading] = useState(false)
   const [todayGroupLessonReservations, setTodayGroupLessonReservations] = useState([])
@@ -2353,7 +2368,7 @@ export default function Dashboard() {
         studentLabel: '-',
         teacherLabel: String(lesson.teacher || lesson.teacherName || '').trim() || '-',
         title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
-        statusLabel: '수업 예정',
+        statusLabel: isNoDeductionCancelledGroupLesson(lesson) ? '휴강 · 차감 없음' : '수업 예정',
       }
     })
 
@@ -3203,17 +3218,48 @@ export default function Dashboard() {
     }
   }
 
-  async function handleDeleteGroup(group) {
+  function handleDeleteGroup(group) {
     if (userProfile?.role !== 'admin') {
       alert('그룹 관리 권한이 없습니다.')
+      return
+    }
+    const todayYmd = getTodayStorageDateString()
+    setGroupClosureModal({ group })
+    setGroupClosureForm({
+      closedFromDate: todayYmd,
+      closedReason: '',
+      cancelFutureLessons: true,
+    })
+    setGroupClosureErrors({})
+  }
+
+  async function submitGroupClosure() {
+    const group = groupClosureModal?.group
+    if (userProfile?.role !== 'admin' || !group?.id) {
+      alert('그룹 관리 권한이 없습니다.')
+      return
+    }
+
+    const closedFromDate = String(groupClosureForm.closedFromDate || '').trim()
+    const closedReason = String(groupClosureForm.closedReason || '').trim()
+    const cancelFutureLessons = groupClosureForm.cancelFutureLessons !== false
+    const errors = {}
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(closedFromDate)) {
+      errors.closedFromDate = '종료 기준일을 YYYY-MM-DD 형식으로 입력해 주세요.'
+    }
+    if (!closedReason) {
+      errors.closedReason = '종료 사유를 입력해 주세요.'
+    }
+    if (Object.keys(errors).length > 0) {
+      setGroupClosureErrors(errors)
       return
     }
 
     const label = `${group.name || ''} (${group.teacher || ''})`.trim()
     if (
       !window.confirm(
-        `이 반을 삭제할까요?\n${label}\n\n` +
-          '이 반을 삭제하면 앞으로 생성된 수업 일정도 캘린더와 예약 화면에서 숨겨집니다. 과거 수업 기록은 유지됩니다.'
+        `반 운영을 종료할까요?\n${label}\n\n` +
+          '선택한 날짜 이후의 예정 수업만 취소됩니다. 과거 수업 기록은 유지됩니다.'
       )
     ) {
       return
@@ -3223,43 +3269,104 @@ export default function Dashboard() {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(group, scopedAcademyId, '그룹')
       setBusyGroupId(group.id)
-      const todayYmd = getTodayStorageDateString()
       const relatedLessons = await fetchGroupLessonsForClassIdMerge(group.id)
-      const futureLessons = relatedLessons.filter((lesson) => {
+      const futureLessons = cancelFutureLessons ? relatedLessons.filter((lesson) => {
         if (isCancelledOrDeletedGroupLesson(lesson)) return false
         const lessonDate = String(lesson.date || '').trim()
-        return /^\d{4}-\d{2}-\d{2}$/.test(lessonDate) && lessonDate >= todayYmd
-      })
-      const lessonChunks = chunkArray(futureLessons, 450)
+        return /^\d{4}-\d{2}-\d{2}$/.test(lessonDate) && lessonDate >= closedFromDate
+      }) : []
+      const lessonIds = new Set(futureLessons.map((lesson) => String(lesson.id || '').trim()))
+      const activeReservationSnap = cancelFutureLessons
+        ? await getDocs(
+            query(
+              collection(db, 'groupLessonReservations'),
+              where('academyId', '==', scopedAcademyId),
+              where('groupClassId', '==', group.id),
+              where('status', '==', 'active')
+            )
+          )
+        : null
+      const activeReservations = activeReservationSnap
+        ? activeReservationSnap.docs
+            .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+            .filter((reservation) => lessonIds.has(String(reservation.lessonId || '').trim()))
+        : []
+      const lessonById = new Map(futureLessons.map((lesson) => [String(lesson.id || ''), lesson]))
       const groupRef = doc(db, 'groupClasses', group.id)
       const now = serverTimestamp()
+      const ops = [
+        {
+          type: 'update',
+          ref: groupRef,
+          data: {
+            status: 'closed',
+            closedFromDate,
+            closedReason,
+            closedAt: now,
+            closedByUid: user?.uid || '',
+            updatedAt: now,
+          },
+        },
+      ]
 
-      if (lessonChunks.length === 0) {
-        await deleteDoc(groupRef)
-      } else {
-        for (let chunkIndex = 0; chunkIndex < lessonChunks.length; chunkIndex += 1) {
-          const batch = writeBatch(db)
-          if (chunkIndex === 0) {
-            batch.delete(groupRef)
-          }
-          lessonChunks[chunkIndex].forEach((lesson) => {
-            batch.update(doc(db, 'groupLessons', lesson.id), {
-              status: 'cancelled',
-              groupClassDeleted: true,
-              cancelledReason: 'group_class_deleted',
-              cancelledAt: now,
-              cancelledByUid: user?.uid || '',
-              updatedAt: now,
-            })
-          })
-          await batch.commit()
-        }
+      futureLessons.forEach((lesson) => {
+        ops.push({
+          type: 'update',
+          ref: doc(db, 'groupLessons', lesson.id),
+          data: {
+            status: 'cancelled',
+            groupClassDeleted: true,
+            cancellationType: 'class_closure',
+            cancelledReason: 'group_class_closed',
+            cancelledFromDate: closedFromDate,
+            cancelledAt: now,
+            cancelledByUid: user?.uid || '',
+            noDeduction: true,
+            updatedAt: now,
+          },
+        })
+      })
+      activeReservations.forEach((reservation) => {
+        const lesson = lessonById.get(String(reservation.lessonId || '')) || {}
+        ops.push({
+          type: 'update',
+          ref: doc(db, 'groupLessonReservations', reservation.id),
+          data: {
+            status: 'cancelled',
+            cancellationType: 'class_closure',
+            cancelledReason: 'group_class_closed',
+            cancelledAt: now,
+            cancelledByUid: user?.uid || '',
+            noDeduction: true,
+            date: reservation.date || lesson.date || '',
+            time: reservation.time || lesson.time || '',
+            subject: reservation.subject || lesson.subject || '',
+            updatedAt: now,
+          },
+        })
+      })
+      for (const chunk of chunkArray(ops, 450)) {
+        const batch = writeBatch(db)
+        chunk.forEach((op) => {
+          batch.update(op.ref, op.data)
+        })
+        await batch.commit()
       }
-      setSelectedGroupClass((prev) => (prev?.id === group.id ? null : prev))
-      alert(`반을 삭제했습니다. 앞으로 예정된 수업 ${futureLessons.length}건을 취소했습니다.`)
+
+      setSelectedGroupClass((prev) => {
+        if (prev?.id !== group.id) return prev
+        return {
+          ...prev,
+          status: 'closed',
+          closedFromDate,
+          closedReason,
+        }
+      })
+      setGroupClosureModal(null)
+      alert(`반 운영을 종료했습니다. 선택한 날짜 이후 예정 수업 ${futureLessons.length}건을 취소했습니다.`)
     } catch (error) {
-      console.error('그룹 삭제 실패:', error)
-      alert(`그룹 삭제 실패: ${error.message}`)
+      console.error('반 운영 종료 실패:', error)
+      alert(`반 운영 종료 실패: ${error.message}`)
     } finally {
       setBusyGroupId(null)
     }
@@ -3294,6 +3401,109 @@ export default function Dashboard() {
       alert(`그룹 학생 제거 실패: ${error.message}`)
     } finally {
       setBusyRemovingGroupStudentId(null)
+    }
+  }
+
+  function openGroupLessonNoDeductionCancelModal(lesson) {
+    if (userProfile?.role !== 'admin') {
+      alert('수업 수정 권한이 없습니다.')
+      return
+    }
+    if (!lesson?.id) return
+    setGroupLessonNoDeductionCancelModal({ lesson })
+    setGroupLessonNoDeductionCancelForm({
+      cancelledReason: 'holiday',
+      cancellationNote: '',
+    })
+    setGroupLessonNoDeductionCancelErrors({})
+  }
+
+  async function submitGroupLessonNoDeductionCancel() {
+    const lesson = groupLessonNoDeductionCancelModal?.lesson
+    if (userProfile?.role !== 'admin' || !lesson?.id) {
+      alert('수업 수정 권한이 없습니다.')
+      return
+    }
+    const cancelledReason = String(groupLessonNoDeductionCancelForm.cancelledReason || '').trim()
+    const cancellationNote = String(groupLessonNoDeductionCancelForm.cancellationNote || '').trim()
+    const allowedReasons = ['holiday', 'teacher_unavailable', 'academy_closed', 'other']
+    const errors = {}
+    if (!allowedReasons.includes(cancelledReason)) {
+      errors.cancelledReason = '휴강 사유를 선택해 주세요.'
+    }
+    if (Object.keys(errors).length > 0) {
+      setGroupLessonNoDeductionCancelErrors(errors)
+      return
+    }
+    const label = `${lesson.date || ''} ${lesson.time || ''} ${lesson.subject || ''}`.trim()
+    if (
+      !window.confirm(
+        `이 수업을 휴강 처리할까요?\n${label}\n\n` +
+          '이 수업은 휴강 처리되며 수강권이 차감되지 않습니다.'
+      )
+    ) {
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(lesson, scopedAcademyId, '그룹 수업')
+      setBusyGroupLessonId(lesson.id)
+      const now = serverTimestamp()
+      const activeReservationSnap = await getDocs(
+        query(
+          collection(db, 'groupLessonReservations'),
+          where('academyId', '==', scopedAcademyId),
+          where('lessonId', '==', lesson.id),
+          where('status', '==', 'active')
+        )
+      )
+      const ops = [
+        {
+          ref: doc(db, 'groupLessons', lesson.id),
+          data: {
+            status: 'cancelled',
+            cancellationType: 'no_deduction',
+            cancelledReason,
+            cancellationNote,
+            noDeduction: true,
+            cancelledAt: now,
+            cancelledByUid: user?.uid || '',
+            updatedAt: now,
+          },
+        },
+      ]
+      activeReservationSnap.docs.forEach((docItem) => {
+        const reservation = { id: docItem.id, ...docItem.data() }
+        ops.push({
+          ref: doc(db, 'groupLessonReservations', reservation.id),
+          data: {
+            status: 'cancelled',
+            cancellationType: 'no_deduction',
+            cancelledReason,
+            cancellationNote,
+            noDeduction: true,
+            cancelledAt: now,
+            cancelledByUid: user?.uid || '',
+            date: reservation.date || lesson.date || '',
+            time: reservation.time || lesson.time || '',
+            subject: reservation.subject || lesson.subject || '',
+            updatedAt: now,
+          },
+        })
+      })
+      for (const chunk of chunkArray(ops, 450)) {
+        const batch = writeBatch(db)
+        chunk.forEach((op) => batch.update(op.ref, op.data))
+        await batch.commit()
+      }
+      setGroupLessonNoDeductionCancelModal(null)
+      alert(`휴강 처리했습니다. 활성 예약 ${activeReservationSnap.docs.length}건을 차감 없이 취소했습니다.`)
+    } catch (error) {
+      console.error('휴강 처리 실패:', error)
+      alert(`휴강 처리 실패: ${error.message}`)
+    } finally {
+      setBusyGroupLessonId(null)
     }
   }
 
@@ -3865,6 +4075,7 @@ export default function Dashboard() {
       canEditLesson,
       canDeleteLesson,
       onOpenCalendarGroupLessonAttendance: openCalendarGroupLessonAttendance,
+      onOpenGroupLessonNoDeductionCancel: openGroupLessonNoDeductionCancelModal,
     },
   }
 
@@ -3943,6 +4154,7 @@ export default function Dashboard() {
     openGroupLessonAttendanceModal,
     canEditLesson,
     openGroupLessonEditModal,
+    openGroupLessonNoDeductionCancelModal,
     canDeleteLesson,
     handleDeleteGroupLesson,
     getGroupStudentDisplayName,
@@ -4405,6 +4617,211 @@ export default function Dashboard() {
       selectedGroupClass &&
       groupLessonForAttendanceModal ? (
         <GroupLessonAttendanceModal {...groupLessonAttendanceModalProps} />
+      ) : null}
+
+      {isAdmin && groupClosureModal?.group ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="group-closure-modal-title"
+          data-testid="group-closure-modal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+            zIndex: 80,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(520px, 100%)',
+              borderRadius: 16,
+              border: '1px solid #2e3240',
+              background: '#151922',
+              color: 'white',
+              padding: 20,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+            }}
+          >
+            <h2 id="group-closure-modal-title" style={{ marginTop: 0 }}>반 운영 종료</h2>
+            <p style={{ opacity: 0.75, fontSize: 14 }}>
+              선택한 날짜 이후의 예정 수업만 취소됩니다. 과거 수업 기록은 유지됩니다.
+            </p>
+            <label style={{ display: 'grid', gap: 6, marginTop: 14 }}>
+              종료 기준일
+              <input
+                type="date"
+                value={groupClosureForm.closedFromDate}
+                onChange={(event) =>
+                  setGroupClosureForm((prev) => ({
+                    ...prev,
+                    closedFromDate: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            {groupClosureErrors.closedFromDate ? (
+              <p style={{ color: '#f4a7a7', fontSize: 13 }}>{groupClosureErrors.closedFromDate}</p>
+            ) : null}
+            <label style={{ display: 'grid', gap: 6, marginTop: 14 }}>
+              종료 사유
+              <textarea
+                value={groupClosureForm.closedReason}
+                onChange={(event) =>
+                  setGroupClosureForm((prev) => ({
+                    ...prev,
+                    closedReason: event.target.value,
+                  }))
+                }
+                rows={3}
+                placeholder="예: 과정 종료, 반 통합"
+              />
+            </label>
+            {groupClosureErrors.closedReason ? (
+              <p style={{ color: '#f4a7a7', fontSize: 13 }}>{groupClosureErrors.closedReason}</p>
+            ) : null}
+            <div style={{ display: 'grid', gap: 8, marginTop: 14 }}>
+              <label>
+                <input
+                  type="radio"
+                  name="groupClosureCancelFutureLessons"
+                  checked={groupClosureForm.cancelFutureLessons === true}
+                  onChange={() =>
+                    setGroupClosureForm((prev) => ({ ...prev, cancelFutureLessons: true }))
+                  }
+                />{' '}
+                선택한 날짜 이후 예정 수업 취소
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="groupClosureCancelFutureLessons"
+                  checked={groupClosureForm.cancelFutureLessons === false}
+                  onChange={() =>
+                    setGroupClosureForm((prev) => ({ ...prev, cancelFutureLessons: false }))
+                  }
+                />{' '}
+                반만 비활성화하고 예정 수업은 유지
+              </label>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+              <button type="button" onClick={() => setGroupClosureModal(null)}>
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={submitGroupClosure}
+                disabled={Boolean(busyGroupId)}
+                style={{
+                  background: '#4a2a2a',
+                  color: 'white',
+                  border: '1px solid #553333',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                }}
+              >
+                {busyGroupId ? '처리 중...' : '운영 종료'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isAdmin && groupLessonNoDeductionCancelModal?.lesson ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="group-lesson-no-deduction-cancel-title"
+          data-testid="group-lesson-no-deduction-cancel-modal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+            zIndex: 85,
+          }}
+        >
+          <div
+            style={{
+              width: 'min(520px, 100%)',
+              borderRadius: 16,
+              border: '1px solid #2e3240',
+              background: '#151922',
+              color: 'white',
+              padding: 20,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.35)',
+            }}
+          >
+            <h2 id="group-lesson-no-deduction-cancel-title" style={{ marginTop: 0 }}>
+              휴강 처리
+            </h2>
+            <p style={{ opacity: 0.75, fontSize: 14 }}>
+              이 수업은 휴강 처리되며 수강권이 차감되지 않습니다.
+            </p>
+            <label style={{ display: 'grid', gap: 6, marginTop: 14 }}>
+              휴강 사유
+              <select
+                value={groupLessonNoDeductionCancelForm.cancelledReason}
+                onChange={(event) =>
+                  setGroupLessonNoDeductionCancelForm((prev) => ({
+                    ...prev,
+                    cancelledReason: event.target.value,
+                  }))
+                }
+              >
+                <option value="holiday">공휴일</option>
+                <option value="teacher_unavailable">선생님 사정</option>
+                <option value="academy_closed">학원 사정</option>
+                <option value="other">기타</option>
+              </select>
+            </label>
+            {groupLessonNoDeductionCancelErrors.cancelledReason ? (
+              <p style={{ color: '#f4a7a7', fontSize: 13 }}>
+                {groupLessonNoDeductionCancelErrors.cancelledReason}
+              </p>
+            ) : null}
+            <label style={{ display: 'grid', gap: 6, marginTop: 14 }}>
+              학생 안내 문구 (선택)
+              <textarea
+                value={groupLessonNoDeductionCancelForm.cancellationNote}
+                onChange={(event) =>
+                  setGroupLessonNoDeductionCancelForm((prev) => ({
+                    ...prev,
+                    cancellationNote: event.target.value,
+                  }))
+                }
+                rows={3}
+                placeholder="예: 공휴일로 휴강합니다."
+              />
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+              <button type="button" onClick={() => setGroupLessonNoDeductionCancelModal(null)}>
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={submitGroupLessonNoDeductionCancel}
+                disabled={Boolean(busyGroupLessonId)}
+                style={{
+                  background: '#3a321f',
+                  color: '#ffe8b8',
+                  border: '1px solid #665533',
+                  borderRadius: 8,
+                  padding: '8px 12px',
+                }}
+              >
+                {busyGroupLessonId ? '처리 중...' : '휴강 처리'}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : null}
 
       {activeSection === 'calendar' && isAdmin && privateLessonModalOpen ? (

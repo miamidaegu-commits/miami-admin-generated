@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import {
   collection,
@@ -121,6 +121,9 @@ function getLessonCapacityLabel(lesson) {
 }
 
 function getReservationStatusLabel(reservation) {
+  if (reservation?.noDeduction === true) {
+    return '휴강 · 차감 없음'
+  }
   return reservation?.status === 'active' ? '예약 완료' : '예약 취소'
 }
 
@@ -320,6 +323,9 @@ function getPrivateSlotViewModeButtonStyle(isSelected) {
 }
 
 function getLessonHistoryStatusLabel(item) {
+  if (item.noDeduction === true) {
+    return '휴강 · 차감 없음'
+  }
   if (item.status !== 'active') return '예약 취소'
   if (item.startsAtMs !== null && item.startsAtMs < Date.now()) return '지난 수업'
   return '예약 완료'
@@ -368,6 +374,7 @@ export default function StudentBookingPage() {
   const [reservationsError, setReservationsError] = useState('')
   const [busyReservationId, setBusyReservationId] = useState('')
   const [groupLessonsRefreshKey, setGroupLessonsRefreshKey] = useState(0)
+  const [locallyReservedGroupLessonIds, setLocallyReservedGroupLessonIds] = useState([])
   const [allowedPrivateTeacherKeys, setAllowedPrivateTeacherKeys] = useState([])
   const [allowedPrivateSlotIds, setAllowedPrivateSlotIds] = useState([])
   const [privateSlotBookingPilotEnabled, setPrivateSlotBookingPilotEnabled] = useState(false)
@@ -383,6 +390,7 @@ export default function StudentBookingPage() {
   const [privateReservationsLoading, setPrivateReservationsLoading] = useState(false)
   const [privateReservationsResolved, setPrivateReservationsResolved] = useState(false)
   const [privateReservationsError, setPrivateReservationsError] = useState('')
+  const hasGroupLessonRowsRef = useRef(false)
   const [studentPrivateLessons, setStudentPrivateLessons] = useState([])
   const [studentPrivateLessonsLoading, setStudentPrivateLessonsLoading] = useState(false)
   const [studentPrivateLessonsResolved, setStudentPrivateLessonsResolved] = useState(false)
@@ -391,6 +399,7 @@ export default function StudentBookingPage() {
   const [dailyMaterials, setDailyMaterials] = useState([])
   const [dailyMaterialsLoading, setDailyMaterialsLoading] = useState(false)
   const [dailyMaterialsError, setDailyMaterialsError] = useState('')
+  const groupAccessRefreshTimerRef = useRef(null)
 
   const scopedStudentId = String(studentId || currentMembership?.studentId || '').trim()
   const hasOperationalAcademy = isValidOperationalAcademyId(currentAcademyId)
@@ -446,6 +455,13 @@ export default function StudentBookingPage() {
         setAllowedGroupClassIds(Array.from(nextIds.values()))
         setAllowedGroupCourseTypes(Array.from(nextCourseTypes.values()))
         setGroupLessonsRefreshKey((previous) => previous + 1)
+        if (groupAccessRefreshTimerRef.current) {
+          clearTimeout(groupAccessRefreshTimerRef.current)
+        }
+        groupAccessRefreshTimerRef.current = window.setTimeout(() => {
+          setGroupLessonsRefreshKey((previous) => previous + 1)
+          groupAccessRefreshTimerRef.current = null
+        }, 750)
         setAccessLoading(false)
         setAccessResolved(true)
       },
@@ -459,7 +475,13 @@ export default function StudentBookingPage() {
       }
     )
 
-    return () => unsubscribe()
+    return () => {
+      if (groupAccessRefreshTimerRef.current) {
+        clearTimeout(groupAccessRefreshTimerRef.current)
+        groupAccessRefreshTimerRef.current = null
+      }
+      unsubscribe()
+    }
   }, [currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
 
   useEffect(() => {
@@ -608,19 +630,21 @@ export default function StudentBookingPage() {
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      hasGroupLessonRowsRef.current = false
       setLessons([])
       setLessonsLoading(false)
       setLessonsError('')
       return
     }
     if (allowedGroupClassIds.length === 0 && allowedGroupCourseTypes.length === 0) {
+      hasGroupLessonRowsRef.current = false
       setLessons([])
       setLessonsLoading(false)
       setLessonsError('')
       return
     }
 
-    setLessonsLoading(true)
+    setLessonsLoading(!hasGroupLessonRowsRef.current)
     setLessonsError('')
 
     let cancelled = false
@@ -639,7 +663,28 @@ export default function StudentBookingPage() {
     loadGroupLessonAvailability()
       .then((rows) => {
         if (cancelled) return
-        setLessons(rows)
+        setLessons((previous) => {
+          const byId = new Map(rows.map((lesson) => [String(lesson.id || '').trim(), lesson]))
+          const activeReservationLessonIds = new Set(
+            reservations
+              .filter((reservation) => reservation.status === 'active')
+              .map((reservation) => String(reservation.lessonId || '').trim())
+              .filter(Boolean)
+          )
+          locallyReservedGroupLessonIds.forEach((lessonId) => {
+            if (lessonId) activeReservationLessonIds.add(String(lessonId))
+          })
+          previous.forEach((lesson) => {
+            const lessonId = String(lesson.id || '').trim()
+            if (!lessonId || byId.has(lessonId)) return
+            if (activeReservationLessonIds.has(lessonId)) {
+              byId.set(lessonId, lesson)
+            }
+          })
+          const nextLessons = Array.from(byId.values())
+          hasGroupLessonRowsRef.current = nextLessons.length > 0
+          return nextLessons
+        })
         setLessonsLoading(false)
       })
       .catch((error) => {
@@ -659,6 +704,8 @@ export default function StudentBookingPage() {
     currentAcademyId,
     groupLessonsRefreshKey,
     hasOperationalAcademy,
+    locallyReservedGroupLessonIds,
+    reservations,
     role,
     scopedStudentId,
   ])
@@ -1406,6 +1453,8 @@ export default function StudentBookingPage() {
         date,
         time,
         status: reservation.status,
+        cancellationType: reservation.cancellationType || lesson?.cancellationType || '',
+        noDeduction: reservation.noDeduction === true || lesson?.noDeduction === true,
         startsAtMs,
         fallbackId: reservation.lessonId,
       }
@@ -1566,8 +1615,10 @@ export default function StudentBookingPage() {
         lessonId: lesson.id,
         studentId: scopedStudentId,
       })
+      setLocallyReservedGroupLessonIds((previous) =>
+        previous.includes(lesson.id) ? previous : [...previous, lesson.id]
+      )
       updateGroupLessonBookedCount(lesson.id, 1)
-      setGroupLessonsRefreshKey((value) => value + 1)
     } catch (error) {
       console.error('학생 그룹 수업 예약 실패:', error)
       logStudentBookingEvent('reserve_failure', {
@@ -1691,6 +1742,9 @@ export default function StudentBookingPage() {
         lessonId: reservation.lessonId,
         studentId: scopedStudentId,
       })
+      setLocallyReservedGroupLessonIds((previous) =>
+        previous.filter((lessonId) => lessonId !== reservation.lessonId)
+      )
       updateGroupLessonBookedCount(reservation.lessonId, -1)
       setGroupLessonsRefreshKey((value) => value + 1)
     } catch (error) {
@@ -2371,6 +2425,12 @@ export default function StudentBookingPage() {
                     })
                     const isBusy = busyPrivateReservationId === reservationId
                     const isActive = reservation.status === 'active'
+                    const reservationTitle =
+                      String(reservation.subject || slot?.subject || '').trim() || '1:1 수업'
+                    const reservationDateTime = [
+                      String(reservation.date || slot?.date || '').trim(),
+                      String(reservation.time || slot?.time || '').trim(),
+                    ].filter(Boolean).join(' · ')
 
                     return (
                       <article
@@ -2480,6 +2540,12 @@ export default function StudentBookingPage() {
                     })
                     const isBusy = busyReservationId === reservationId
                     const isActive = reservation.status === 'active'
+                    const reservationTitle =
+                      String(reservation.subject || lesson?.subject || '').trim() || '그룹 수업'
+                    const reservationDateTime = [
+                      String(reservation.date || lesson?.date || '').trim(),
+                      String(reservation.time || lesson?.time || '').trim(),
+                    ].filter(Boolean).join(' · ')
 
                     return (
                       <article
@@ -2503,12 +2569,10 @@ export default function StudentBookingPage() {
                         >
                           <div>
                             <strong style={{ fontSize: '1rem' }}>
-                              {lesson?.subject || '그룹 수업'}
+                              {reservationTitle}
                             </strong>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
-                              {lesson
-                                ? [lesson.date, lesson.time].filter(Boolean).join(' · ')
-                                : `lessonId: ${reservation.lessonId}`}
+                              {reservationDateTime || `lessonId: ${reservation.lessonId}`}
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               {getReservationStatusLabel(reservation)}

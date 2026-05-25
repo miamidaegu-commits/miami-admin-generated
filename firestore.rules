@@ -2096,14 +2096,53 @@ service cloud.firestore {
         request.resource.data.studentId == resource.data.studentId &&
         request.resource.data.status in ["active", "cancelled"] &&
         request.resource.data.source == resource.data.source &&
-        changedOnly(["status", "updatedAt", "cancelledAt"]) &&
         (
           (
+            changedOnly(["status", "updatedAt", "cancelledAt"]) &&
             request.resource.data.source == "dashboard" &&
             (
               isAcademyAdmin(resource.data.academyId) ||
               parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId)
             )
+          ) ||
+          (
+            isAcademyAdmin(resource.data.academyId) &&
+            resource.data.status == "active" &&
+            request.resource.data.status == "cancelled" &&
+            request.resource.data.noDeduction == true &&
+            request.resource.data.cancellationType in ["no_deduction", "class_closure"] &&
+            request.resource.data.cancelledReason in [
+              "holiday",
+              "teacher_unavailable",
+              "academy_closed",
+              "other",
+              "group_class_closed"
+            ] &&
+            request.resource.data.cancelledAt is timestamp &&
+            request.resource.data.updatedAt is timestamp &&
+            (!("cancelledByUid" in request.resource.data.keys()) ||
+              request.resource.data.cancelledByUid is string) &&
+            (!("cancellationNote" in request.resource.data.keys()) ||
+              request.resource.data.cancellationNote is string) &&
+            (!("date" in request.resource.data.keys()) ||
+              request.resource.data.date is string) &&
+            (!("time" in request.resource.data.keys()) ||
+              request.resource.data.time is string) &&
+            (!("subject" in request.resource.data.keys()) ||
+              request.resource.data.subject is string) &&
+            changedOnly([
+              "status",
+              "cancellationType",
+              "cancelledReason",
+              "cancellationNote",
+              "noDeduction",
+              "cancelledAt",
+              "cancelledByUid",
+              "date",
+              "time",
+              "subject",
+              "updatedAt"
+            ])
           )
         );
 

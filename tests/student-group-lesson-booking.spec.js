@@ -827,12 +827,15 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
   const beginnerClassId = `e2e-course-beginner-class-${unique}`;
   const legacyClassId = `e2e-course-legacy-class-${unique}`;
   const deletedClassId = `e2e-course-deleted-class-${unique}`;
+  const closedClassId = `e2e-course-closed-class-${unique}`;
   const orphanClassId = `e2e-course-orphan-class-${unique}`;
   const freeLessonId = `e2e-course-free-lesson-${unique}`;
   const beginnerLessonId = `e2e-course-beginner-lesson-${unique}`;
   const legacyLessonId = `e2e-course-legacy-lesson-${unique}`;
   const deletedLessonId = `e2e-course-deleted-lesson-${unique}`;
+  const closedLessonId = `e2e-course-closed-lesson-${unique}`;
   const orphanLessonId = `e2e-course-orphan-lesson-${unique}`;
+  const noDeductionLessonId = `e2e-course-no-deduction-lesson-${unique}`;
   const summaryRef = db.collection('studentGroupAccessSummary').doc(accessSummaryId({ studentId }));
   const studentMembershipRef = db
     .collection('academyMemberships')
@@ -847,11 +850,14 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     db.collection('groupClasses').doc(freeClassId),
     db.collection('groupClasses').doc(beginnerClassId),
     db.collection('groupClasses').doc(legacyClassId),
+    db.collection('groupClasses').doc(closedClassId),
     db.collection('groupLessons').doc(freeLessonId),
     db.collection('groupLessons').doc(beginnerLessonId),
     db.collection('groupLessons').doc(legacyLessonId),
     db.collection('groupLessons').doc(deletedLessonId),
+    db.collection('groupLessons').doc(closedLessonId),
     db.collection('groupLessons').doc(orphanLessonId),
+    db.collection('groupLessons').doc(noDeductionLessonId),
     db.collection('studentPackages').doc(`e2e-course-beginner-package-${unique}`),
     db.collection('studentPackages').doc(`e2e-course-free-package-${unique}`),
     db.collection('studentPackages').doc(`e2e-course-private-package-${unique}`),
@@ -931,6 +937,22 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
+      db.collection('groupClasses').doc(closedClassId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `운영 종료 ${unique}`,
+        teacher: TEACHER_NAME,
+        teacherName: TEACHER_NAME,
+        maxStudents: 6,
+        time: '13:30',
+        subject: 'Course Closed',
+        groupCourseType: 'free_talking',
+        weekdays: ['목'],
+        status: 'closed',
+        closedFromDate: '2099-06-01',
+        closedReason: 'E2E closed',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
       db.collection('groupLessons').doc(freeLessonId).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
         groupClassId: freeClassId,
@@ -990,6 +1012,40 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         status: 'cancelled',
         groupClassDeleted: true,
         cancelledReason: 'group_class_deleted',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(closedLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: closedClassId,
+        groupClassName: `운영 종료 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-07',
+        time: '13:30',
+        subject: 'Course Closed Hidden',
+        groupCourseType: 'free_talking',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(noDeductionLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: freeClassId,
+        groupClassName: `프리토킹 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-06',
+        time: '15:00',
+        subject: 'Course Holiday Hidden',
+        groupCourseType: 'free_talking',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        status: 'cancelled',
+        cancellationType: 'no_deduction',
+        cancelledReason: 'holiday',
+        noDeduction: true,
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
@@ -1090,7 +1146,7 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     await expect(page.getByText('Course Free Visible')).toHaveCount(0);
     await summaryRef.set(
       {
-        groupClassIds: [freeClassId, legacyClassId, deletedClassId, orphanClassId],
+        groupClassIds: [freeClassId, legacyClassId, deletedClassId, closedClassId, orphanClassId],
         groupCourseTypes: ['beginner_conversation'],
         updatedAt: nowTs,
       },
@@ -1103,6 +1159,7 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
           freeClassId,
           legacyClassId,
           deletedClassId,
+          closedClassId,
           orphanClassId,
         ]),
         groupCourseTypes: expect.arrayContaining(['beginner_conversation']),
@@ -1110,11 +1167,13 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
     await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);
     await expect(page.getByText('Course Deleted Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Closed Hidden')).toHaveCount(0);
     await expect(page.getByText('Course Orphan Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Holiday Hidden')).toHaveCount(0);
 
     await summaryRef.set(
       {
-        groupClassIds: [legacyClassId, orphanClassId],
+        groupClassIds: [legacyClassId, closedClassId, orphanClassId],
         groupCourseTypes: ['free_talking'],
         updatedAt: nowTs,
       },
@@ -1123,14 +1182,16 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     await expect
       .poll(async () => getStudentGroupAccessSummary(summaryRef), { timeout: 15000 })
       .toMatchObject({
-        groupClassIds: [legacyClassId, orphanClassId],
+        groupClassIds: [legacyClassId, closedClassId, orphanClassId],
         groupCourseTypes: ['free_talking'],
       });
     await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
     await expect(page.getByText('Course Beginner Only')).toHaveCount(0);
     await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);
     await expect(page.getByText('Course Deleted Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Closed Hidden')).toHaveCount(0);
     await expect(page.getByText('Course Orphan Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Holiday Hidden')).toHaveCount(0);
   } finally {
     await Promise.all(refsToDelete.map((ref) => ref.delete().catch(() => {})));
     await Promise.all([

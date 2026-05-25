@@ -401,6 +401,28 @@ export function isCancelledOrDeletedGroupLesson(lesson) {
   return status === 'cancelled' || status === 'canceled' || lesson?.groupClassDeleted === true
 }
 
+export function isClassClosureCancelledGroupLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const cancelledReason = String(lesson?.cancelledReason || '').trim().toLowerCase()
+  return (
+    lesson?.groupClassDeleted === true ||
+    cancellationType === 'class_closure' ||
+    (status === 'cancelled' && cancelledReason === 'group_class_closed') ||
+    (status === 'cancelled' && cancelledReason === 'group_class_deleted')
+  )
+}
+
+export function isNoDeductionCancelledGroupLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    lesson?.noDeduction === true &&
+    cancellationType === 'no_deduction'
+  )
+}
+
 export function isActiveGroupClassRow(groupClass) {
   if (!groupClass) return false
   const status = String(groupClass.status || 'active').trim().toLowerCase()

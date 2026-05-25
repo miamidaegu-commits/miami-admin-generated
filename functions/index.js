@@ -344,6 +344,7 @@ function isActiveGroupClass(data) {
     status !== "deleted" &&
     status !== "cancelled" &&
     status !== "canceled" &&
+    status !== "closed" &&
     status !== "inactive"
   );
 }

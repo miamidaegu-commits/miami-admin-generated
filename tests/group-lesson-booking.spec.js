@@ -300,24 +300,24 @@ test('admin can create a group class when start date differs from selected weekd
   }
 });
 
-test('admin deleting a group class cancels future lessons and preserves past lessons', async ({
+test('admin closing a group class cancels future lessons and preserves past lessons', async ({
   page,
   browserName,
 }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 group delete setup을 실행합니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 group closure setup을 실행합니다.');
   test.setTimeout(120000);
 
   initializeAdmin();
   const db = admin.firestore();
   const nowTs = admin.firestore.Timestamp.now();
   const unique = `${Date.now()}-${testInfo.workerIndex}`;
-  const groupClassId = `e2e-delete-group-class-${unique}`;
-  const groupName = `E2E 삭제반 ${unique}`;
-  const futureSubject = `Delete Future ${unique}`;
-  const pastSubject = `Delete Past ${unique}`;
-  const futureLessonId = `e2e-delete-future-lesson-${unique}`;
-  const pastLessonId = `e2e-delete-past-lesson-${unique}`;
+  const groupClassId = `e2e-close-group-class-${unique}`;
+  const groupName = `E2E 종료반 ${unique}`;
+  const futureSubject = `Close Future ${unique}`;
+  const pastSubject = `Close Past ${unique}`;
+  const futureLessonId = `e2e-close-future-lesson-${unique}`;
+  const pastLessonId = `e2e-close-past-lesson-${unique}`;
   const futureYmd = nextWeekdayYmd(1);
   const pastYmd = '2000-01-03';
   const dialogMessages = [];
@@ -336,7 +336,7 @@ test('admin deleting a group class cancels future lessons and preserves past les
         teacherName: TEACHER_NAME,
         maxStudents: 4,
         time: '15:00',
-        subject: '삭제 테스트',
+        subject: '종료 테스트',
         groupCourseType: 'free_talking',
         weekdays: ['월'],
         createdAt: nowTs,
@@ -380,10 +380,32 @@ test('admin deleting a group class cancels future lessons and preserves past les
     await groupRow.click();
     await expect(getLessonRow(page, futureSubject)).toBeVisible({ timeout: 15000 });
 
-    await groupRow.getByRole('button', { name: '삭제', exact: true }).click();
+    await groupRow.getByRole('button', { name: '반 운영 종료', exact: true }).click();
+    const modal = page.getByTestId('group-closure-modal');
+    await expect(modal).toBeVisible();
+    await modal.getByLabel('종료 기준일').fill(futureYmd);
+    await modal.getByLabel('종료 사유').fill('E2E 운영 종료');
+    await modal.getByRole('button', { name: '운영 종료', exact: true }).click();
 
-    await expect(groupRow).toHaveCount(0, { timeout: 15000 });
+    await expect(groupRow).toBeVisible({ timeout: 15000 });
     await expect(getLessonRow(page, futureSubject)).toHaveCount(0);
+    await expect
+      .poll(async () => {
+        const snap = await db.collection('groupClasses').doc(groupClassId).get();
+        const data = snap.data() || {};
+        return {
+          exists: snap.exists,
+          status: data.status || '',
+          closedFromDate: data.closedFromDate || '',
+          closedReason: data.closedReason || '',
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        exists: true,
+        status: 'closed',
+        closedFromDate: futureYmd,
+        closedReason: 'E2E 운영 종료',
+      });
     await expect
       .poll(async () => {
         const snap = await db.collection('groupLessons').doc(futureLessonId).get();
@@ -392,14 +414,18 @@ test('admin deleting a group class cancels future lessons and preserves past les
           exists: snap.exists,
           status: data.status || '',
           groupClassDeleted: data.groupClassDeleted === true,
+          cancellationType: data.cancellationType || '',
           cancelledReason: data.cancelledReason || '',
+          noDeduction: data.noDeduction === true,
         };
       }, { timeout: 15000 })
       .toEqual({
         exists: true,
         status: 'cancelled',
         groupClassDeleted: true,
-        cancelledReason: 'group_class_deleted',
+        cancellationType: 'class_closure',
+        cancelledReason: 'group_class_closed',
+        noDeduction: true,
       });
     await expect
       .poll(async () => {
@@ -417,7 +443,7 @@ test('admin deleting a group class cancels future lessons and preserves past les
         groupClassDeleted: false,
       });
     expect(dialogMessages.join('\n')).toContain('과거 수업 기록은 유지됩니다.');
-    expect(dialogMessages.join('\n')).toContain('앞으로 예정된 수업 1건을 취소했습니다.');
+    expect(dialogMessages.join('\n')).toContain('선택한 날짜 이후 예정 수업 1건을 취소했습니다.');
   } finally {
     await Promise.all([
       db.collection('groupLessons').doc(futureLessonId).delete().catch(() => {}),
@@ -752,6 +778,104 @@ async function expectReservationStatus(db, lessonId, studentId, expected) {
     }, { timeout: 15000 })
     .toBe(expected);
 }
+
+test('admin can mark one group lesson as no-deduction cancelled', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 booking setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  initializeAdmin();
+  const db = admin.firestore();
+  let setup = null;
+  const dialogMessages = [];
+  page.on('dialog', async (dialog) => {
+    dialogMessages.push(dialog.message());
+    await dialog.accept();
+  });
+
+  try {
+    const unique = `${Date.now()}-${testInfo.workerIndex}`;
+    setup = await createBookingFixture(unique);
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
+
+    const groupRow = await clickGroupRow(page, setup.groupName);
+    await expect(getRegisteredStudentsHeading(page, setup.groupName)).toBeVisible();
+
+    const bookableRow = page
+      .locator(`[data-testid="group-lesson-row"][data-lesson-id="${setup.bookableLessonId}"]`)
+      .first();
+    await expect(bookableRow).toBeVisible({ timeout: 15000 });
+    const reservationModal = await openReservationAdd(bookableRow);
+    await clickExpectingNoDialog(
+      page,
+      reservationModal
+        .getByTestId('group-reservation-candidate-row')
+        .filter({ hasText: setup.firstStudentName })
+        .getByRole('button', { name: '예약', exact: true })
+    );
+    await expectReservationStatus(db, setup.bookableLessonId, setup.firstStudentId, 'active');
+    await closeReservationModal(reservationModal);
+
+    await bookableRow.getByRole('button', { name: '휴강 처리', exact: true }).click();
+    const cancelModal = page.getByTestId('group-lesson-no-deduction-cancel-modal');
+    await expect(cancelModal).toBeVisible();
+    await cancelModal.getByLabel('휴강 사유').selectOption('teacher_unavailable');
+    await cancelModal.getByLabel('학생 안내 문구 (선택)').fill('선생님 사정으로 휴강합니다.');
+    await cancelModal.getByRole('button', { name: '휴강 처리', exact: true }).click();
+
+    await expect(bookableRow).toContainText('휴강', { timeout: 15000 });
+    await expect(bookableRow).toContainText('차감 없음');
+    await expect(bookableRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();
+    await expect
+      .poll(async () => {
+        const snap = await db.collection('groupLessons').doc(setup.bookableLessonId).get();
+        const data = snap.data() || {};
+        return {
+          status: data.status || '',
+          cancellationType: data.cancellationType || '',
+          cancelledReason: data.cancelledReason || '',
+          noDeduction: data.noDeduction === true,
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        status: 'cancelled',
+        cancellationType: 'no_deduction',
+        cancelledReason: 'teacher_unavailable',
+        noDeduction: true,
+      });
+    await expect
+      .poll(async () => {
+        const snap = await db
+          .collection('groupLessonReservations')
+          .doc(reservationId({ lessonId: setup.bookableLessonId, studentId: setup.firstStudentId }))
+          .get();
+        const data = snap.data() || {};
+        return {
+          status: data.status || '',
+          cancellationType: data.cancellationType || '',
+          cancelledReason: data.cancelledReason || '',
+          noDeduction: data.noDeduction === true,
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        status: 'cancelled',
+        cancellationType: 'no_deduction',
+        cancelledReason: 'teacher_unavailable',
+        noDeduction: true,
+      });
+    expect(dialogMessages.join('\n')).toContain('수강권이 차감되지 않습니다.');
+    await expect(groupRow).toBeVisible();
+  } finally {
+    if (setup) {
+      await cleanupBookingFixture(setup).catch(() => {});
+    }
+  }
+});
 
 test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and cancels', async ({
   page,
