@@ -1988,24 +1988,6 @@ service cloud.firestore {
             effectiveGroupClassIdFromData(request.resource.data)
           ) &&
           changedOnly(["countedStudentIDs", "attendanceAppliedAt", "updatedAt"])
-        ) || (
-          isAcademyTeacherOrStaff(resource.data.academyId) &&
-          effectiveGroupClassIdFromData(resource.data) != "" &&
-          effectiveGroupClassIdFromData(request.resource.data) != "" &&
-          parentGroupClassBelongsToTeacher(
-            resource.data.academyId,
-            effectiveGroupClassIdFromData(resource.data)
-          ) &&
-          parentGroupClassBelongsToTeacher(
-            request.resource.data.academyId,
-            effectiveGroupClassIdFromData(request.resource.data)
-          ) &&
-          changedOnly(["bookedCount", "updatedAt"]) &&
-          validBookedCountDelta()
-        ) || (
-          changedOnly(["bookedCount", "updatedAt"]) &&
-          validBookedCountDelta() &&
-          validStudentBookedCountPairing(groupLessonId)
         )
       );
 
@@ -2054,10 +2036,6 @@ service cloud.firestore {
                 request.resource.data.groupClassId
               )
             )
-          ) ||
-          (
-            validStudentReservationCreateShape() &&
-            validStudentReservationPairingOnCreate()
           )
         )
       ;
@@ -2080,10 +2058,6 @@ service cloud.firestore {
               isAcademyAdmin(resource.data.academyId) ||
               parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId)
             )
-          ) ||
-          (
-            request.resource.data.source == "student" &&
-            validStudentReservationPairingOnUpdate()
           )
         );
 

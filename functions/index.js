@@ -276,6 +276,205 @@ function requireActiveStudentMembership(membershipSnap) {
   };
 }
 
+function requireActiveAcademyMembership(membershipSnap) {
+  const membership = membershipSnap.exists ? membershipSnap.data() || {} : null;
+  const role = String((membership && membership.role) || "")
+      .trim()
+      .toLowerCase();
+  const status = String((membership && membership.status) || "")
+      .trim()
+      .toLowerCase();
+
+  if (!membership || status !== "active" || !role) {
+    throw new HttpsError(
+        "permission-denied",
+        "Active academy membership required.",
+    );
+  }
+  return {
+    ...membership,
+    role,
+    studentId: normalizeId(membership.studentId),
+  };
+}
+
+function canManageGroupReservations(membership) {
+  const role = String((membership && membership.role) || "").toLowerCase();
+  return role === "owner" || role === "admin" || role === "teacher";
+}
+
+function canManageGroupAttendance(membership) {
+  const role = String((membership && membership.role) || "").toLowerCase();
+  return (
+    role === "owner" ||
+    role === "admin" ||
+    Boolean(
+        membership &&
+        membership.permissions &&
+        membership.permissions.canManageAttendance === true,
+    )
+  );
+}
+
+function groupLessonReservationDocId({academyId, lessonId, studentId}) {
+  return `${academyId}__${lessonId}__${studentId}`;
+}
+
+function getGroupLessonGroupId(data) {
+  return normalizeId(data && (data.groupClassId || data.classID));
+}
+
+function getGroupStudentGroupId(data) {
+  return normalizeId(data && (data.groupClassId || data.classID));
+}
+
+function getDateValueYmd(value) {
+  if (!value) return "";
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return value;
+  }
+  if (typeof value.toDate === "function") {
+    const date = value.toDate();
+    return date ? date.toISOString().slice(0, 10) : "";
+  }
+  if (value.seconds !== undefined) {
+    return new Date(Number(value.seconds) * 1000).toISOString().slice(0, 10);
+  }
+  return "";
+}
+
+function isActiveGroupStudentForLesson(groupStudent, lesson) {
+  const status = String(groupStudent.status || "active").trim().toLowerCase();
+  if (status !== "active") return false;
+  if (getGroupStudentGroupId(groupStudent) !== getGroupLessonGroupId(lesson)) {
+    return false;
+  }
+
+  const lessonDate = normalizeId(lesson.date);
+  const startDate = getDateValueYmd(groupStudent.startDate);
+  if (startDate && lessonDate && startDate > lessonDate) return false;
+
+  const studentStatus = String(groupStudent.studentStatus || "")
+      .trim()
+      .toLowerCase();
+  if (studentStatus === "onbreak") {
+    const breakStart = getDateValueYmd(groupStudent.breakStartDate);
+    const breakEnd = getDateValueYmd(groupStudent.breakEndDate);
+    if (breakStart && breakEnd && lessonDate >= breakStart &&
+        lessonDate <= breakEnd) {
+      return false;
+    }
+  }
+
+  const excludedDates = normalizeIdList(groupStudent.excludedDates);
+  return !(lessonDate && excludedDates.includes(lessonDate));
+}
+
+function getFixedMembersForLesson(groupStudents, lesson) {
+  return groupStudents.filter((groupStudent) =>
+    isActiveGroupStudentForLesson(groupStudent, lesson),
+  );
+}
+
+function getGroupSeatAvailability({lesson, fixedMembers, reservations}) {
+  const capacity = Math.max(0, Math.floor(Number(lesson.capacity || 0)));
+  const fixedMemberIds = normalizeIdList(
+      fixedMembers.map((member) => member.studentId),
+  );
+  const fixedMemberIdSet = new Set(fixedMemberIds);
+  const countedIdSet = new Set(normalizeIdList(lesson.countedStudentIDs));
+  const releasedIds = normalizeIdList(lesson.releasedFixedStudentIDs);
+  const releasedIdSet = new Set(releasedIds);
+  const attendanceApplied = Boolean(lesson.attendanceAppliedAt);
+  const releasedFixedSeatIds = new Set();
+
+  fixedMemberIds.forEach((studentId) => {
+    if (releasedIdSet.has(studentId)) {
+      releasedFixedSeatIds.add(studentId);
+      return;
+    }
+    if (attendanceApplied && !countedIdSet.has(studentId)) {
+      releasedFixedSeatIds.add(studentId);
+    }
+  });
+
+  const guestReservedStudentIds = new Set();
+  reservations.forEach((reservation) => {
+    if (String(reservation.status || "") !== "active") return;
+    const studentId = normalizeId(reservation.studentId);
+    if (!studentId || fixedMemberIdSet.has(studentId)) return;
+    guestReservedStudentIds.add(studentId);
+  });
+
+  const fixedMemberCount = fixedMemberIds.length;
+  const releasedFixedSeatCount = releasedFixedSeatIds.size;
+  const fixedAttendingCount =
+    Math.max(0, fixedMemberCount - releasedFixedSeatCount);
+  const guestReservedCount = guestReservedStudentIds.size;
+  const remainingSeats =
+    Math.max(0, capacity - fixedAttendingCount - guestReservedCount);
+
+  return {
+    capacity,
+    fixedMemberCount,
+    fixedAttendingCount,
+    releasedFixedSeatCount,
+    guestReservedCount,
+    remainingSeats,
+    isFull: remainingSeats <= 0,
+  };
+}
+
+function hasGroupLessonAccess({summary, lesson}) {
+  const groupClassId = getGroupLessonGroupId(lesson);
+  const groupCourseType = normalizeId(lesson.groupCourseType);
+  return (
+    normalizeIdList(summary && summary.groupClassIds).includes(groupClassId) ||
+    normalizeIdList(summary && summary.groupCourseTypes)
+        .includes(groupCourseType)
+  );
+}
+
+function sanitizeGroupLessonForStudent(docSnap, availability) {
+  const lesson = docSnap.data() || {};
+  return {
+    id: docSnap.id,
+    academyId: normalizeId(lesson.academyId),
+    groupClassId: getGroupLessonGroupId(lesson),
+    groupClassName: normalizeId(lesson.groupClassName),
+    groupCourseType: normalizeId(lesson.groupCourseType),
+    teacher: normalizeId(lesson.teacher || lesson.teacherName),
+    date: normalizeId(lesson.date),
+    time: normalizeId(lesson.time),
+    subject: normalizeId(lesson.subject),
+    capacity: availability.capacity,
+    bookedCount: availability.guestReservedCount,
+    isBookable: lesson.isBookable === true,
+    remainingSeats: availability.remainingSeats,
+    isFull: availability.isFull,
+  };
+}
+
+async function getGroupSeatInputSnaps(transaction, db, academyId) {
+  const [groupStudentsSnap, reservationsSnap] = await Promise.all([
+    transaction.get(
+        db.collection("groupStudents").where("academyId", "==", academyId),
+    ),
+    transaction.get(
+        db
+            .collection("groupLessonReservations")
+            .where("academyId", "==", academyId),
+    ),
+  ]);
+  return {groupStudentsSnap, reservationsSnap};
+}
+
+function docsForLesson(snap, lessonId) {
+  return snap.docs
+      .filter((docSnap) => normalizeId(docSnap.data().lessonId) === lessonId)
+      .map((docSnap) => ({id: docSnap.id, ...docSnap.data()}));
+}
+
 function normalizeIdList(value) {
   return Array.isArray(value) ?
     value.map((item) => normalizeId(item)).filter(Boolean) :
@@ -1447,6 +1646,563 @@ function buildTemplateSlots({
   });
   return slots;
 }
+
+exports.listGroupLessonAvailability = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipSnap = await db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`)
+            .get();
+        const membership = requireActiveStudentMembership(membershipSnap);
+        const studentId = membership.studentId;
+        const summarySnap = await db
+            .collection("studentGroupAccessSummary")
+            .doc(`${academyId}__${studentId}`)
+            .get();
+        const summary = summarySnap.exists ? summarySnap.data() || {} : {};
+
+        const [lessonSnap, groupStudentsSnap, reservationsSnap] =
+          await Promise.all([
+            db.collection("groupLessons")
+                .where("academyId", "==", academyId)
+                .get(),
+            db.collection("groupStudents")
+                .where("academyId", "==", academyId)
+                .get(),
+            db.collection("groupLessonReservations")
+                .where("academyId", "==", academyId)
+                .get(),
+          ]);
+
+        const groupStudents = groupStudentsSnap.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+        const reservations = reservationsSnap.docs.map((docSnap) => ({
+          id: docSnap.id,
+          ...docSnap.data(),
+        }));
+
+        const lessons = lessonSnap.docs
+            .filter((docSnap) => {
+              const lesson = docSnap.data() || {};
+              return lesson.isBookable === true &&
+                hasGroupLessonAccess({summary, lesson});
+            })
+            .map((docSnap) => {
+              const lesson = {id: docSnap.id, ...docSnap.data()};
+              const fixedMembers = getFixedMembersForLesson(
+                  groupStudents,
+                  lesson,
+              );
+              if (fixedMembers.some((member) =>
+                normalizeId(member.studentId) === studentId,
+              )) {
+                return null;
+              }
+              const lessonReservations = reservations.filter(
+                  (reservation) => reservation.lessonId === docSnap.id,
+              );
+              const availability = getGroupSeatAvailability({
+                lesson,
+                fixedMembers,
+                reservations: lessonReservations,
+              });
+              return sanitizeGroupLessonForStudent(docSnap, availability);
+            })
+            .filter(Boolean)
+            .sort((a, b) => {
+              const aKey = `${a.date || ""} ${a.time || ""} ${a.subject || ""}`;
+              const bKey = `${b.date || ""} ${b.time || ""} ${b.subject || ""}`;
+              return aKey.localeCompare(bKey, "ko");
+            });
+
+        return {lessons};
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.reserveGroupLessonSeat = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const lessonId = requireString(data, "lessonId");
+        const groupStudentId = optionalString(data, "groupStudentId");
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const lessonRef = db.collection("groupLessons").doc(lessonId);
+
+        return await db.runTransaction(async (transaction) => {
+          const [membershipSnap, lessonSnap] = await Promise.all([
+            transaction.get(membershipRef),
+            transaction.get(lessonRef),
+          ]);
+          const membership = requireActiveAcademyMembership(membershipSnap);
+          if (!lessonSnap.exists) {
+            throw new HttpsError("not-found", "수업 일정을 찾을 수 없습니다.");
+          }
+
+          const lesson = {id: lessonSnap.id, ...lessonSnap.data()};
+          if (normalizeId(lesson.academyId) !== academyId) {
+            throw new HttpsError("permission-denied", "Academy mismatch.");
+          }
+          if (lesson.isBookable !== true) {
+            throw new HttpsError("failed-precondition", "예약 불가 수업입니다.");
+          }
+
+          const lessonGroupId = getGroupLessonGroupId(lesson);
+          let studentId = "";
+          let source = "student";
+          let studentName = "";
+          let groupStudent = null;
+
+          if (membership.role === "student") {
+            studentId = membership.studentId;
+            if (!studentId) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Student membership is not linked to a student.",
+              );
+            }
+            const summaryRef = db
+                .collection("studentGroupAccessSummary")
+                .doc(`${academyId}__${studentId}`);
+            const summarySnap = await transaction.get(summaryRef);
+            const summary = summarySnap.exists ? summarySnap.data() || {} : {};
+            if (!hasGroupLessonAccess({summary, lesson})) {
+              throw new HttpsError(
+                  "permission-denied",
+                  "예약 가능한 반 권한이 없습니다.",
+              );
+            }
+          } else {
+            if (!canManageGroupReservations(membership)) {
+              throw new HttpsError(
+                  "permission-denied",
+                  "예약 관리 권한이 없습니다.",
+              );
+            }
+            if (!groupStudentId) {
+              throw new HttpsError(
+                  "invalid-argument",
+                  "groupStudentId is required.",
+              );
+            }
+            const groupStudentRef = db
+                .collection("groupStudents")
+                .doc(groupStudentId);
+            const groupStudentSnap = await transaction.get(groupStudentRef);
+            if (!groupStudentSnap.exists) {
+              throw new HttpsError(
+                  "not-found",
+                  "그룹 학생 정보를 찾을 수 없습니다.",
+              );
+            }
+            groupStudent = {
+              id: groupStudentSnap.id,
+              ...groupStudentSnap.data(),
+            };
+            if (normalizeId(groupStudent.academyId) !== academyId ||
+                getGroupStudentGroupId(groupStudent) !== lessonGroupId) {
+              throw new HttpsError("permission-denied", "Academy mismatch.");
+            }
+            studentId = normalizeId(groupStudent.studentId);
+            studentName = normalizeId(
+                groupStudent.studentName || groupStudent.name,
+            );
+            source = "dashboard";
+          }
+
+          if (!studentId) {
+            throw new HttpsError("invalid-argument", "studentId is required.");
+          }
+
+          const reservationRef = db
+              .collection("groupLessonReservations")
+              .doc(groupLessonReservationDocId({
+                academyId,
+                lessonId,
+                studentId,
+              }));
+          const reservationSnap = await transaction.get(reservationRef);
+          if (reservationSnap.exists &&
+              String(reservationSnap.data().status || "") === "active") {
+            throw new HttpsError("already-exists", "이미 예약됨");
+          }
+
+          const {groupStudentsSnap, reservationsSnap} =
+            await getGroupSeatInputSnaps(transaction, db, academyId);
+          const groupStudents = groupStudentsSnap.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          }));
+          const reservations = docsForLesson(reservationsSnap, lessonId);
+          const fixedMembers = getFixedMembersForLesson(groupStudents, lesson);
+          if (membership.role === "student" &&
+              fixedMembers.some((member) =>
+                normalizeId(member.studentId) === studentId,
+              )) {
+            throw new HttpsError(
+                "failed-precondition",
+                "고정 등록 학생은 추가 예약 대상이 아닙니다.",
+            );
+          }
+          const availability = getGroupSeatAvailability({
+            lesson,
+            fixedMembers,
+            reservations,
+          });
+          if (availability.remainingSeats <= 0) {
+            throw new HttpsError("resource-exhausted", "정원 마감");
+          }
+
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          const existing = reservationSnap.exists ?
+            reservationSnap.data() || {} :
+            {};
+          const reservationData = {
+            academyId,
+            lessonId,
+            groupClassId: lessonGroupId,
+            studentId,
+            status: "active",
+            source,
+            createdAt: existing.createdAt || now,
+            updatedAt: now,
+            cancelledAt: null,
+          };
+          if (source === "dashboard") {
+            reservationData.studentName = studentName || studentId;
+            reservationData.teacher = normalizeId(lesson.teacher);
+          }
+
+          const activeReservationCount = reservations
+              .filter((reservation) => reservation.status === "active")
+              .filter((reservation) => reservation.studentId !== studentId)
+              .length + 1;
+          transaction.set(reservationRef, reservationData, {merge: true});
+          transaction.update(lessonRef, {
+            bookedCount: activeReservationCount,
+            updatedAt: now,
+          });
+
+          return {
+            remainingSeats: Math.max(0, availability.remainingSeats - 1),
+          };
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.cancelGroupLessonSeat = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const lessonId = requireString(data, "lessonId");
+        const groupStudentId = optionalString(data, "groupStudentId");
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const lessonRef = db.collection("groupLessons").doc(lessonId);
+
+        return await db.runTransaction(async (transaction) => {
+          const [membershipSnap, lessonSnap] = await Promise.all([
+            transaction.get(membershipRef),
+            transaction.get(lessonRef),
+          ]);
+          const membership = requireActiveAcademyMembership(membershipSnap);
+          if (!lessonSnap.exists) {
+            throw new HttpsError("not-found", "수업 일정을 찾을 수 없습니다.");
+          }
+          const lesson = {id: lessonSnap.id, ...lessonSnap.data()};
+          if (normalizeId(lesson.academyId) !== academyId) {
+            throw new HttpsError("permission-denied", "Academy mismatch.");
+          }
+
+          let studentId = "";
+          if (membership.role === "student") {
+            studentId = membership.studentId;
+          } else {
+            if (!canManageGroupReservations(membership)) {
+              throw new HttpsError(
+                  "permission-denied",
+                  "예약 관리 권한이 없습니다.",
+              );
+            }
+            if (!groupStudentId) {
+              throw new HttpsError(
+                  "invalid-argument",
+                  "groupStudentId is required.",
+              );
+            }
+            const groupStudentSnap = await transaction.get(
+                db.collection("groupStudents").doc(groupStudentId),
+            );
+            if (!groupStudentSnap.exists) {
+              throw new HttpsError(
+                  "not-found",
+                  "그룹 학생 정보를 찾을 수 없습니다.",
+              );
+            }
+            const groupStudent = groupStudentSnap.data() || {};
+            if (normalizeId(groupStudent.academyId) !== academyId ||
+                getGroupStudentGroupId(groupStudent) !==
+                  getGroupLessonGroupId(lesson)) {
+              throw new HttpsError("permission-denied", "Academy mismatch.");
+            }
+            studentId = normalizeId(groupStudent.studentId);
+          }
+
+          if (!studentId) {
+            throw new HttpsError("invalid-argument", "studentId is required.");
+          }
+
+          const reservationRef = db
+              .collection("groupLessonReservations")
+              .doc(groupLessonReservationDocId({
+                academyId,
+                lessonId,
+                studentId,
+              }));
+          const reservationSnap = await transaction.get(reservationRef);
+          if (!reservationSnap.exists ||
+              String(reservationSnap.data().status || "") !== "active") {
+            throw new HttpsError(
+                "failed-precondition",
+                "활성 예약을 찾을 수 없습니다.",
+            );
+          }
+          const reservation = reservationSnap.data() || {};
+          if (normalizeId(reservation.academyId) !== academyId ||
+              normalizeId(reservation.lessonId) !== lessonId ||
+              normalizeId(reservation.studentId) !== studentId) {
+            throw new HttpsError("permission-denied", "Academy mismatch.");
+          }
+
+          const {reservationsSnap} =
+            await getGroupSeatInputSnaps(transaction, db, academyId);
+          const reservations = docsForLesson(reservationsSnap, lessonId);
+          const activeReservationCount = Math.max(
+              0,
+              reservations
+                  .filter((row) => row.status === "active")
+                  .filter((row) => row.studentId !== studentId)
+                  .length,
+          );
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          transaction.update(reservationRef, {
+            status: "cancelled",
+            cancelledAt: now,
+            updatedAt: now,
+          });
+          transaction.update(lessonRef, {
+            bookedCount: activeReservationCount,
+            updatedAt: now,
+          });
+          return {remainingActiveReservations: activeReservationCount};
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.releaseGroupLessonFixedSeat = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const lessonId = requireString(data, "lessonId");
+        const groupStudentId = requireString(data, "groupStudentId");
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const lessonRef = db.collection("groupLessons").doc(lessonId);
+        const groupStudentRef = db
+            .collection("groupStudents")
+            .doc(groupStudentId);
+
+        return await db.runTransaction(async (transaction) => {
+          const [membershipSnap, lessonSnap, groupStudentSnap] =
+            await Promise.all([
+              transaction.get(membershipRef),
+              transaction.get(lessonRef),
+              transaction.get(groupStudentRef),
+            ]);
+          const membership = requireActiveAcademyMembership(membershipSnap);
+          if (!canManageGroupAttendance(membership)) {
+            throw new HttpsError(
+                "permission-denied",
+                "출결 관리 권한이 없습니다.",
+            );
+          }
+          if (!lessonSnap.exists || !groupStudentSnap.exists) {
+            throw new HttpsError("not-found", "수업 또는 학생을 찾을 수 없습니다.");
+          }
+          const lesson = {id: lessonSnap.id, ...lessonSnap.data()};
+          const groupStudent = {
+            id: groupStudentSnap.id,
+            ...groupStudentSnap.data(),
+          };
+          if (normalizeId(lesson.academyId) !== academyId ||
+              normalizeId(groupStudent.academyId) !== academyId ||
+              getGroupStudentGroupId(groupStudent) !==
+                getGroupLessonGroupId(lesson)) {
+            throw new HttpsError("permission-denied", "Academy mismatch.");
+          }
+          const studentId = normalizeId(groupStudent.studentId);
+          if (!studentId) {
+            throw new HttpsError("invalid-argument", "studentId is required.");
+          }
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          transaction.update(lessonRef, {
+            releasedFixedStudentIDs:
+              admin.firestore.FieldValue.arrayUnion(studentId),
+            updatedAt: now,
+          });
+          return {releasedStudentId: studentId};
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.restoreGroupLessonFixedSeat = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const lessonId = requireString(data, "lessonId");
+        const groupStudentId = requireString(data, "groupStudentId");
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const lessonRef = db.collection("groupLessons").doc(lessonId);
+        const groupStudentRef = db
+            .collection("groupStudents")
+            .doc(groupStudentId);
+
+        return await db.runTransaction(async (transaction) => {
+          const [membershipSnap, lessonSnap, groupStudentSnap] =
+            await Promise.all([
+              transaction.get(membershipRef),
+              transaction.get(lessonRef),
+              transaction.get(groupStudentRef),
+            ]);
+          const membership = requireActiveAcademyMembership(membershipSnap);
+          if (!canManageGroupAttendance(membership)) {
+            throw new HttpsError(
+                "permission-denied",
+                "출결 관리 권한이 없습니다.",
+            );
+          }
+          if (!lessonSnap.exists || !groupStudentSnap.exists) {
+            throw new HttpsError("not-found", "수업 또는 학생을 찾을 수 없습니다.");
+          }
+          const lesson = {id: lessonSnap.id, ...lessonSnap.data()};
+          const groupStudent = {
+            id: groupStudentSnap.id,
+            ...groupStudentSnap.data(),
+          };
+          if (normalizeId(lesson.academyId) !== academyId ||
+              normalizeId(groupStudent.academyId) !== academyId ||
+              getGroupStudentGroupId(groupStudent) !==
+                getGroupLessonGroupId(lesson)) {
+            throw new HttpsError("permission-denied", "Academy mismatch.");
+          }
+          const studentId = normalizeId(groupStudent.studentId);
+          const releasedIds = normalizeIdList(lesson.releasedFixedStudentIDs);
+          if (!studentId || !releasedIds.includes(studentId)) {
+            throw new HttpsError(
+                "failed-precondition",
+                "차감취소된 고정 좌석이 아닙니다.",
+            );
+          }
+
+          const {groupStudentsSnap, reservationsSnap} =
+            await getGroupSeatInputSnaps(transaction, db, academyId);
+          const groupStudents = groupStudentsSnap.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          }));
+          const reservations = docsForLesson(reservationsSnap, lessonId);
+          const fixedMembers = getFixedMembersForLesson(groupStudents, lesson);
+          const availability = getGroupSeatAvailability({
+            lesson,
+            fixedMembers,
+            reservations,
+          });
+          if (availability.remainingSeats <= 0) {
+            throw new HttpsError(
+                "failed-precondition",
+                "이미 추가 예약으로 자리가 채워져 복구할 수 없습니다.",
+            );
+          }
+
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          transaction.update(lessonRef, {
+            releasedFixedStudentIDs:
+              admin.firestore.FieldValue.arrayRemove(studentId),
+            updatedAt: now,
+          });
+          return {restoredStudentId: studentId};
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
 
 exports.listPrivateLessonSlotAvailability = onCall(
     {region: REGION, cors: true},

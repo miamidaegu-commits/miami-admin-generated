@@ -7,8 +7,6 @@ import {
   getDocs,
   onSnapshot,
   query,
-  runTransaction,
-  serverTimestamp,
   where,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
@@ -25,7 +23,6 @@ import {
 } from './src/features/dashboard/academyScope.js'
 import {
   formatLessonSessionNumber,
-  getGroupLessonGroupId,
   getLessonStorageDateString,
   getTodayStorageDateString,
 } from './src/features/dashboard/dashboardViewUtils.js'
@@ -89,6 +86,7 @@ function chunkValues(values, size) {
 function validateLessonBookingState(lesson, mode) {
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
+  const remainingSeats = Number(lesson?.remainingSeats ?? lesson?.seatAvailability?.remainingSeats)
 
   if (!Number.isFinite(capacity) || capacity <= 0) {
     throw new Error('예약 불가 수업입니다.')
@@ -101,6 +99,7 @@ function validateLessonBookingState(lesson, mode) {
   }
   if (mode === 'reserve') {
     if (lesson?.isBookable !== true) throw new Error('예약 불가 수업입니다.')
+    if (Number.isFinite(remainingSeats) && remainingSeats <= 0) throw new Error('정원 마감')
     if (bookedCount >= capacity) throw new Error('정원 마감')
     return
   }
@@ -111,10 +110,14 @@ function validateLessonBookingState(lesson, mode) {
 
 function getLessonCapacityLabel(lesson) {
   const capacity = Number(lesson?.capacity ?? 0)
-  const bookedCount = Number(lesson?.bookedCount ?? 0)
   const safeCapacity = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
+  const remainingSeats = Number(lesson?.remainingSeats ?? lesson?.seatAvailability?.remainingSeats)
+  if (Number.isFinite(remainingSeats)) {
+    return `남은 자리 ${Math.max(0, remainingSeats)}명`
+  }
+  const bookedCount = Number(lesson?.bookedCount ?? 0)
   const safeBooked = Number.isFinite(bookedCount) && bookedCount >= 0 ? bookedCount : 0
-  return `${safeBooked} / ${safeCapacity}`
+  return `남은 자리 ${Math.max(0, safeCapacity - safeBooked)}명`
 }
 
 function getReservationStatusLabel(reservation) {
@@ -364,6 +367,7 @@ export default function StudentBookingPage() {
   const [reservationsResolved, setReservationsResolved] = useState(false)
   const [reservationsError, setReservationsError] = useState('')
   const [busyReservationId, setBusyReservationId] = useState('')
+  const [groupLessonsRefreshKey, setGroupLessonsRefreshKey] = useState(0)
   const [allowedPrivateTeacherKeys, setAllowedPrivateTeacherKeys] = useState([])
   const [allowedPrivateSlotIds, setAllowedPrivateSlotIds] = useState([])
   const [privateSlotBookingPilotEnabled, setPrivateSlotBookingPilotEnabled] = useState(false)
@@ -618,53 +622,17 @@ export default function StudentBookingPage() {
     setLessonsLoading(true)
     setLessonsError('')
 
-    const querySpecs = [
-      ...chunkValues(allowedGroupClassIds, GROUP_CLASS_QUERY_CHUNK_SIZE).map((values) => ({
-        type: 'groupClassId',
-        values,
-      })),
-      ...chunkValues(allowedGroupCourseTypes, GROUP_CLASS_QUERY_CHUNK_SIZE).map((values) => ({
-        type: 'groupCourseType',
-        values,
-      })),
-    ]
     let cancelled = false
 
     async function loadGroupLessonAvailability() {
-      const byId = new Map()
-      const results = await Promise.allSettled(
-        querySpecs.map((spec) =>
-          getDocs(
-            query(
-              collection(db, 'groupLessons'),
-              where('academyId', '==', currentAcademyId),
-              where('isBookable', '==', true),
-              where(spec.type, 'in', spec.values)
-            )
-          )
-        )
+      const listGroupLessonAvailability = httpsCallable(
+        firebaseFunctions,
+        'listGroupLessonAvailability'
       )
-
-      const rejectedResults = results.filter((result) => result.status === 'rejected')
-      if (rejectedResults.length === results.length) {
-        throw rejectedResults[0]?.reason || new Error('groupLessons unavailable')
-      }
-      rejectedResults.forEach((result) => {
-        console.error('student groupLessons 일부 조회 실패:', result.reason)
+      const result = await listGroupLessonAvailability({
+        academyId: currentAcademyId,
       })
-
-      results.forEach((result) => {
-        if (result.status !== 'fulfilled') return
-        result.value.docs.forEach((docItem) => {
-          const row = {
-            id: docItem.id,
-            ...docItem.data(),
-          }
-          byId.set(row.id, row)
-        })
-      })
-
-      return Array.from(byId.values())
+      return Array.isArray(result.data?.lessons) ? result.data.lessons : []
     }
 
     loadGroupLessonAvailability()
@@ -688,6 +656,7 @@ export default function StudentBookingPage() {
     allowedGroupClassIds,
     allowedGroupCourseTypes,
     currentAcademyId,
+    groupLessonsRefreshKey,
     hasOperationalAcademy,
     role,
     scopedStudentId,
@@ -704,6 +673,9 @@ export default function StudentBookingPage() {
         return {
           ...lesson,
           bookedCount: Math.max(0, bookedCount + delta),
+          remainingSeats: Number.isFinite(Number(lesson.remainingSeats))
+            ? Math.max(0, Number(lesson.remainingSeats) - delta)
+            : lesson.remainingSeats,
         }
       })
     )
@@ -1560,7 +1532,11 @@ export default function StudentBookingPage() {
       alert('학생 계정 연결 정보가 없어 예약할 수 없습니다.')
       return
     }
-    if (!allowedGroupClassIds.includes(groupClassId)) {
+    const groupCourseType = normalizeGroupCourseType(lesson.groupCourseType)
+    const hasGroupAccess =
+      allowedGroupClassIds.includes(groupClassId) ||
+      (groupCourseType && allowedGroupCourseTypes.includes(groupCourseType))
+    if (!hasGroupAccess) {
       alert('예약 가능한 반 권한이 없습니다.')
       return
     }
@@ -1579,89 +1555,18 @@ export default function StudentBookingPage() {
 
     try {
       setBusyReservationId(reservationId)
-      if (existingReservation?.status === 'cancelled') {
-        await runTransaction(db, async (transaction) => {
-          const lessonRef = doc(db, 'groupLessons', lesson.id)
-          const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-
-          const [lessonSnap, reservationSnap] = await Promise.all([
-            transaction.get(lessonRef),
-            transaction.get(reservationRef),
-          ])
-
-          if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-          if (!reservationSnap.exists()) throw new Error('취소된 예약을 찾을 수 없습니다.')
-
-          const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-          const reservationData = reservationSnap.data()
-
-          assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-          validateLessonBookingState(lessonData, 'reserve')
-
-          if (getGroupLessonGroupId(lessonData) !== groupClassId) {
-            throw new Error('수업의 그룹 정보가 올바르지 않습니다.')
-          }
-          if (String(reservationData.studentId || '').trim() !== scopedStudentId) {
-            throw new Error('다른 학생의 예약은 수정할 수 없습니다.')
-          }
-          if (reservationData.status !== 'cancelled') {
-            throw new Error('이미 예약됨')
-          }
-
-          const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-          transaction.update(reservationRef, {
-            status: 'active',
-            cancelledAt: null,
-            updatedAt: serverTimestamp(),
-          })
-          transaction.update(lessonRef, {
-            bookedCount: bookedCount + 1,
-            updatedAt: serverTimestamp(),
-          })
-        })
-      } else {
-        await runTransaction(db, async (transaction) => {
-          const lessonRef = doc(db, 'groupLessons', lesson.id)
-          const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-          const lessonSnap = await transaction.get(lessonRef)
-
-          if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-
-          const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-
-          assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-          validateLessonBookingState(lessonData, 'reserve')
-
-          if (getGroupLessonGroupId(lessonData) !== groupClassId) {
-            throw new Error('수업의 그룹 정보가 올바르지 않습니다.')
-          }
-
-          const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-          transaction.set(reservationRef, {
-            academyId: scopedAcademyId,
-            lessonId: lesson.id,
-            groupClassId,
-            studentId: scopedStudentId,
-            status: 'active',
-            source: 'student',
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            cancelledAt: null,
-          })
-          transaction.update(lessonRef, {
-            bookedCount: bookedCount + 1,
-            updatedAt: serverTimestamp(),
-          })
-        })
-      }
+      const reserveGroupLessonSeat = httpsCallable(firebaseFunctions, 'reserveGroupLessonSeat')
+      await reserveGroupLessonSeat({
+        academyId: scopedAcademyId,
+        lessonId: lesson.id,
+      })
       logStudentBookingEvent('reserve_success', {
         academyId: scopedAcademyId,
         lessonId: lesson.id,
         studentId: scopedStudentId,
       })
       updateGroupLessonBookedCount(lesson.id, 1)
+      setGroupLessonsRefreshKey((value) => value + 1)
     } catch (error) {
       console.error('학생 그룹 수업 예약 실패:', error)
       logStudentBookingEvent('reserve_failure', {
@@ -1775,41 +1680,10 @@ export default function StudentBookingPage() {
 
     try {
       setBusyReservationId(reservationId)
-      await runTransaction(db, async (transaction) => {
-        const lessonRef = doc(db, 'groupLessons', reservation.lessonId)
-        const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-        const [lessonSnap, reservationSnap] = await Promise.all([
-          transaction.get(lessonRef),
-          transaction.get(reservationRef),
-        ])
-
-        if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-        if (!reservationSnap.exists()) throw new Error('활성 예약을 찾을 수 없습니다.')
-
-        const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-        const reservationData = reservationSnap.data()
-
-        assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-        validateLessonBookingState(lessonData, 'cancel')
-
-        if (String(reservationData.studentId || '').trim() !== scopedStudentId) {
-          throw new Error('다른 학생의 예약은 취소할 수 없습니다.')
-        }
-        if (reservationData.status !== 'active') {
-          throw new Error('활성 예약을 찾을 수 없습니다.')
-        }
-
-        const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-        transaction.update(reservationRef, {
-          status: 'cancelled',
-          cancelledAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
-        transaction.update(lessonRef, {
-          bookedCount: bookedCount - 1,
-          updatedAt: serverTimestamp(),
-        })
+      const cancelGroupLessonSeat = httpsCallable(firebaseFunctions, 'cancelGroupLessonSeat')
+      await cancelGroupLessonSeat({
+        academyId: scopedAcademyId,
+        lessonId: reservation.lessonId,
       })
       logStudentBookingEvent('cancel_success', {
         academyId: scopedAcademyId,
@@ -1817,6 +1691,7 @@ export default function StudentBookingPage() {
         studentId: scopedStudentId,
       })
       updateGroupLessonBookedCount(reservation.lessonId, -1)
+      setGroupLessonsRefreshKey((value) => value + 1)
     } catch (error) {
       console.error('학생 그룹 수업 예약 취소 실패:', error)
       logStudentBookingEvent('cancel_failure', {
@@ -2118,11 +1993,22 @@ export default function StudentBookingPage() {
                       studentId: scopedStudentId,
                     })
                     const isBusy = busyReservationId === reservationId
+                    const remainingSeats = Number(
+                      lesson.remainingSeats ?? lesson.seatAvailability?.remainingSeats
+                    )
+                    const hasRemainingSeats = Number.isFinite(remainingSeats)
+                      ? remainingSeats > 0
+                      : Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
+                    const lessonBookingStatusLabel = isReserved
+                      ? '예약 완료'
+                      : hasRemainingSeats
+                        ? '예약 가능'
+                        : '마감'
                     const canReserve =
                       !isReserved &&
                       !busyReservationId &&
                       lesson.isBookable === true &&
-                      Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
+                      hasRemainingSeats
 
                     return (
                       <article
@@ -2155,8 +2041,7 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              정원 {getLessonCapacityLabel(lesson)}
-                              {isReserved ? ' · 예약 완료' : ''}
+                              {lessonBookingStatusLabel} · {getLessonCapacityLabel(lesson)}
                             </div>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -2192,7 +2077,7 @@ export default function StudentBookingPage() {
                                   cursor: canReserve ? 'pointer' : 'not-allowed',
                                 }}
                               >
-                                {isBusy ? '예약 중...' : '예약'}
+                                {isBusy ? '예약 중...' : canReserve ? '단체반 예약' : '마감'}
                               </button>
                             )}
                           </div>

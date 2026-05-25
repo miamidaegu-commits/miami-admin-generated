@@ -1,20 +1,12 @@
 import { useEffect, useState } from 'react'
-import {
-  doc,
-  runTransaction,
-  serverTimestamp,
-} from 'firebase/firestore'
-import { db } from '../../../../firebase'
+import { httpsCallable } from 'firebase/functions'
+import { functions as firebaseFunctions } from '../../../../firebase'
 import { debugLog } from '../../../utils/debugLog.js'
 import {
   assertSameAcademy,
   isValidOperationalAcademyId,
   requireCurrentAcademyId,
 } from '../academyScope.js'
-import {
-  getGroupLessonGroupId,
-  normalizeText,
-} from '../dashboardViewUtils.js'
 
 export function buildGroupLessonReservationId({ academyId, lessonId, studentId }) {
   return `${academyId}__${lessonId}__${studentId}`
@@ -22,18 +14,6 @@ export function buildGroupLessonReservationId({ academyId, lessonId, studentId }
 
 function logReservationEvent(type, payload) {
   debugLog(`[group-reservation] ${type}`, payload)
-}
-
-function getGroupStudentGroupId(groupStudentRow) {
-  return String(groupStudentRow?.groupClassId || groupStudentRow?.classID || '').trim()
-}
-
-function getStudentDisplayName(groupStudentRow) {
-  return (
-    normalizeText(groupStudentRow?.studentName || '') ||
-    normalizeText(groupStudentRow?.name || '') ||
-    '-'
-  )
 }
 
 function ensureReservationInputs({ lesson, groupStudentRow, currentAcademyId }) {
@@ -49,11 +29,6 @@ function ensureReservationInputs({ lesson, groupStudentRow, currentAcademyId }) 
   return {
     scopedAcademyId,
     studentId,
-    reservationId: buildGroupLessonReservationId({
-      academyId: scopedAcademyId,
-      lessonId: lesson.id,
-      studentId,
-    }),
   }
 }
 
@@ -145,7 +120,7 @@ export default function useGroupReservationFlow({
       return
     }
 
-    const { scopedAcademyId, studentId, reservationId } = ensureReservationInputs({
+    const { scopedAcademyId, studentId } = ensureReservationInputs({
       lesson,
       groupStudentRow,
       currentAcademyId,
@@ -155,67 +130,14 @@ export default function useGroupReservationFlow({
 
     try {
       setBusyGroupReservationId(busyKey)
-      await runTransaction(db, async (transaction) => {
-        const lessonRef = doc(db, 'groupLessons', lesson.id)
-        const groupStudentRef = doc(db, 'groupStudents', groupStudentRow.id)
-        const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-
-        const lessonSnap = await transaction.get(lessonRef)
-        const groupStudentSnap = await transaction.get(groupStudentRef)
-        const reservationSnap = await transaction.get(reservationRef)
-
-        if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-        if (!groupStudentSnap.exists()) throw new Error('그룹 학생 정보를 찾을 수 없습니다.')
-
-        const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-        const groupStudentData = { id: groupStudentSnap.id, ...groupStudentSnap.data() }
-
-        assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-        assertSameAcademy(groupStudentData, scopedAcademyId, '그룹 학생')
-        validateLessonBookingState(lessonData, 'reserve')
-
-        if (String(groupStudentData.status || 'active') !== 'active') {
-          throw new Error('비활성 학생')
-        }
-
-        const capacity = Number(lessonData.capacity ?? 0)
-        const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-        const lessonGroupId = getGroupLessonGroupId(lessonData)
-        const groupStudentGroupId = getGroupStudentGroupId(groupStudentData)
-        if (!lessonGroupId || groupStudentGroupId !== lessonGroupId) {
-          throw new Error('현재 학원 불일치')
-        }
-
-        if (String(groupStudentData.studentId || '').trim() !== studentId) {
-          throw new Error('현재 학원 불일치')
-        }
-
-        if (reservationSnap.exists()) {
-          const reservationData = reservationSnap.data()
-          assertSameAcademy(reservationData, scopedAcademyId, '예약')
-          if (reservationData.status === 'active') throw new Error('이미 예약됨')
-        }
-
-        transaction.set(reservationRef, {
-          academyId: scopedAcademyId,
-          lessonId: lesson.id,
-          groupClassId: lessonGroupId,
-          studentId,
-          studentName: getStudentDisplayName(groupStudentData),
-          teacher: normalizeText(lessonData.teacher || ''),
-          status: 'active',
-          createdAt: reservationSnap.exists()
-            ? reservationSnap.data().createdAt || serverTimestamp()
-            : serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          cancelledAt: null,
-          source: 'dashboard',
-        })
-        transaction.update(lessonRef, {
-          bookedCount: bookedCount + 1,
-          updatedAt: serverTimestamp(),
-        })
+      const reserveGroupLessonSeatCallable = httpsCallable(
+        firebaseFunctions,
+        'reserveGroupLessonSeat'
+      )
+      await reserveGroupLessonSeatCallable({
+        academyId: scopedAcademyId,
+        lessonId: lesson.id,
+        groupStudentId: groupStudentRow.id,
       })
       logReservationEvent('reserve_success', {
         academyId: scopedAcademyId,
@@ -242,7 +164,7 @@ export default function useGroupReservationFlow({
       return
     }
 
-    const { scopedAcademyId, studentId, reservationId } = ensureReservationInputs({
+    const { scopedAcademyId, studentId } = ensureReservationInputs({
       lesson,
       groupStudentRow,
       currentAcademyId,
@@ -252,54 +174,14 @@ export default function useGroupReservationFlow({
 
     try {
       setBusyGroupReservationId(busyKey)
-      await runTransaction(db, async (transaction) => {
-        const lessonRef = doc(db, 'groupLessons', lesson.id)
-        const groupStudentRef = doc(db, 'groupStudents', groupStudentRow.id)
-        const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-
-        const lessonSnap = await transaction.get(lessonRef)
-        const groupStudentSnap = await transaction.get(groupStudentRef)
-        const reservationSnap = await transaction.get(reservationRef)
-
-        if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-        if (!groupStudentSnap.exists()) throw new Error('그룹 학생 정보를 찾을 수 없습니다.')
-        if (!reservationSnap.exists() || reservationSnap.data().status !== 'active') {
-          throw new Error('활성 예약을 찾을 수 없습니다.')
-        }
-
-        const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-        const groupStudentData = { id: groupStudentSnap.id, ...groupStudentSnap.data() }
-        const reservationData = reservationSnap.data()
-
-        assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-        assertSameAcademy(groupStudentData, scopedAcademyId, '그룹 학생')
-        assertSameAcademy(reservationData, scopedAcademyId, '예약')
-        validateLessonBookingState(lessonData, 'cancel')
-
-        const lessonGroupId = getGroupLessonGroupId(lessonData)
-        const groupStudentGroupId = getGroupStudentGroupId(groupStudentData)
-        if (!lessonGroupId || groupStudentGroupId !== lessonGroupId) {
-          throw new Error('현재 학원 불일치')
-        }
-        if (
-          reservationData.lessonId !== lesson.id ||
-          reservationData.studentId !== studentId ||
-          reservationData.groupClassId !== lessonGroupId
-        ) {
-          throw new Error('현재 학원 불일치')
-        }
-
-        const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-        transaction.update(reservationRef, {
-          status: 'cancelled',
-          cancelledAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
-        transaction.update(lessonRef, {
-          bookedCount: bookedCount - 1,
-          updatedAt: serverTimestamp(),
-        })
+      const cancelGroupLessonSeatCallable = httpsCallable(
+        firebaseFunctions,
+        'cancelGroupLessonSeat'
+      )
+      await cancelGroupLessonSeatCallable({
+        academyId: scopedAcademyId,
+        lessonId: lesson.id,
+        groupStudentId: groupStudentRow.id,
       })
       logReservationEvent('cancel_success', {
         academyId: scopedAcademyId,

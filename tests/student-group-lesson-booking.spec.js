@@ -189,6 +189,7 @@ async function createStudentBookingFixture(unique, options = {}) {
   const pastLessonId = `e2e-student-booking-past-${unique}`;
   const cancelledLessonId = `e2e-student-booking-cancelled-${unique}`;
   const otherHistoryLessonId = `e2e-student-booking-other-history-${unique}`;
+  const fixedStudentIds = [1, 2, 3].map((index) => `e2e-fixed-${index}-${unique}`);
   const blockedGroupName = `숨김반 ${unique}`;
   const eligibleGroupName = `예약반 ${unique}`;
   const studentMembershipRef = db
@@ -330,8 +331,9 @@ async function createStudentBookingFixture(unique, options = {}) {
     db.collection('groupClasses').doc(hiddenGroupClassId),
     db.collection('privateStudents').doc(studentId),
     db.collection('privateStudents').doc(otherStudentId),
-    db.collection('groupStudents').doc(`gs-${studentId}`),
-    db.collection('groupStudents').doc(`gs-${otherStudentId}`),
+    ...fixedStudentIds.map((fixedStudentId) =>
+      db.collection('groupStudents').doc(`gs-${fixedStudentId}`)
+    ),
     db.collection('studentGroupAccess').doc(accessId({ groupClassId: eligibleGroupClassId, studentId })),
     db.collection('studentGroupAccessSummary').doc(accessSummaryId({ studentId })),
     db.collection('groupLessons').doc(eligibleLessonId),
@@ -400,51 +402,33 @@ async function createStudentBookingFixture(unique, options = {}) {
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
-    db.collection('groupStudents').doc(`gs-${studentId}`).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      groupClassId: eligibleGroupClassId,
-      classID: eligibleGroupClassId,
-      studentId,
-      studentName: `학생 ${unique}`,
-      name: `학생 ${unique}`,
-      teacher: TEACHER_NAME,
-      packageId: `pkg-${studentId}`,
-      packageType: 'group',
-      paidLessons: 8,
-      attendanceCount: 0,
-      status: 'active',
-      studentStatus: 'active',
-      excludedDates: [],
-      breakStartDate: '',
-      breakEndDate: '',
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    }),
-    db.collection('groupStudents').doc(`gs-${otherStudentId}`).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      groupClassId: eligibleGroupClassId,
-      classID: eligibleGroupClassId,
-      studentId: otherStudentId,
-      studentName: `다른학생 ${unique}`,
-      name: `다른학생 ${unique}`,
-      teacher: TEACHER_NAME,
-      packageId: `pkg-${otherStudentId}`,
-      packageType: 'group',
-      paidLessons: 8,
-      attendanceCount: 0,
-      status: 'active',
-      studentStatus: 'active',
-      excludedDates: [],
-      breakStartDate: '',
-      breakEndDate: '',
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    }),
+    ...fixedStudentIds.map((fixedStudentId, index) =>
+      db.collection('groupStudents').doc(`gs-${fixedStudentId}`).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: eligibleGroupClassId,
+        classID: eligibleGroupClassId,
+        studentId: fixedStudentId,
+        studentName: `고정학생 ${index + 1} ${unique}`,
+        name: `고정학생 ${index + 1} ${unique}`,
+        teacher: TEACHER_NAME,
+        packageId: `pkg-${fixedStudentId}`,
+        packageType: 'group',
+        paidLessons: 8,
+        attendanceCount: 0,
+        status: 'active',
+        studentStatus: 'active',
+        excludedDates: [],
+        breakStartDate: '',
+        breakEndDate: '',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      })
+    ),
     studentLinked
       ? db.collection('studentGroupAccess').doc(accessId({ groupClassId: eligibleGroupClassId, studentId })).set({
           academyId: DEFAULT_E2E_ACADEMY_ID,
           groupClassId: eligibleGroupClassId,
-          groupStudentId: `gs-${studentId}`,
+          groupStudentId: '',
           studentId,
           packageId: `pkg-${studentId}`,
           status: 'active',
@@ -470,7 +454,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-03',
       time: '10:00',
       subject: 'Bookable',
-      capacity: 2,
+      capacity: 4,
       bookedCount: 0,
       isBookable: true,
       createdAt: nowTs,
@@ -484,7 +468,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-04',
       time: '11:00',
       subject: 'Full',
-      capacity: 1,
+      capacity: 4,
       bookedCount: 1,
       isBookable: true,
       createdAt: nowTs,
@@ -498,7 +482,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-05',
       time: '13:00',
       subject: 'Closed',
-      capacity: 2,
+      capacity: 4,
       bookedCount: 0,
       isBookable: false,
       createdAt: nowTs,
@@ -512,7 +496,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-06',
       time: '14:00',
       subject: 'Hidden',
-      capacity: 2,
+      capacity: 4,
       bookedCount: 1,
       isBookable: true,
       createdAt: nowTs,
@@ -527,7 +511,7 @@ async function createStudentBookingFixture(unique, options = {}) {
           date: '2020-01-03',
           time: '09:00',
           subject: 'Past History',
-          capacity: 2,
+          capacity: 4,
           bookedCount: 1,
           isBookable: true,
           createdAt: nowTs,
@@ -543,7 +527,7 @@ async function createStudentBookingFixture(unique, options = {}) {
           date: '2099-05-07',
           time: '15:00',
           subject: 'Cancelled History',
-          capacity: 2,
+          capacity: 4,
           bookedCount: 0,
           isBookable: true,
           createdAt: nowTs,
@@ -559,7 +543,7 @@ async function createStudentBookingFixture(unique, options = {}) {
           date: '2099-05-08',
           time: '16:00',
           subject: 'Other History',
-          capacity: 2,
+          capacity: 4,
           bookedCount: 1,
           isBookable: true,
           createdAt: nowTs,
@@ -656,6 +640,7 @@ async function createStudentBookingFixture(unique, options = {}) {
     pastLessonId,
     cancelledLessonId,
     otherHistoryLessonId,
+    fixedStudentIds,
     docsToDelete,
     originals,
   };
@@ -712,12 +697,19 @@ test('student self-booking only shows eligible lessons and supports reserve/canc
 
     const fullCard = getLessonCard(page, 'Full');
     await expect(fullCard.getByTestId('student-booking-reserve-button')).toBeDisabled();
+    await expect(fullCard).toContainText('마감');
 
     const bookableCard = getLessonCard(page, 'Bookable');
+    await expect(bookableCard).toContainText('예약 가능');
+    await expect(bookableCard).toContainText('남은 자리 1명');
+    await expect(bookableCard.getByTestId('student-booking-reserve-button')).toHaveText('단체반 예약');
+    await expect(page.locator('body')).not.toContainText('고정학생 1');
+    await expect(page.locator('body')).not.toContainText('차감취소');
     await bookableCard.getByTestId('student-booking-reserve-button').click();
     await expectReservationStatus(db, fixture.eligibleLessonId, fixture.studentId, 'active');
     await expectBookedCount(db, fixture.eligibleLessonId, 1);
     await expect(bookableCard).toContainText('예약 완료', { timeout: 15000 });
+    await expect(bookableCard).toContainText('남은 자리 0명', { timeout: 15000 });
 
     const reservationCard = getReservationCard(page, 'Bookable');
     await expect(reservationCard).toBeVisible({ timeout: 15000 });
@@ -735,6 +727,43 @@ test('student self-booking only shows eligible lessons and supports reserve/canc
     await bookableCard.getByTestId('student-booking-reserve-button').click();
     await expectReservationStatus(db, fixture.eligibleLessonId, fixture.studentId, 'active');
     await expectBookedCount(db, fixture.eligibleLessonId, 1);
+  } finally {
+    if (fixture) {
+      await cleanupStudentBookingFixture(fixture).catch(() => {});
+    }
+  }
+});
+
+test('student sees released fixed group seat without private fixed-student details', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 student booking setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  initializeAdmin();
+  const db = admin.firestore();
+  let fixture = null;
+
+  try {
+    fixture = await createStudentBookingFixture(`${Date.now()}-${testInfo.workerIndex}-released`);
+    await db.collection('groupLessons').doc(fixture.eligibleLessonId).set(
+      {
+        releasedFixedStudentIDs: [fixture.fixedStudentIds[0]],
+        updatedAt: admin.firestore.Timestamp.now(),
+      },
+      { merge: true }
+    );
+
+    await loginAsStudent(page, TEST_STUDENT_EMAIL, TEST_STUDENT_PASSWORD);
+
+    const bookableCard = getLessonCard(page, 'Bookable');
+    await expect(bookableCard).toBeVisible({ timeout: 15000 });
+    await expect(bookableCard).toContainText('예약 가능');
+    await expect(bookableCard).toContainText('남은 자리 2명');
+    await expect(page.locator('body')).not.toContainText('고정학생 1');
+    await expect(page.locator('body')).not.toContainText('차감취소');
   } finally {
     if (fixture) {
       await cleanupStudentBookingFixture(fixture).catch(() => {});

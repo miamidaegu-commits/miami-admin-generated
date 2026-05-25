@@ -2188,6 +2188,8 @@ export default function Dashboard() {
     openCalendarGroupLessonAttendance,
     applyGroupLessonAttendanceDeduction,
     applyGroupLessonAttendanceUndo,
+    releaseGroupLessonFixedSeat,
+    restoreGroupLessonFixedSeat,
   } = useGroupAttendanceFlow({
     activeSection,
     userProfile,
@@ -2223,6 +2225,7 @@ export default function Dashboard() {
     groupLessonSeriesPlannedCount,
     groupLessonForAttendanceModal,
     groupLessonAttendanceModalRows,
+    groupLessonSeatAvailabilityById,
   } = useGroupsSectionViewModel({
     groupClasses,
     groupStudents,
@@ -2232,6 +2235,7 @@ export default function Dashboard() {
     groupLessonSeriesForm,
     groupLessonSeriesModalOpen,
     groupLessonAttendanceModal,
+    groupLessonReservations,
   })
 
   const studentsSectionViewModel = useStudentsSectionViewModel({
@@ -3859,6 +3863,7 @@ export default function Dashboard() {
     sortedGroupLessonsForSelectedClass,
     groupLessonReservations,
     groupLessonReservationsLoading,
+    groupLessonSeatAvailabilityById,
     groupReservationModal,
     busyGroupReservationId,
     canManageGroupReservations: isAdmin,
@@ -4071,11 +4076,17 @@ export default function Dashboard() {
     selectedGroupClass,
     groupLessonForAttendanceModal,
     groupLessonAttendanceModalRows,
+    groupLessonSeatAvailability:
+      groupLessonForAttendanceModal?.id
+        ? groupLessonSeatAvailabilityById[groupLessonForAttendanceModal.id] || null
+        : null,
     isPastLesson: isPastGroupLesson(groupLessonForAttendanceModal),
     isAdmin,
     busyGroupAttendanceStudentId,
     applyGroupLessonAttendanceDeduction,
     applyGroupLessonAttendanceUndo,
+    releaseGroupLessonFixedSeat,
+    restoreGroupLessonFixedSeat,
     closeGroupLessonAttendanceModal,
   }
 
