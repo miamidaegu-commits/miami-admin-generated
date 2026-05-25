@@ -435,7 +435,7 @@ async function createBookingFixture(unique) {
       status: 'active',
       studentStatus: 'active',
       attendanceCount: 0,
-      startDate: admin.firestore.Timestamp.fromDate(new Date('2099-01-01T00:00:00')),
+      startDate: admin.firestore.Timestamp.fromDate(new Date('2100-01-01T00:00:00')),
       excludedDates: [],
       createdAt: nowTs,
       updatedAt: nowTs,
@@ -451,7 +451,7 @@ async function createBookingFixture(unique) {
       status: 'active',
       studentStatus: 'active',
       attendanceCount: 0,
-      startDate: admin.firestore.Timestamp.fromDate(new Date('2099-01-01T00:00:00')),
+      startDate: admin.firestore.Timestamp.fromDate(new Date('2100-01-01T00:00:00')),
       excludedDates: [],
       createdAt: nowTs,
       updatedAt: nowTs,
@@ -467,7 +467,7 @@ async function createBookingFixture(unique) {
       status: 'active',
       studentStatus: 'active',
       attendanceCount: 0,
-      startDate: admin.firestore.Timestamp.fromDate(new Date('2099-01-01T00:00:00')),
+      startDate: admin.firestore.Timestamp.fromDate(new Date('2100-01-01T00:00:00')),
       excludedDates: [],
       createdAt: nowTs,
       updatedAt: nowTs,
@@ -618,7 +618,9 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
 
     const bookableRow = getLessonRow(page, 'Bookable');
     await expect(bookableRow).toBeVisible({ timeout: 15000 });
-    await expect(bookableRow).toContainText('0 / 2');
+    await expect(bookableRow).toContainText('정원 2명');
+    await expect(bookableRow).toContainText('추가 예약 0명');
+    await expect(bookableRow).toContainText('남은 자리 2명');
     await expect(bookableRow).toContainText('예약 가능');
 
     let modal = await openReservationAdd(bookableRow);
@@ -634,7 +636,8 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     );
     await expectReservationStatus(db, setup.bookableLessonId, setup.firstStudentId, 'active');
     await expectLessonBookedCount(db, setup.bookableLessonId, 1);
-    await expect(bookableRow).toContainText('1 / 2', { timeout: 15000 });
+    await expect(bookableRow).toContainText('추가 예약 1명', { timeout: 15000 });
+    await expect(bookableRow).toContainText('남은 자리 1명', { timeout: 15000 });
     await closeReservationModal(modal);
 
     modal = await openReservationAdd(bookableRow);
@@ -653,7 +656,8 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await expect(activeReservation).toContainText('예약 취소', { timeout: 15000 });
     await expectLessonBookedCount(db, setup.bookableLessonId, 0);
     await closeReservationModal(modal);
-    await expect(bookableRow).toContainText('0 / 2', { timeout: 15000 });
+    await expect(bookableRow).toContainText('추가 예약 0명', { timeout: 15000 });
+    await expect(bookableRow).toContainText('남은 자리 2명', { timeout: 15000 });
 
     modal = await openReservationAdd(bookableRow);
     await expect(modal.getByText(setup.firstStudentName)).toBeVisible();
@@ -678,7 +682,8 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await closeReservationModal(modal);
 
     const fullRow = getLessonRow(page, 'Full');
-    await expect(fullRow).toContainText('0 / 1');
+    await expect(fullRow).toContainText('정원 1명');
+    await expect(fullRow).toContainText('남은 자리 1명');
     modal = await openReservationAdd(fullRow);
     await clickExpectingNoDialog(
       page,
@@ -689,7 +694,8 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     );
     await expectReservationStatus(db, setup.fullLessonId, setup.firstStudentId, 'active');
     await expectLessonBookedCount(db, setup.fullLessonId, 1);
-    await expect(fullRow).toContainText('1 / 1', { timeout: 15000 });
+    await expect(fullRow).toContainText('추가 예약 1명', { timeout: 15000 });
+    await expect(fullRow).toContainText('남은 자리 0명', { timeout: 15000 });
     await expect(fullRow).toContainText('마감');
     await closeReservationModal(modal);
     await expect(fullRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();

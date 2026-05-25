@@ -409,6 +409,19 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
     await expect(targetLessonRow).toHaveCount(1, { timeout: 10000 });
 
     attendanceDialog = await openAttendanceDialogForLesson(targetLessonRow, page);
+    await expect(attendanceDialog.getByTestId('group-lesson-seat-summary')).toBeVisible();
+    await expect(attendanceDialog.getByTestId('group-lesson-fixed-attending-count')).toContainText(
+      '고정 참석 예정'
+    );
+    await expect(attendanceDialog.getByTestId('group-lesson-released-seat-count')).toContainText(
+      '고정 결석/차감취소'
+    );
+    await expect(attendanceDialog.getByTestId('group-lesson-guest-reserved-count')).toContainText(
+      '추가 예약'
+    );
+    await expect(attendanceDialog.getByTestId('group-lesson-remaining-seats')).toContainText(
+      '남은 자리'
+    );
     const attendanceDiagnostics = () =>
       collectAttendanceDiagnostics({
         page,

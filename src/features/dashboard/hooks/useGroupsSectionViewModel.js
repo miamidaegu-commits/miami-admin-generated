@@ -5,6 +5,7 @@ import {
   normalizeGroupWeekdaysFromDoc,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
+import { getGroupLessonSeatAvailability } from '../../booking/groupSeatAvailability.js'
 
 /**
  * Groups 탭 전용: 반 목록/학생 목록/출석 모달에 쓰이는 파생 데이터만 담당.
@@ -19,6 +20,7 @@ export default function useGroupsSectionViewModel({
   groupLessonSeriesForm,
   groupLessonSeriesModalOpen,
   groupLessonAttendanceModal,
+  groupLessonReservations = [],
 }) {
   const sortedGroupLessonsForSelectedClass = useMemo(() => {
     return [...groupLessons].sort((a, b) => {
@@ -113,10 +115,16 @@ export default function useGroupsSectionViewModel({
         const used = pkgOk ? Number(pkg.usedCount ?? 0) : 0
 
         const isCounted = Boolean(studentId && countedSet.has(studentId))
+        const releasedStudentIds = Array.isArray(lesson.releasedFixedStudentIDs)
+          ? lesson.releasedFixedStudentIDs.map((id) => String(id || '').trim())
+          : []
+        const isReleased = Boolean(studentId && releasedStudentIds.includes(studentId))
 
         let statusLabel = '미차감'
         if (isCounted) {
           statusLabel = '차감됨'
+        } else if (isReleased) {
+          statusLabel = '차감취소됨'
         } else if (remaining <= 0) {
           statusLabel = '남은 횟수 없음'
         }
@@ -129,9 +137,12 @@ export default function useGroupsSectionViewModel({
           remainingCount: remaining,
           usedCount: used,
           isCounted,
+          isReleased,
           statusLabel,
           canDeduct: pkgOk && !isCounted && remaining > 0,
           canUndo: pkgOk && isCounted && used > 0,
+          canReleaseSeat: pkgOk && !isCounted && !isReleased,
+          canRestoreSeat: pkgOk && isReleased,
         }
       })
   }, [
@@ -141,6 +152,27 @@ export default function useGroupsSectionViewModel({
     groupStudents,
     studentPackages,
   ])
+
+  const groupLessonSeatAvailabilityById = useMemo(() => {
+    const byId = {}
+    groupLessons.forEach((lesson) => {
+      const lessonDate = String(lesson.date || '').trim()
+      const lessonGroupId = String(lesson.groupClassId || lesson.classID || '').trim()
+      const fixedMembers = groupStudents.filter((gs) => {
+        if (String(gs.groupClassId || gs.classID || '').trim() !== lessonGroupId) return false
+        return isGroupStudentOperationallyEligibleOnYmd(gs, lessonDate)
+      })
+      const lessonReservations = groupLessonReservations.filter(
+        (reservation) => reservation.lessonId === lesson.id
+      )
+      byId[lesson.id] = getGroupLessonSeatAvailability({
+        lesson,
+        fixedMembers,
+        reservations: lessonReservations,
+      })
+    })
+    return byId
+  }, [groupLessons, groupStudents, groupLessonReservations])
 
   const groupLessonForAttendanceModal = useMemo(() => {
     const m = groupLessonAttendanceModal?.lesson
@@ -154,6 +186,7 @@ export default function useGroupsSectionViewModel({
     sortedGroupClasses,
     sortedGroupStudentsForSelectedClass,
     groupLessonAttendanceModalRows,
+    groupLessonSeatAvailabilityById,
     groupLessonForAttendanceModal,
   }
 }
