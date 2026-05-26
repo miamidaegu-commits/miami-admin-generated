@@ -3,6 +3,7 @@ import {
   getGroupLessonGroupId,
   getLessonDate,
   getLessonStorageDateString,
+  getTodayStorageDateString,
   formatLessonSessionNumber,
   getStudentName,
   getTeacherName,
@@ -26,6 +27,7 @@ export default function useCalendarSectionViewModel({
   showOnlySelectedDate,
   userProfile,
 }) {
+  const todayYmd = getTodayStorageDateString()
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aDate = getLessonDate(a)
@@ -82,15 +84,30 @@ export default function useCalendarSectionViewModel({
       const gc = groupClasses.find((g) => String(g.id) === String(gcid))
       const name =
         gc?.name != null && String(gc.name).trim() ? String(gc.name).trim() : '-'
+      const lessonDate = getLessonStorageDateString(gl)
+      const countedIds = Array.isArray(gl.countedStudentIDs) ? gl.countedStudentIDs : []
+      const autoDeductedIds = Array.isArray(gl.autoDeductedStudentIDs)
+        ? gl.autoDeductedStudentIDs
+        : []
+      let calendarStatusLabel = '예정'
+      if (isNoDeductionCancelledGroupLesson(gl)) {
+        calendarStatusLabel = '휴강 · 차감 없음'
+      } else if (autoDeductedIds.length > 0) {
+        calendarStatusLabel = '자동 차감 완료'
+      } else if (countedIds.length > 0) {
+        calendarStatusLabel = '정상 차감'
+      } else if (lessonDate && lessonDate < todayYmd) {
+        calendarStatusLabel = '미처리 · 자동 차감 예정'
+      }
       return {
         ...gl,
         _calendarRowKind: 'group',
         groupClassDisplayName: name,
         teacher: String(gl.teacher || gc?.teacher || '').trim() || '-',
-        calendarStatusLabel: isNoDeductionCancelledGroupLesson(gl) ? '휴강 · 차감 없음' : '예정',
+        calendarStatusLabel,
       }
     })
-  }, [visibleGroupLessons, groupClasses])
+  }, [visibleGroupLessons, groupClasses, todayYmd])
 
   const privateSlotById = useMemo(() => {
     return new Map(

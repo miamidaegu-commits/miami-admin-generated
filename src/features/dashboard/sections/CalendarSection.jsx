@@ -550,14 +550,25 @@ export default function CalendarSection(props) {
                 ? Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private')
                 : Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private'))
             const privateReservationStatus = String(lesson.status || '').trim()
+            const privateReservationEndMillis = isPrivateReservationRow
+              ? getPrivateReservationEndMillis(lesson)
+              : null
+            const privateReservationHasEnded =
+              privateReservationEndMillis != null && Date.now() >= privateReservationEndMillis
             const statusLabel = isGroupRow
               ? lesson.calendarStatusLabel || '예정'
               : isPrivateReservationRow
-                ? privateReservationStatus === 'completed'
-                  ? '완료'
-                  : privateReservationStatus === 'no_show'
-                    ? '노쇼'
-                    : '예약됨'
+                ? lesson.deductionSource === 'auto'
+                  ? '자동 차감 완료'
+                  : lesson.deductionApplied === true
+                    ? '정상 차감'
+                    : privateReservationHasEnded && privateReservationStatus === 'active'
+                      ? '미처리 · 자동 차감 예정'
+                      : privateReservationStatus === 'completed'
+                        ? '완료'
+                        : privateReservationStatus === 'no_show'
+                          ? '노쇼'
+                          : '예약됨'
                 : lesson.isDeductCancelled
                   ? '차감취소'
                   : isDeductedPrivateLesson && pkgForRemaining
@@ -574,11 +585,6 @@ export default function CalendarSection(props) {
               busyPrivateReservationOutcomeId === `${lesson.id}:reverse`
             const reservationOutcomeBusy =
               reservationCompleteBusy || reservationNoShowBusy || reservationReverseBusy
-            const privateReservationEndMillis = isPrivateReservationRow
-              ? getPrivateReservationEndMillis(lesson)
-              : null
-            const privateReservationHasEnded =
-              privateReservationEndMillis != null && Date.now() >= privateReservationEndMillis
             const rowLessonActionBusy =
               busyLessonId === lesson.id || rowPrivateCrudBusy || busyPrivateLessonAdd
             const sessionLabel = formatLessonSessionNumber(lesson)
