@@ -25,6 +25,23 @@ async function acceptNextDialog(page, timeout = 5000) {
   return message;
 }
 
+async function closeGroupClassThroughClosureModal(page, targetGroupRow, reason) {
+  await targetGroupRow.getByRole('button', { name: '반 운영 종료', exact: true }).click();
+
+  const closureDialog = page.getByRole('dialog', { name: '반 운영 종료' });
+  await expect(closureDialog).toBeVisible({ timeout: 10000 });
+  await closureDialog.getByLabel('종료 사유').fill(reason);
+
+  const confirmDialogPromise = acceptNextDialog(page, 10000);
+  await closureDialog.getByRole('button', { name: '운영 종료', exact: true }).click();
+  const confirmMessage = await confirmDialogPromise;
+  expect(confirmMessage).toContain('반 운영을 종료할까요?');
+
+  const resultMessage = await acceptNextDialog(page, 60000);
+  expect(resultMessage).toContain('반 운영을 종료했습니다.');
+  await expect(closureDialog).toBeHidden({ timeout: 60000 });
+}
+
 async function attachGroupSaveDiagnostics(testInfo, page, groupName, groupDialog, targetGroupRow, consoleMessages) {
   const saveButton = groupDialog.getByRole('button', { name: /저장|저장 중/ });
   const diagnostics = {
@@ -134,29 +151,28 @@ test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다'
     await expect(targetGroupRow).toBeVisible();
     groupCreated = true;
 
-    const deleteDialogPromise = acceptNextDialog(page);
-    await targetGroupRow.getByRole('button', { name: '삭제', exact: true }).click();
-    const deleteDialogMessage = await deleteDialogPromise;
-    expect(deleteDialogMessage).toContain('이 반을 삭제할까요?');
+    await closeGroupClassThroughClosureModal(page, targetGroupRow, `E2E cleanup ${uniqueToken}`);
 
+    await expect(targetGroupRow).toBeVisible({ timeout: 10000 });
+    groupCreated = false;
+    await cleanupAdminGroupClassByName({
+      academyId: E2E_ACADEMY_ID,
+      groupName,
+    });
     await expect
       .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
       .toBe(0);
-    groupCreated = false;
   } finally {
     if (groupCreated && (await targetGroupRow.count()) > 0) {
-      const cleanupDialogPromise = acceptNextDialog(page);
-      await targetGroupRow.getByRole('button', { name: '삭제', exact: true }).click();
-      await cleanupDialogPromise;
-
-      await expect
-        .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
-        .toBe(0);
+      await closeGroupClassThroughClosureModal(page, targetGroupRow, `E2E final cleanup ${uniqueToken}`);
     }
 
     await cleanupAdminGroupClassByName({
       academyId: E2E_ACADEMY_ID,
       groupName,
     });
+    await expect
+      .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
+      .toBe(0);
   }
 });

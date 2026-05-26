@@ -90,10 +90,9 @@ async function collectCalendarDiagnostics(page, selectedDate, fixture = null) {
 }
 
 async function selectCalendarDateByYmd(page, ymd) {
-  const day = Number(String(ymd || '').slice(-2));
-  const dateButton = page.getByRole('button', {
-    name: new RegExp(`^${day}(\\s|$)`),
-  });
+  const dateButton = page.locator(
+    `[data-testid="calendar-day-button"][data-date="${String(ymd || '').trim()}"]`
+  );
   await expect(dateButton).toBeVisible({ timeout: 15000 });
   await dateButton.click();
 }
