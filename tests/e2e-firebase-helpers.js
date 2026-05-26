@@ -1116,7 +1116,17 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         firestore: firestoreModule,
         params,
       }) {
-        const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
+        const {
+          collection,
+          deleteDoc,
+          doc,
+          getDoc,
+          getDocs,
+          query,
+          serverTimestamp,
+          updateDoc,
+          where,
+        } = firestoreModule;
         const { groupClassId, groupLessonId, groupLessonIds, strictLessonIdsOnly = false } = params;
         const academyId = getTaskAcademyId(params);
         const explicitLessonIds = new Set(
@@ -1129,17 +1139,38 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           explicitLessonIds.add(String(groupLessonId));
         }
 
+        async function softCancelGroupLesson(lessonId) {
+          const lessonRef = doc(db, 'groupLessons', lessonId);
+          const lessonSnap = await getDoc(lessonRef);
+          if (!lessonSnap.exists()) return;
+          const lesson = lessonSnap.data() || {};
+          if (String(lesson.academyId || '').trim() !== academyId) {
+            throw new Error(
+              `Refusing to cleanup groupLessons/${lessonId}: academyId ${lesson.academyId || '(missing)'} does not match ${academyId}.`
+            );
+          }
+          await updateDoc(lessonRef, {
+            status: 'cancelled',
+            groupClassDeleted: true,
+            cancellationType: 'class_closure',
+            cancelledReason: 'group_class_closed',
+            noDeduction: true,
+            cancelledAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
         if (explicitLessonIds.size > 0) {
           await Promise.all(
             Array.from(explicitLessonIds).map((lessonId) =>
               withFirestoreStep(
-                'cleanupTempCalendarGroupLessonSetup.deleteKnownGroupLesson',
+                'cleanupTempCalendarGroupLessonSetup.softCancelKnownGroupLesson',
                 {
                   collection: 'groupLessons',
                   docId: lessonId,
                   academyId,
                 },
-                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+                () => softCancelGroupLesson(lessonId)
               )
             )
           );
@@ -1196,13 +1227,13 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           await Promise.all(
             Array.from(lessonIds).map((lessonId) =>
               withFirestoreStep(
-                'cleanupTempCalendarGroupLessonSetup.deleteQueriedGroupLesson',
+                'cleanupTempCalendarGroupLessonSetup.softCancelQueriedGroupLesson',
                 {
                   collection: 'groupLessons',
                   docId: lessonId,
                   academyId,
                 },
-                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+                () => softCancelGroupLesson(lessonId)
               )
             )
           );

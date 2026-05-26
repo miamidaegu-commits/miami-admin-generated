@@ -187,6 +187,8 @@ export default function CalendarSection(props) {
             return (
               <button
                 key={dateKey}
+                data-testid="calendar-day-button"
+                data-date={dateKey}
                 onClick={() => {
                   setSelectedDate(day)
                   setShowOnlySelectedDate(true)
