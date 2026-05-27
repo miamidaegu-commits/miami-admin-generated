@@ -56,19 +56,27 @@ export default function StudentPackageEditModal({
             >
               수강권 수정
             </h2>
-            <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.78, lineHeight: 1.5 }}>
-              studentId: {studentPackageEditModalPackage.studentId || '-'} · studentName:{' '}
-              {studentPackageEditModalPackage.studentName || '-'}
-              <br />
-              teacher: {studentPackageEditModalPackage.teacher || '-'} · packageType:{' '}
-              {String(studentPackageEditModalPackage.packageType || '-')}
-              <br />
-              groupClassId: {studentPackageEditModalPackage.groupClassId || '-'} ·
-              groupClassName: {studentPackageEditModalPackage.groupClassName || '-'}
-              <br />
-              groupCourseType:{' '}
-              {getGroupCourseTypeLabel(studentPackageEditModalPackage.groupCourseType) || '-'}
-            </p>
+            {countOnly ? (
+              <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.78, lineHeight: 1.5 }}>
+                학생: {studentPackageEditModalPackage.studentName || '-'}
+                <br />
+                수강권: {studentPackageEditModalPackage.title || '개인 수강권'}
+              </p>
+            ) : (
+              <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.78, lineHeight: 1.5 }}>
+                studentId: {studentPackageEditModalPackage.studentId || '-'} · studentName:{' '}
+                {studentPackageEditModalPackage.studentName || '-'}
+                <br />
+                teacher: {studentPackageEditModalPackage.teacher || '-'} · packageType:{' '}
+                {String(studentPackageEditModalPackage.packageType || '-')}
+                <br />
+                groupClassId: {studentPackageEditModalPackage.groupClassId || '-'} ·
+                groupClassName: {studentPackageEditModalPackage.groupClassName || '-'}
+                <br />
+                groupCourseType:{' '}
+                {getGroupCourseTypeLabel(studentPackageEditModalPackage.groupCourseType) || '-'}
+              </p>
+            )}
             <p style={{ margin: '0 0 12px 0', fontSize: 13, opacity: 0.85 }}>
               사용 횟수(usedCount): {Number(studentPackageEditModalPackage.usedCount ?? 0)} (수정
               불가)
@@ -257,8 +265,7 @@ export default function StudentPackageEditModal({
                 취소
               </button>
               <button
-                type="button"
-                onClick={() => submitStudentPackageEditModal()}
+                type="submit"
                 disabled={busyStudentPackageActionId === studentPackageEditModalPackage.id}
                 data-testid="student-package-edit-save-button"
                 style={{

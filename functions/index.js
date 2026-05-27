@@ -1,6 +1,7 @@
 /* eslint-disable require-jsdoc */
 const {setGlobalOptions} = require("firebase-functions/v2");
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
+const {onSchedule} = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 const {
   STUDENT_ACCOUNT_PERMISSIONS,
@@ -316,6 +317,39 @@ function canManageGroupAttendance(membership) {
   );
 }
 
+function requireTeacherPackageCountEditor(membershipSnap) {
+  const membership = requireActiveAcademyMembership(membershipSnap);
+  if (
+    membership.role !== "teacher" ||
+    !membership.permissions ||
+    membership.permissions.canEditStudentPackageCounts !== true
+  ) {
+    throw new HttpsError(
+        "permission-denied",
+        "Teacher package count edit permission required.",
+    );
+  }
+  const teacherName = normalizeId(membership.teacherName);
+  if (!teacherName) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Teacher membership is missing teacherName.",
+    );
+  }
+  return {...membership, teacherName};
+}
+
+function parsePackageTotalCount(value) {
+  const totalCount = Number(value);
+  if (!Number.isInteger(totalCount) || totalCount < 1) {
+    throw new HttpsError(
+        "invalid-argument",
+        "totalCount must be an integer greater than zero.",
+    );
+  }
+  return totalCount;
+}
+
 function groupLessonReservationDocId({academyId, lessonId, studentId}) {
   return `${academyId}__${lessonId}__${studentId}`;
 }
@@ -578,6 +612,140 @@ function getNextStudentPackageStatus(currentStatus, remainingCount) {
   const rem = Number(remainingCount || 0);
   if (!Number.isFinite(rem) || rem <= 0) return "exhausted";
   return "active";
+}
+
+function buildDeductionKey({academyId, lessonId, studentId, packageId}) {
+  return [
+    "deduct",
+    normalizeId(academyId),
+    normalizeId(lessonId),
+    normalizeId(studentId),
+    normalizeId(packageId),
+  ].join("_");
+}
+
+function createDeductionSummary() {
+  return {
+    checked: 0,
+    deducted: 0,
+    skippedAlreadyDeducted: 0,
+    skippedNoDeduction: 0,
+    skippedCancelled: 0,
+    skippedNoPackage: 0,
+    skippedNoRemaining: 0,
+    skippedUnsupportedFixedPrivate: 0,
+    errors: 0,
+  };
+}
+
+function addDeductionSummary(target, source) {
+  Object.keys(createDeductionSummary()).forEach((key) => {
+    target[key] = Number(target[key] || 0) + Number(source[key] || 0);
+  });
+  return target;
+}
+
+function getKstDateString(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+}
+
+function offsetYmd(ymd, offsetDays) {
+  const [year, month, day] = String(ymd || "").split("-").map(Number);
+  if (!year || !month || !day) return "";
+  const millis = Date.UTC(year, month - 1, day) + offsetDays * DAY_MS;
+  return new Date(millis).toISOString().slice(0, 10);
+}
+
+function getAutoDeductionDateRange({
+  todayYmd = getKstDateString(),
+  lookbackDays = 3,
+} = {}) {
+  const safeLookback = Math.min(
+      7,
+      Math.max(1, Math.floor(Number(lookbackDays) || 3)),
+  );
+  const dates = [];
+  for (let offset = safeLookback; offset >= 1; offset -= 1) {
+    dates.push(offsetYmd(todayYmd, -offset));
+  }
+  return dates.filter(Boolean);
+}
+
+function isPackageActiveForDeduction(pkg) {
+  const status = normalizeId(pkg && (pkg.status || "active")).toLowerCase();
+  return ![
+    "inactive",
+    "expired",
+    "ended",
+    "cancelled",
+    "canceled",
+  ].includes(status);
+}
+
+function getDeductionSkipReasonForLesson(lesson) {
+  const status = normalizeId(lesson && lesson.status).toLowerCase();
+  const cancellationType = normalizeId(
+      lesson && lesson.cancellationType,
+  ).toLowerCase();
+  const cancelledReason = normalizeId(
+      lesson && lesson.cancelledReason,
+  ).toLowerCase();
+  if (status === "cancelled" || status === "canceled") return "cancelled";
+  if (lesson && lesson.groupClassDeleted === true) return "cancelled";
+  if (lesson && lesson.noDeduction === true) return "noDeduction";
+  if (cancellationType === "class_closure") return "noDeduction";
+  if (cancellationType === "no_deduction") return "noDeduction";
+  if ([
+    "holiday",
+    "teacher_unavailable",
+    "academy_closed",
+    "group_class_closed",
+    "group_class_deleted",
+  ].includes(cancelledReason)) {
+    return "noDeduction";
+  }
+  return "";
+}
+
+function getPrivateReservationSkipReason(reservation) {
+  const status = normalizeId(reservation && reservation.status).toLowerCase();
+  const cancellationType = normalizeId(
+      reservation && reservation.cancellationType,
+  ).toLowerCase();
+  const cancelledReason = normalizeId(
+      reservation && reservation.cancelledReason,
+  ).toLowerCase();
+  if (status === "cancelled" || status === "canceled") return "cancelled";
+  if (reservation && reservation.noDeduction === true) return "noDeduction";
+  if (cancellationType === "no_deduction") return "noDeduction";
+  if ([
+    "holiday",
+    "teacher_unavailable",
+    "academy_closed",
+  ].includes(cancelledReason)) {
+    return "noDeduction";
+  }
+  return "";
+}
+
+function incrementDeductionSkip(summary, reason) {
+  if (reason === "cancelled") summary.skippedCancelled += 1;
+  else if (reason === "noDeduction") summary.skippedNoDeduction += 1;
+  else if (reason === "noRemaining") summary.skippedNoRemaining += 1;
+  else if (reason === "alreadyDeducted") {
+    summary.skippedAlreadyDeducted += 1;
+  } else if (reason === "unsupportedFixedPrivate") {
+    summary.skippedUnsupportedFixedPrivate += 1;
+  } else {
+    summary.skippedNoPackage += 1;
+  }
 }
 
 function isApprovedLessonAtSameTime(data) {
@@ -1086,6 +1254,653 @@ function getPrivateReservationEndMillis(reservation, slot) {
   if (startMillis === null) return null;
   return startMillis +
     getPrivateReservationDurationMinutes(reservation, slot) * 60 * 1000;
+}
+
+async function findPrivatePackageForAutoDeduction({
+  transaction,
+  db,
+  academyId,
+  reservation,
+  slot,
+}) {
+  const explicitPackageId = normalizeId(reservation.packageId);
+  if (explicitPackageId) {
+    const packageRef = db.collection("studentPackages").doc(explicitPackageId);
+    const packageSnap = await transaction.get(packageRef);
+    if (!packageSnap.exists) return null;
+    const packageData = packageSnap.data() || {};
+    if (!isPrivatePackageForReservation(packageData, reservation, slot)) {
+      return null;
+    }
+    return {ref: packageRef, data: packageData};
+  }
+
+  const studentId = normalizeId(reservation.studentId);
+  const packageSnap = await transaction.get(
+      db.collection("studentPackages")
+          .where("academyId", "==", academyId)
+          .where("studentId", "==", studentId),
+  );
+  const candidates = packageSnap.docs
+      .map((docSnap) => ({ref: docSnap.ref, data: docSnap.data() || {}}))
+      .filter((candidate) =>
+        isPrivatePackageForReservation(candidate.data, reservation, slot) &&
+        Number(candidate.data.remainingCount || 0) > 0,
+      )
+      .sort(sortPrivatePackageCandidates);
+  return candidates[0] || null;
+}
+
+async function findGroupPackageForAutoDeduction({
+  transaction,
+  db,
+  academyId,
+  lesson,
+  studentId,
+}) {
+  const packageSnap = await transaction.get(
+      db.collection("studentPackages")
+          .where("academyId", "==", academyId)
+          .where("studentId", "==", studentId),
+  );
+  const groupClassId = getGroupLessonGroupId(lesson);
+  const groupCourseType = normalizeId(lesson.groupCourseType);
+  const candidates = packageSnap.docs
+      .map((docSnap) => ({ref: docSnap.ref, data: docSnap.data() || {}}))
+      .filter((candidate) => {
+        const pkg = candidate.data;
+        if (normalizeId(pkg.packageType).toLowerCase() !== "group") {
+          return false;
+        }
+        if (!isPackageActiveForDeduction(pkg)) return false;
+        const pkgGroupId = normalizeId(pkg.groupClassId);
+        const pkgCourseType = normalizeId(pkg.groupCourseType);
+        return (
+          (groupClassId && pkgGroupId === groupClassId) ||
+          (groupCourseType && pkgCourseType === groupCourseType)
+        );
+      })
+      .sort((a, b) => {
+        const aRemaining = Number(a.data.remainingCount || 0);
+        const bRemaining = Number(b.data.remainingCount || 0);
+        if (aRemaining !== bRemaining) return aRemaining - bRemaining;
+        const aCreated = getTimestampMillis(a.data.createdAt) || 0;
+        const bCreated = getTimestampMillis(b.data.createdAt) || 0;
+        return aCreated - bCreated;
+      });
+  return candidates[0] || null;
+}
+
+function getGroupLessonStudentDeductionId(lesson, studentId) {
+  const map = lesson && lesson.deductionTransactionIds;
+  if (!map || typeof map !== "object") return "";
+  return normalizeId(map[studentId]);
+}
+
+async function autoDeductPrivateReservation({
+  db,
+  academyId,
+  reservationId,
+  dryRun = false,
+}) {
+  const summary = createDeductionSummary();
+  summary.checked = 1;
+  return await db.runTransaction(async (transaction) => {
+    const reservationRef = db
+        .collection("privateLessonReservations")
+        .doc(reservationId);
+    const reservationSnap = await transaction.get(reservationRef);
+    if (!reservationSnap.exists) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+
+    const reservation = reservationSnap.data() || {};
+    if (normalizeId(reservation.academyId) !== academyId) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    if (reservation.deductionApplied === true ||
+        normalizeId(reservation.deductionTransactionId) ||
+        normalizeId(reservation.deductionCreditTransactionId)) {
+      incrementDeductionSkip(summary, "alreadyDeducted");
+      return summary;
+    }
+    const skipReason = getPrivateReservationSkipReason(reservation);
+    if (skipReason) {
+      incrementDeductionSkip(summary, skipReason);
+      return summary;
+    }
+    if (!isActivePrivateReservation(reservation)) {
+      incrementDeductionSkip(summary, "cancelled");
+      return summary;
+    }
+
+    const studentId = normalizeId(reservation.studentId);
+    const slotId = normalizeId(reservation.slotId);
+    if (!studentId || !slotId) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+
+    const slotRef = db.collection("privateLessonSlots").doc(slotId);
+    const studentRef = db.collection("privateStudents").doc(studentId);
+    const [slotSnap, studentSnap] = await Promise.all([
+      transaction.get(slotRef),
+      transaction.get(studentRef),
+    ]);
+    const slot = slotSnap.exists ? slotSnap.data() || {} : null;
+    const student = studentSnap.exists ? studentSnap.data() || {} : null;
+    if (slot && normalizeId(slot.academyId) !== academyId) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    const endMillis = getPrivateReservationEndMillis(reservation, slot);
+    if (endMillis === null || Date.now() < endMillis) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+
+    const packageCandidate = await findPrivatePackageForAutoDeduction({
+      transaction,
+      db,
+      academyId,
+      reservation,
+      slot,
+    });
+    if (!packageCandidate) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+
+    const packageData = packageCandidate.data;
+    const packageRef = packageCandidate.ref;
+    if (!isPackageActiveForDeduction(packageData)) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    const remainingBefore = Number(packageData.remainingCount || 0);
+    const usedBefore = Number(packageData.usedCount || 0);
+    if (!Number.isFinite(remainingBefore) || remainingBefore <= 0 ||
+        !Number.isFinite(usedBefore)) {
+      incrementDeductionSkip(summary, "noRemaining");
+      return summary;
+    }
+
+    const deductionKey = buildDeductionKey({
+      academyId,
+      lessonId: reservationId,
+      studentId,
+      packageId: packageRef.id,
+    });
+    const creditRef = db.collection("creditTransactions").doc(deductionKey);
+    const creditSnap = await transaction.get(creditRef);
+    if (creditSnap.exists) {
+      incrementDeductionSkip(summary, "alreadyDeducted");
+      return summary;
+    }
+    if (dryRun) {
+      summary.deducted += 1;
+      return summary;
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const remainingAfter = Math.max(0, remainingBefore - 1);
+    const usedAfter = usedBefore + 1;
+    const nextPackageStatus = getNextStudentPackageStatus(
+        packageData.status,
+        remainingAfter,
+    );
+    const teacher = getReservationTeacherKey(reservation, slot);
+    const studentName =
+      getOptionalStudentName({student, membership: null, reservation}) ||
+      studentId;
+    const datePart = [
+      normalizeId(reservation.date || (slot && slot.date)),
+      normalizeId(reservation.time || (slot && slot.time)),
+      normalizeId(reservation.subject || (slot && slot.subject)),
+    ].filter(Boolean).join(" ");
+
+    transaction.update(packageRef, {
+      usedCount: usedAfter,
+      remainingCount: remainingAfter,
+      status: nextPackageStatus,
+      updatedAt: now,
+    });
+    transaction.update(reservationRef, {
+      status: "completed",
+      completedAt: now,
+      noShowAt: null,
+      deductionApplied: true,
+      deductionAppliedAt: now,
+      deductionPackageId: packageRef.id,
+      deductionCreditTransactionId: deductionKey,
+      deductionTransactionId: deductionKey,
+      deductionSource: "auto",
+      deductionStatus: "deducted",
+      outcomeActorRole: "auto",
+      updatedAt: now,
+    });
+    transaction.set(creditRef, {
+      academyId,
+      studentId,
+      studentName,
+      teacher,
+      packageId: packageRef.id,
+      packageType: "private",
+      packageTitle: String(packageData.packageTitle || packageData.title || ""),
+      groupClassName: "",
+      sourceType: "privateReservation",
+      sourceId: reservationId,
+      actionType: "auto_private_reservation_deduct",
+      deltaCount: -1,
+      memo: datePart ?
+        `자동 1:1 예약 차감 ${datePart}` :
+        "자동 1:1 예약 차감",
+      actorUid: "system:autoDeductPendingLessons",
+      actorRole: "system",
+      deductionSource: "auto",
+      createdAt: now,
+    }, {merge: false});
+    summary.deducted += 1;
+    return summary;
+  });
+}
+
+async function autoDeductGroupStudent({
+  db,
+  academyId,
+  lessonId,
+  groupStudentId = "",
+  reservationId = "",
+  dryRun = false,
+}) {
+  const summary = createDeductionSummary();
+  summary.checked = 1;
+  return await db.runTransaction(async (transaction) => {
+    const lessonRef = db.collection("groupLessons").doc(lessonId);
+    const lessonSnap = await transaction.get(lessonRef);
+    if (!lessonSnap.exists) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    const lesson = {id: lessonSnap.id, ...lessonSnap.data()};
+    if (normalizeId(lesson.academyId) !== academyId) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    const lessonSkip = getDeductionSkipReasonForLesson(lesson);
+    if (lessonSkip) {
+      incrementDeductionSkip(summary, lessonSkip);
+      return summary;
+    }
+
+    let studentId = "";
+    let studentName = "";
+    let packageRef = null;
+    let packageData = null;
+    let groupStudentRef = null;
+    let groupStudentData = null;
+    let reservationRef = null;
+    const releasedIds = normalizeIdList(lesson.releasedFixedStudentIDs);
+
+    if (groupStudentId) {
+      groupStudentRef = db.collection("groupStudents").doc(groupStudentId);
+      const groupStudentSnap = await transaction.get(groupStudentRef);
+      if (!groupStudentSnap.exists) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      groupStudentData = groupStudentSnap.data() || {};
+      if (normalizeId(groupStudentData.academyId) !== academyId ||
+          getGroupStudentGroupId(groupStudentData) !==
+            getGroupLessonGroupId(lesson)) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      if (!isActiveGroupStudentForLesson(groupStudentData, lesson)) {
+        incrementDeductionSkip(summary, "noDeduction");
+        return summary;
+      }
+      studentId = normalizeId(groupStudentData.studentId);
+      studentName = normalizeId(
+          groupStudentData.studentName || groupStudentData.name,
+      );
+      if (!studentId || releasedIds.includes(studentId)) {
+        incrementDeductionSkip(summary, "noDeduction");
+        return summary;
+      }
+      if (lesson.attendanceAppliedAt &&
+          !normalizeIdList(lesson.countedStudentIDs).includes(studentId)) {
+        incrementDeductionSkip(summary, "alreadyDeducted");
+        return summary;
+      }
+      const packageId = normalizeId(groupStudentData.packageId);
+      if (!packageId) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      packageRef = db.collection("studentPackages").doc(packageId);
+      const packageSnap = await transaction.get(packageRef);
+      if (!packageSnap.exists) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      packageData = packageSnap.data() || {};
+    } else if (reservationId) {
+      reservationRef = db.collection("groupLessonReservations")
+          .doc(reservationId);
+      const reservationSnap = await transaction.get(reservationRef);
+      if (!reservationSnap.exists) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      const reservation = reservationSnap.data() || {};
+      if (normalizeId(reservation.academyId) !== academyId ||
+          normalizeId(reservation.lessonId) !== lessonId) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      const reservationStatus = normalizeId(reservation.status).toLowerCase();
+      if (reservationStatus !== "active") {
+        incrementDeductionSkip(summary, "cancelled");
+        return summary;
+      }
+      if (reservation.noDeduction === true ||
+          normalizeId(reservation.cancellationType) === "no_deduction" ||
+          normalizeId(reservation.cancellationType) === "class_closure") {
+        incrementDeductionSkip(summary, "noDeduction");
+        return summary;
+      }
+      if (reservation.deductionApplied === true ||
+          normalizeId(reservation.deductionTransactionId)) {
+        incrementDeductionSkip(summary, "alreadyDeducted");
+        return summary;
+      }
+      studentId = normalizeId(reservation.studentId);
+      studentName = normalizeId(reservation.studentName) || studentId;
+      if (!studentId) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      const packageCandidate = await findGroupPackageForAutoDeduction({
+        transaction,
+        db,
+        academyId,
+        lesson,
+        studentId,
+      });
+      if (!packageCandidate) {
+        incrementDeductionSkip(summary, "noPackage");
+        return summary;
+      }
+      packageRef = packageCandidate.ref;
+      packageData = packageCandidate.data;
+    } else {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+
+    const countedIds = normalizeIdList(lesson.countedStudentIDs);
+    if (countedIds.includes(studentId) ||
+        getGroupLessonStudentDeductionId(lesson, studentId)) {
+      incrementDeductionSkip(summary, "alreadyDeducted");
+      return summary;
+    }
+    if (normalizeId(packageData.academyId) !== academyId ||
+        normalizeId(packageData.studentId) !== studentId ||
+        normalizeId(packageData.packageType).toLowerCase() !== "group") {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    if (!isPackageActiveForDeduction(packageData)) {
+      incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    const remainingBefore = Number(packageData.remainingCount || 0);
+    const usedBefore = Number(packageData.usedCount || 0);
+    if (!Number.isFinite(remainingBefore) || remainingBefore <= 0 ||
+        !Number.isFinite(usedBefore)) {
+      incrementDeductionSkip(summary, "noRemaining");
+      return summary;
+    }
+
+    const deductionKey = buildDeductionKey({
+      academyId,
+      lessonId,
+      studentId,
+      packageId: packageRef.id,
+    });
+    const creditRef = db.collection("creditTransactions").doc(deductionKey);
+    const creditSnap = await transaction.get(creditRef);
+    if (creditSnap.exists) {
+      incrementDeductionSkip(summary, "alreadyDeducted");
+      return summary;
+    }
+    if (dryRun) {
+      summary.deducted += 1;
+      return summary;
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const remainingAfter = Math.max(0, remainingBefore - 1);
+    const usedAfter = usedBefore + 1;
+    const nextPackageStatus = getNextStudentPackageStatus(
+        packageData.status,
+        remainingAfter,
+    );
+    const groupClassName = normalizeId(lesson.groupClassName);
+    const teacher = normalizeTeacherKey(
+        lesson.teacher || lesson.teacherName || packageData.teacher,
+    );
+    const datePart = [
+      normalizeId(lesson.date),
+      normalizeId(lesson.time),
+      normalizeId(lesson.subject),
+    ].filter(Boolean).join(" ");
+
+    transaction.update(packageRef, {
+      usedCount: usedAfter,
+      remainingCount: remainingAfter,
+      status: nextPackageStatus,
+      updatedAt: now,
+    });
+    if (groupStudentRef && groupStudentData) {
+      const attendanceCount = Number(groupStudentData.attendanceCount || 0);
+      transaction.update(groupStudentRef, {
+        attendanceCount: attendanceCount + 1,
+        updatedAt: now,
+      });
+    }
+    transaction.set(lessonRef, {
+      countedStudentIDs: admin.firestore.FieldValue.arrayUnion(studentId),
+      autoDeductedStudentIDs: admin.firestore.FieldValue.arrayUnion(studentId),
+      attendanceAppliedAt: now,
+      deductionTransactionIds: {[studentId]: deductionKey},
+      deductionSources: {[studentId]: "auto"},
+      deductionSource: "auto",
+      deductionStatus: "deducted",
+      autoDeductedAt: now,
+      updatedAt: now,
+    }, {merge: true});
+    if (reservationRef) {
+      transaction.update(reservationRef, {
+        deductionApplied: true,
+        deductionAppliedAt: now,
+        deductionPackageId: packageRef.id,
+        deductionCreditTransactionId: deductionKey,
+        deductionTransactionId: deductionKey,
+        deductionSource: "auto",
+        deductionStatus: "deducted",
+        updatedAt: now,
+      });
+    }
+    transaction.set(creditRef, {
+      academyId,
+      studentId,
+      studentName: studentName || studentId,
+      teacher,
+      packageId: packageRef.id,
+      packageType: "group",
+      packageTitle: String(packageData.packageTitle || packageData.title || ""),
+      groupClassName,
+      sourceType: "groupLesson",
+      sourceId: lessonId,
+      actionType: "auto_group_deduct",
+      deltaCount: -1,
+      memo: datePart ? `자동 그룹 차감 ${datePart}` : "자동 그룹 차감",
+      actorUid: "system:autoDeductPendingLessons",
+      actorRole: "system",
+      deductionSource: "auto",
+      createdAt: now,
+    }, {merge: false});
+    summary.deducted += 1;
+    return summary;
+  });
+}
+
+async function getAutoDeductionAcademyIds(db, explicitAcademyId) {
+  const academyId = normalizeId(explicitAcademyId);
+  if (academyId) return [academyId];
+  const snap = await db.collection("academies").limit(50).get();
+  return snap.docs
+      .map((docSnap) => normalizeId(docSnap.id))
+      .filter(Boolean);
+}
+
+async function runAutoDeductPendingLessons({
+  academyId = "",
+  dates = null,
+  lookbackDays = 3,
+  todayYmd = getKstDateString(),
+  dryRun = false,
+} = {}) {
+  const db = admin.firestore();
+  const academyIds = await getAutoDeductionAcademyIds(db, academyId);
+  const rangeDates = Array.isArray(dates) && dates.length > 0 ?
+    dates.map((date) => normalizeId(date)).filter(Boolean) :
+    getAutoDeductionDateRange({todayYmd, lookbackDays});
+  const summary = createDeductionSummary();
+  summary.academies = {};
+  summary.dates = rangeDates;
+  summary.dryRun = dryRun === true;
+
+  for (const scopedAcademyId of academyIds) {
+    const academySummary = createDeductionSummary();
+    summary.academies[scopedAcademyId] = academySummary;
+    for (const date of rangeDates) {
+      if (!date || date >= todayYmd) continue;
+
+      const privateSnap = await db.collection("privateLessonReservations")
+          .where("academyId", "==", scopedAcademyId)
+          .where("date", "==", date)
+          .limit(200)
+          .get();
+      for (const docSnap of privateSnap.docs) {
+        try {
+          const result = await autoDeductPrivateReservation({
+            db,
+            academyId: scopedAcademyId,
+            reservationId: docSnap.id,
+            dryRun,
+          });
+          addDeductionSummary(academySummary, result);
+          addDeductionSummary(summary, result);
+        } catch (error) {
+          academySummary.errors += 1;
+          summary.errors += 1;
+          console.error("auto private deduction failed", {
+            academyId: scopedAcademyId,
+            reservationId: docSnap.id,
+            error: error.message,
+          });
+        }
+      }
+
+      const groupLessonSnap = await db.collection("groupLessons")
+          .where("academyId", "==", scopedAcademyId)
+          .where("date", "==", date)
+          .limit(200)
+          .get();
+      for (const lessonDoc of groupLessonSnap.docs) {
+        const lesson = {id: lessonDoc.id, ...lessonDoc.data()};
+        const lessonSkip = getDeductionSkipReasonForLesson(lesson);
+        if (lessonSkip) {
+          academySummary.checked += 1;
+          summary.checked += 1;
+          incrementDeductionSkip(academySummary, lessonSkip);
+          incrementDeductionSkip(summary, lessonSkip);
+          continue;
+        }
+        const groupClassId = getGroupLessonGroupId(lesson);
+        const [groupStudentsSnap, reservationsSnap] = await Promise.all([
+          db.collection("groupStudents")
+              .where("academyId", "==", scopedAcademyId)
+              .where("groupClassId", "==", groupClassId)
+              .get(),
+          db.collection("groupLessonReservations")
+              .where("academyId", "==", scopedAcademyId)
+              .where("lessonId", "==", lessonDoc.id)
+              .get(),
+        ]);
+        const fixedMembers = groupStudentsSnap.docs
+            .map((docSnap) => ({id: docSnap.id, ...docSnap.data()}))
+            .filter((groupStudent) =>
+              isActiveGroupStudentForLesson(groupStudent, lesson),
+            );
+        for (const groupStudent of fixedMembers) {
+          try {
+            const result = await autoDeductGroupStudent({
+              db,
+              academyId: scopedAcademyId,
+              lessonId: lessonDoc.id,
+              groupStudentId: groupStudent.id,
+              dryRun,
+            });
+            addDeductionSummary(academySummary, result);
+            addDeductionSummary(summary, result);
+          } catch (error) {
+            academySummary.errors += 1;
+            summary.errors += 1;
+            console.error("auto group fixed deduction failed", {
+              academyId: scopedAcademyId,
+              lessonId: lessonDoc.id,
+              groupStudentId: groupStudent.id,
+              error: error.message,
+            });
+          }
+        }
+        const guestReservations = reservationsSnap.docs
+            .map((docSnap) => ({id: docSnap.id, ...docSnap.data()}))
+            .filter((reservation) =>
+              normalizeId(reservation.status).toLowerCase() === "active",
+            );
+        for (const reservation of guestReservations) {
+          try {
+            const result = await autoDeductGroupStudent({
+              db,
+              academyId: scopedAcademyId,
+              lessonId: lessonDoc.id,
+              reservationId: reservation.id,
+              dryRun,
+            });
+            addDeductionSummary(academySummary, result);
+            addDeductionSummary(summary, result);
+          } catch (error) {
+            academySummary.errors += 1;
+            summary.errors += 1;
+            console.error("auto group reservation deduction failed", {
+              academyId: scopedAcademyId,
+              lessonId: lessonDoc.id,
+              reservationId: reservation.id,
+              error: error.message,
+            });
+          }
+        }
+      }
+    }
+  }
+  return summary;
 }
 
 function normalizePositiveAttempt(value) {
@@ -3178,6 +3993,62 @@ exports.adminCancelPrivateLessonReservation = onCall(
     },
 );
 
+exports.autoDeductPendingLessons = onSchedule(
+    {
+      region: REGION,
+      schedule: "30 0 * * *",
+      timeZone: "Asia/Seoul",
+    },
+    async () => {
+      if (!isEnabledFlag(process.env.AUTO_DEDUCT_LESSONS_ENABLED)) {
+        console.log("autoDeductPendingLessons disabled");
+        return {disabled: true};
+      }
+      const summary = await runAutoDeductPendingLessons({
+        lookbackDays: Number(process.env.AUTO_DEDUCT_LOOKBACK_DAYS || 3),
+      });
+      console.log("autoDeductPendingLessons summary", summary);
+      return summary;
+    },
+);
+
+exports.runAutoDeductPendingLessonsForTest = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        if (getRuntimeProjectId() !== "miami-e2e") {
+          throw new HttpsError(
+              "failed-precondition",
+              "Test auto deduction callable is e2e-only.",
+          );
+        }
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        validateAcademyId(academyId);
+        await requireAcademyAdmin(
+            admin.firestore(),
+            academyId,
+            request.auth.uid,
+        );
+        const dates = Array.isArray(data.dates) ?
+          data.dates.map((date) => normalizeId(date)).filter(Boolean) :
+          null;
+        return await runAutoDeductPendingLessons({
+          academyId,
+          dates,
+          todayYmd: optionalString(data, "todayYmd") || getKstDateString(),
+          lookbackDays: Number(data.lookbackDays || 3),
+          dryRun: data.dryRun === true,
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
 exports.markPrivateReservationOutcome = onCall(
     {region: REGION, cors: true},
     async (request) => {
@@ -3356,12 +4227,22 @@ exports.markPrivateReservationOutcome = onCall(
           );
           const deductionAttemptNumber =
             normalizePositiveAttempt(reservation.deductionAttemptNumber) + 1;
-          const creditTransactionId =
-            `privateReservationDeduction__${reservationId}__` +
-            `${deductionAttemptNumber}`;
+          const creditTransactionId = buildDeductionKey({
+            academyId,
+            lessonId: reservationId,
+            studentId,
+            packageId: packageRef.id,
+          });
           const creditRef = db
               .collection("creditTransactions")
               .doc(creditTransactionId);
+          const creditSnap = await transaction.get(creditRef);
+          if (creditSnap.exists) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Private reservation deduction was already applied.",
+            );
+          }
           const datePart = [
             normalizeId(reservation.date || (slot && slot.date)),
             normalizeId(reservation.time || (slot && slot.time)),
@@ -3389,6 +4270,9 @@ exports.markPrivateReservationOutcome = onCall(
             deductionAppliedAt: now,
             deductionPackageId: packageRef.id,
             deductionCreditTransactionId: creditTransactionId,
+            deductionTransactionId: creditTransactionId,
+            deductionSource: "manual",
+            deductionStatus: "deducted",
             deductionAttemptNumber,
             outcomeByUid: uid,
             outcomeActorRole: outcomeActor.actorRole,
@@ -3424,6 +4308,79 @@ exports.markPrivateReservationOutcome = onCall(
             creditTransactionId,
           };
         });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.updateTeacherStudentPackageCounts = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const packageId = requireString(data, "packageId");
+        const totalCount = parsePackageTotalCount(data.totalCount);
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const packageRef = db.collection("studentPackages").doc(packageId);
+        const [membershipSnap, packageSnap] = await Promise.all([
+          membershipRef.get(),
+          packageRef.get(),
+        ]);
+        const membership = requireTeacherPackageCountEditor(membershipSnap);
+        if (!packageSnap.exists) {
+          throw new HttpsError("not-found", "Student package not found.");
+        }
+
+        const pkg = packageSnap.data() || {};
+        if (normalizeId(pkg.academyId) !== academyId) {
+          throw new HttpsError(
+              "permission-denied",
+              "Student package academy mismatch.",
+          );
+        }
+
+        const packageTeacher = normalizeId(pkg.teacher || pkg.teacherName);
+        if (!packageTeacher || packageTeacher !== membership.teacherName) {
+          throw new HttpsError(
+              "permission-denied",
+              "Only own teacher-scoped packages can be edited.",
+          );
+        }
+
+        const usedCount = Number(pkg.usedCount || 0);
+        if (!Number.isFinite(usedCount) || usedCount < 0) {
+          throw new HttpsError(
+              "failed-precondition",
+              "Student package usedCount is invalid.",
+          );
+        }
+        if (totalCount < usedCount) {
+          throw new HttpsError(
+              "failed-precondition",
+              "totalCount cannot be less than usedCount.",
+          );
+        }
+
+        const remainingCount = Math.max(0, totalCount - usedCount);
+        await packageRef.update({
+          totalCount,
+          remainingCount,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        return {ok: true, totalCount, remainingCount};
       } catch (error) {
         throw asHttpsError(error);
       }
