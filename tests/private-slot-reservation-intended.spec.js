@@ -1012,7 +1012,8 @@ test('fixed private lesson approval creates and links private packages', async (
     'utf8'
   );
   expect(calendarSource).toContain('수강권 없음');
-  expect(calendarSource).toContain('formatRemainingCountFromPackage(pkgForRemaining)');
+  expect(calendarSource).toContain('formatRemainingCountFromPackage')
+  expect(calendarSource).toContain('findActivePrivatePackageForTeacher');
 
   const dryRunSource = fs.readFileSync(
     path.join(process.cwd(), 'scripts/dry-run-fixed-private-package-backfill.cjs'),

@@ -1718,6 +1718,9 @@ async function autoDeductGroupStudent({
       attendanceAppliedAt: now,
       deductionTransactionIds: {[studentId]: deductionKey},
       deductionSources: {[studentId]: "auto"},
+      deductionSource: "auto",
+      deductionStatus: "deducted",
+      autoDeductedAt: now,
       updatedAt: now,
     }, {merge: true});
     if (reservationRef) {

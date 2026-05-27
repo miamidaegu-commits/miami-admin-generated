@@ -17,6 +17,21 @@ import {
  * 캘린더 탭 전용: 개인/그룹 수업 통합·필터·일자별 집계 등 읽기 전용 파생 상태.
  * Firestore 쓰기·모달·핸들러는 Dashboard에 둔다.
  */
+function groupLessonHasAutoDeduction(groupLesson) {
+  const autoDeductedIds = Array.isArray(groupLesson?.autoDeductedStudentIDs)
+    ? groupLesson.autoDeductedStudentIDs
+    : []
+  if (autoDeductedIds.length > 0) return true
+  if (String(groupLesson?.deductionSource || '').trim() === 'auto') return true
+  const deductionSources =
+    groupLesson?.deductionSources && typeof groupLesson.deductionSources === 'object'
+      ? groupLesson.deductionSources
+      : {}
+  return Object.values(deductionSources).some(
+    (source) => String(source || '').trim() === 'auto'
+  )
+}
+
 export default function useCalendarSectionViewModel({
   lessons,
   privateLessonReservations,
@@ -86,13 +101,10 @@ export default function useCalendarSectionViewModel({
         gc?.name != null && String(gc.name).trim() ? String(gc.name).trim() : '-'
       const lessonDate = getLessonStorageDateString(gl)
       const countedIds = Array.isArray(gl.countedStudentIDs) ? gl.countedStudentIDs : []
-      const autoDeductedIds = Array.isArray(gl.autoDeductedStudentIDs)
-        ? gl.autoDeductedStudentIDs
-        : []
       let calendarStatusLabel = '예정'
       if (isNoDeductionCancelledGroupLesson(gl)) {
         calendarStatusLabel = '휴강 · 차감 없음'
-      } else if (autoDeductedIds.length > 0) {
+      } else if (groupLessonHasAutoDeduction(gl)) {
         calendarStatusLabel = '자동 차감 완료'
       } else if (countedIds.length > 0) {
         calendarStatusLabel = '정상 차감'

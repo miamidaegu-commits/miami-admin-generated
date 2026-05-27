@@ -762,13 +762,11 @@ export default function CalendarSection(props) {
                   ? '자동 차감 완료'
                   : lesson.deductionApplied === true
                     ? '정상 차감'
-                    : privateReservationHasEnded && privateReservationStatus === 'active'
-                      ? '미처리 · 자동 차감 예정'
-                      : privateReservationStatus === 'completed'
-                        ? '완료'
-                        : privateReservationStatus === 'no_show'
-                          ? '노쇼'
-                          : '예약됨'
+                    : privateReservationStatus === 'completed'
+                      ? '완료'
+                      : privateReservationStatus === 'no_show'
+                        ? '노쇼'
+                        : '예약됨'
                 : isNoDeductionPrivateLesson
                   ? '휴강 · 차감 없음'
                   : lesson.isDeductCancelled
