@@ -359,13 +359,18 @@ async function recomputePrivatePackageUsage(packageId, academyId) {
       where('academyId', '==', scopedAcademyId),
       where('deductionPackageId', '==', pid)
     )
-  )
-  reservationSnap.docs.forEach((reservationDoc) => {
-    const data = reservationDoc.data()
-    if (data.deductionApplied !== true) return
-    if (data.status !== 'completed' && data.status !== 'no_show') return
-    usedCount += 1
+  ).catch((error) => {
+    console.warn('privateLessonReservations usage lookup skipped:', error)
+    return null
   })
+  if (reservationSnap) {
+    reservationSnap.docs.forEach((reservationDoc) => {
+      const data = reservationDoc.data()
+      if (data.deductionApplied !== true) return
+      if (data.status !== 'completed' && data.status !== 'no_show') return
+      usedCount += 1
+    })
+  }
 
   const totalRaw = Number(pkg.totalCount ?? 0)
   const total = Number.isFinite(totalRaw) ? totalRaw : 0
@@ -736,6 +741,8 @@ export default function Dashboard() {
         teacherMembershipUid: membership?.uid || '',
         countEditPermissionEnabled:
           membership?.permissions?.canEditStudentPackageCounts === true,
+        lessonDeductionPermissionEnabled:
+          membership?.permissions?.canManageOwnLessonDeductions === true,
       }
     })
   }, [teacherDirectoryMemberships, teacherRecords])
@@ -881,6 +888,35 @@ export default function Dashboard() {
       })
     } catch (error) {
       console.error('선생님 수강권 횟수 수정 권한 변경 실패:', error)
+      alert(error.message || '선생님 권한 변경에 실패했습니다.')
+      throw error
+    } finally {
+      setBusyTeacherId('')
+    }
+  }
+
+  const updateTeacherLessonDeductionPermission = async (teacher, enabled) => {
+    if (userProfile?.role !== 'admin') {
+      alert('관리자만 선생님 권한을 관리할 수 있습니다.')
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      if (String(teacher.academyId || '').trim() !== scopedAcademyId) {
+        throw new Error('선생님 문서가 현재 학원에 속하지 않습니다.')
+      }
+      if (!teacher.teacherMembershipId) {
+        throw new Error('선생님 로그인 연결 정보를 찾을 수 없습니다.')
+      }
+
+      setBusyTeacherId(`${teacher.id}__lesson_deduction_permission`)
+      await updateDoc(doc(db, 'academyMemberships', teacher.teacherMembershipId), {
+        'permissions.canManageOwnLessonDeductions': enabled === true,
+        updatedAt: serverTimestamp(),
+      })
+    } catch (error) {
+      console.error('선생님 수업 차감 관리 권한 변경 실패:', error)
       alert(error.message || '선생님 권한 변경에 실패했습니다.')
       throw error
     } finally {
@@ -2302,6 +2338,9 @@ export default function Dashboard() {
   const canEditLesson = isAdmin
   const canDeleteLesson = isAdmin
   const canManageAttendance = isAdmin
+  const canManagePrivateLessonDeductions =
+    isAdmin ||
+    (canManageOwnGroupClasses && userProfile?.canManageOwnLessonDeductions === true)
   const canCreateLessonDirectly = isAdmin
   const requiresLessonApproval = userProfile?.requiresLessonApproval === true
   const canUseDirectLessonCreation = canCreateLessonDirectly && !requiresLessonApproval
@@ -2944,7 +2983,18 @@ export default function Dashboard() {
   }
 
   async function handleDeductionToggle(lesson) {
-    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+    const adminUser = userProfile?.role === 'admin'
+    const lessonTeacher = normalizeText(getTeacherName(lesson))
+    const myTeacher = normalizeText(userProfile?.teacherName || '')
+    const teacherCanManageOwnLesson =
+      !adminUser &&
+      userProfile?.role === 'teacher' &&
+      userProfile?.canManageOwnLessonDeductions === true &&
+      myTeacher &&
+      lessonTeacher &&
+      lessonTeacher === myTeacher
+
+    if (!(adminUser || teacherCanManageOwnLesson)) {
       alert('출결 관리 권한이 없습니다.')
       return
     }
@@ -2953,7 +3003,7 @@ export default function Dashboard() {
     const resolvedStudentId = String(lesson.studentId || '').trim() || studentId || ''
     const currentlyCancelled = Boolean(lesson.isDeductCancelled)
     const fallbackPackage =
-      !String(lesson.packageId || '').trim() && resolvedStudentId
+      adminUser && !String(lesson.packageId || '').trim() && resolvedStudentId
         ? findActivePrivatePackageForTeacher({
             studentPackages,
             academyId: currentAcademyId,
@@ -3022,9 +3072,7 @@ export default function Dashboard() {
           alert('수업의 학생과 수강권의 학생이 일치하지 않습니다.')
           return
         }
-        const adminUser = userProfile?.role === 'admin'
         const pkgTeacher = normalizeText(selectedPackage.teacher || '')
-        const lessonTeacher = normalizeText(getTeacherName(lesson))
         if (!pkgTeacher || !lessonTeacher || pkgTeacher !== lessonTeacher) {
           alert('수업 담당 선생님과 수강권 담당 선생님이 일치하지 않습니다.')
           return
@@ -3063,20 +3111,24 @@ export default function Dashboard() {
           const datePart = [lesson.date, lesson.time, lesson.subject]
             .filter(Boolean)
             .join(' ')
-          await addCreditTransaction({
-            studentId: resolvedStudentId,
-            studentName: String(pkgForLog.studentName || '').trim() || '-',
-            teacher: normalizeText(pkgForLog.teacher || ''),
-            packageId,
-            packageType: pkgForLog.packageType || 'private',
-            sourceType: 'lesson',
-            sourceId: lesson.id,
-            actionType: nextCancelled
-              ? 'private_deduct_cancel'
-              : 'private_deduct_restore',
-            deltaCount: nextCancelled ? 1 : -1,
-            memo: datePart ? `개인 수업 ${datePart}` : '개인 수업 차감 토글',
-          })
+          try {
+            await addCreditTransaction({
+              studentId: resolvedStudentId,
+              studentName: String(pkgForLog.studentName || '').trim() || '-',
+              teacher: normalizeText(pkgForLog.teacher || ''),
+              packageId,
+              packageType: pkgForLog.packageType || 'private',
+              sourceType: 'lesson',
+              sourceId: lesson.id,
+              actionType: nextCancelled
+                ? 'private_deduct_cancel'
+                : 'private_deduct_restore',
+              deltaCount: nextCancelled ? 1 : -1,
+              memo: datePart ? `개인 수업 ${datePart}` : '개인 수업 차감 토글',
+            })
+          } catch (creditError) {
+            console.warn('creditTransactions 기록 실패(차감 처리는 반영됨):', creditError)
+          }
         }
       }
     } catch (error) {
@@ -4064,6 +4116,7 @@ export default function Dashboard() {
       studentPackages,
       handleDeductionToggle,
       canManageAttendance,
+      canManagePrivateLessonDeductions,
       busyLessonId,
       busyPrivateLessonCrudId,
       busyPrivateLessonAdd,
@@ -4076,6 +4129,8 @@ export default function Dashboard() {
       canDeleteLesson,
       onOpenCalendarGroupLessonAttendance: openCalendarGroupLessonAttendance,
       onOpenGroupLessonNoDeductionCancel: openGroupLessonNoDeductionCancelModal,
+      openStudentPackageEditModal,
+      canEditStudentPackageCountsForPackage,
     },
   }
 
@@ -4405,6 +4460,7 @@ export default function Dashboard() {
     cancelTeacherEdit: resetTeacherForm,
     updateTeacherStatus,
     updateTeacherCountEditPermission,
+    updateTeacherLessonDeductionPermission,
     busyTeacherId,
   }
 
@@ -4565,7 +4621,7 @@ export default function Dashboard() {
       {activeSection === 'students' && isAdmin && studentPackageModalStudent ? (
         <StudentPackageModal {...studentPackageModalProps} />
       ) : null}
-      {activeSection === 'students' && studentPackageEditModalPackage ? (
+      {studentPackageEditModalPackage ? (
         <StudentPackageEditModal {...studentPackageEditModalProps} />
       ) : null}
 

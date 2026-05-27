@@ -208,19 +208,19 @@ async function loginAsDashboardUser(page, email, password) {
 
   await expect
     .poll(
-      async () => ({
-        url: page.url(),
-        welcomeText: ((await welcomeMessage.textContent()) || '').trim(),
-        hasCalendarNav: await calendarButton.isVisible().catch(() => false),
-        hasInvalidCredentials: await invalidCredentials.isVisible().catch(() => false),
-        hasInactiveAccount: await inactiveAccount.isVisible().catch(() => false),
-      }),
-      { timeout: 5000 }
+      async () => {
+        if (await invalidCredentials.isVisible().catch(() => false)) return 'invalid';
+        if (await inactiveAccount.isVisible().catch(() => false)) return 'inactive';
+        const welcomeText = ((await welcomeMessage.textContent().catch(() => '')) || '').trim();
+        const hasWelcome = /님,?\s환영합니다/.test(welcomeText);
+        const hasCalendarNav = await calendarButton.isVisible().catch(() => false);
+        return /\/dashboard/.test(page.url()) && hasWelcome && hasCalendarNav
+          ? 'dashboard'
+          : 'waiting';
+      },
+      { timeout: 10000 }
     )
-    .toMatchObject({
-      hasInvalidCredentials: false,
-      hasInactiveAccount: false,
-    });
+    .toBe('dashboard');
 
   const bodyText = (await page.locator('body').textContent()) || '';
   const isDashboard = /\/dashboard/.test(page.url());

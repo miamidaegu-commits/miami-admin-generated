@@ -317,6 +317,39 @@ function canManageGroupAttendance(membership) {
   );
 }
 
+function requireTeacherPackageCountEditor(membershipSnap) {
+  const membership = requireActiveAcademyMembership(membershipSnap);
+  if (
+    membership.role !== "teacher" ||
+    !membership.permissions ||
+    membership.permissions.canEditStudentPackageCounts !== true
+  ) {
+    throw new HttpsError(
+        "permission-denied",
+        "Teacher package count edit permission required.",
+    );
+  }
+  const teacherName = normalizeId(membership.teacherName);
+  if (!teacherName) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Teacher membership is missing teacherName.",
+    );
+  }
+  return {...membership, teacherName};
+}
+
+function parsePackageTotalCount(value) {
+  const totalCount = Number(value);
+  if (!Number.isInteger(totalCount) || totalCount < 1) {
+    throw new HttpsError(
+        "invalid-argument",
+        "totalCount must be an integer greater than zero.",
+    );
+  }
+  return totalCount;
+}
+
 function groupLessonReservationDocId({academyId, lessonId, studentId}) {
   return `${academyId}__${lessonId}__${studentId}`;
 }
@@ -4272,6 +4305,79 @@ exports.markPrivateReservationOutcome = onCall(
             creditTransactionId,
           };
         });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.updateTeacherStudentPackageCounts = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const packageId = requireString(data, "packageId");
+        const totalCount = parsePackageTotalCount(data.totalCount);
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const packageRef = db.collection("studentPackages").doc(packageId);
+        const [membershipSnap, packageSnap] = await Promise.all([
+          membershipRef.get(),
+          packageRef.get(),
+        ]);
+        const membership = requireTeacherPackageCountEditor(membershipSnap);
+        if (!packageSnap.exists) {
+          throw new HttpsError("not-found", "Student package not found.");
+        }
+
+        const pkg = packageSnap.data() || {};
+        if (normalizeId(pkg.academyId) !== academyId) {
+          throw new HttpsError(
+              "permission-denied",
+              "Student package academy mismatch.",
+          );
+        }
+
+        const packageTeacher = normalizeId(pkg.teacher || pkg.teacherName);
+        if (!packageTeacher || packageTeacher !== membership.teacherName) {
+          throw new HttpsError(
+              "permission-denied",
+              "Only own teacher-scoped packages can be edited.",
+          );
+        }
+
+        const usedCount = Number(pkg.usedCount || 0);
+        if (!Number.isFinite(usedCount) || usedCount < 0) {
+          throw new HttpsError(
+              "failed-precondition",
+              "Student package usedCount is invalid.",
+          );
+        }
+        if (totalCount < usedCount) {
+          throw new HttpsError(
+              "failed-precondition",
+              "totalCount cannot be less than usedCount.",
+          );
+        }
+
+        const remainingCount = Math.max(0, totalCount - usedCount);
+        await packageRef.update({
+          totalCount,
+          remainingCount,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        return {ok: true, totalCount, remainingCount};
       } catch (error) {
         throw asHttpsError(error);
       }

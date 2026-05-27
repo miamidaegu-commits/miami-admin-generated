@@ -11,7 +11,8 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore'
-import { db } from '../../../../firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions as firebaseFunctions } from '../../../../firebase'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   creditTransactionCreatedAtToMillis,
@@ -257,10 +258,14 @@ export default function useStudentPackageAdminFlow({
       const pkgRef = doc(db, 'studentPackages', pkg.id)
       const remainingCount = Math.max(0, result.totalCount - usedCount)
       if (!isAdminEdit) {
-        await updateDoc(pkgRef, {
+        const updateCounts = httpsCallable(
+          firebaseFunctions,
+          'updateTeacherStudentPackageCounts'
+        )
+        await updateCounts({
+          academyId: scopedAcademyId,
+          packageId: pkg.id,
           totalCount: result.totalCount,
-          remainingCount,
-          updatedAt: serverTimestamp(),
         })
         closeStudentPackageEditModal()
         return

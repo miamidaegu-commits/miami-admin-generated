@@ -157,8 +157,14 @@ service cloud.firestore {
         myMembership(academyId).permissions.canEditStudentPackageCounts == true;
     }
 
+    function canManageOwnLessonDeductions(academyId) {
+      return isAcademyTeacherOrStaff(academyId) &&
+        myMembership(academyId).permissions.canManageOwnLessonDeductions == true;
+    }
+
     function canTeacherUpdateStudentPackageUsage(academyId) {
       return canManageAttendance(academyId) ||
+        canManageOwnLessonDeductions(academyId) ||
         canCreateLessonDirectly(academyId) ||
         canEditLesson(academyId) ||
         canDeleteLesson(academyId);
@@ -236,7 +242,7 @@ service cloud.firestore {
         );
     }
 
-    function validTeacherPackageCountPermissionUpdate() {
+    function validTeacherPermissionUpdate() {
       return resource.data.academyId is string &&
         request.resource.data.academyId == resource.data.academyId &&
         isAcademyAdmin(resource.data.academyId) &&
@@ -248,8 +254,11 @@ service cloud.firestore {
         resource.data.permissions is map &&
         request.resource.data.permissions is map &&
         request.resource.data.permissions.diff(resource.data.permissions).affectedKeys()
-          .hasOnly(["canEditStudentPackageCounts"]) &&
-        request.resource.data.permissions.canEditStudentPackageCounts is bool;
+          .hasOnly(["canEditStudentPackageCounts", "canManageOwnLessonDeductions"]) &&
+        (!("canEditStudentPackageCounts" in request.resource.data.permissions) ||
+          request.resource.data.permissions.canEditStudentPackageCounts is bool) &&
+        (!("canManageOwnLessonDeductions" in request.resource.data.permissions) ||
+          request.resource.data.permissions.canManageOwnLessonDeductions is bool);
     }
 
     function myStudentId(academyId) {
@@ -1498,7 +1507,7 @@ service cloud.firestore {
     match /academyMemberships/{membershipId} {
       allow read: if canReadAcademyMembership(resource.data);
       allow create, delete: if false;
-      allow update: if validTeacherPackageCountPermissionUpdate();
+      allow update: if validTeacherPermissionUpdate();
     }
 
     match /teachers/{teacherId} {
@@ -1532,7 +1541,8 @@ service cloud.firestore {
           lessonBelongsToTeacher(request.resource.data) &&
           changedOnly(["date", "time", "subject", "startAt", "updatedAt"])
         ) || (
-          canManageAttendance(resource.data.academyId) &&
+          (canManageAttendance(resource.data.academyId) ||
+            canManageOwnLessonDeductions(resource.data.academyId)) &&
           lessonBelongsToTeacher(resource.data) &&
           lessonBelongsToTeacher(request.resource.data) &&
           changedOnly([
@@ -2176,7 +2186,8 @@ service cloud.firestore {
       allow create: if sameAcademyOnCreate() && (
         isAcademyAdmin(request.resource.data.academyId) ||
         (
-          canManageAttendance(request.resource.data.academyId) &&
+          (canManageAttendance(request.resource.data.academyId) ||
+            canManageOwnLessonDeductions(request.resource.data.academyId)) &&
           creditTransactionBelongsToTeacher(request.resource.data)
         )
       );

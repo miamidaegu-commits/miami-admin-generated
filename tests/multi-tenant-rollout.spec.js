@@ -40,6 +40,8 @@ const PERMISSION_KEYS = [
   'canEditLesson',
   'canDeleteLesson',
   'canCreateLessonDirectly',
+  'canEditStudentPackageCounts',
+  'canManageOwnLessonDeductions',
   'requiresLessonApproval',
 ];
 

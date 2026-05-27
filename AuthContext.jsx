@@ -29,6 +29,7 @@ const PERMISSION_KEYS = [
   'canDeleteLesson',
   'canCreateLessonDirectly',
   'canEditStudentPackageCounts',
+  'canManageOwnLessonDeductions',
   'requiresLessonApproval',
 ]
 
@@ -137,6 +138,8 @@ function buildUserProfileAdapter({
     canDeleteLesson: admin || permissions.canDeleteLesson === true,
     canCreateLessonDirectly: admin || permissions.canCreateLessonDirectly === true,
     canEditStudentPackageCounts: admin || permissions.canEditStudentPackageCounts === true,
+    canManageOwnLessonDeductions:
+      admin || permissions.canManageOwnLessonDeductions === true,
     requiresLessonApproval: !admin && permissions.requiresLessonApproval === true,
   }
 }

@@ -16,6 +16,7 @@ const PERMISSION_KEYS = [
   "canDeleteLesson",
   "canCreateLessonDirectly",
   "canEditStudentPackageCounts",
+  "canManageOwnLessonDeductions",
   "requiresLessonApproval",
 ];
 
@@ -87,6 +88,7 @@ const USERS = [
       canDeleteLesson: true,
       canCreateLessonDirectly: true,
       canEditStudentPackageCounts: true,
+      canManageOwnLessonDeductions: true,
       requiresLessonApproval: false,
     },
   },
@@ -112,6 +114,7 @@ const USERS = [
       canDeleteLesson: false,
       canCreateLessonDirectly: false,
       canEditStudentPackageCounts: false,
+      canManageOwnLessonDeductions: false,
       requiresLessonApproval: false,
     },
   },
@@ -137,6 +140,7 @@ const USERS = [
       canDeleteLesson: false,
       canCreateLessonDirectly: false,
       canEditStudentPackageCounts: false,
+      canManageOwnLessonDeductions: false,
       requiresLessonApproval: false,
     },
   },

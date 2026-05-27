@@ -6,6 +6,8 @@ const STUDENT_ACCOUNT_PERMISSIONS = {
   canEditLesson: false,
   canDeleteLesson: false,
   canCreateLessonDirectly: false,
+  canEditStudentPackageCounts: false,
+  canManageOwnLessonDeductions: false,
   requiresLessonApproval: false,
 };
 
@@ -17,6 +19,8 @@ const TEACHER_ACCOUNT_PERMISSIONS = {
   canEditLesson: false,
   canDeleteLesson: false,
   canCreateLessonDirectly: false,
+  canEditStudentPackageCounts: false,
+  canManageOwnLessonDeductions: false,
   requiresLessonApproval: true,
 };
 

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import {
   formatDate,
   formatLessonSessionNumber,
@@ -81,6 +82,190 @@ function formatRemainingCountFromPackage(pkg) {
   if (!pkg || pkg.remainingCount == null || pkg.remainingCount === '') return '—'
   const count = Number(pkg.remainingCount)
   return Number.isFinite(count) ? count : '—'
+}
+
+function isPrivateLessonCancelledWithoutDeduction(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const cancelledReason = String(lesson?.cancelledReason || '').trim().toLowerCase()
+  if (lesson?.noDeduction === true) return true
+  if (cancellationType === 'no_deduction' || cancellationType === 'class_closure') return true
+  if (['holiday', 'teacher_unavailable', 'academy_closed'].includes(cancelledReason)) return true
+  return status === 'cancelled' || status === 'canceled'
+}
+
+function getPackageById(studentPackages, packageId) {
+  const pid = String(packageId || '').trim()
+  if (!pid) return null
+  return (Array.isArray(studentPackages) ? studentPackages : []).find((p) => p.id === pid) || null
+}
+
+function getPrivateLessonPackageContext({
+  lesson,
+  studentPackages,
+  academyId,
+  matchedStudentId,
+}) {
+  const linkedPackage = getPackageById(studentPackages, lesson?.packageId)
+  const linkedPrivatePackage =
+    linkedPackage && linkedPackage.packageType === 'private' ? linkedPackage : null
+  const fallbackPackage =
+    !linkedPrivatePackage && matchedStudentId
+      ? findActivePrivatePackageForTeacher({
+          studentPackages,
+          academyId,
+          studentId: matchedStudentId,
+          teacher: getTeacherName(lesson),
+        })
+      : null
+  return {
+    linkedPrivatePackage,
+    contextPackage: linkedPrivatePackage || fallbackPackage,
+  }
+}
+
+function CalendarPrivateLessonDetailModal({
+  detail,
+  busyLessonId,
+  onClose,
+  onToggleDeduction,
+  onOpenPackageEdit,
+}) {
+  if (!detail) return null
+  const canRunDeductionAction =
+    detail.canManagePrivateLessonDeductions &&
+    detail.hasLinkedPrivatePackage &&
+    detail.canToggleDeduction
+  const canEditPackageCount = detail.canEditPackageCount && detail.contextPackage
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="calendar-private-lesson-detail-title"
+      data-testid="calendar-private-lesson-detail-modal"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0, 0, 0, 0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1003,
+        padding: 16,
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div
+        style={{
+          width: '100%',
+          maxWidth: 460,
+          background: '#151922',
+          border: '1px solid #2e3240',
+          borderRadius: 12,
+          padding: 20,
+          color: 'white',
+          boxSizing: 'border-box',
+        }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <h2
+          id="calendar-private-lesson-detail-title"
+          style={{ margin: '0 0 12px 0', fontSize: '1.1rem' }}
+        >
+          수업 차감 상세
+        </h2>
+        <div style={{ display: 'grid', gap: 8, fontSize: 13, lineHeight: 1.5 }}>
+          <div>학생: {detail.studentName || '-'}</div>
+          <div>
+            일시: {formatDate(detail.lessonDate)} {formatTime(detail.lessonDate)}
+          </div>
+          <div>과목: {detail.subject || '-'}</div>
+          <div>상태: {detail.statusLabel}</div>
+          <div>남은 횟수: {detail.remainingLessons}</div>
+          {detail.actionReason ? (
+            <div
+              data-testid="calendar-private-lesson-action-reason"
+              style={{
+                marginTop: 4,
+                padding: 10,
+                borderRadius: 8,
+                border: '1px solid #554633',
+                background: '#251f17',
+                color: '#ffe0aa',
+              }}
+            >
+              {detail.actionReason}
+            </div>
+          ) : null}
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 8,
+            marginTop: 18,
+            flexWrap: 'wrap',
+          }}
+        >
+          {canEditPackageCount ? (
+            <button
+              type="button"
+              data-testid="calendar-package-count-edit-button"
+              onClick={() => onOpenPackageEdit(detail.contextPackage)}
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #335544',
+                background: '#243528',
+                color: 'white',
+                cursor: 'pointer',
+              }}
+            >
+              수강권 횟수 수정
+            </button>
+          ) : null}
+          {canRunDeductionAction ? (
+            <button
+              type="button"
+              data-testid="calendar-deduction-toggle-button"
+              onClick={() => onToggleDeduction(detail.lesson)}
+              disabled={busyLessonId === detail.lesson.id}
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #555',
+                background: detail.lesson.isDeductCancelled ? '#4a2a2a' : '#1f2a44',
+                color: 'white',
+                cursor: busyLessonId === detail.lesson.id ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {busyLessonId === detail.lesson.id
+                ? '처리 중...'
+                : detail.lesson.isDeductCancelled
+                  ? '차감복구'
+                  : '차감취소'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: '8px 12px',
+              borderRadius: 8,
+              border: '1px solid #555',
+              background: 'transparent',
+              color: 'white',
+              cursor: 'pointer',
+            }}
+          >
+            닫기
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /**
@@ -270,6 +455,7 @@ export default function CalendarSection(props) {
     studentPackages,
     handleDeductionToggle,
     canManageAttendance,
+    canManagePrivateLessonDeductions,
     busyLessonId,
     busyPrivateLessonCrudId,
     busyPrivateLessonAdd,
@@ -282,7 +468,10 @@ export default function CalendarSection(props) {
     canDeleteLesson,
     onOpenCalendarGroupLessonAttendance,
     onOpenGroupLessonNoDeductionCancel,
+    openStudentPackageEditModal,
+    canEditStudentPackageCountsForPackage = () => false,
   } = props
+  const [privateLessonDetail, setPrivateLessonDetail] = useState(null)
   const displayedLessonRows =
     activeSection === 'groups'
       ? displayedLessons.filter((lesson) => lesson._calendarRowKind === 'group')
@@ -517,38 +706,49 @@ export default function CalendarSection(props) {
             const lessonDate = getLessonDate(lesson)
             const matchedStudent = getMatchedStudent(lesson)
             const matchedStudentId = getMatchedStudentId(lesson)
-            const pkgForRemaining = lesson.packageId
-              ? studentPackages.find((p) => p.id === lesson.packageId)
-              : matchedStudentId
-                ? findActivePrivatePackageForTeacher({
-                    studentPackages,
-                    academyId: lesson.academyId,
-                    studentId: matchedStudentId,
-                    teacher: getTeacherName(lesson),
-                  })
-                : null
+            const {
+              linkedPrivatePackage,
+              contextPackage,
+            } = getPrivateLessonPackageContext({
+              lesson,
+              studentPackages,
+              academyId: lesson.academyId,
+              matchedStudentId,
+            })
+            const hasLinkedPrivatePackage = Boolean(linkedPrivatePackage)
             const remainingLessons = isGroupRow || isPrivateReservationRow
               ? '—'
-              : pkgForRemaining
-                ? formatRemainingCountFromPackage(pkgForRemaining)
+              : contextPackage
+                ? formatRemainingCountFromPackage(contextPackage)
                 : matchedStudent
                   ? '수강권 없음'
                   : '-'
             const todayString = getTodayStorageDateString()
             const lessonDateStr = getLessonStorageDateString(lesson)
+            const isNoDeductionPrivateLesson =
+              !isGroupRow &&
+              !isPrivateReservationRow &&
+              isPrivateLessonCancelledWithoutDeduction(lesson)
             const isDeductedPrivateLesson =
               !isGroupRow &&
               !isPrivateReservationRow &&
+              !isNoDeductionPrivateLesson &&
+              hasLinkedPrivatePackage &&
               lesson.isDeductCancelled !== true &&
               Boolean(lessonDateStr && lessonDateStr <= todayString)
+            const isPendingLinkedPrivateLesson =
+              !isGroupRow &&
+              !isPrivateReservationRow &&
+              !isNoDeductionPrivateLesson &&
+              hasLinkedPrivatePackage &&
+              lesson.isDeductCancelled !== true &&
+              Boolean(lessonDateStr && lessonDateStr > todayString)
             const canDeductionAction =
               !isGroupRow &&
               !isPrivateReservationRow &&
-              canManageAttendance &&
+              canManagePrivateLessonDeductions &&
               (isDeductedPrivateLesson || lesson.isDeductCancelled === true) &&
-              (lesson.packageId
-                ? Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private')
-                : Boolean(pkgForRemaining && pkgForRemaining.packageType === 'private'))
+              hasLinkedPrivatePackage
             const privateReservationStatus = String(lesson.status || '').trim()
             const privateReservationEndMillis = isPrivateReservationRow
               ? getPrivateReservationEndMillis(lesson)
@@ -569,13 +769,35 @@ export default function CalendarSection(props) {
                         : privateReservationStatus === 'no_show'
                           ? '노쇼'
                           : '예약됨'
-                : lesson.isDeductCancelled
+                : isNoDeductionPrivateLesson
+                  ? '휴강 · 차감 없음'
+                  : lesson.isDeductCancelled
                   ? '차감취소'
-                  : isDeductedPrivateLesson && pkgForRemaining
+                  : isDeductedPrivateLesson
                     ? '정상 차감'
-                    : isDeductedPrivateLesson
+                    : isPendingLinkedPrivateLesson
+                      ? '자동 차감 예정'
+                      : lessonDateStr && lessonDateStr <= todayString
                       ? '수강권 없음'
-                    : '예정'
+                      : '예정'
+            const actionReason = isGroupRow || isPrivateReservationRow
+              ? ''
+              : !canManagePrivateLessonDeductions
+                ? '권한이 없습니다'
+                : isNoDeductionPrivateLesson
+                  ? '휴강 · 차감 없음'
+                  : !hasLinkedPrivatePackage
+                    ? '수강권이 연결되어 있지 않습니다'
+                    : lesson.isDeductCancelled === true
+                      ? ''
+                      : isDeductedPrivateLesson
+                        ? ''
+                        : '아직 차감된 수업이 아닙니다'
+            const canEditPackageCount =
+              !isGroupRow &&
+              !isPrivateReservationRow &&
+              Boolean(contextPackage) &&
+              canEditStudentPackageCountsForPackage(contextPackage)
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
             const reservationCompleteBusy =
               busyPrivateReservationOutcomeId === `${lesson.id}:completed`
@@ -617,6 +839,24 @@ export default function CalendarSection(props) {
               : undefined
             const canOpenGroupAttendance =
               isGroupRow && (isAdmin || canManageAttendance)
+            const canOpenPrivateLessonDetail =
+              activeSection === 'calendar' && !isGroupRow && !isPrivateReservationRow
+            const privateLessonDetailPayload = canOpenPrivateLessonDetail
+              ? {
+                  lesson,
+                  lessonDate,
+                  studentName: getStudentName(lesson),
+                  subject: lesson.subject || '-',
+                  statusLabel,
+                  remainingLessons,
+                  actionReason,
+                  canManagePrivateLessonDeductions,
+                  canToggleDeduction: isDeductedPrivateLesson || lesson.isDeductCancelled === true,
+                  hasLinkedPrivatePackage,
+                  contextPackage,
+                  canEditPackageCount,
+                }
+              : null
             const rowKind = isGroupRow
               ? 'group'
               : isPrivateReservationRow
@@ -636,13 +876,19 @@ export default function CalendarSection(props) {
                 onClick={
                   canOpenGroupAttendance
                     ? () => onOpenCalendarGroupLessonAttendance?.(lesson)
-                    : undefined
+                    : canOpenPrivateLessonDetail
+                      ? () => setPrivateLessonDetail(privateLessonDetailPayload)
+                      : undefined
                 }
                 style={{
                   gridTemplateColumns:
                     'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(64px, 0.7fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
-                  cursor: canOpenGroupAttendance ? 'pointer' : 'default',
-                  background: canOpenGroupAttendance ? 'rgba(90, 127, 208, 0.08)' : undefined,
+                  cursor:
+                    canOpenGroupAttendance || canOpenPrivateLessonDetail ? 'pointer' : 'default',
+                  background:
+                    canOpenGroupAttendance || canOpenPrivateLessonDetail
+                      ? 'rgba(90, 127, 208, 0.08)'
+                      : undefined,
                 }}
               >
                 <span>{formatDate(lessonDate)}</span>
@@ -673,23 +919,24 @@ export default function CalendarSection(props) {
                     alignItems: 'flex-start',
                   }}
                 >
-                  {canManageAttendance &&
+                  {canManagePrivateLessonDeductions &&
                   !isGroupRow &&
                   !isPrivateReservationRow &&
-                  (isDeductedPrivateLesson || lesson.isDeductCancelled === true) ? (
+                  canDeductionAction ? (
                     <button
-                      onClick={() => handleDeductionToggle(lesson)}
-                      disabled={busyLessonId === lesson.id || !canDeductionAction}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleDeductionToggle(lesson)
+                      }}
+                      disabled={busyLessonId === lesson.id}
+                      data-testid="calendar-deduction-toggle-button"
                       style={{
                         padding: '6px 10px',
                         borderRadius: 8,
                         border: '1px solid #555',
                         background: lesson.isDeductCancelled ? '#4a2a2a' : '#1f2a44',
                         color: 'white',
-                        cursor:
-                          busyLessonId === lesson.id || !canDeductionAction
-                            ? 'not-allowed'
-                            : 'pointer',
+                        cursor: busyLessonId === lesson.id ? 'not-allowed' : 'pointer',
                       }}
                     >
                       {busyLessonId === lesson.id
@@ -699,13 +946,57 @@ export default function CalendarSection(props) {
                           : '차감취소'}
                     </button>
                   ) : null}
+                  {canManagePrivateLessonDeductions &&
+                  !isGroupRow &&
+                  !isPrivateReservationRow &&
+                  !canDeductionAction &&
+                  actionReason ? (
+                    <span
+                      data-testid="calendar-deduction-action-disabled-label"
+                      style={{
+                        fontSize: 12,
+                        opacity: 0.72,
+                        padding: '4px 0',
+                      }}
+                    >
+                      {actionReason === '수강권이 연결되어 있지 않습니다'
+                        ? '수강권 연결 필요'
+                        : actionReason}
+                    </span>
+                  ) : null}
+                  {activeSection === 'calendar' &&
+                  !isGroupRow &&
+                  !isPrivateReservationRow &&
+                  canEditPackageCount ? (
+                    <button
+                      type="button"
+                      data-testid="calendar-package-count-edit-button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        openStudentPackageEditModal?.(contextPackage)
+                      }}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #335544',
+                        background: '#243528',
+                        color: 'white',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      횟수 수정
+                    </button>
+                  ) : null}
                   {activeSection === 'calendar' &&
                   canEditLesson &&
                   !isGroupRow &&
                   !isPrivateReservationRow ? (
                     <button
                       type="button"
-                      onClick={() => openPrivateLessonEditModal(lesson)}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        openPrivateLessonEditModal(lesson)
+                      }}
                       disabled={rowLessonActionBusy}
                       style={{
                         padding: '6px 10px',
@@ -725,7 +1016,10 @@ export default function CalendarSection(props) {
                   !isPrivateReservationRow ? (
                     <button
                       type="button"
-                      onClick={() => handleDeletePrivateLesson(lesson)}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleDeletePrivateLesson(lesson)
+                      }}
                       disabled={rowLessonActionBusy}
                       style={{
                         padding: '6px 10px',
@@ -849,6 +1143,18 @@ export default function CalendarSection(props) {
           })}
         </div>
       )}
+      {privateLessonDetail ? (
+        <CalendarPrivateLessonDetailModal
+          detail={privateLessonDetail}
+          busyLessonId={busyLessonId}
+          onClose={() => setPrivateLessonDetail(null)}
+          onToggleDeduction={handleDeductionToggle}
+          onOpenPackageEdit={(pkg) => {
+            openStudentPackageEditModal?.(pkg)
+            setPrivateLessonDetail(null)
+          }}
+        />
+      ) : null}
     </section>
   )
 }

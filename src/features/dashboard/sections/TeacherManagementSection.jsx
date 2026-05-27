@@ -111,6 +111,7 @@ export default function TeacherManagementSection({
   cancelTeacherEdit,
   updateTeacherStatus,
   updateTeacherCountEditPermission,
+  updateTeacherLessonDeductionPermission,
   busyTeacherId,
 }) {
   const isEditing = Boolean(teacherForm.id)
@@ -207,6 +208,24 @@ export default function TeacherManagementSection({
       )
     } catch (error) {
       console.error('학생 수강권 횟수 수정 권한 변경 실패:', error)
+      setPermissionError('권한 변경에 실패했습니다. 잠시 후 다시 시도해 주세요.')
+    }
+  }
+
+  async function toggleLessonDeductionPermission(teacher) {
+    if (!updateTeacherLessonDeductionPermission) return
+    const nextEnabled = teacher.lessonDeductionPermissionEnabled !== true
+    setPermissionMessage('')
+    setPermissionError('')
+    try {
+      await updateTeacherLessonDeductionPermission(teacher, nextEnabled)
+      setPermissionMessage(
+        nextEnabled
+          ? '수업 차감 관리 권한을 허용했습니다.'
+          : '수업 차감 관리 권한을 차단했습니다.'
+      )
+    } catch (error) {
+      console.error('수업 차감 관리 권한 변경 실패:', error)
       setPermissionError('권한 변경에 실패했습니다. 잠시 후 다시 시도해 주세요.')
     }
   }
@@ -358,7 +377,8 @@ export default function TeacherManagementSection({
           <div
             className="table-head"
             style={{
-              gridTemplateColumns: '1fr 1fr 0.7fr 1fr minmax(180px, 1.1fr) minmax(150px, auto)',
+              gridTemplateColumns:
+                '1fr 1fr 0.7fr 1fr minmax(180px, 1.1fr) minmax(180px, 1.1fr) minmax(150px, auto)',
             }}
           >
             <span>이름</span>
@@ -366,6 +386,7 @@ export default function TeacherManagementSection({
             <span>상태</span>
             <span>수정일</span>
             <span>학생 수강권 횟수 수정 권한</span>
+            <span>수업 차감 관리 권한</span>
             <span>작업</span>
           </div>
           {teachers.map((teacher) => {
@@ -373,6 +394,9 @@ export default function TeacherManagementSection({
             const active = String(teacher.status || 'active') === 'active'
             const countEditEnabled = teacher.countEditPermissionEnabled === true
             const permissionBusy = busyTeacherId === `${teacher.id}__count_edit_permission`
+            const lessonDeductionEnabled = teacher.lessonDeductionPermissionEnabled === true
+            const lessonDeductionBusy =
+              busyTeacherId === `${teacher.id}__lesson_deduction_permission`
             const hasLinkedMembership = Boolean(teacher.teacherMembershipId)
             return (
             <div
@@ -380,7 +404,7 @@ export default function TeacherManagementSection({
               className="table-row"
               style={{
                 gridTemplateColumns:
-                  '1fr 1fr 0.7fr 1fr minmax(180px, 1.1fr) minmax(150px, auto)',
+                  '1fr 1fr 0.7fr 1fr minmax(180px, 1.1fr) minmax(180px, 1.1fr) minmax(150px, auto)',
               }}
               data-testid="teacher-management-row"
               data-teacher-key={teacherKey}
@@ -423,6 +447,42 @@ export default function TeacherManagementSection({
                     : countEditEnabled
                     ? '횟수 수정 차단'
                     : '횟수 수정 허용'}
+                </button>
+              </span>
+              <span style={{ display: 'grid', gap: 6, alignContent: 'start' }}>
+                <span
+                  data-testid="teacher-lesson-deduction-permission-status"
+                  style={{
+                    fontSize: 12,
+                    color: lessonDeductionEnabled ? '#9ee6b2' : '#f4c7a1',
+                  }}
+                >
+                  {hasLinkedMembership
+                    ? lessonDeductionEnabled
+                      ? '차감 관리 허용'
+                      : '차감 관리 차단'
+                    : '로그인 연결 필요'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => toggleLessonDeductionPermission(teacher)}
+                  disabled={!hasLinkedMembership || lessonDeductionBusy}
+                  data-testid="teacher-lesson-deduction-permission-toggle"
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: 8,
+                    border: lessonDeductionEnabled ? '1px solid #7a3636' : '1px solid #335544',
+                    background: lessonDeductionEnabled ? '#3f1f25' : '#243528',
+                    color: 'white',
+                    cursor: !hasLinkedMembership || lessonDeductionBusy ? 'not-allowed' : 'pointer',
+                    opacity: !hasLinkedMembership ? 0.65 : 1,
+                  }}
+                >
+                  {lessonDeductionBusy
+                    ? '변경 중...'
+                    : lessonDeductionEnabled
+                    ? '차감 관리 차단'
+                    : '차감 관리 허용'}
                 </button>
               </span>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
