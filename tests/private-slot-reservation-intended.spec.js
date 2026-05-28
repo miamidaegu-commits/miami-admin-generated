@@ -1011,7 +1011,7 @@ test('fixed private lesson approval creates and links private packages', async (
     path.join(process.cwd(), 'src/features/dashboard/sections/CalendarSection.jsx'),
     'utf8'
   );
-  expect(calendarSource).toContain('수강권 미등록');
+  expect(calendarSource).toContain('수강권 등록 필요');
   expect(calendarSource).toContain('수강권 연결 필요');
   expect(calendarSource).toContain('소진');
   expect(calendarSource).toContain('formatRemainingCountFromPackage')
@@ -1402,7 +1402,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       noRemainingReserveButton,
       'no-remaining student should not overbook an allowed open private slot'
     ).toBeDisabled();
-    await expect(noRemainingSlotCard).toContainText(/보충 가능 0회|수강권 미등록|수업 있음/);
+    await expect(noRemainingSlotCard).toContainText(/보충 가능 0회|수강권 등록 필요|수업 있음/);
     expect(
       await getReservation(
         db,

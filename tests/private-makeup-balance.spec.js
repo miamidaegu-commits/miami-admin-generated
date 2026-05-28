@@ -446,7 +446,7 @@ test('fixed private package balance creates one makeup booking and prevents over
     );
     await expect(secondSlotCard).toBeVisible({ timeout: 20000 });
     await expect(secondSlotCard.getByTestId('student-private-slot-reserve-button')).toBeDisabled();
-    await expect(secondSlotCard).toContainText(/보충 가능 0회|수강권 미등록|수업 있음/);
+    await expect(secondSlotCard).toContainText(/보충 가능 0회|수강권 등록 필요|수업 있음/);
 
     await selectCalendarDate(page, fixture.pastDate);
     const restoreRow = page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${fixture.pastLessonId}"]`);

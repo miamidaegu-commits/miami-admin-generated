@@ -2091,14 +2091,29 @@ export default function StudentBookingPage() {
                       : Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
                     const lessonBookingStatusLabel = isReserved
                       ? '예약 완료'
-                      : hasRemainingSeats
+                      : lesson.groupTicketStatusLabel
+                        ? lesson.groupTicketStatusLabel
+                        : hasRemainingSeats
                         ? '예약 가능'
+                        : '마감'
+                    const groupTicketAvailableToBook = Number(lesson.groupTicketAvailableToBook ?? 0)
+                    const hasGroupTicketBalanceProjection =
+                      lesson.groupTicketAvailableToBook !== undefined ||
+                      Boolean(lesson.groupTicketStatusLabel)
+                    const hasGroupTicketAvailability =
+                      !hasGroupTicketBalanceProjection ||
+                      (Number.isFinite(groupTicketAvailableToBook) && groupTicketAvailableToBook > 0)
+                    const groupReserveDisabledReason = !hasRemainingSeats
+                      ? '마감'
+                      : lesson.groupTicketStatusLabel && !hasGroupTicketAvailability
+                        ? lesson.groupTicketStatusLabel
                         : '마감'
                     const canReserve =
                       !isReserved &&
                       !busyReservationId &&
                       lesson.isBookable === true &&
-                      hasRemainingSeats
+                      hasRemainingSeats &&
+                      hasGroupTicketAvailability
 
                     return (
                       <article
@@ -2167,7 +2182,11 @@ export default function StudentBookingPage() {
                                   cursor: canReserve ? 'pointer' : 'not-allowed',
                                 }}
                               >
-                                {isBusy ? '예약 중...' : canReserve ? '단체반 예약' : '마감'}
+                                {isBusy
+                                  ? '예약 중...'
+                                  : canReserve
+                                    ? '단체반 예약'
+                                    : groupReserveDisabledReason}
                               </button>
                             )}
                           </div>

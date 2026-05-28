@@ -163,7 +163,7 @@ function getPrivatePackageStateLabel({
   if (!contextPackage) {
     return hasAnyPrivatePackage || hasPackageMatchIncomplete
       ? '수강권 연결 필요'
-      : '수강권 미등록'
+      : '수강권 등록 필요'
   }
 
   const remainingCount = Number(formatRemainingCountFromPackage(contextPackage))
@@ -865,7 +865,7 @@ export default function CalendarSection(props) {
                       : hasPackageMatchIncomplete
                       ? '수강권 연결 필요'
                       : lessonDateStr && lessonDateStr <= todayString
-                      ? '수강권 미등록'
+                      ? '수강권 등록 필요'
                       : '예정'
             const actionReason = isGroupRow || isPrivateReservationRow
               ? ''
