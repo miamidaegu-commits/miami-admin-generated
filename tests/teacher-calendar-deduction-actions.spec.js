@@ -48,6 +48,12 @@ function getTodayYmdInSeoul() {
   }).format(new Date());
 }
 
+function addDaysToYmd(dateValue, days) {
+  const date = new Date(`${dateValue}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 async function getTeacherMembershipRef() {
   const userRecord = await getAdminApp().auth().getUserByEmail(TEST_TEACHER_EMAIL);
   return getDb().collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${userRecord.uid}`);
@@ -220,13 +226,78 @@ test('admin no-package calendar row shows no active 차감취소 action', async 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await selectCalendarDate(page, date);
     const row = await getCalendarPrivateRow(page, fixture.lessonId);
-    await expect(row).toContainText('수강권 없음');
+    await expect(row).toContainText('수강권 미등록');
     await expect(row.getByRole('button', { name: '차감취소', exact: true })).toHaveCount(0);
     await expect(row.getByTestId('calendar-deduction-action-disabled-label')).toContainText(
-      '수강권 연결 필요'
+      '수강권 등록 필요'
     );
   } finally {
     await cleanupRefs(fixture.refs);
+  }
+});
+
+test('admin calendar distinguishes exhausted and legacy-linked private packages', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 Firestore fixture를 생성합니다.');
+
+  const today = getTodayYmdInSeoul();
+  const date = addDaysToYmd(today, 1);
+  const exhaustedFixture = await createPrivateLessonFixture({
+    unique: `admin-exhausted-${Date.now()}-${testInfo.workerIndex}`,
+    date,
+    studentName: `E2E 소진 ${Date.now()}-${testInfo.workerIndex}`,
+    packageOverrides: {
+      totalCount: 4,
+      usedCount: 4,
+      remainingCount: 0,
+    },
+    lessonOverrides: {
+      packageId: '',
+    },
+  });
+  const legacyFixture = await createPrivateLessonFixture({
+    unique: `admin-legacy-${Date.now()}-${testInfo.workerIndex}`,
+    date,
+    studentName: `E2E 레거시 ${Date.now()}-${testInfo.workerIndex}`,
+    lessonOverrides: {
+      packageId: '',
+    },
+  });
+  const allocatedFixture = await createPrivateLessonFixture({
+    unique: `admin-allocated-${Date.now()}-${testInfo.workerIndex}`,
+    date,
+    studentName: `E2E 배정 ${Date.now()}-${testInfo.workerIndex}`,
+    packageOverrides: {
+      totalCount: 1,
+      usedCount: 0,
+      remainingCount: 1,
+    },
+  });
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await selectCalendarDate(page, date);
+
+    const exhaustedRow = await getCalendarPrivateRow(page, exhaustedFixture.lessonId);
+    await expect(exhaustedRow).toContainText('소진');
+    await expect(exhaustedRow).not.toContainText('수강권 없음');
+
+    const legacyRow = await getCalendarPrivateRow(page, legacyFixture.lessonId);
+    await expect(legacyRow).toContainText(/보충 가능 \d회|수강권 자동 연결|수강권 연결됨/);
+    await expect(legacyRow).not.toContainText('수강권 없음');
+
+    const allocatedRow = await getCalendarPrivateRow(page, allocatedFixture.lessonId);
+    await expect(allocatedRow).toContainText('보충 가능 0회');
+    await expect(allocatedRow).not.toContainText('수강권 없음');
+  } finally {
+    await cleanupRefs([
+      ...exhaustedFixture.refs,
+      ...legacyFixture.refs,
+      ...allocatedFixture.refs,
+    ]);
   }
 });
 

@@ -958,7 +958,7 @@ test('released fixed private slot behavior is wired server-side', async () => {
   expect(source).toContain('releaseReason: "fixed_student_cancelled"');
   expect(source).toContain('exports.adminCancelPrivateLessonReservation');
   expect(source).toMatch(
-    /exports\.reservePrivateLessonSlot[\s\S]*findActivePrivatePackageForTeacher/
+    /exports\.reservePrivateLessonSlot[\s\S]*findUsablePrivatePackageForTeacher/
   );
   expect(source).toMatch(
     /exports\.reservePrivateLessonSlot[\s\S]*const hasAccess = hasSlotAccess\(\{slot, summary, slotId, studentId\}\)[\s\S]*!hasAccess && !packageResult\.ok/
@@ -1011,9 +1011,11 @@ test('fixed private lesson approval creates and links private packages', async (
     path.join(process.cwd(), 'src/features/dashboard/sections/CalendarSection.jsx'),
     'utf8'
   );
-  expect(calendarSource).toContain('수강권 없음');
+  expect(calendarSource).toContain('수강권 미등록');
+  expect(calendarSource).toContain('수강권 연결 필요');
+  expect(calendarSource).toContain('소진');
   expect(calendarSource).toContain('formatRemainingCountFromPackage')
-  expect(calendarSource).toContain('findActivePrivatePackageForTeacher');
+  expect(calendarSource).toContain('findPrivatePackageForTeacherContext');
 
   const dryRunSource = fs.readFileSync(
     path.join(process.cwd(), 'scripts/dry-run-fixed-private-package-backfill.cjs'),
@@ -1022,6 +1024,14 @@ test('fixed private lesson approval creates and links private packages', async (
   expect(dryRunSource).toContain('writesPerformed: false');
   expect(dryRunSource).toContain('wouldCreatePackage');
   expect(dryRunSource).toContain('lessonsToLinkPackageId');
+
+  const linkAuditSource = fs.readFileSync(
+    path.join(process.cwd(), 'scripts/dry-run-private-package-link-audit.cjs'),
+    'utf8'
+  );
+  expect(linkAuditSource).toContain('dryRun: !args.apply');
+  expect(linkAuditSource).toContain('confidence');
+  expect(linkAuditSource).toContain('proposedUpdates');
 });
 
 test('intended flexible private slot visibility honors teacher access and pilot gate', async ({
@@ -1392,7 +1402,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       noRemainingReserveButton,
       'no-remaining student should not overbook an allowed open private slot'
     ).toBeDisabled();
-    await expect(noRemainingSlotCard).toContainText(/보충 가능 0회|수강권 없음|수업 있음/);
+    await expect(noRemainingSlotCard).toContainText(/보충 가능 0회|수강권 미등록|수업 있음/);
     expect(
       await getReservation(
         db,

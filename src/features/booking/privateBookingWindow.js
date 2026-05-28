@@ -11,7 +11,7 @@ export const PRIVATE_BOOKING_STATUS_LABELS = {
   reserved_by_me: '내 예약',
   reserved: '수업 있음',
   blocked: '수업 있음',
-  no_package: '수강권 없음',
+  no_package: '수강권 미등록',
   no_makeup: '보충 가능 0회',
 }
 

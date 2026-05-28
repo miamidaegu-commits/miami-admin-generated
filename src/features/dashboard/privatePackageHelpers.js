@@ -29,7 +29,7 @@ function uniqueTeacherKeys(...values) {
   return Array.from(keys.values())
 }
 
-function getPackageTeacherKeys(pkg) {
+export function getPackageTeacherKeys(pkg) {
   return uniqueTeacherKeys(
     pkg?.teacher,
     pkg?.teacherName,
@@ -43,6 +43,18 @@ function teacherValuesMatch(pkg, teacherValues) {
   const requestedKeys = uniqueTeacherKeys(teacherValues)
   if (requestedKeys.length === 0) return false
   return requestedKeys.some((key) => packageKeys.includes(key))
+}
+
+const INACTIVE_PRIVATE_PACKAGE_STATUSES = ['inactive', 'expired', 'ended', 'cancelled', 'canceled']
+
+function isDisplayablePrivatePackageForStudent({ pkg, academyId, studentId }) {
+  if (!pkg) return false
+  const packageType = normalizeId(pkg.packageType || 'private')
+  if (packageType && packageType !== 'private') return false
+  if (normalizeId(pkg.academyId) !== normalizeId(academyId)) return false
+  if (normalizeId(pkg.studentId) !== normalizeId(studentId)) return false
+  const status = normalizePackageStatus(pkg)
+  return !INACTIVE_PRIVATE_PACKAGE_STATUSES.includes(status)
 }
 
 export function isActivePrivatePackageForTeacher({
@@ -62,9 +74,56 @@ export function isActivePrivatePackageForTeacher({
   if (!teacherValuesMatch(pkg, [teacher, teacherKey, teacherUid])) return false
 
   const status = normalizePackageStatus(pkg)
-  if (['inactive', 'expired', 'ended', 'cancelled', 'canceled'].includes(status)) return false
+  if (INACTIVE_PRIVATE_PACKAGE_STATUSES.includes(status)) return false
   if (requireRemaining && Number(pkg.remainingCount ?? 0) <= 0) return false
   return true
+}
+
+export function findStudentPrivatePackageContexts({
+  studentPackages,
+  academyId,
+  studentId,
+}) {
+  return (Array.isArray(studentPackages) ? studentPackages : []).filter((pkg) =>
+    isDisplayablePrivatePackageForStudent({
+      pkg,
+      academyId,
+      studentId,
+    })
+  )
+}
+
+export function findPrivatePackageForTeacherContext({
+  studentPackages,
+  academyId,
+  studentId,
+  teacher,
+  teacherKey,
+  teacherUid,
+  requireRemaining = false,
+}) {
+  return findStudentPrivatePackageContexts({
+    studentPackages,
+    academyId,
+    studentId,
+  })
+    .filter((pkg) => {
+      if (!teacherValuesMatch(pkg, [teacher, teacherKey, teacherUid])) return false
+      if (requireRemaining && Number(pkg.remainingCount ?? 0) <= 0) return false
+      return true
+    })
+    .sort((a, b) => {
+      const br = Number(b.remainingCount ?? 0)
+      const ar = Number(a.remainingCount ?? 0)
+      if (ar !== br) return br - ar
+      const at = a.createdAt?.toMillis?.() || Number(a.createdAt?.seconds || 0) * 1000 || 0
+      const bt = b.createdAt?.toMillis?.() || Number(b.createdAt?.seconds || 0) * 1000 || 0
+      return at - bt
+    })[0] || null
+}
+
+export function findUsablePrivatePackageForTeacher(args) {
+  return findActivePrivatePackageForTeacher({...args, requireRemaining: true})
 }
 
 export function findActivePrivatePackageForTeacher({
