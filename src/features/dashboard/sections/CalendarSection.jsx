@@ -13,7 +13,8 @@ import {
 } from '../dashboardViewUtils.js'
 import {
   computePrivateTeacherPackageUsage,
-  findActivePrivatePackageForTeacher,
+  findPrivatePackageForTeacherContext,
+  findStudentPrivatePackageContexts,
 } from '../privatePackageHelpers.js'
 
 function calendarTimestampToMillis(value) {
@@ -113,9 +114,16 @@ function getPrivateLessonPackageContext({
   const linkedPackage = getPackageById(studentPackages, lesson?.packageId)
   const linkedPrivatePackage =
     linkedPackage && linkedPackage.packageType === 'private' ? linkedPackage : null
+  const studentPrivatePackages = matchedStudentId
+    ? findStudentPrivatePackageContexts({
+        studentPackages,
+        academyId,
+        studentId: matchedStudentId,
+      })
+    : []
   const fallbackPackage =
     !directPackageId && !linkedPrivatePackage && matchedStudentId
-      ? findActivePrivatePackageForTeacher({
+      ? findPrivatePackageForTeacherContext({
           studentPackages,
           academyId,
           studentId: matchedStudentId,
@@ -140,7 +148,33 @@ function getPrivateLessonPackageContext({
     contextPackage,
     hasDirectPackageLink: Boolean(linkedPrivatePackage || linkedPackageStub),
     hasTeacherScopedPackage: Boolean(contextPackage),
+    hasAnyPrivatePackage: Boolean(contextPackage || studentPrivatePackages.length > 0),
+    hasPackageMatchIncomplete: Boolean(!contextPackage && studentPrivatePackages.length > 0),
   }
+}
+
+function getPrivatePackageStateLabel({
+  contextPackage,
+  packageUsage,
+  hasAnyPrivatePackage,
+  hasPackageMatchIncomplete,
+  hasDirectPackageLink,
+}) {
+  if (!contextPackage) {
+    return hasAnyPrivatePackage || hasPackageMatchIncomplete
+      ? '수강권 연결 필요'
+      : '수강권 미등록'
+  }
+
+  const remainingCount = Number(formatRemainingCountFromPackage(contextPackage))
+  if (Number.isFinite(remainingCount) && remainingCount <= 0) return '소진'
+
+  const makeupAvailableCount = Number(packageUsage?.makeupAvailableCount)
+  if (Number.isFinite(makeupAvailableCount)) {
+    return `보충 가능 ${Math.max(0, makeupAvailableCount)}회`
+  }
+
+  return hasDirectPackageLink ? '수강권 연결됨' : '수강권 자동 연결'
 }
 
 function CalendarPrivateLessonDetailModal({
@@ -737,10 +771,11 @@ export default function CalendarSection(props) {
             const matchedStudent = getMatchedStudent(lesson)
             const matchedStudentId = getMatchedStudentId(lesson)
             const {
-              linkedPrivatePackage,
               contextPackage,
               hasDirectPackageLink,
               hasTeacherScopedPackage,
+              hasAnyPrivatePackage,
+              hasPackageMatchIncomplete,
             } = getPrivateLessonPackageContext({
               lesson,
               studentPackages,
@@ -759,14 +794,19 @@ export default function CalendarSection(props) {
                     teacher: getTeacherName(lesson),
                   })
                 : null
+            const privatePackageStateLabel = getPrivatePackageStateLabel({
+              contextPackage,
+              packageUsage,
+              hasAnyPrivatePackage,
+              hasPackageMatchIncomplete,
+              hasDirectPackageLink,
+            })
             const remainingLessons = isGroupRow || isPrivateReservationRow
               ? '—'
               : contextPackage
-                ? `보충 가능 ${
-                    packageUsage?.makeupAvailableCount ?? formatRemainingCountFromPackage(contextPackage)
-                  }회`
+                ? privatePackageStateLabel
                 : matchedStudent
-                  ? '수강권 없음'
+                  ? privatePackageStateLabel
                   : '-'
             const todayString = getTodayStorageDateString()
             const lessonDateStr = getLessonStorageDateString(lesson)
@@ -819,13 +859,13 @@ export default function CalendarSection(props) {
                   : isDeductedPrivateLesson
                     ? '정상 차감'
                     : isPendingLinkedPrivateLesson
-                      ? '자동 차감 예정'
+                      ? privatePackageStateLabel
                       : hasTeacherScopedPackage
-                        ? hasDirectPackageLink
-                          ? '수강권 연결됨'
-                          : '수강권 자동 연결'
+                        ? privatePackageStateLabel
+                      : hasPackageMatchIncomplete
+                      ? '수강권 연결 필요'
                       : lessonDateStr && lessonDateStr <= todayString
-                      ? '수강권 없음'
+                      ? '수강권 미등록'
                       : '예정'
             const actionReason = isGroupRow || isPrivateReservationRow
               ? ''
@@ -833,12 +873,16 @@ export default function CalendarSection(props) {
                 ? '권한이 없습니다'
                 : isNoDeductionPrivateLesson
                   ? '휴강 · 차감 없음'
-                  : !hasTeacherScopedPackage
-                    ? '수강권이 연결되어 있지 않습니다'
+                  : !hasAnyPrivatePackage
+                    ? '수강권 등록 필요'
+                    : !hasTeacherScopedPackage
+                    ? '수강권 연결 필요'
                     : lesson.isDeductCancelled === true
                       ? ''
                       : isDeductedPrivateLesson
                         ? ''
+                      : packageUsage && Number(packageUsage.makeupAvailableCount || 0) <= 0
+                        ? '보충 가능 0회'
                         : '아직 차감된 수업이 아닙니다'
             const canEditPackageCount =
               !isGroupRow &&

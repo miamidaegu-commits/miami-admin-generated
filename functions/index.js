@@ -1010,6 +1010,10 @@ async function findActivePrivatePackageForTeacher({
   return {ok: true, ...fallbackCandidates[0], checkedPackages};
 }
 
+async function findUsablePrivatePackageForTeacher(args) {
+  return findActivePrivatePackageForTeacher(args);
+}
+
 function isFixedPrivateSlot(slot, reservation) {
   const slotType = normalizeId(slot && slot.slotType);
   const sourceType = normalizeId(reservation && reservation.sourceType);
@@ -1198,7 +1202,7 @@ function getPrivateBookingStatusLabel(status) {
   if (status === "reserved_by_me") return "내 예약";
   if (status === "reserved") return "수업 있음";
   if (status === "blocked") return "수업 있음";
-  if (status === "no_package") return "수강권 없음";
+  if (status === "no_package") return "수강권 미등록";
   if (status === "no_makeup") return "보충 가능 0회";
   return "예약 중지";
 }
@@ -3758,7 +3762,7 @@ exports.reservePrivateLessonSlot = onCall(
             slot.teacherKey,
             slot.teacherUid,
           ]);
-          const packageResult = await findActivePrivatePackageForTeacher({
+          const packageResult = await findUsablePrivatePackageForTeacher({
             transaction,
             db,
             academyId,

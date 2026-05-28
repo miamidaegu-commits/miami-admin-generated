@@ -3084,7 +3084,23 @@ export default function Dashboard() {
           }
         }
         if (currentlyCancelled) {
-          const activeReservationsUsingPackage = privateLessonReservations.filter((reservation) => {
+          const activeReservationSnapshot = await getDocs(
+            query(
+              collection(db, 'privateLessonReservations'),
+              where('academyId', '==', scopedAcademyId),
+              where('studentId', '==', resolvedStudentId),
+              where('status', '==', 'active')
+            )
+          )
+          const activeReservationById = new Map()
+          privateLessonReservations.forEach((reservation) => {
+            const reservationId = String(reservation.id || reservation.reservationId || '').trim()
+            if (reservationId) activeReservationById.set(reservationId, reservation)
+          })
+          activeReservationSnapshot.docs.forEach((docSnap) => {
+            activeReservationById.set(docSnap.id, { id: docSnap.id, ...docSnap.data() })
+          })
+          const activeReservationsUsingPackage = Array.from(activeReservationById.values()).filter((reservation) => {
             if (String(reservation.academyId || '').trim() !== scopedAcademyId) return false
             if (String(reservation.status || '').trim() !== 'active') return false
             if (String(reservation.studentId || '').trim() !== resolvedStudentId) return false
