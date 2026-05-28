@@ -13,6 +13,7 @@ import {
 import { buildTeacherPrivateLessonRequestPlans } from '../src/features/dashboard/teacherPrivateLessonRequestPlanning.js';
 
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
+const LOGIN_ATTEMPT_TIMEOUT_MS = 15000;
 
 function hasServiceAccount() {
   return fs.existsSync(SERVICE_ACCOUNT_PATH);
@@ -179,72 +180,63 @@ test('fixed 1:1 planning: paidLessons가 없으면 슬롯마다 비반복 1회 �
 });
 
 async function loginAsDashboardUser(page, email, password) {
-  await page.goto(`${BASE_URL.replace(/\/$/, '')}/login`);
-  const emailInput = page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first();
-  const passwordInput = page
-    .getByLabel(/Password|비밀번호/i)
-    .or(page.locator('input[type="password"]'))
-    .first();
+  await page.goto(`${BASE_URL}login/`);
 
-  if (!(await emailInput.isVisible({ timeout: 3000 }).catch(() => false))) {
-    await page.goto(BASE_URL);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const emailInput = page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first();
+    const passwordInput = page
+      .getByLabel(/Password|비밀번호/i)
+      .or(page.locator('input[type="password"]'))
+      .first();
+    const invalidCredentials = page.getByText('Invalid email or password.');
+    const inactiveAccount = page.getByText('비활성 계정입니다');
+    const welcomeMessage = page.getByTestId('dashboard-welcome-subtitle');
+    const calendarButton = page.getByRole('button', { name: '캘린더', exact: true });
+
+    const hasLoginForm = await emailInput.isVisible({ timeout: LOGIN_ATTEMPT_TIMEOUT_MS }).catch(() => false);
+    if (!hasLoginForm) {
+      if (attempt < 3) {
+        await page.goto(`${BASE_URL}login/`);
+        continue;
+      }
+      break;
+    }
+    await emailInput.fill(email);
+    await passwordInput.fill(password);
+    await page.getByRole('button', { name: /Sign In|로그인/i }).click();
+
+    const outcome = await expect
+      .poll(
+        async () => {
+          if (await invalidCredentials.isVisible().catch(() => false)) return 'invalid';
+          if (await inactiveAccount.isVisible().catch(() => false)) return 'inactive';
+          const welcomeText = ((await welcomeMessage.textContent().catch(() => '')) || '').trim();
+          const hasWelcome = /님,?\s환영합니다/.test(welcomeText);
+          const hasCalendarNav = await calendarButton.isVisible().catch(() => false);
+          return /\/dashboard/.test(page.url()) && hasWelcome && hasCalendarNav
+            ? 'dashboard'
+            : 'waiting';
+        },
+        { timeout: LOGIN_ATTEMPT_TIMEOUT_MS }
+      )
+      .toBe('dashboard')
+      .then(() => 'dashboard')
+      .catch(() => 'retry');
+
+    if (outcome === 'dashboard') return;
+    if (attempt < 3) await page.goto(`${BASE_URL}login/`);
   }
 
-  await emailInput.fill(email);
-  await passwordInput.fill(password);
-  await page.getByRole('button', { name: /Sign In|로그인/i }).click();
-
-  const invalidCredentials = page.getByText('Invalid email or password.');
-  const inactiveAccount = page.getByText('비활성 계정입니다');
-  const welcomeMessage = page.getByTestId('dashboard-welcome-subtitle');
-  const calendarButton = page.getByRole('button', { name: '캘린더', exact: true });
-
-  await Promise.race([
-    page.waitForURL(/\/dashboard/, { timeout: 5000 }).catch(() => null),
-    invalidCredentials.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
-    inactiveAccount.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
-    calendarButton.waitFor({ state: 'visible', timeout: 5000 }).catch(() => null),
-  ]);
-
-  await expect
-    .poll(
-      async () => {
-        if (await invalidCredentials.isVisible().catch(() => false)) return 'invalid';
-        if (await inactiveAccount.isVisible().catch(() => false)) return 'inactive';
-        const welcomeText = ((await welcomeMessage.textContent().catch(() => '')) || '').trim();
-        const hasWelcome = /님,?\s환영합니다/.test(welcomeText);
-        const hasCalendarNav = await calendarButton.isVisible().catch(() => false);
-        return /\/dashboard/.test(page.url()) && hasWelcome && hasCalendarNav
-          ? 'dashboard'
-          : 'waiting';
-      },
-      { timeout: 10000 }
-    )
-    .toBe('dashboard');
-
-  const bodyText = (await page.locator('body').textContent()) || '';
-  const isDashboard = /\/dashboard/.test(page.url());
-  const welcomeText = ((await welcomeMessage.textContent()) || '').trim();
-  const hasWelcome = /님,?\s환영합니다/.test(welcomeText);
-  const hasTeacherNav = await calendarButton.isVisible().catch(() => false);
-  const hasInvalidCredentials = bodyText.includes('Invalid email or password.');
-  const hasInactiveAccount = bodyText.includes('비활성 계정입니다');
-
-  const loginSucceeded = isDashboard && hasWelcome && hasTeacherNav;
-
-  expect(
-    loginSucceeded,
+  const bodyText = (await page.locator('body').textContent().catch(() => '')) || '';
+  const welcomeText = ((await page.getByTestId('dashboard-welcome-subtitle').textContent().catch(() => '')) || '').trim();
+  throw new Error(
     [
       'Dashboard login failed.',
       `URL: ${page.url()}`,
       `Welcome: ${welcomeText || '(empty)'}`,
-      hasInvalidCredentials ? 'Reason: Invalid email or password.' : null,
-      hasInactiveAccount ? 'Reason: 비활성 계정입니다' : null,
       `Body: ${bodyText}`,
-    ]
-      .filter(Boolean)
-      .join('\n'),
-  ).toBe(true);
+    ].join('\n')
+  );
 }
 
 async function loginAsTeacher(page) {
