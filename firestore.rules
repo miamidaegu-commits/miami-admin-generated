@@ -1544,7 +1544,6 @@ service cloud.firestore {
           (canManageAttendance(resource.data.academyId) ||
             canManageOwnLessonDeductions(resource.data.academyId)) &&
           lessonBelongsToTeacher(resource.data) &&
-          lessonBelongsToTeacher(request.resource.data) &&
           changedOnly([
             "isDeductCancelled",
             "deductMemo",

@@ -932,7 +932,7 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(pageSource).toContain('student-private-calendar');
   expect(pageSource).toContain('예약은 수업 시작 7시간 전까지만 가능합니다.');
   expect(pageSource).toContain('예약 마감 · 수업 준비 중');
-  expect(pageSource).toContain('사용 가능 수강권: 잔여');
+  expect(pageSource).toContain('예약 가능 보충');
   expect(helperSource).toContain("not_open: '예약 오픈 대기'");
 
   expect(dashboardSource).toContain('createPrivateAvailabilityTemplate');
@@ -1385,19 +1385,22 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     );
     const noRemainingSlotCard = noRemainingSlotCards.first();
     await expect(noRemainingSlotCard).toBeVisible();
-    const noRemainingReserveButton = await expectPrivateSlotReserveButtonEnabled(
-      noRemainingPage,
-      noRemainingSlotCard,
-      'no-remaining student should be able to reserve the allowed open private slot'
+    const noRemainingReserveButton = noRemainingSlotCard.getByTestId(
+      'student-private-slot-reserve-button'
     );
-    await noRemainingReserveButton.click();
-    await expectReservationStatus(
-      db,
-      fixture.noRemainingOpenSlotId,
-      fixture.noRemainingStudent.studentId,
-      'active'
-    );
-    await expectSlotStatus(db, fixture.noRemainingOpenSlotId, 'reserved');
+    await expect(
+      noRemainingReserveButton,
+      'no-remaining student should not overbook an allowed open private slot'
+    ).toBeDisabled();
+    await expect(noRemainingSlotCard).toContainText(/보충 가능 0회|수강권 없음|수업 있음/);
+    expect(
+      await getReservation(
+        db,
+        fixture.noRemainingOpenSlotId,
+        fixture.noRemainingStudent.studentId
+      )
+    ).toBeNull();
+    await expectSlotStatus(db, fixture.noRemainingOpenSlotId, 'open');
 
     await eligibleReserveButton.click();
     await expect
@@ -1572,6 +1575,8 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
         teacher: fixture.teacherKey,
         teacherName: fixture.teacherKey,
         status: 'active',
+        totalCount: 2,
+        usedCount: 0,
         remainingCount: 1,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },

@@ -813,9 +813,33 @@ function getReservationTeacherKey(reservation, slot) {
     normalizeTeacherKey(slot && slot.teacherName);
 }
 
+function getReservationTeacherKeys(reservation, slot) {
+  return uniqueNormalizedTeacherKeyList([
+    reservation && reservation.teacher,
+    reservation && reservation.teacherName,
+    reservation && reservation.teacherKey,
+    reservation && reservation.teacherUid,
+    slot && slot.teacher,
+    slot && slot.teacherName,
+    slot && slot.teacherKey,
+    slot && slot.teacherUid,
+  ]);
+}
+
 function getPrivatePackageTeacherKey(pkg) {
   return normalizeTeacherKey(pkg && pkg.teacher) ||
-    normalizeTeacherKey(pkg && pkg.teacherName);
+    normalizeTeacherKey(pkg && pkg.teacherName) ||
+    normalizeTeacherKey(pkg && pkg.teacherKey) ||
+    normalizeTeacherKey(pkg && pkg.teacherUid);
+}
+
+function getPrivatePackageTeacherKeys(pkg) {
+  return uniqueNormalizedTeacherKeyList([
+    pkg && pkg.teacher,
+    pkg && pkg.teacherName,
+    pkg && pkg.teacherKey,
+    pkg && pkg.teacherUid,
+  ]);
 }
 
 function getPrivatePackageRejectReason({
@@ -823,6 +847,7 @@ function getPrivatePackageRejectReason({
   academyId,
   studentId,
   teacherKey,
+  teacherKeys = [],
 }) {
   if (!pkg) return "package_missing";
   if (normalizeId(pkg.academyId) !== academyId) return "academy_mismatch";
@@ -846,10 +871,16 @@ function getPrivatePackageRejectReason({
     return "no_remaining_count";
   }
 
-  const packageTeacherKey = getPrivatePackageTeacherKey(pkg);
-  if (!teacherKey) return "missing_slot_teacher";
-  if (!packageTeacherKey) return "missing_package_teacher";
-  if (packageTeacherKey !== teacherKey) return "teacher_mismatch";
+  const packageTeacherKeys = getPrivatePackageTeacherKeys(pkg);
+  const requestedTeacherKeys = uniqueNormalizedTeacherKeyList([
+    teacherKey,
+    ...teacherKeys,
+  ]);
+  if (requestedTeacherKeys.length === 0) return "missing_slot_teacher";
+  if (packageTeacherKeys.length === 0) return "missing_package_teacher";
+  if (!requestedTeacherKeys.some((key) => packageTeacherKeys.includes(key))) {
+    return "teacher_mismatch";
+  }
   return null;
 }
 
@@ -859,6 +890,7 @@ function isPrivatePackageForReservation(pkg, reservation, slot) {
     academyId: normalizeId(reservation && reservation.academyId),
     studentId: normalizeId(reservation && reservation.studentId),
     teacherKey: getReservationTeacherKey(reservation, slot),
+    teacherKeys: getReservationTeacherKeys(reservation, slot),
   });
 }
 
@@ -877,11 +909,16 @@ async function findActivePrivatePackageForTeacher({
   academyId,
   studentId,
   teacherKey,
+  teacherKeys = [],
   candidatePackageIds = [],
 }) {
   const normalizedAcademyId = normalizeId(academyId);
   const normalizedStudentId = normalizeId(studentId);
   const normalizedTeacherKey = normalizeTeacherKey(teacherKey);
+  const normalizedTeacherKeys = uniqueNormalizedTeacherKeyList([
+    normalizedTeacherKey,
+    ...teacherKeys,
+  ]);
   const checkedPackages = [];
   const uniqueCandidateIds = [];
   normalizeIdList(candidatePackageIds).forEach((packageId) => {
@@ -903,6 +940,7 @@ async function findActivePrivatePackageForTeacher({
       academyId: normalizedAcademyId,
       studentId: normalizedStudentId,
       teacherKey: normalizedTeacherKey,
+      teacherKeys: normalizedTeacherKeys,
     });
     checkedPackages.push({
       packageId,
@@ -938,6 +976,7 @@ async function findActivePrivatePackageForTeacher({
           academyId: normalizedAcademyId,
           studentId: normalizedStudentId,
           teacherKey: normalizedTeacherKey,
+          teacherKeys: normalizedTeacherKeys,
         });
         checkedPackages.push({
           packageId: docSnap.id,
@@ -1160,6 +1199,7 @@ function getPrivateBookingStatusLabel(status) {
   if (status === "reserved") return "수업 있음";
   if (status === "blocked") return "수업 있음";
   if (status === "no_package") return "수강권 없음";
+  if (status === "no_makeup") return "보충 가능 0회";
   return "예약 중지";
 }
 
@@ -1191,9 +1231,10 @@ function computePrivateBookingStatus({
   if (status === "reserved") return "reserved";
   if (status === "blocked") return "blocked";
   if (status !== "open") return "blocked";
-  if (!packageSummary || Number(packageSummary.remainingCount || 0) <= 0) {
+  if (!packageSummary) {
     return "no_package";
   }
+  if (Number(packageSummary.remainingCount || 0) <= 0) return "no_makeup";
   const window = computePrivateBookingWindow(slot);
   if (!window || window.weekday < 1 || window.weekday > 6) return "closed";
   if (nowMillis < window.bookingOpensAt) return "not_open";
@@ -1972,13 +2013,28 @@ function sanitizePrivateSlotAvailabilityRow({
   const bookingOpensAt = window ? window.bookingOpensAt : null;
   const bookingClosesAt = window ? window.bookingClosesAt : null;
   const startsAt = window ? window.startsAt : null;
+  const packageAvailableCount = packageSummary &&
+    packageSummary.makeupAvailableCount !== undefined ?
+      packageSummary.makeupAvailableCount :
+      packageSummary && packageSummary.remainingCount !== undefined ?
+        packageSummary.remainingCount :
+        0;
   const packageRemainingCount = packageSummary ?
-    Number(packageSummary.remainingCount || 0) :
+    Number(packageAvailableCount) :
     0;
   const safePackageSummary = packageSummary ? {
     packageId: packageSummary.packageId || "",
     teacherKey: packageSummary.teacherKey || "",
     remainingCount: packageRemainingCount,
+    totalCount: Number(packageSummary.totalCount || 0),
+    usedDeductedCount: Number(packageSummary.usedDeductedCount || 0),
+    futureFixedAllocatedCount:
+      Number(packageSummary.futureFixedAllocatedCount || 0),
+    activeFutureReservationAllocatedCount:
+      Number(packageSummary.activeFutureReservationAllocatedCount || 0),
+    noDeductionReleasedCount:
+      Number(packageSummary.noDeductionReleasedCount || 0),
+    makeupAvailableCount: packageRemainingCount,
   } : null;
 
   return {
@@ -2021,6 +2077,7 @@ function sanitizePrivateSlotAvailabilityRow({
         "",
     packageId: packageSummary ? packageSummary.packageId : "",
     packageRemainingCount,
+    makeupAvailableCount: packageRemainingCount,
     packageSummary: safePackageSummary,
     slotType: normalizeId(slot && slot.slotType),
     releasedFromFixed: slot && slot.releasedFromFixed === true,
@@ -2089,7 +2146,13 @@ function buildBusyPrivateScheduleRow({
     status :
     "busy";
   const packageRemainingCount = packageSummary ?
-    Number(packageSummary.remainingCount || 0) :
+    Number(
+        packageSummary.makeupAvailableCount !== undefined ?
+          packageSummary.makeupAvailableCount :
+          packageSummary.remainingCount !== undefined ?
+            packageSummary.remainingCount :
+            0,
+    ) :
     0;
   return {
     id,
@@ -2124,10 +2187,20 @@ function buildBusyPrivateScheduleRow({
     bookingOpenRelativeLabel: "",
     packageId: packageSummary ? packageSummary.packageId : "",
     packageRemainingCount,
+    makeupAvailableCount: packageRemainingCount,
     packageSummary: packageSummary ? {
       packageId: packageSummary.packageId || "",
       teacherKey: packageSummary.teacherKey || "",
       remainingCount: packageRemainingCount,
+      totalCount: Number(packageSummary.totalCount || 0),
+      usedDeductedCount: Number(packageSummary.usedDeductedCount || 0),
+      futureFixedAllocatedCount:
+        Number(packageSummary.futureFixedAllocatedCount || 0),
+      activeFutureReservationAllocatedCount:
+        Number(packageSummary.activeFutureReservationAllocatedCount || 0),
+      noDeductionReleasedCount:
+        Number(packageSummary.noDeductionReleasedCount || 0),
+      makeupAvailableCount: packageRemainingCount,
     } : null,
     slotType: "busy",
     availabilityTemplateId: "",
@@ -2277,6 +2350,9 @@ async function loadBusyPrivateScheduleRows(db, {
 function getPackageSummaryByTeacherKey(packageSnap, {
   academyId,
   studentId,
+  privateLessons = [],
+  privateReservations = [],
+  nowMillis = Date.now(),
 }) {
   const byTeacherKey = new Map();
   const activePackageIds = [];
@@ -2295,13 +2371,30 @@ function getPackageSummaryByTeacherKey(packageSnap, {
     }
     const teacherKey = getPrivatePackageTeacherKey(packageData);
     if (!teacherKey) return;
-    const remainingCount = Number(packageData.remainingCount || 0);
+    const usage = computePrivateTeacherPackageUsage({
+      privatePackage: packageData,
+      packageId: docSnap.id,
+      privateLessons,
+      privateReservations,
+      academyId,
+      studentId,
+      teacherKeys: getPrivatePackageTeacherKeys(packageData),
+      nowMillis,
+    });
+    const remainingCount = Number(usage.makeupAvailableCount || 0);
     const safeRemainingCount =
       Number.isFinite(remainingCount) ? remainingCount : 0;
     const summary = {
       packageId: docSnap.id,
       teacherKey,
       remainingCount: safeRemainingCount,
+      makeupAvailableCount: safeRemainingCount,
+      totalCount: usage.totalCount,
+      usedDeductedCount: usage.usedDeductedCount,
+      futureFixedAllocatedCount: usage.futureFixedAllocatedCount,
+      activeFutureReservationAllocatedCount:
+        usage.activeFutureReservationAllocatedCount,
+      noDeductionReleasedCount: usage.noDeductionReleasedCount,
     };
     const existing = byTeacherKey.get(teacherKey);
     if (!existing || safeRemainingCount > existing.remainingCount) {
@@ -2328,6 +2421,154 @@ function getPrivateSlotConflictKey({teacher, teacherName, date, time}) {
   const teacherKey =
     normalizeTeacherKey(teacher) || normalizeTeacherKey(teacherName);
   return `${teacherKey}__${normalizeId(date)}__${normalizeId(time)}`;
+}
+
+function getPrivateRowTeacherKeys(row) {
+  return uniqueNormalizedTeacherKeyList([
+    row && row.teacher,
+    row && row.teacherName,
+    row && row.teacherKey,
+    row && row.teacherUid,
+  ]);
+}
+
+function getPrivateRowStudentId(row) {
+  return normalizeId(
+      row && (row.studentId || row.studentID || row.studentUid),
+  );
+}
+
+function privateRowMatchesPackageScope({
+  row,
+  privatePackage,
+  packageId,
+  academyId,
+  studentId,
+  teacherKeys,
+  packageIdFields = ["packageId"],
+}) {
+  if (normalizeId(row && row.academyId) !== academyId) return false;
+  if (getPrivateRowStudentId(row) !== studentId) return false;
+  const rowPackageIds = packageIdFields
+      .map((field) => normalizeId(row && row[field]))
+      .filter(Boolean);
+  if (rowPackageIds.length > 0) return rowPackageIds.includes(packageId);
+  const packageTeacherKeys = teacherKeys && teacherKeys.length > 0 ?
+    teacherKeys :
+    getPrivatePackageTeacherKeys(privatePackage);
+  const rowTeacherKeys = getPrivateRowTeacherKeys(row);
+  return rowTeacherKeys.some((key) => packageTeacherKeys.includes(key));
+}
+
+function getPrivateRowStartMillis(row) {
+  const explicitStart = getTimestampMillis(row && row.startAt);
+  if (explicitStart !== null) return explicitStart;
+  return getSeoulDateTimeMillis(
+      row && (row.date || row.lessonDate || row.scheduleDate),
+      row && (row.time || row.startTime || row.scheduleTime),
+  );
+}
+
+function isFuturePrivateAllocation(row, nowMillis) {
+  const startMillis = getPrivateRowStartMillis(row);
+  if (startMillis !== null) return startMillis >= nowMillis;
+  const date = normalizeId(
+      row && (row.date || row.lessonDate || row.scheduleDate),
+  );
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    date >= getSeoulTodayDateString();
+}
+
+function computePrivateTeacherPackageUsage({
+  privatePackage,
+  packageId,
+  privateLessons = [],
+  privateReservations = [],
+  academyId,
+  studentId,
+  teacherKeys = [],
+  nowMillis = Date.now(),
+}) {
+  const totalRaw = Number(privatePackage && privatePackage.totalCount);
+  const usedRaw = Number(privatePackage && privatePackage.usedCount);
+  const remainingRaw = Number(privatePackage && privatePackage.remainingCount);
+  const totalCount = Number.isFinite(totalRaw) && totalRaw > 0 ? totalRaw : 0;
+  const usedDeductedCount = Number.isFinite(usedRaw) && usedRaw > 0 ?
+    usedRaw :
+    0;
+  const remainingCount = Number.isFinite(remainingRaw) && remainingRaw > 0 ?
+    remainingRaw :
+    0;
+  const rawAvailableCount = totalCount > 0 ?
+    Math.min(remainingCount, Math.max(0, totalCount - usedDeductedCount)) :
+    remainingCount;
+  const packageTeacherKeys = teacherKeys.length > 0 ?
+    teacherKeys :
+    getPrivatePackageTeacherKeys(privatePackage);
+
+  let futureFixedAllocatedCount = 0;
+  let noDeductionReleasedCount = 0;
+  privateLessons.forEach((lesson) => {
+    if (!privateRowMatchesPackageScope({
+      row: lesson,
+      privatePackage,
+      packageId,
+      academyId,
+      studentId,
+      teacherKeys: packageTeacherKeys,
+    })) {
+      return;
+    }
+    const skipReason = getDeductionSkipReasonForLesson(lesson);
+    if (skipReason || (lesson && lesson.isDeductCancelled === true)) {
+      noDeductionReleasedCount += 1;
+      return;
+    }
+    if (isFuturePrivateAllocation(lesson, nowMillis)) {
+      futureFixedAllocatedCount += 1;
+    }
+  });
+
+  let activeFutureReservationAllocatedCount = 0;
+  privateReservations.forEach((reservation) => {
+    if (!isActivePrivateReservation(reservation)) return;
+    if (!privateRowMatchesPackageScope({
+      row: reservation,
+      privatePackage,
+      packageId,
+      academyId,
+      studentId,
+      teacherKeys: packageTeacherKeys,
+      packageIdFields: ["packageId", "deductionPackageId"],
+    })) {
+      return;
+    }
+    if (isFuturePrivateAllocation(reservation, nowMillis)) {
+      activeFutureReservationAllocatedCount += 1;
+    }
+  });
+
+  const allocationAvailableCount =
+    rawAvailableCount -
+    futureFixedAllocatedCount -
+    activeFutureReservationAllocatedCount;
+  const releasedAvailableCount =
+    noDeductionReleasedCount - activeFutureReservationAllocatedCount;
+  const makeupAvailableCount = Math.max(
+      0,
+      allocationAvailableCount,
+      releasedAvailableCount,
+  );
+
+  return {
+    totalCount,
+    usedDeductedCount,
+    futureFixedAllocatedCount,
+    activeFutureReservationAllocatedCount,
+    noDeductionReleasedCount,
+    makeupAvailableCount,
+    remainingCount,
+  };
 }
 
 async function hasTeacherExactConflict(transaction, db, {
@@ -3111,18 +3352,43 @@ exports.listPrivateLessonSlotAvailability = onCall(
         const summaryRef = db
             .collection("studentPrivateAccessSummary")
             .doc(`${academyId}__${studentId}`);
-        const [summarySnap, packageSnap] = await Promise.all([
+        const [
+          summarySnap,
+          packageSnap,
+          privateLessonsSnap,
+          privateReservationsSnap,
+        ] = await Promise.all([
           summaryRef.get(),
           db
               .collection("studentPackages")
               .where("academyId", "==", academyId)
               .where("studentId", "==", studentId)
               .get(),
+          db
+              .collection("lessons")
+              .where("academyId", "==", academyId)
+              .where("studentId", "==", studentId)
+              .get(),
+          db
+              .collection("privateLessonReservations")
+              .where("academyId", "==", academyId)
+              .where("studentId", "==", studentId)
+              .get(),
         ]);
         const summary = summarySnap.exists ? summarySnap.data() || {} : null;
+        const nowMillis = Date.now();
         const packageSummary = getPackageSummaryByTeacherKey(packageSnap, {
           academyId,
           studentId,
+          privateLessons: privateLessonsSnap.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          })),
+          privateReservations: privateReservationsSnap.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          })),
+          nowMillis,
         });
         const packageTeacherKeys = Array.from(
             packageSummary.byTeacherKey.keys(),
@@ -3154,7 +3420,6 @@ exports.listPrivateLessonSlotAvailability = onCall(
         const currentMonday = getSeoulMondayForDate(today);
         const rangeStart = currentMonday;
         const rangeEnd = addSeoulDays(currentMonday, 12);
-        const nowMillis = Date.now();
         const byId = new Map();
 
         const addVisibleSlot = (docSnap) => {
@@ -3487,12 +3752,19 @@ exports.reservePrivateLessonSlot = onCall(
             throw new HttpsError("failed-precondition", "booking-closed");
           }
           const teacherKey = normalizeTeacherKey(teacher);
+          const teacherKeys = uniqueNormalizedTeacherKeyList([
+            teacher,
+            slot.teacherName,
+            slot.teacherKey,
+            slot.teacherUid,
+          ]);
           const packageResult = await findActivePrivatePackageForTeacher({
             transaction,
             db,
             academyId,
             studentId,
             teacherKey,
+            teacherKeys,
             candidatePackageIds: summary && summary.activePackageIds,
           });
           const hasAccess = hasSlotAccess({slot, summary, slotId, studentId});
@@ -3518,6 +3790,45 @@ exports.reservePrivateLessonSlot = onCall(
                   "no-remaining-package" :
                   packageResult.reason ||
                     "no-remaining-package",
+            );
+          }
+          const [packageLessonsSnap, packageReservationsSnap] =
+            await Promise.all([
+              transaction.get(
+                  db
+                      .collection("lessons")
+                      .where("academyId", "==", academyId)
+                      .where("studentId", "==", studentId),
+              ),
+              transaction.get(
+                  db
+                      .collection("privateLessonReservations")
+                      .where("academyId", "==", academyId)
+                      .where("studentId", "==", studentId),
+              ),
+            ]);
+          const usage = computePrivateTeacherPackageUsage({
+            privatePackage: packageResult.data,
+            packageId: packageResult.id,
+            privateLessons: packageLessonsSnap.docs.map((docSnap) => ({
+              id: docSnap.id,
+              ...docSnap.data(),
+            })),
+            privateReservations: packageReservationsSnap.docs.map(
+                (docSnap) => ({
+                  id: docSnap.id,
+                  ...docSnap.data(),
+                }),
+            ),
+            academyId,
+            studentId,
+            teacherKeys,
+            nowMillis,
+          });
+          if (usage.makeupAvailableCount <= 0) {
+            throw new HttpsError(
+                "failed-precondition",
+                "no-makeup-available",
             );
           }
           const hasTeacherConflict = await hasTeacherExactConflict(

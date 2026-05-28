@@ -173,12 +173,9 @@ function getPrivatePackageTeacherKey(pkg) {
 function isActivePrivatePackage(pkg) {
   const packageType = String(pkg?.packageType || 'private').trim()
   const status = String(pkg?.status || 'active').trim().toLowerCase()
-  const remainingCount = Number(pkg?.remainingCount || 0)
   return (
     (!packageType || packageType === 'private') &&
     !['inactive', 'expired', 'ended', 'cancelled', 'canceled'].includes(status) &&
-    Number.isFinite(remainingCount) &&
-    remainingCount > 0 &&
     Boolean(getPrivatePackageTeacherKey(pkg))
   )
 }
@@ -206,6 +203,11 @@ function getStudentPrivateSlotStatus(slot, canUsePrivateBooking) {
     isReservedByMe: false,
   })
   return status === 'available' && !canUsePrivateBooking ? 'blocked' : status
+}
+
+function getPrivateSlotAvailableCount(slot) {
+  const count = Number(slot?.makeupAvailableCount ?? slot?.packageRemainingCount ?? 0)
+  return Number.isFinite(count) ? Math.max(0, count) : 0
 }
 
 function getPrivateSlotDisplayLabel(status, fallbackLabel = '') {
@@ -336,6 +338,9 @@ function validatePrivateSlotBookingState(slot, mode) {
   if (slot.status === 'cancelled') throw new Error('취소된 시간입니다.')
   if (mode === 'reserve') {
     if (slot.status !== 'open') throw new Error('이미 예약된 시간입니다.')
+    if (getPrivateSlotAvailableCount(slot) <= 0) {
+      throw new Error('예약 가능한 보충 횟수가 없습니다.')
+    }
     return
   }
   if (slot.status !== 'reserved') throw new Error('활성 예약 시간을 찾을 수 없습니다.')
@@ -744,7 +749,16 @@ export default function StudentBookingPage() {
         releasedByStudentId: _releasedByStudentId,
         ...safeData
       } = data || {}
-      const row = { id, ...safeData, isReserved: false, isBookable: true }
+      const row = {
+        id,
+        ...safeData,
+        isReserved: false,
+        isBookable: false,
+        bookingStatus: 'blocked',
+        bookingStatusLabel: '수업 있음',
+        packageRemainingCount: 0,
+        makeupAvailableCount: 0,
+      }
       if (
         String(row.academyId || '').trim() !== currentAcademyId ||
         String(row.status || '').trim() !== 'open'
@@ -890,7 +904,16 @@ export default function StudentBookingPage() {
         releasedByStudentId: _releasedByStudentId,
         ...safeData
       } = snapshot.data() || {}
-      const row = { id: snapshot.id, ...safeData, isReserved: false, isBookable: true }
+      const row = {
+        id: snapshot.id,
+        ...safeData,
+        isReserved: false,
+        isBookable: false,
+        bookingStatus: 'blocked',
+        bookingStatusLabel: '수업 있음',
+        packageRemainingCount: 0,
+        makeupAvailableCount: 0,
+      }
       if (
         String(row.academyId || '').trim() !== currentAcademyId ||
         String(row.status || '').trim() !== 'open'
@@ -950,7 +973,16 @@ export default function StudentBookingPage() {
           releasedByStudentId: _releasedByStudentId,
           ...safeData
         } = data || {}
-        const row = { id, ...safeData, isReserved: false, isBookable: true }
+        const row = {
+          id,
+          ...safeData,
+          isReserved: false,
+          isBookable: false,
+          bookingStatus: 'blocked',
+          bookingStatusLabel: '수업 있음',
+          packageRemainingCount: 0,
+          makeupAvailableCount: 0,
+        }
         if (
           String(row.academyId || '').trim() !== currentAcademyId ||
           String(row.status || '').trim() !== 'open'
@@ -2278,7 +2310,7 @@ export default function StudentBookingPage() {
                                     slot.status === 'open'
                                   const statusLabel =
                                     getPrivateSlotDisplayLabel(bookingStatus, slot.bookingStatusLabel)
-                                  const remainingCount = Number(slot.packageRemainingCount || 0)
+                                  const remainingCount = getPrivateSlotAvailableCount(slot)
 
                                   if (isBusySlot) {
                                     return (
@@ -2353,7 +2385,7 @@ export default function StudentBookingPage() {
                                         ) : null}
                                         {canReserve ? (
                                           <div style={{ opacity: 0.72, fontSize: 12 }}>
-                                            사용 가능 수강권: 잔여 {remainingCount}회
+                                            예약 가능 보충: {remainingCount}회
                                           </div>
                                         ) : null}
                                         <button
