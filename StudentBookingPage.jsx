@@ -411,6 +411,7 @@ export default function StudentBookingPage() {
   const todayDailyMaterialId = hasOperationalAcademy
     ? `${currentAcademyId}__${getTodayStorageDateString()}`
     : ''
+  const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
@@ -828,7 +829,10 @@ export default function StudentBookingPage() {
         academyId: currentAcademyId,
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
-      const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+      const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+      const rows = canUsePrivateBooking
+        ? serverRows
+        : serverRows.filter((row) => row?.isBusy !== true && row?.bookingStatus !== 'busy')
       if (rows.length === 0) {
         const fallbackRows = await loadDirectOpenPrivateSlotsFallback()
         if (fallbackRows.length > 0) {
@@ -1035,9 +1039,6 @@ export default function StudentBookingPage() {
         .then((fallbackRows) => {
           fallbackResolved = true
           latestFallbackRows = fallbackRows
-          if (cancelled) return fallbackRows
-          setPrivateSlots(fallbackRows)
-          setPrivateSlotsLoading(false)
           return fallbackRows
         })
         .catch((fallbackError) => {
@@ -1057,7 +1058,10 @@ export default function StudentBookingPage() {
           ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
         })
         if (cancelled) return
-        const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+        const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+        const rows = canUsePrivateBooking
+          ? serverRows
+          : serverRows.filter((row) => row?.isBusy !== true && row?.bookingStatus !== 'busy')
         if (rows.length === 0 && Array.isArray(latestFallbackRows) && latestFallbackRows.length > 0) {
           setPrivateSlots(latestFallbackRows)
         } else {
@@ -1088,6 +1092,7 @@ export default function StudentBookingPage() {
     allowedPrivateSlotIds,
     allowedPrivateTeacherKeys,
     currentAcademyId,
+    canUsePrivateBooking,
     hasOperationalAcademy,
     privateAccessLoading,
     privateAccessResolved,
@@ -1309,8 +1314,6 @@ export default function StudentBookingPage() {
     })
     return slotIds
   }, [privateReservations])
-
-  const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
 
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {

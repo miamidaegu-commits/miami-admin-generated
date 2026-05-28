@@ -296,12 +296,12 @@ export function computePrivateTeacherPackageUsage({
     if (isFutureAllocation(reservation, now)) activeFutureReservationAllocatedCount += 1
   })
 
-  const allocationAvailableCount =
+  const unallocatedRemainingCount =
     rawAvailableCount - futureFixedAllocatedCount - activeFutureReservationAllocatedCount
   const releasedAvailableCount = noDeductionReleasedCount - activeFutureReservationAllocatedCount
-  const makeupAvailableCount = Math.max(
+  const availableToBook = Math.max(
     0,
-    allocationAvailableCount,
+    unallocatedRemainingCount,
     releasedAvailableCount
   )
 
@@ -311,7 +311,7 @@ export function computePrivateTeacherPackageUsage({
     futureFixedAllocatedCount,
     activeFutureReservationAllocatedCount,
     noDeductionReleasedCount,
-    makeupAvailableCount,
+    makeupAvailableCount: availableToBook,
     remainingCount,
   }
 }

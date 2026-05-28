@@ -2548,15 +2548,15 @@ function computePrivateTeacherPackageUsage({
     }
   });
 
-  const allocationAvailableCount =
+  const unallocatedRemainingCount =
     rawAvailableCount -
     futureFixedAllocatedCount -
     activeFutureReservationAllocatedCount;
   const releasedAvailableCount =
     noDeductionReleasedCount - activeFutureReservationAllocatedCount;
-  const makeupAvailableCount = Math.max(
+  const availableToBook = Math.max(
       0,
-      allocationAvailableCount,
+      unallocatedRemainingCount,
       releasedAvailableCount,
   );
 
@@ -2566,7 +2566,7 @@ function computePrivateTeacherPackageUsage({
     futureFixedAllocatedCount,
     activeFutureReservationAllocatedCount,
     noDeductionReleasedCount,
-    makeupAvailableCount,
+    makeupAvailableCount: availableToBook,
     remainingCount,
   };
 }
