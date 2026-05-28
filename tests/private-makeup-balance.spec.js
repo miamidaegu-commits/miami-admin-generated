@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { expect, test } from '@playwright/test';
 import { BASE_URL, loginAsAdmin, loginAsStudent, openDashboardSection } from './e2e-helpers.js';
+import { computePrivateTicketBalance } from '../src/features/dashboard/ticketBalanceHelpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -369,6 +370,56 @@ test('fixed private package balance creates one makeup booking and prevents over
     const linkedRow = page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${fixture.pastLessonId}"]`);
     await expect(linkedRow).toBeVisible({ timeout: 15000 });
     await expect(linkedRow).not.toContainText('수강권 없음');
+    const initialPackageDoc = await snapshotDoc(db.collection('studentPackages').doc(fixture.packageId));
+    const initialLessonDocs = await Promise.all(
+      [fixture.pastLessonId, ...fixture.futureLessonIds].map(async (lessonId) => ({
+        id: lessonId,
+        ...(await snapshotDoc(db.collection('lessons').doc(lessonId))),
+      }))
+    );
+    const initialBalance = computePrivateTicketBalance({
+      ticket: { id: fixture.packageId, ...initialPackageDoc },
+      fixedPrivateLessons: initialLessonDocs,
+      privateReservations: [],
+      studentId: fixture.studentId,
+      teacherScope: { teacher: TEACHER_NAME },
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    testInfo.attach('private-makeup-initial-balance', {
+      body: JSON.stringify(
+        {
+          balance: initialBalance,
+          releasedLessonSkipped: initialBalance.futureFixedAllocatedCount === 3,
+          lessons: initialLessonDocs.map((lesson) => ({
+            id: lesson.id,
+            date: lesson.date,
+            isDeductCancelled: lesson.isDeductCancelled,
+            noDeduction: lesson.noDeduction,
+            status: lesson.status,
+            cancellationType: lesson.cancellationType,
+            cancelledReason: lesson.cancelledReason,
+          })),
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json',
+    });
+    expect(initialBalance).toMatchObject({
+      remainingCount: 4,
+      futureFixedAllocatedCount: 3,
+      activeFutureReservationCount: 0,
+      availableToBook: 1,
+      makeupAvailableCount: 1,
+    });
+    await linkedRow.click();
+    const detailModal = page.getByTestId('calendar-private-lesson-detail-modal');
+    await expect(detailModal).toBeVisible({ timeout: 15000 });
+    testInfo.attach('private-makeup-calendar-detail', {
+      body: await detailModal.innerText(),
+      contentType: 'text/plain',
+    });
+    await detailModal.getByRole('button', { name: '닫기' }).click();
     await expect(linkedRow).toContainText('보충 가능 1회');
 
     await selectCalendarDate(page, fixture.today);

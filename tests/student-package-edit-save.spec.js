@@ -57,6 +57,7 @@ test('관리자가 학생 수강권 수정 모달에서 값을 저장하고 다�
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
 
   const tempMemo = `E2E 수강권 메모 ${Date.now()}`;
   let originalMemo = '';

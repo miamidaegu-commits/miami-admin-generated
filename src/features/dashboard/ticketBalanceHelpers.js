@@ -74,6 +74,18 @@ function isFutureAllocation(row, now) {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= getKstTodayString(now)
 }
 
+function isPrivateLessonReleasedFromDeduction(lesson) {
+  const status = normalizeId(lesson?.status).toLowerCase()
+  const cancellationType = normalizeId(lesson?.cancellationType).toLowerCase()
+  const cancelledReason = normalizeId(lesson?.cancelledReason).toLowerCase()
+  if (lesson?.isDeductCancelled === true) return true
+  if (lesson?.noDeduction === true) return true
+  if (status === 'cancelled' || status === 'canceled') return true
+  if (cancellationType === 'no_deduction') return true
+  if (cancellationType === 'class_closure') return true
+  return ['holiday', 'teacher_unavailable', 'academy_closed'].includes(cancelledReason)
+}
+
 function isNoDeductionLesson(row) {
   const status = normalizeId(row?.status).toLowerCase()
   const cancellationType = normalizeId(row?.cancellationType).toLowerCase()
@@ -121,22 +133,26 @@ function privateRowMatchesTicketScope({
   if (rowStudentId !== normalizeId(studentId)) return false
   const ticketId = normalizeId(ticket?.id)
   const rowPackageIds = packageIdFields.map((key) => normalizeId(row?.[key])).filter(Boolean)
-  if (ticketId && rowPackageIds.length > 0) return rowPackageIds.includes(ticketId)
+  if (rowPackageIds.length > 0) {
+    if (ticketId && rowPackageIds.includes(ticketId)) return true
+    return false
+  }
 
   const ticketKeys = getPackageTeacherKeys(ticket)
+  const rowKeys = [row?.teacher, row?.teacherName, row?.teacherKey, row?.teacherUid]
+    .map(normalizeKey)
+    .filter(Boolean)
+  if (ticketKeys.length === 0) return false
+  if (rowKeys.length > 0) return rowKeys.some((key) => ticketKeys.includes(key))
+
   const requestedKeys = [
     teacherScope?.teacher,
     teacherScope?.teacherName,
     teacherScope?.teacherKey,
     teacherScope?.teacherUid,
-    row?.teacher,
-    row?.teacherName,
-    row?.teacherKey,
-    row?.teacherUid,
   ]
     .map(normalizeKey)
     .filter(Boolean)
-  if (ticketKeys.length === 0 || requestedKeys.length === 0) return false
   return requestedKeys.some((key) => ticketKeys.includes(key))
 }
 
@@ -207,6 +223,7 @@ function buildBalanceResult({
   studentId,
   now,
   rowMatchesTicketScope,
+  isReleasedFromDeduction = isNoDeductionLesson,
   ambiguousLegacyMatch = false,
 }) {
   if (!ticket) {
@@ -241,7 +258,7 @@ function buildBalanceResult({
   let noDeductionReleasedCount = 0
   ;(Array.isArray(fixedLessons) ? fixedLessons : []).forEach((lesson) => {
     if (!rowMatchesTicketScope(lesson)) return
-    if (isNoDeductionLesson(lesson)) {
+    if (isReleasedFromDeduction(lesson)) {
       noDeductionReleasedCount += 1
       return
     }
@@ -299,6 +316,7 @@ export function computePrivateTicketBalance({
     studentId,
     now,
     ambiguousLegacyMatch,
+    isReleasedFromDeduction: isPrivateLessonReleasedFromDeduction,
     rowMatchesTicketScope: (row, packageIdFields = ['packageId']) =>
       privateRowMatchesTicketScope({
         row,

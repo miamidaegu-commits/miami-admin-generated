@@ -122,7 +122,7 @@ function getPrivateLessonPackageContext({
       })
     : []
   const fallbackPackage =
-    !directPackageId && !linkedPrivatePackage && matchedStudentId
+    !linkedPrivatePackage && matchedStudentId
       ? findPrivatePackageForTeacherContext({
           studentPackages,
           academyId,
@@ -142,11 +142,11 @@ function getPrivateLessonPackageContext({
           __packageStub: true,
         }
       : null
-  const contextPackage = linkedPrivatePackage || linkedPackageStub || fallbackPackage
+  const contextPackage = linkedPrivatePackage || fallbackPackage || linkedPackageStub
   return {
     linkedPrivatePackage: linkedPrivatePackage || linkedPackageStub,
     contextPackage,
-    hasDirectPackageLink: Boolean(linkedPrivatePackage || linkedPackageStub),
+    hasDirectPackageLink: Boolean(directPackageId && contextPackage),
     hasTeacherScopedPackage: Boolean(contextPackage),
     hasAnyPrivatePackage: Boolean(contextPackage || studentPrivatePackages.length > 0),
     hasPackageMatchIncomplete: Boolean(!contextPackage && studentPrivatePackages.length > 0),

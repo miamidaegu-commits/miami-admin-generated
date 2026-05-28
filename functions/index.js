@@ -2729,12 +2729,19 @@ function privateRowMatchesPackageScope({
   const rowPackageIds = packageIdFields
       .map((field) => normalizeId(row && row[field]))
       .filter(Boolean);
-  if (rowPackageIds.length > 0) return rowPackageIds.includes(packageId);
+  if (rowPackageIds.length > 0) {
+    if (packageId && rowPackageIds.includes(packageId)) return true;
+    return false;
+  }
   const packageTeacherKeys = teacherKeys && teacherKeys.length > 0 ?
     teacherKeys :
     getPrivatePackageTeacherKeys(privatePackage);
   const rowTeacherKeys = getPrivateRowTeacherKeys(row);
-  return rowTeacherKeys.some((key) => packageTeacherKeys.includes(key));
+  if (packageTeacherKeys.length === 0) return false;
+  if (rowTeacherKeys.length > 0) {
+    return rowTeacherKeys.some((key) => packageTeacherKeys.includes(key));
+  }
+  return false;
 }
 
 function getPrivateRowStartMillis(row) {
@@ -2754,6 +2761,26 @@ function isFuturePrivateAllocation(row, nowMillis) {
   );
   return /^\d{4}-\d{2}-\d{2}$/.test(date) &&
     date >= getSeoulTodayDateString();
+}
+
+function isPrivateLessonReleasedFromDeduction(lesson) {
+  const status = normalizeId(lesson && lesson.status).toLowerCase();
+  const cancellationType = normalizeId(
+      lesson && lesson.cancellationType,
+  ).toLowerCase();
+  const cancelledReason = normalizeId(
+      lesson && lesson.cancelledReason,
+  ).toLowerCase();
+  if (lesson && lesson.isDeductCancelled === true) return true;
+  if (lesson && lesson.noDeduction === true) return true;
+  if (status === "cancelled" || status === "canceled") return true;
+  if (cancellationType === "no_deduction") return true;
+  if (cancellationType === "class_closure") return true;
+  return [
+    "holiday",
+    "teacher_unavailable",
+    "academy_closed",
+  ].includes(cancelledReason);
 }
 
 function computePrivateTeacherPackageUsage({
@@ -2796,8 +2823,7 @@ function computePrivateTeacherPackageUsage({
     })) {
       return;
     }
-    const skipReason = getDeductionSkipReasonForLesson(lesson);
-    if (skipReason || (lesson && lesson.isDeductCancelled === true)) {
+    if (isPrivateLessonReleasedFromDeduction(lesson)) {
       noDeductionReleasedCount += 1;
       return;
     }
