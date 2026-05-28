@@ -273,8 +273,8 @@ async function createFixture(unique) {
   const workerSuffix = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
   const createdHour = 8 + ((Math.floor(numericUnique / 60000) + workerSuffix) % 10);
   const createdTime = `${String(createdHour).padStart(2, '0')}:${String(numericUnique % 60).padStart(2, '0')}`;
-  const hiddenDate = addDaysToYmd(createdDate, 31);
-  const otherAcademyDate = addDaysToYmd(createdDate, 62);
+  const hiddenDate = addDaysToYmd(createdDate, 1);
+  const otherAcademyDate = addDaysToYmd(createdDate, 2);
   const approvedLessonDate = addDaysToYmd(createdDate, 93);
   const hiddenApprovedLessonDate = addDaysToYmd(createdDate, 124);
   const pastApprovedLessonDate = '2020-01-04';

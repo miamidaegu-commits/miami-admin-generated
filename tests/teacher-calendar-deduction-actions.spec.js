@@ -330,16 +330,20 @@ test('teacher with deduction permission can reverse only own visible lesson', as
       canManageOwnLessonDeductions: true,
       canEditStudentPackageCounts: false,
     });
-    page.once('dialog', (dialog) => dialog.accept('teacher e2e cancel'));
     await loginAsTeacher(page);
     await selectCalendarDate(page, date);
     const ownRow = await getCalendarPrivateRow(page, ownFixture.lessonId);
     await expect(
       page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${otherFixture.lessonId}"]`)
     ).toHaveCount(0);
-    await ownRow.getByRole('button', { name: '차감취소', exact: true }).click();
+    await Promise.all([
+      page.waitForEvent('dialog').then((dialog) => dialog.accept('teacher e2e cancel')),
+      ownRow.getByRole('button', { name: '차감취소', exact: true }).click(),
+    ]);
 
-    await expect.poll(async () => (await snapshotDoc(lessonRef))?.isDeductCancelled).toBe(true);
+    await expect
+      .poll(async () => (await snapshotDoc(lessonRef))?.isDeductCancelled, { timeout: 15000 })
+      .toBe(true);
     await expect.poll(async () => (await snapshotDoc(packageRef))?.usedCount, { timeout: 15000 }).toBe(0);
     await expect.poll(async () => (await snapshotDoc(packageRef))?.remainingCount, { timeout: 15000 }).toBe(4);
   } finally {

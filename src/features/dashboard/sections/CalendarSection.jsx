@@ -11,7 +11,10 @@ import {
   getStorageDateStringFromDate,
   isSameStorageDate,
 } from '../dashboardViewUtils.js'
-import { findActivePrivatePackageForTeacher } from '../privatePackageHelpers.js'
+import {
+  computePrivateTeacherPackageUsage,
+  findActivePrivatePackageForTeacher,
+} from '../privatePackageHelpers.js'
 
 function calendarTimestampToMillis(value) {
   if (!value) return null
@@ -106,11 +109,12 @@ function getPrivateLessonPackageContext({
   academyId,
   matchedStudentId,
 }) {
+  const directPackageId = String(lesson?.packageId || '').trim()
   const linkedPackage = getPackageById(studentPackages, lesson?.packageId)
   const linkedPrivatePackage =
     linkedPackage && linkedPackage.packageType === 'private' ? linkedPackage : null
   const fallbackPackage =
-    !linkedPrivatePackage && matchedStudentId
+    !directPackageId && !linkedPrivatePackage && matchedStudentId
       ? findActivePrivatePackageForTeacher({
           studentPackages,
           academyId,
@@ -118,9 +122,24 @@ function getPrivateLessonPackageContext({
           teacher: getTeacherName(lesson),
         })
       : null
+  const linkedPackageStub =
+    !linkedPrivatePackage && directPackageId
+      ? {
+          id: directPackageId,
+          academyId,
+          studentId: matchedStudentId,
+          teacher: getTeacherName(lesson),
+          teacherName: getTeacherName(lesson),
+          packageType: 'private',
+          __packageStub: true,
+        }
+      : null
+  const contextPackage = linkedPrivatePackage || linkedPackageStub || fallbackPackage
   return {
-    linkedPrivatePackage,
-    contextPackage: linkedPrivatePackage || fallbackPackage,
+    linkedPrivatePackage: linkedPrivatePackage || linkedPackageStub,
+    contextPackage,
+    hasDirectPackageLink: Boolean(linkedPrivatePackage || linkedPackageStub),
+    hasTeacherScopedPackage: Boolean(contextPackage),
   }
 }
 
@@ -184,6 +203,15 @@ function CalendarPrivateLessonDetailModal({
           <div>과목: {detail.subject || '-'}</div>
           <div>상태: {detail.statusLabel}</div>
           <div>남은 횟수: {detail.remainingLessons}</div>
+          {detail.packageUsage ? (
+            <>
+              <div>총 횟수: {detail.packageUsage.totalCount}</div>
+              <div>사용 횟수: {detail.packageUsage.usedDeductedCount}</div>
+              <div>예정 고정수업: {detail.packageUsage.futureFixedAllocatedCount}</div>
+              <div>예약된 보충수업: {detail.packageUsage.activeFutureReservationAllocatedCount}</div>
+              <div>보충 가능: {detail.packageUsage.makeupAvailableCount}</div>
+            </>
+          ) : null}
           {detail.actionReason ? (
             <div
               data-testid="calendar-private-lesson-action-reason"
@@ -209,7 +237,7 @@ function CalendarPrivateLessonDetailModal({
             flexWrap: 'wrap',
           }}
         >
-          {canEditPackageCount ? (
+          {canEditPackageCount && detail.contextPackage?.__packageStub !== true ? (
             <button
               type="button"
               data-testid="calendar-package-count-edit-button"
@@ -453,6 +481,8 @@ export default function CalendarSection(props) {
     getMatchedStudent,
     getMatchedStudentId,
     studentPackages,
+    allPrivateLessons = [],
+    privateLessonReservations = [],
     handleDeductionToggle,
     canManageAttendance,
     canManagePrivateLessonDeductions,
@@ -709,17 +739,32 @@ export default function CalendarSection(props) {
             const {
               linkedPrivatePackage,
               contextPackage,
+              hasDirectPackageLink,
+              hasTeacherScopedPackage,
             } = getPrivateLessonPackageContext({
               lesson,
               studentPackages,
               academyId: lesson.academyId,
               matchedStudentId,
             })
-            const hasLinkedPrivatePackage = Boolean(linkedPrivatePackage)
+            const hasLinkedPrivatePackage = Boolean(contextPackage)
+            const packageUsage =
+              contextPackage && matchedStudentId
+                ? computePrivateTeacherPackageUsage({
+                    privatePackage: contextPackage,
+                    privateLessons: allPrivateLessons,
+                    privateReservations: privateLessonReservations,
+                    academyId: lesson.academyId,
+                    studentId: matchedStudentId,
+                    teacher: getTeacherName(lesson),
+                  })
+                : null
             const remainingLessons = isGroupRow || isPrivateReservationRow
               ? '—'
               : contextPackage
-                ? formatRemainingCountFromPackage(contextPackage)
+                ? `보충 가능 ${
+                    packageUsage?.makeupAvailableCount ?? formatRemainingCountFromPackage(contextPackage)
+                  }회`
                 : matchedStudent
                   ? '수강권 없음'
                   : '-'
@@ -775,6 +820,10 @@ export default function CalendarSection(props) {
                     ? '정상 차감'
                     : isPendingLinkedPrivateLesson
                       ? '자동 차감 예정'
+                      : hasTeacherScopedPackage
+                        ? hasDirectPackageLink
+                          ? '수강권 연결됨'
+                          : '수강권 자동 연결'
                       : lessonDateStr && lessonDateStr <= todayString
                       ? '수강권 없음'
                       : '예정'
@@ -784,7 +833,7 @@ export default function CalendarSection(props) {
                 ? '권한이 없습니다'
                 : isNoDeductionPrivateLesson
                   ? '휴강 · 차감 없음'
-                  : !hasLinkedPrivatePackage
+                  : !hasTeacherScopedPackage
                     ? '수강권이 연결되어 있지 않습니다'
                     : lesson.isDeductCancelled === true
                       ? ''
@@ -794,7 +843,7 @@ export default function CalendarSection(props) {
             const canEditPackageCount =
               !isGroupRow &&
               !isPrivateReservationRow &&
-              Boolean(contextPackage) &&
+              Boolean(contextPackage && contextPackage.__packageStub !== true) &&
               canEditStudentPackageCountsForPackage(contextPackage)
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
             const reservationCompleteBusy =
@@ -852,6 +901,7 @@ export default function CalendarSection(props) {
                   canToggleDeduction: isDeductedPrivateLesson || lesson.isDeductCancelled === true,
                   hasLinkedPrivatePackage,
                   contextPackage,
+                  packageUsage,
                   canEditPackageCount,
                 }
               : null

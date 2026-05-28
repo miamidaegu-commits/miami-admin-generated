@@ -3047,15 +3047,14 @@ export default function Dashboard() {
       assertSameAcademy(lessonSnap.data(), scopedAcademyId, '수업')
 
       if (usePackagePath) {
-        const selectedPackage = studentPackages.find((p) => p.id === packageId) || fallbackPackage
-        if (!selectedPackage) {
-          alert('연결된 수강권을 찾을 수 없습니다.')
-          return
-        }
-        assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
         const pkgRef = doc(db, 'studentPackages', packageId)
         const pkgSnap = await getDoc(pkgRef)
         if (!pkgSnap.exists()) throw new Error('연결된 수강권을 찾을 수 없습니다.')
+        const selectedPackage =
+          studentPackages.find((p) => p.id === packageId) ||
+          fallbackPackage ||
+          { id: packageId, ...pkgSnap.data() }
+        assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
         assertSameAcademy(pkgSnap.data(), scopedAcademyId, '수강권')
         if (selectedPackage.packageType !== 'private') {
           alert('개인 수강권이 아닙니다.')
@@ -3084,22 +3083,71 @@ export default function Dashboard() {
             return
           }
         }
+        if (currentlyCancelled) {
+          const activeReservationsUsingPackage = privateLessonReservations.filter((reservation) => {
+            if (String(reservation.academyId || '').trim() !== scopedAcademyId) return false
+            if (String(reservation.status || '').trim() !== 'active') return false
+            if (String(reservation.studentId || '').trim() !== resolvedStudentId) return false
+            if (String(reservation.packageId || reservation.deductionPackageId || '').trim() !== packageId) {
+              return false
+            }
+            const reservationTeacher = normalizeText(
+              reservation.teacher || reservation.teacherName || ''
+            )
+            return reservationTeacher && lessonTeacher && reservationTeacher === lessonTeacher
+          })
+          if (activeReservationsUsingPackage.length > 0) {
+            alert('이미 보충 예약으로 사용되어 차감복구할 수 없습니다.')
+            return
+          }
+          const rawRemaining = Number(pkgSnap.data()?.remainingCount ?? selectedPackage.remainingCount ?? 0)
+          const remainingCount = Number.isFinite(rawRemaining) ? rawRemaining : 0
+          if (remainingCount <= activeReservationsUsingPackage.length) {
+            alert('이미 보충 예약으로 사용되어 차감복구할 수 없습니다.')
+            return
+          }
+        }
 
         const lessonPatch = {
           isDeductCancelled: nextCancelled,
           deductMemo: nextMemo,
           updatedAt: serverTimestamp(),
-          studentId: resolvedStudentId,
-          studentName: getStudentName(lesson),
-          teacherName: normalizeText(getTeacherName(lesson)),
         }
         if (!String(lesson.packageId || '').trim()) {
+          lessonPatch.studentId = resolvedStudentId
+          lessonPatch.studentName = getStudentName(lesson)
+          lessonPatch.teacherName = normalizeText(getTeacherName(lesson))
           lessonPatch.packageId = packageId
           lessonPatch.packageType = 'private'
           lessonPatch.packageTitle = String(selectedPackage.title || '고정 1:1')
           lessonPatch.billingType = 'private'
         }
         batch.update(lessonRef, lessonPatch)
+        if (adminUser) {
+          const packageDataForCount = pkgSnap.data()
+          const usedBefore = Number(packageDataForCount.usedCount ?? selectedPackage.usedCount ?? 0)
+          const remainingBefore = Number(
+            packageDataForCount.remainingCount ?? selectedPackage.remainingCount ?? 0
+          )
+          const totalBefore = Number(packageDataForCount.totalCount ?? selectedPackage.totalCount ?? 0)
+          const safeUsedBefore = Number.isFinite(usedBefore) ? Math.max(0, usedBefore) : 0
+          const safeRemainingBefore = Number.isFinite(remainingBefore)
+            ? Math.max(0, remainingBefore)
+            : 0
+          const safeTotalBefore = Number.isFinite(totalBefore) ? Math.max(0, totalBefore) : 0
+          const usedAfter = nextCancelled
+            ? Math.max(0, safeUsedBefore - 1)
+            : safeUsedBefore + 1
+          const remainingAfter = nextCancelled
+            ? Math.min(safeTotalBefore, safeRemainingBefore + 1)
+            : Math.max(0, safeRemainingBefore - 1)
+          batch.update(pkgRef, {
+            usedCount: usedAfter,
+            remainingCount: remainingAfter,
+            status: getNextStudentPackageStatus(packageDataForCount.status, remainingAfter),
+            updatedAt: serverTimestamp(),
+          })
+        }
       }
 
       await batch.commit()
@@ -4111,6 +4159,8 @@ export default function Dashboard() {
       handleGroupLegacyBackfill,
       busyGroupLegacyBackfill,
       displayedLessons,
+      allPrivateLessons: lessons,
+      privateLessonReservations,
       getMatchedStudent,
       getMatchedStudentId,
       studentPackages,
