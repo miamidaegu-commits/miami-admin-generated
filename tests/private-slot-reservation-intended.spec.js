@@ -310,6 +310,7 @@ async function createStudentFixture(db, auth, {
   allowedSlotIds,
   paidLessons,
   privateSlotBookingPilotEnabled = false,
+  createPackage = teacherAccess,
 }) {
   const nowTs = admin.firestore.Timestamp.now();
   const email = `private-reservation-${roleName}-${unique}@example.com`;
@@ -366,7 +367,7 @@ async function createStudentFixture(db, auth, {
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
-    teacherAccess
+    createPackage
       ? db.collection('studentPackages').doc(packageId).set({
           academyId: DEFAULT_E2E_ACADEMY_ID,
           studentId,
@@ -386,7 +387,7 @@ async function createStudentFixture(db, auth, {
       academyId: DEFAULT_E2E_ACADEMY_ID,
       studentId,
       teacherKeys: teacherAccess ? [teacherKey] : [],
-      activePackageIds: teacherAccess ? [packageId] : [],
+      activePackageIds: createPackage ? [packageId] : [],
       allowedSlotIds,
       allowedPrivateLessonSlotIds: allowedSlotIds,
       privateSlotBookingPilotEnabled,
@@ -414,6 +415,8 @@ async function createFixture(unique) {
   const noRemainingExistingSlotId = `e2e-flex-private-no-remaining-existing-slot-${unique}`;
   const noRemainingOpenSlotId = `e2e-flex-private-no-remaining-open-slot-${unique}`;
   const noRemainingFixedLessonId = `e2e-flex-private-fixed-lesson-${unique}`;
+  const noTicketStudentId = `e2e-flex-private-no-ticket-${unique}`;
+  const noTicketOpenSlotId = `e2e-flex-private-no-ticket-open-slot-${unique}`;
   const pilotDisabledStudentId = `e2e-flex-private-pilot-disabled-${unique}`;
   const pilotDisabledSlotId = `e2e-flex-private-pilot-disabled-slot-${unique}`;
   const busyPrivateLessonId = `e2e-flex-private-busy-lesson-${unique}`;
@@ -425,6 +428,7 @@ async function createFixture(unique) {
   const noRemainingOpenSubject = `E2E Flexible No Remaining Slot ${unique}`;
   const noRemainingOpenDate = upcomingMondaySaturdayYmd(3);
   const noRemainingFixedLessonDate = upcomingMondaySaturdayYmd(4);
+  const noTicketOpenDate = upcomingMondaySaturdayYmd(6);
   const pilotDisabledDate = upcomingMondaySaturdayYmd(5);
   const busyPrivateLessonDate = upcomingMondaySaturdayYmd(2);
   const busyPrivateLessonTime = '15:00';
@@ -478,6 +482,17 @@ async function createFixture(unique) {
     allowedSlotIds: [],
     paidLessons: 1,
     privateSlotBookingPilotEnabled: true,
+  });
+  const noTicketStudent = await createStudentFixture(db, auth, {
+    unique,
+    roleName: 'no-ticket',
+    studentId: noTicketStudentId,
+    teacherAccess: true,
+    teacherKey,
+    allowedSlotIds: [],
+    paidLessons: 0,
+    privateSlotBookingPilotEnabled: true,
+    createPackage: false,
   });
   const pilotDisabledStudent = await createStudentFixture(db, auth, {
     unique,
@@ -564,6 +579,30 @@ async function createFixture(unique) {
       cancelledAt: null,
       createdAt: nowTs,
       updatedAt: nowTs,
+    }),
+    db.collection('privateLessonSlots').doc(noTicketOpenSlotId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      date: noTicketOpenDate,
+      time: '11:40',
+      subject: `E2E Flexible No Ticket Slot ${unique}`,
+      capacity: 1,
+      reservedCount: 0,
+      startAt: admin.firestore.Timestamp.fromDate(new Date(`${noTicketOpenDate}T11:40:00`)),
+      bookingOpensAt,
+      bookingClosesAt,
+      durationMinutes: 50,
+      status: 'open',
+      reservedStudentId: '',
+      reservationId: '',
+      slotType: 'open',
+      isBookable: true,
+      createdByUid: 'e2e-admin-sdk',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      reservedAt: null,
+      cancelledAt: null,
     }),
     db.collection('privateLessonSlots').doc(pilotDisabledSlotId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
@@ -694,6 +733,7 @@ async function createFixture(unique) {
     eligibleStudent,
     noRemainingStudent,
     ineligibleStudent,
+    noTicketStudent,
     pilotDisabledStudent,
     pilotDisabledSlotId,
     pilotDisabledDate,
@@ -701,6 +741,8 @@ async function createFixture(unique) {
     noRemainingExistingDate,
     noRemainingOpenSlotId,
     noRemainingOpenDate,
+    noTicketOpenSlotId,
+    noTicketOpenDate,
     noRemainingFixedLessonId,
     busyPrivateLessonId,
     busyPrivateLessonDate,
@@ -722,12 +764,20 @@ async function cleanupFixture(fixture) {
   if (!fixture) return;
   const db = getDb();
   const auth = getAuth();
-  const { slotId, eligibleStudent, noRemainingStudent, ineligibleStudent, pilotDisabledStudent } =
+  const {
+    slotId,
+    eligibleStudent,
+    noRemainingStudent,
+    ineligibleStudent,
+    noTicketStudent,
+    pilotDisabledStudent,
+  } =
     fixture;
   const refs = [
     db.collection('privateLessonSlots').doc(slotId),
     db.collection('privateLessonSlots').doc(fixture.noRemainingExistingSlotId),
     db.collection('privateLessonSlots').doc(fixture.noRemainingOpenSlotId),
+    db.collection('privateLessonSlots').doc(fixture.noTicketOpenSlotId),
     db.collection('privateLessonSlots').doc(fixture.pilotDisabledSlotId),
     db.collection('privateLessonReservations').doc(reservationId(slotId, eligibleStudent.studentId)),
     db.collection('privateLessonReservations').doc(reservationId(slotId, noRemainingStudent.studentId)),
@@ -748,26 +798,31 @@ async function cleanupFixture(fixture) {
     db.collection('privateStudents').doc(eligibleStudent.studentId),
     db.collection('privateStudents').doc(noRemainingStudent.studentId),
     db.collection('privateStudents').doc(ineligibleStudent.studentId),
+    db.collection('privateStudents').doc(noTicketStudent.studentId),
     db.collection('privateStudents').doc(pilotDisabledStudent.studentId),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(eligibleStudent.studentId)),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(noRemainingStudent.studentId)),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(ineligibleStudent.studentId)),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(noTicketStudent.studentId)),
     db.collection('studentPrivateAccessSummary').doc(
       privateSummaryId(pilotDisabledStudent.studentId)
     ),
     db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(eligibleStudent.studentId)),
     db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(noRemainingStudent.studentId)),
     db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(ineligibleStudent.studentId)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(noTicketStudent.studentId)),
     db.collection('studentPrivateBookingStats').doc(
       privateBookingStatsId(pilotDisabledStudent.studentId)
     ),
     db.collection('users').doc(eligibleStudent.uid),
     db.collection('users').doc(noRemainingStudent.uid),
     db.collection('users').doc(ineligibleStudent.uid),
+    db.collection('users').doc(noTicketStudent.uid),
     db.collection('users').doc(pilotDisabledStudent.uid),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${eligibleStudent.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${noRemainingStudent.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${ineligibleStudent.uid}`),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${noTicketStudent.uid}`),
     db.collection('academyMemberships').doc(
       `${DEFAULT_E2E_ACADEMY_ID}_${pilotDisabledStudent.uid}`
     ),
@@ -776,6 +831,7 @@ async function cleanupFixture(fixture) {
     eligibleStudent.packageId,
     noRemainingStudent.packageId,
     ineligibleStudent.packageId,
+    noTicketStudent.packageId,
     pilotDisabledStudent.packageId,
   ]
     .filter(Boolean)
@@ -793,6 +849,7 @@ async function cleanupFixture(fixture) {
       eligibleStudent.studentId,
       noRemainingStudent.studentId,
       ineligibleStudent.studentId,
+      noTicketStudent.studentId,
       pilotDisabledStudent.studentId,
     ])
     .get()
@@ -804,6 +861,7 @@ async function cleanupFixture(fixture) {
     auth.deleteUser(eligibleStudent.uid).catch(() => {}),
     auth.deleteUser(noRemainingStudent.uid).catch(() => {}),
     auth.deleteUser(ineligibleStudent.uid).catch(() => {}),
+    auth.deleteUser(noTicketStudent.uid).catch(() => {}),
     auth.deleteUser(pilotDisabledStudent.uid).catch(() => {}),
   ]);
 }
@@ -1387,22 +1445,32 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       await dialog.accept();
     });
     await loginAsStudentWithPrivateBooking(noRemainingPage, fixture.noRemainingStudent.email);
-    const noRemainingSlotCards = await expectPrivateSlotCardCount(
-      noRemainingPage,
-      fixture.noRemainingOpenDate,
-      1,
-      'no-remaining student should see the allowed open private slot'
-    );
-    const noRemainingSlotCard = noRemainingSlotCards.first();
-    await expect(noRemainingSlotCard).toBeVisible();
-    const noRemainingReserveButton = noRemainingSlotCard.getByTestId(
-      'student-private-slot-reserve-button'
+    const noRemainingBusyCard = noRemainingPage.locator(
+      `[data-testid="student-private-busy-slot-card"][data-slot-id="${fixture.noRemainingOpenSlotId}"]`
     );
     await expect(
-      noRemainingReserveButton,
-      'no-remaining student should not overbook an allowed open private slot'
-    ).toBeDisabled();
-    await expect(noRemainingSlotCard).toContainText(/보충 가능 0회|수강권 등록 필요|수업 있음/);
+      noRemainingBusyCard,
+      'no-remaining student should see the allowed open private slot as unavailable'
+    ).toBeVisible({ timeout: 15000 });
+    await expect(noRemainingBusyCard).toContainText('수업 있음');
+    await expect(
+      noRemainingPage.locator(
+        `[data-testid="student-private-slot-card"][data-slot-id="${fixture.noRemainingOpenSlotId}"]`
+      )
+    ).toHaveCount(0);
+    await noRemainingPage.getByTestId('private-slot-view-mode-available').click();
+    await expectPrivateBusyCardCount(
+      noRemainingPage,
+      fixture.noRemainingOpenDate,
+      0,
+      'available-only view should hide no-remaining unavailable private slot'
+    );
+    await expectPrivateSlotCardCount(
+      noRemainingPage,
+      fixture.noRemainingOpenDate,
+      0,
+      'available-only view should not show no-remaining open private slot'
+    );
     expect(
       await getReservation(
         db,
@@ -1411,6 +1479,45 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       )
     ).toBeNull();
     await expectSlotStatus(db, fixture.noRemainingOpenSlotId, 'open');
+
+    const noTicketContext = await browser.newContext();
+    contexts.push(noTicketContext);
+    const noTicketPage = await noTicketContext.newPage();
+    await loginAsStudentWithPrivateBooking(noTicketPage, fixture.noTicketStudent.email);
+    const noTicketBusyCard = noTicketPage.locator(
+      `[data-testid="student-private-busy-slot-card"][data-slot-id="${fixture.noTicketOpenSlotId}"]`
+    );
+    await expect(
+      noTicketBusyCard,
+      'no-ticket student should see teacher schedule as unavailable'
+    ).toBeVisible({ timeout: 15000 });
+    await expect(noTicketBusyCard).toContainText('수업 있음');
+    await expect(
+      noTicketPage.locator(
+        `[data-testid="student-private-slot-card"][data-slot-id="${fixture.noTicketOpenSlotId}"]`
+      )
+    ).toHaveCount(0);
+    await noTicketPage.getByTestId('private-slot-view-mode-available').click();
+    await expectPrivateBusyCardCount(
+      noTicketPage,
+      fixture.noTicketOpenDate,
+      0,
+      'available-only view should hide no-ticket unavailable private slot'
+    );
+    await expectPrivateSlotCardCount(
+      noTicketPage,
+      fixture.noTicketOpenDate,
+      0,
+      'available-only view should not show no-ticket open private slot'
+    );
+    expect(
+      await getReservation(
+        db,
+        fixture.noTicketOpenSlotId,
+        fixture.noTicketStudent.studentId
+      )
+    ).toBeNull();
+    await expectSlotStatus(db, fixture.noTicketOpenSlotId, 'open');
 
     await eligibleReserveButton.click();
     await expect

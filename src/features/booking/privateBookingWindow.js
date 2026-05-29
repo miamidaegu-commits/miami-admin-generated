@@ -11,6 +11,7 @@ export const PRIVATE_BOOKING_STATUS_LABELS = {
   reserved_by_me: '내 예약',
   reserved: '수업 있음',
   blocked: '수업 있음',
+  no_ticket: '수업 있음',
   no_package: '수강권 등록 필요',
   no_makeup: '보충 가능 0회',
 }
@@ -130,7 +131,8 @@ export function getPrivateBookingStatus({
   if (slot?.isBusy === true) return String(slot?.bookingStatus || 'busy').trim() || 'busy'
   if (rawStatus === 'reserved') return 'reserved'
   if (rawStatus === 'blocked' || rawStatus === 'closed' || rawStatus === 'cancelled') return 'blocked'
-  if (!hasPackage || Number(slot?.packageRemainingCount ?? 1) <= 0) return 'no_package'
+  if (!hasPackage) return 'no_ticket'
+  if (Number(slot?.packageRemainingCount ?? 1) <= 0) return 'no_makeup'
 
   const window = getBookingWindowForPrivateLesson(slot?.date, slot?.time)
   if (!window || !window.isBookableWeekday) return 'closed'
