@@ -33,6 +33,22 @@ function weekdayLabel(value) {
   return WEEKDAY_OPTIONS.find((option) => option.value === String(value))?.label || '-'
 }
 
+function getShortIdentity(value) {
+  const text = String(value || '').trim()
+  return text.length > 10 ? text.slice(0, 10) : text
+}
+
+function getPrivateSlotTeacherDisplay(row) {
+  const displayName = String(row?.teacherName || row?.teacher || '').trim()
+  const identity =
+    String(row?.teacherKey || '').trim() ||
+    String(row?.teacherEmail || '').trim() ||
+    getShortIdentity(row?.teacherUid)
+  if (!displayName) return identity || '-'
+  if (!identity || identity === displayName) return displayName
+  return `${displayName} · ${identity}`
+}
+
 function normalizeEligibleStudentIds(values) {
   const out = []
   const seen = new Set()
@@ -154,6 +170,7 @@ export default function PrivateLessonSlotsSection({
                 선생님
                 <select
                   value={privateAvailabilityTemplateForm.teacher}
+                  data-testid="private-availability-template-teacher-select"
                   onChange={(event) =>
                     setPrivateAvailabilityTemplateForm((prev) => ({
                       ...prev,
@@ -295,7 +312,7 @@ export default function PrivateLessonSlotsSection({
                         padding: 10,
                       }}
                     >
-                      <span>{template.teacherName || template.teacher || '-'}</span>
+                      <span>{getPrivateSlotTeacherDisplay(template)}</span>
                       <span>{weekdayLabel(template.weekday)}</span>
                       <span>{template.time || '-'}</span>
                       <span>{status === 'active' ? '사용' : '중지'}</span>
@@ -348,6 +365,7 @@ export default function PrivateLessonSlotsSection({
               선생님
               <select
                 value={privateSlotForm.teacher}
+                data-testid="private-slot-teacher-select"
                 onChange={(event) =>
                   setPrivateSlotForm((prev) => ({ ...prev, teacher: event.target.value }))
                 }
@@ -548,10 +566,11 @@ export default function PrivateLessonSlotsSection({
                 className="table-row"
                 data-testid="private-slot-row"
                 data-slot-id={slot.id}
+                data-academy-id={slot.academyId || ''}
                 style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
               >
                 <span>{[slot.date, slot.time].filter(Boolean).join(' ') || slot.id}</span>
-                <span>{slot.teacherName || slot.teacher || '-'}</span>
+                <span>{getPrivateSlotTeacherDisplay(slot)}</span>
                 <span>
                   {privateSlotStatusLabel(slot)}
                   {isAdmin &&

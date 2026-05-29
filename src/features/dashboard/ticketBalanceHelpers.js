@@ -97,7 +97,7 @@ function isNoDeductionLesson(row) {
 }
 
 function getPackageTeacherKeys(ticket) {
-  return [ticket?.teacher, ticket?.teacherName, ticket?.teacherKey, ticket?.teacherUid]
+  return [ticket?.teacherUid, ticket?.teacherKey, ticket?.teacher, ticket?.teacherName]
     .map(normalizeKey)
     .filter(Boolean)
 }
@@ -139,17 +139,17 @@ function privateRowMatchesTicketScope({
   }
 
   const ticketKeys = getPackageTeacherKeys(ticket)
-  const rowKeys = [row?.teacher, row?.teacherName, row?.teacherKey, row?.teacherUid]
+  const rowKeys = [row?.teacherUid, row?.teacherKey, row?.teacher, row?.teacherName]
     .map(normalizeKey)
     .filter(Boolean)
   if (ticketKeys.length === 0) return false
   if (rowKeys.length > 0) return rowKeys.some((key) => ticketKeys.includes(key))
 
   const requestedKeys = [
+    teacherScope?.teacherUid,
+    teacherScope?.teacherKey,
     teacherScope?.teacher,
     teacherScope?.teacherName,
-    teacherScope?.teacherKey,
-    teacherScope?.teacherUid,
   ]
     .map(normalizeKey)
     .filter(Boolean)

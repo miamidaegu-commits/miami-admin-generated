@@ -32,10 +32,10 @@ function uniqueTeacherKeys(...values) {
 
 export function getPackageTeacherKeys(pkg) {
   return uniqueTeacherKeys(
-    pkg?.teacher,
-    pkg?.teacherName,
     pkg?.teacherKey,
-    pkg?.teacherUid
+    pkg?.teacherUid,
+    pkg?.teacher,
+    pkg?.teacherName
   )
 }
 

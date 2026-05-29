@@ -440,6 +440,8 @@ service cloud.firestore {
             data.eligibleStudentIds is list &&
             myStudentId(data.academyId) in data.eligibleStudentIds
           ) ||
+          hasPrivateTeacherAccess(data.academyId, data.teacherUid) ||
+          hasPrivateTeacherAccess(data.academyId, data.teacherKey) ||
           hasPrivateTeacherAccess(data.academyId, data.teacher) ||
           hasPrivateTeacherAccess(data.academyId, data.teacherName)
         );
@@ -707,6 +709,9 @@ service cloud.firestore {
           "academyId",
           "teacher",
           "teacherName",
+          "teacherKey",
+          "teacherUid",
+          "teacherEmail",
           "date",
           "time",
           "subject",
@@ -741,6 +746,9 @@ service cloud.firestore {
         data.teacher is string &&
         data.teacher != "" &&
         (!("teacherName" in data.keys()) || data.teacherName is string) &&
+        (!("teacherKey" in data.keys()) || data.teacherKey is string) &&
+        (!("teacherUid" in data.keys()) || data.teacherUid is string) &&
+        (!("teacherEmail" in data.keys()) || data.teacherEmail is string) &&
         data.date is string &&
         data.date != "" &&
         data.time is string &&
@@ -921,8 +929,7 @@ service cloud.firestore {
     }
 
     function validPrivateSlotManagerCancelOpen() {
-      return validPrivateSlotBaseShape(request.resource.data) &&
-        changedOnly(["status", "updatedAt", "cancelledAt"]) &&
+      return changedOnly(["status", "updatedAt", "cancelledAt"]) &&
         resource.data.status == "open" &&
         request.resource.data.status == "cancelled" &&
         request.resource.data.academyId == resource.data.academyId &&
@@ -997,6 +1004,8 @@ service cloud.firestore {
           "teacher",
           "teacherName",
           "teacherKey",
+          "teacherUid",
+          "teacherEmail",
           "weekday",
           "time",
           "durationMinutes",
@@ -1011,6 +1020,8 @@ service cloud.firestore {
         data.teacherKey is string &&
         data.teacherKey != "" &&
         (!("teacherName" in data.keys()) || data.teacherName is string) &&
+        (!("teacherUid" in data.keys()) || data.teacherUid is string) &&
+        (!("teacherEmail" in data.keys()) || data.teacherEmail is string) &&
         data.weekday is int &&
         data.weekday >= 1 &&
         data.weekday <= 6 &&
