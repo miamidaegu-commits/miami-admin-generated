@@ -5,7 +5,12 @@ import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
-import { loginAsAdmin, loginAsStudent, openDashboardSection } from './e2e-helpers.js';
+import {
+  loginAsAdmin,
+  loginAsStudent,
+  openDashboardSection,
+  selectTeacherOption,
+} from './e2e-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -213,6 +218,26 @@ async function expectSlotStatus(db, slotId, expected) {
       return snap.exists ? snap.data()?.status || null : null;
     }, { timeout: 15000 })
     .toBe(expected);
+}
+
+async function expectSlotStatusWithDiagnostics(db, page, slotId, expected, diagnostics = {}) {
+  try {
+    await expectSlotStatus(db, slotId, expected);
+  } catch (error) {
+    const [slotSnap, rows] = await Promise.all([
+      db.collection('privateLessonSlots').doc(slotId).get(),
+      getVisiblePrivateSlotRows(page).catch(() => []),
+    ]);
+    throw new Error(
+      [
+        `Expected private slot ${slotId} status to be ${expected}.`,
+        `Slot data: ${JSON.stringify(slotSnap.exists ? slotSnap.data() : null, null, 2)}`,
+        `Visible private slot rows: ${JSON.stringify(rows, null, 2)}`,
+        `Diagnostics: ${JSON.stringify(diagnostics, null, 2)}`,
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
 }
 
 async function expectReservationStatus(db, slotId, studentId, expected) {
@@ -658,6 +683,68 @@ async function cleanupFixture(fixture) {
   ]);
 }
 
+async function getVisiblePrivateSlotRows(page) {
+  return page.locator('[data-testid="private-slot-row"]').evaluateAll((rows) =>
+    rows.map((row) => ({
+      slotId: row.getAttribute('data-slot-id') || '',
+      academyId: row.getAttribute('data-academy-id') || '',
+      text: row.textContent || '',
+    }))
+  );
+}
+
+async function expectPrivateSlotRowHidden(page, slotId, message) {
+  const row = page.locator(`[data-testid="private-slot-row"][data-slot-id="${slotId}"]`);
+  try {
+    await expect(row, message).toHaveCount(0);
+  } catch (error) {
+    const [rows, url, authState] = await Promise.all([
+      getVisiblePrivateSlotRows(page).catch(() => []),
+      Promise.resolve(page.url()),
+      page
+        .evaluate(() => {
+          const keys = Object.keys(window.localStorage || {}).filter((key) =>
+            key.includes('firebase')
+          );
+          return { firebaseLocalStorageKeys: keys };
+        })
+        .catch(() => null),
+    ]);
+    throw new Error(
+      [
+        message || `Private slot row should be hidden: ${slotId}`,
+        `Current URL: ${url}`,
+        `Auth storage: ${JSON.stringify(authState)}`,
+        `Visible private slot rows: ${JSON.stringify(rows, null, 2)}`,
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+}
+
+async function expectPrivateSlotRowVisible(page, slotId, message) {
+  const row = page.locator(`[data-testid="private-slot-row"][data-slot-id="${slotId}"]`);
+  try {
+    await expect(row, message).toBeVisible({ timeout: 30000 });
+  } catch (error) {
+    const [rows, bodyText] = await Promise.all([
+      getVisiblePrivateSlotRows(page).catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+    throw new Error(
+      [
+        message || `Private slot row should be visible: ${slotId}`,
+        `Current URL: ${page.url()}`,
+        `Visible private slot rows: ${JSON.stringify(rows, null, 2)}`,
+        'Body:',
+        bodyText.slice(0, 1500),
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+  return row;
+}
+
 test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and tenant scope', async ({
   browser,
   page,
@@ -680,8 +767,16 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '1:1 예약 시간 관리');
     await expect(page.getByRole('heading', { name: '1:1 예약 시간 관리', level: 1 })).toBeVisible();
-    await expect(page.getByText(fixture.hiddenDate).first()).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText(fixture.otherAcademyDate)).toHaveCount(0);
+    await expectPrivateSlotRowVisible(
+      page,
+      fixture.hiddenSlotId,
+      'current academy private slot row should be visible to current academy admin'
+    );
+    await expectPrivateSlotRowHidden(
+      page,
+      fixture.otherAcademySlotId,
+      'other academy private slot row should not be visible to current academy admin'
+    );
 
     const existingMatchingSlots = await queryMatchingSlots(db, {
       date: fixture.createdDate,
@@ -689,7 +784,7 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     });
     const existingMatchingSlotIds = new Set(existingMatchingSlots.map((slot) => slot.id));
 
-    await page.getByLabel('1:1 수업 선생님').selectOption(TEACHER_NAME);
+    await selectTeacherOption(page.getByLabel('1:1 수업 선생님'), TEACHER_NAME);
     await page.getByLabel('1:1 수업 날짜').fill(fixture.createdDate);
     await page.getByLabel('1:1 수업 시작 시간').fill(fixture.createdTime);
     await page.getByLabel('1:1 수업 진행 시간').fill('50');
@@ -757,7 +852,12 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
         hasText: fixture.createdDate,
       })
     ).toHaveCount(0);
-    await expect(studentPage.getByText(fixture.hiddenDate)).toHaveCount(0);
+    await expect(
+      studentPage.locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.hiddenSlotId}"]`)
+    ).toHaveCount(0);
+    await expect(
+      studentPage.locator(`[data-testid="student-private-busy-slot-card"][data-slot-id="${fixture.hiddenSlotId}"]`)
+    ).toHaveCount(0);
     await expect(studentPage.locator('body')).not.toContainText(fixture.secondStudentName);
 
     const secondStudentContext = await browser.newContext();
@@ -779,11 +879,20 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
       .locator(`[data-testid="private-slot-row"][data-slot-id="${fixture.createdSlotId}"]`);
     await expect(dashboardSlotRow).toBeVisible({ timeout: 15000 });
     await expect(dashboardSlotRow).toContainText(fixture.secondStudentName);
-    await Promise.all([
-      page.waitForEvent('dialog').then((dialog) => dialog.accept()),
-      dashboardSlotRow.getByTestId('private-slot-cancel-button').click(),
-    ]);
-    await expectSlotStatus(db, fixture.createdSlotId, 'cancelled');
+    const cancelDialogs = [];
+    const acceptCancelDialog = async (dialog) => {
+      cancelDialogs.push(dialog.message());
+      await dialog.accept();
+    };
+    page.on('dialog', acceptCancelDialog);
+    try {
+      await dashboardSlotRow.getByTestId('private-slot-cancel-button').click();
+      await expectSlotStatusWithDiagnostics(db, page, fixture.createdSlotId, 'cancelled', {
+        cancelDialogs,
+      });
+    } finally {
+      page.off('dialog', acceptCancelDialog);
+    }
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));
     if (fixture) {
@@ -835,7 +944,7 @@ test('admin can create repeated weekly private slots and skips duplicate Tuesday
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '1:1 예약 시간 관리');
-    await page.getByLabel('1:1 수업 선생님').selectOption(TEACHER_NAME);
+    await selectTeacherOption(page.getByLabel('1:1 수업 선생님'), TEACHER_NAME);
     await page.getByLabel('1:1 수업 날짜').fill(startDate);
     await page.getByLabel('1:1 수업 시작 시간').fill(time);
     await page.getByLabel('1:1 수업 진행 시간').fill('50');

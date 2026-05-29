@@ -116,6 +116,55 @@ export async function openDashboardSection(page, sectionName) {
   await expect(page.getByRole('heading', { name: sectionName, level: 1 })).toBeVisible();
 }
 
+async function getSelectOptionRows(selectLocator) {
+  return selectLocator.locator('option').evaluateAll((items) =>
+    items.map((option) => ({
+      value: option.value,
+      label: option.label || option.textContent || '',
+      text: option.textContent || '',
+    }))
+  );
+}
+
+function teacherOptionMatches(option, teacherText) {
+  const target = String(teacherText || '').trim();
+  if (!target) return false;
+  const value = String(option?.value || '').trim();
+  const label = String(option?.label || '').trim();
+  const text = String(option?.text || '').trim();
+  return (
+    value === target ||
+    label === target ||
+    text === target ||
+    label.includes(target) ||
+    text.includes(target)
+  );
+}
+
+export async function selectTeacherOption(selectLocator, teacherText, options = {}) {
+  const timeout = options.timeout ?? 15000;
+  await expect(selectLocator).toBeVisible({ timeout });
+
+  let optionRows = [];
+  await expect
+    .poll(
+      async () => {
+        optionRows = await getSelectOptionRows(selectLocator);
+        return optionRows.some((option) => teacherOptionMatches(option, teacherText));
+      },
+      { timeout }
+    )
+    .toBe(true);
+
+  const match = optionRows.find((option) => teacherOptionMatches(option, teacherText));
+  if (!match) {
+    throw new Error(
+      `Teacher option not found for ${teacherText}. Options: ${JSON.stringify(optionRows)}`
+    );
+  }
+  await selectLocator.selectOption(match.value);
+}
+
 export function getStudentSearchInput(page) {
   return page.getByTestId('student-search-input');
 }

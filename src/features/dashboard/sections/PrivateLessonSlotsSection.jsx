@@ -566,6 +566,7 @@ export default function PrivateLessonSlotsSection({
                 className="table-row"
                 data-testid="private-slot-row"
                 data-slot-id={slot.id}
+                data-academy-id={slot.academyId || ''}
                 style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
               >
                 <span>{[slot.date, slot.time].filter(Boolean).join(' ') || slot.id}</span>

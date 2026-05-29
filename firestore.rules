@@ -929,8 +929,7 @@ service cloud.firestore {
     }
 
     function validPrivateSlotManagerCancelOpen() {
-      return validPrivateSlotBaseShape(request.resource.data) &&
-        changedOnly(["status", "updatedAt", "cancelledAt"]) &&
+      return changedOnly(["status", "updatedAt", "cancelledAt"]) &&
         resource.data.status == "open" &&
         request.resource.data.status == "cancelled" &&
         request.resource.data.academyId == resource.data.academyId &&

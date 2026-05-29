@@ -9,6 +9,7 @@ import {
   getRegisteredStudentsHeading,
   loginAsAdmin,
   openDashboardSection,
+  selectTeacherOption,
 } from './e2e-helpers.js';
 import {
   ADMIN_EMAIL,
@@ -219,7 +220,7 @@ test('admin can create a group class when start date differs from selected weekd
     const dialog = page.getByRole('dialog', { name: '정규반 만들기' });
     await expect(dialog).toBeVisible();
     await dialog.getByLabel('반 이름').fill(groupName);
-    await dialog.getByLabel('담당 선생님').selectOption(TEACHER_NAME);
+    await selectTeacherOption(dialog.getByLabel('담당 선생님'), TEACHER_NAME);
     await dialog.getByLabel('정원 (명)').fill('4');
     await dialog.getByLabel('수업 시작일 (자동 일정 기준)').fill(startYmd);
     await dialog.getByLabel('기본 시간 (HH:mm)').fill('15:00');
