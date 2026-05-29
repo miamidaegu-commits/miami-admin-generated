@@ -81,7 +81,18 @@ function formatPrivatePackageUsageSummary(pkg) {
   return `잔여 ${remaining}회 / 총 ${total}회 · 사용 ${used}회`
 }
 
-function formatPrivatePackageTeacherSummary(packages) {
+function formatPrivateTicketScheduleSummary(balance) {
+  if (!balance) return ''
+  const fixedAllocated = Math.max(0, Number(balance.futureFixedAllocatedCount) || 0)
+  const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
+  const makeupAvailable = Math.max(0, Number(balance.makeupAvailableCount) || 0)
+  const parts = [`고정 예정 ${fixedAllocated}회`]
+  if (activeReservations > 0) parts.push(`선택예약 ${activeReservations}회`)
+  parts.push(`보충 가능 ${makeupAvailable}회`)
+  return parts.join(' · ')
+}
+
+function formatPrivatePackageTeacherSummary(packages, balanceByPackageId = new Map()) {
   const privatePackages = (Array.isArray(packages) ? packages : []).filter(
     (pkg) => String(pkg?.packageType || '').trim() === 'private'
   )
@@ -100,9 +111,12 @@ function formatPrivatePackageTeacherSummary(packages) {
   return displayPackages.map((pkg) => {
     const remaining = toFiniteNumber(pkg.remainingCount)
     const isActive = isStudentPackageRowActive(pkg)
+    const balance = balanceByPackageId.get(String(pkg.id || '').trim())
+    const scheduleText = formatPrivateTicketScheduleSummary(balance)
     return {
       id: String(pkg.id || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}`),
       text: `${getPrivatePackageTeacherLabel(pkg)} · ${formatPrivatePackageUsageSummary(pkg)}`,
+      scheduleText,
       statusText: !isActive || remaining <= 0 ? '소진' : '',
       muted: !isActive || remaining <= 0,
     }
@@ -288,6 +302,7 @@ export default function StudentsSection({
   studentPackageTableSummaryByStudentId,
   privateLessonProgressByStudentId = new Map(),
   studentPackagesSortedByStudentId,
+  privateTicketBalanceByPackageId = new Map(),
   expandedStudentPackageStudentId,
   setExpandedStudentPackageStudentId,
   showAllStudentPackagesInDetail,
@@ -1031,7 +1046,8 @@ export default function StudentsSection({
               (pkg) =>
                 String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
                 String(pkg.studentId || '').trim() === String(student.id || '').trim()
-            )
+            ),
+            privateTicketBalanceByPackageId
           )
           const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
           const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
@@ -1120,15 +1136,22 @@ export default function StudentsSection({
                     >
                       {summary.text}
                       {summary.statusText ? ` · ${summary.statusText}` : ''}
+                      {summary.scheduleText ? (
+                        <span style={{ display: 'block', fontSize: 12, opacity: 0.82 }}>
+                          {summary.scheduleText}
+                        </span>
+                      ) : null}
                     </span>
                   ))
                 ) : (
                   <span>개인 수강권 등록 필요</span>
                 )}
-                <PrivateLessonProgressSummary
-                  progress={privateLessonProgress}
-                  scheduleOnly={privatePackageTeacherSummary.length === 0}
-                />
+                {privatePackageTeacherSummary.length === 0 ? (
+                  <PrivateLessonProgressSummary
+                    progress={privateLessonProgress}
+                    scheduleOnly
+                  />
+                ) : null}
               </span>
               <span data-testid="student-group-package-cell">
                 {formatStudentPackageCellSummary(

@@ -15,6 +15,7 @@ import {
   studentPackageAttentionScope,
   studentPackageExpiresAtToYmd,
 } from '../dashboardViewUtils.js'
+import { computePrivateTeacherPackageUsage } from '../privatePackageHelpers.js'
 
 function toPositiveInteger(value) {
   const n = Number(value)
@@ -65,6 +66,7 @@ export default function useStudentsSectionViewModel({
   privateStudents,
   studentPackages,
   lessons,
+  privateLessonReservations = [],
   studentSummaryGroupStudents,
   studentSummaryGroupLessons,
   groupClasses,
@@ -247,6 +249,31 @@ export default function useStudentsSectionViewModel({
     }
     return map
   }, [studentPackages])
+
+  const privateTicketBalanceByPackageId = useMemo(() => {
+    const map = new Map()
+    for (const pkg of studentPackages) {
+      if (String(pkg?.packageType || '').trim() !== 'private') continue
+      const packageId = String(pkg?.id || '').trim()
+      const studentId = String(pkg?.studentId || '').trim()
+      const academyId = String(pkg?.academyId || '').trim()
+      if (!packageId || !studentId || !academyId) continue
+      map.set(
+        packageId,
+        computePrivateTeacherPackageUsage({
+          privatePackage: pkg,
+          privateLessons: lessons,
+          privateReservations: privateLessonReservations,
+          academyId,
+          studentId,
+          teacher: pkg.teacher || pkg.teacherName,
+          teacherKey: pkg.teacherKey,
+          teacherUid: pkg.teacherUid,
+        })
+      )
+    }
+    return map
+  }, [studentPackages, lessons, privateLessonReservations])
 
   const activeGroupRegistrationsByStudentId = useMemo(() => {
     const today = getTodayStorageDateString()
@@ -685,6 +712,7 @@ export default function useStudentsSectionViewModel({
     studentPackageTableSummaryByStudentId,
     privateLessonProgressByStudentId,
     studentPackagesSortedByStudentId,
+    privateTicketBalanceByPackageId,
     activeGroupRegistrationsByStudentId,
     nextPrivateLessonByStudentId,
     nextGroupLessonByStudentId,

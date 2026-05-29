@@ -320,10 +320,10 @@ test('학생 관리 목록에 개인 수업 진행 요약이 표시된다', asyn
   const studentRow = getStudentRow(page, TEST_STUDENT_NAME);
   await expect(studentRow).toBeVisible();
 
-  const progress = studentRow.getByTestId('student-private-lesson-progress');
-  await expect(progress).toContainText('총 8회');
-  await expect(progress).toContainText(/지난 \d+회/);
-  await expect(progress).toContainText(/예정 \d+회/);
+  const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
+  await expect(privatePackageCell).toContainText('총 8회');
+  await expect(privatePackageCell).toContainText(/고정 예정 \d+회/);
+  await expect(privatePackageCell).toContainText(/보충 가능 \d+회/);
 });
 
 test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표시된다', async ({

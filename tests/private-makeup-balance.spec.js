@@ -3,7 +3,14 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { expect, test } from '@playwright/test';
-import { BASE_URL, loginAsAdmin, loginAsStudent, openDashboardSection } from './e2e-helpers.js';
+import {
+  BASE_URL,
+  getStudentRow,
+  getStudentSearchInput,
+  loginAsAdmin,
+  loginAsStudent,
+  openDashboardSection,
+} from './e2e-helpers.js';
 import { computePrivateTicketBalance } from '../src/features/dashboard/ticketBalanceHelpers.js';
 import {
   ADMIN_EMAIL,
@@ -372,7 +379,7 @@ test('fixed private package balance creates one makeup booking and prevents over
     await expect(linkedRow).not.toContainText('수강권 없음');
     const initialPackageDoc = await snapshotDoc(db.collection('studentPackages').doc(fixture.packageId));
     const initialLessonDocs = await Promise.all(
-      [fixture.pastLessonId, ...fixture.futureLessonIds].map(async (lessonId) => ({
+      [fixture.pastLessonId, ...fixture.futureLessonIds, fixture.noPackageLessonId].map(async (lessonId) => ({
         id: lessonId,
         ...(await snapshotDoc(db.collection('lessons').doc(lessonId))),
       }))
@@ -421,6 +428,18 @@ test('fixed private package balance creates one makeup booking and prevents over
     });
     await detailModal.getByRole('button', { name: '닫기' }).click();
     await expect(linkedRow).toContainText('보충 가능 1회');
+
+    await openDashboardSection(page, '학생 관리');
+    const studentSearchInput = getStudentSearchInput(page);
+    await expect(studentSearchInput).toBeEnabled({ timeout: 30000 });
+    await studentSearchInput.fill(fixture.studentName);
+    const studentRow = getStudentRow(page, fixture.studentName);
+    await expect(studentRow).toBeVisible({ timeout: 15000 });
+    const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
+    await expect(privatePackageCell).toContainText('잔여 4회 / 총 4회 · 사용 0회');
+    await expect(privatePackageCell).toContainText('고정 예정 3회');
+    await expect(privatePackageCell).toContainText('보충 가능 1회');
+    await expect(privatePackageCell).not.toContainText('예정 4회');
 
     await selectCalendarDate(page, fixture.today);
     const noPackageRow = page.locator(
