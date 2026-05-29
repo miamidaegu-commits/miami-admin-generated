@@ -161,6 +161,8 @@ function privateTeacherValuesMatch(values, teacherValue) {
 
 function slotMatchesPrivateTeacherAccess(slot, teacherKeys) {
   return (
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherUid) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherKey) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacher) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacherName)
   )
@@ -741,6 +743,8 @@ export default function StudentBookingPage() {
     const byId = new Map()
     const teacherChunks = chunkValues(allowedPrivateTeacherKeys, GROUP_CLASS_QUERY_CHUNK_SIZE)
     const querySpecs = [
+      ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
       ...teacherChunks.map((values) => ({ type: 'teacher', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
     ]
@@ -968,6 +972,8 @@ export default function StudentBookingPage() {
       const byId = new Map()
       const teacherChunks = chunkValues(allowedPrivateTeacherKeys, GROUP_CLASS_QUERY_CHUNK_SIZE)
       const querySpecs = [
+        ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
+        ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
         ...teacherChunks.map((values) => ({ type: 'teacher', values })),
         ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
       ]

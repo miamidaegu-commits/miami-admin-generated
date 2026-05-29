@@ -273,6 +273,60 @@ function isVisibleGroupLessonForActiveViews(lesson) {
   return !isClassClosureCancelledGroupLesson(lesson)
 }
 
+function getShortIdentity(value) {
+  const text = String(value || '').trim()
+  return text.length > 10 ? text.slice(0, 10) : text
+}
+
+function getTeacherRecordKey(teacher) {
+  return normalizeText(teacher?.teacherKey || teacher?.teacherName || teacher?.name || '')
+}
+
+function getTeacherDisplayName(teacher) {
+  return String(teacher?.name || teacher?.displayName || teacher?.teacherName || '').trim()
+}
+
+function buildTeacherOptionLabel({ displayName, teacherKey, teacherEmail, teacherUid, duplicateName }) {
+  const base = String(displayName || teacherKey || teacherEmail || teacherUid || '').trim()
+  if (!base) return ''
+  const identity =
+    String(teacherKey || '').trim() ||
+    String(teacherEmail || '').trim() ||
+    getShortIdentity(teacherUid)
+  if (!duplicateName || !identity || identity === base) return base
+  return `${base} · ${identity}`
+}
+
+function buildPrivateSlotTeacherFields(optionOrValue) {
+  const option =
+    optionOrValue && typeof optionOrValue === 'object'
+      ? optionOrValue
+      : { value: String(optionOrValue || '').trim() }
+  const teacherUid = String(option.teacherUid || '').trim()
+  const teacherKey = normalizeText(option.teacherKey || option.value || '')
+  const teacherName = String(option.displayName || option.label || teacherKey || teacherUid).trim()
+  const teacherEmail = String(option.teacherEmail || '').trim()
+  const teacher = teacherKey || teacherUid
+  return {
+    teacher,
+    teacherName,
+    teacherKey: teacherKey || teacher,
+    teacherUid,
+    teacherEmail,
+  }
+}
+
+function getPrivateSlotTeacherDisplay(slot) {
+  const displayName = String(slot?.teacherName || slot?.teacher || '').trim()
+  const identity =
+    String(slot?.teacherKey || '').trim() ||
+    String(slot?.teacherEmail || '').trim() ||
+    getShortIdentity(slot?.teacherUid)
+  if (!displayName) return identity || '-'
+  if (!identity || identity === displayName) return displayName
+  return `${displayName} · ${identity}`
+}
+
 function normalizePrivateSlotEligibleStudentIds(values, privateStudents) {
   const allowedIds = new Set(privateStudents.map((student) => String(student.id || '').trim()))
   const out = []
@@ -700,22 +754,82 @@ export default function Dashboard() {
   }, [currentAcademyId, userProfile?.role])
 
   const teacherSelectOptions = useMemo(() => {
+    const membershipByTeacherKey = new Map()
+    for (const membership of teacherDirectoryMemberships) {
+      const role = String(membership?.role || '').trim().toLowerCase()
+      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) continue
+      const teacherKey = normalizeText(membership.teacherName || '')
+      if (!teacherKey || membershipByTeacherKey.has(teacherKey)) continue
+      membershipByTeacherKey.set(teacherKey, membership)
+    }
+    const activeTeachers = teacherRecords.filter(
+      (teacher) => String(teacher?.status || 'active') !== 'inactive'
+    )
+    const nameCounts = new Map()
+    activeTeachers.forEach((teacher) => {
+      const name = getTeacherDisplayName(teacher)
+      if (!name) return
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
+    })
+    teacherDirectoryMemberships.forEach((membership) => {
+      const role = String(membership?.role || '').trim().toLowerCase()
+      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) return
+      const name = String(membership?.displayName || membership?.teacherName || '').trim()
+      if (!name) return
+      nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
+    })
     const map = new Map()
     for (const teacher of teacherRecords) {
       if (String(teacher?.status || 'active') === 'inactive') continue
-      const rawName = String(teacher?.name || teacher?.teacherName || '').trim()
-      const value = normalizeText(teacher?.teacherKey || teacher?.teacherName || rawName)
+      const rawName = getTeacherDisplayName(teacher)
+      const teacherKey = getTeacherRecordKey(teacher)
+      const membership = teacherKey ? membershipByTeacherKey.get(teacherKey) : null
+      const teacherUid = String(teacher?.teacherUid || teacher?.uid || membership?.uid || '').trim()
+      const teacherEmail = String(teacher?.teacherEmail || teacher?.email || membership?.email || '').trim()
+      const value = teacherUid || teacherKey || rawName
       if (!value) continue
-      if (!map.has(value)) map.set(value, { value, label: rawName || value })
+      if (!map.has(value)) {
+        const displayName = rawName || teacherKey || teacherEmail || value
+        map.set(value, {
+          value,
+          label: buildTeacherOptionLabel({
+            displayName,
+            teacherKey,
+            teacherEmail,
+            teacherUid,
+            duplicateName: nameCounts.get(displayName) > 1,
+          }),
+          displayName,
+          teacherKey,
+          teacherUid,
+          teacherEmail,
+        })
+      }
     }
     for (const u of teacherDirectoryMemberships) {
-      const rawName = String(u?.teacherName || '').trim()
+      const rawName = String(u?.displayName || u?.teacherName || '').trim()
       if (!rawName) continue
       const role = String(u?.role || '').trim().toLowerCase()
       if (!(role === 'teacher' || role === 'admin' || role === 'owner')) continue
-      const value = normalizeText(rawName)
+      const teacherKey = normalizeText(u?.teacherName || rawName)
+      const teacherUid = String(u?.uid || '').trim()
+      const teacherEmail = String(u?.email || '').trim()
+      const value = teacherUid || teacherKey || rawName
       if (!value || map.has(value)) continue
-      map.set(value, { value, label: rawName })
+      map.set(value, {
+        value,
+        label: buildTeacherOptionLabel({
+          displayName: rawName,
+          teacherKey,
+          teacherEmail,
+          teacherUid,
+          duplicateName: nameCounts.get(rawName) > 1,
+        }),
+        displayName: rawName,
+        teacherKey,
+        teacherUid,
+        teacherEmail,
+      })
     }
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ko'))
   }, [teacherDirectoryMemberships, teacherRecords])
@@ -3657,8 +3771,12 @@ export default function Dashboard() {
     const errors = {}
     const isAdminUser = isAdmin
     const teacher = isAdminUser
-      ? normalizeText(privateSlotForm.teacher || '')
-      : normalizeText(userProfile?.teacherName || '')
+      ? String(privateSlotForm.teacher || '').trim()
+      : String(userProfile?.teacherName || '').trim()
+    const teacherOption = isAdminUser
+      ? teacherSelectOptions.find((option) => option.value === teacher) || null
+      : null
+    const teacherFields = buildPrivateSlotTeacherFields(teacherOption || teacher)
     const date = String(privateSlotForm.date || '').trim()
     const time = String(privateSlotForm.time || '').trim()
     const durationMinutes = Number.parseInt(String(privateSlotForm.durationMinutes || ''), 10)
@@ -3666,7 +3784,7 @@ export default function Dashboard() {
     const repeatWeeks = Number.parseInt(String(privateSlotForm.repeatWeeks || ''), 10)
     const repeatEndDate = String(privateSlotForm.repeatEndDate || '').trim()
 
-    if (!teacher) errors.teacher = '선생님을 선택해주세요.'
+    if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parseYmdToLocalDate(date)) {
       errors.date = '날짜를 선택해주세요.'
     }
@@ -3706,6 +3824,7 @@ export default function Dashboard() {
       errors,
       value: {
         teacher,
+        teacherFields,
         dates,
         time,
         durationMinutes,
@@ -3739,17 +3858,26 @@ export default function Dashboard() {
     return dates.filter(Boolean)
   }
 
-  async function privateSlotExists({ academyId, teacher, date, time }) {
-    const snap = await getDocs(
-      query(
-        collection(db, 'privateLessonSlots'),
-        where('academyId', '==', academyId),
-        where('teacher', '==', teacher),
-        where('date', '==', date),
-        where('time', '==', time)
+  async function privateSlotExists({ academyId, teacherFields, date, time }) {
+    const fields = [
+      ['teacherKey', teacherFields.teacherKey],
+      ['teacherUid', teacherFields.teacherUid],
+      ['teacher', teacherFields.teacher],
+    ].filter(([, value]) => String(value || '').trim())
+    const snaps = await Promise.all(
+      fields.map(([field, value]) =>
+        getDocs(
+          query(
+            collection(db, 'privateLessonSlots'),
+            where('academyId', '==', academyId),
+            where(field, '==', value),
+            where('date', '==', date),
+            where('time', '==', time)
+          )
+        )
       )
     )
-    return !snap.empty
+    return snaps.some((snap) => !snap.empty)
   }
 
   async function createPrivateSlot() {
@@ -3764,15 +3892,13 @@ export default function Dashboard() {
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
-      const { teacher, dates, time, durationMinutes, eligibleStudentIds } = result.value
-      const teacherOption = teacherSelectOptions.find((option) => option.value === teacher)
-      const teacherName = String(teacherOption?.label || teacher).trim()
+      const { dates, time, durationMinutes, eligibleStudentIds, teacherFields } = result.value
       setBusyPrivateSlotActionId('__add__')
       const existingFlags = await Promise.all(
         dates.map((date) =>
           privateSlotExists({
             academyId: scopedAcademyId,
-            teacher,
+            teacherFields,
             date,
             time,
           })
@@ -3793,8 +3919,11 @@ export default function Dashboard() {
         const slotRef = doc(collection(db, 'privateLessonSlots'))
         const slotPayload = {
           academyId: scopedAcademyId,
-          teacher,
-          teacherName,
+          teacher: teacherFields.teacher,
+          teacherName: teacherFields.teacherName,
+          teacherKey: teacherFields.teacherKey,
+          teacherUid: teacherFields.teacherUid,
+          teacherEmail: teacherFields.teacherEmail,
           date,
           time,
           subject: '1:1 수업',
@@ -3850,7 +3979,9 @@ export default function Dashboard() {
 
   function validatePrivateAvailabilityTemplateForm() {
     const errors = {}
-    const teacher = normalizeText(privateAvailabilityTemplateForm.teacher || '')
+    const teacher = String(privateAvailabilityTemplateForm.teacher || '').trim()
+    const teacherOption = teacherSelectOptions.find((option) => option.value === teacher) || null
+    const teacherFields = buildPrivateSlotTeacherFields(teacherOption || teacher)
     const weekday = Number.parseInt(String(privateAvailabilityTemplateForm.weekday || ''), 10)
     const time = String(privateAvailabilityTemplateForm.time || '').trim()
     const durationMinutes = Number.parseInt(
@@ -3858,7 +3989,7 @@ export default function Dashboard() {
       10
     )
     const status = String(privateAvailabilityTemplateForm.status || 'active').trim()
-    if (!teacher) errors.teacher = '선생님을 선택해주세요.'
+    if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) {
       errors.weekday = '월요일부터 토요일까지만 선택할 수 있습니다.'
     }
@@ -3870,7 +4001,7 @@ export default function Dashboard() {
     return {
       valid: Object.keys(errors).length === 0,
       errors,
-      value: { teacher, weekday, time, durationMinutes, status },
+      value: { teacher, teacherFields, weekday, time, durationMinutes, status },
     }
   }
 
@@ -3885,15 +4016,15 @@ export default function Dashboard() {
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
-      const { teacher, weekday, time, durationMinutes, status } = result.value
-      const teacherOption = teacherSelectOptions.find((option) => option.value === teacher)
-      const teacherName = String(teacherOption?.label || teacher).trim()
+      const { teacherFields, weekday, time, durationMinutes, status } = result.value
       setBusyPrivateAvailabilityTemplateId('__add__')
       await addDoc(collection(db, 'privateLessonAvailabilityTemplates'), {
         academyId: scopedAcademyId,
-        teacher,
-        teacherName,
-        teacherKey: teacher,
+        teacher: teacherFields.teacher,
+        teacherName: teacherFields.teacherName,
+        teacherKey: teacherFields.teacherKey,
+        teacherUid: teacherFields.teacherUid,
+        teacherEmail: teacherFields.teacherEmail,
         weekday,
         time,
         durationMinutes,

@@ -1315,10 +1315,15 @@ test('student sees matching open private slots and anonymized reserved teacher t
       '1:1 수업 예약'
     );
 
-    await expect(page.locator('[data-testid="student-private-slot-card"]').filter({
-      hasText: fixture.noRemainingExistingDate,
-    })).toHaveCount(0);
-    const reservedBusyCard = studentBusySlotCard(page, fixture.noRemainingExistingDate);
+    await expect(
+      page.locator(
+        `[data-testid="student-private-slot-card"][data-slot-id="${fixture.noRemainingExistingSlotId}"]`
+      )
+    ).toHaveCount(0);
+    const reservedBusyCard = studentBusySlotCard(
+      page,
+      `${fixture.noRemainingExistingDate} · 10:30`
+    );
     await expect(reservedBusyCard).toBeVisible({ timeout: 15000 });
     await expect(reservedBusyCard).toContainText('수업 있음');
     await expect(page.locator('body')).not.toContainText(fixture.noRemainingStudent.displayName);
