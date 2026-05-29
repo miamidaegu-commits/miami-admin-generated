@@ -467,6 +467,8 @@ async function createBookingFixture(unique) {
   const firstStudentId = `e2e-booking-student-a-${unique}`;
   const secondStudentId = `e2e-booking-student-b-${unique}`;
   const mismatchStudentId = `e2e-booking-student-mismatch-${unique}`;
+  const firstPackageId = `e2e-booking-package-a-${unique}`;
+  const secondPackageId = `e2e-booking-package-b-${unique}`;
   const groupName = `E2E 예약반 ${unique}`;
   const firstStudentName = `예약학생 A ${unique}`;
   const secondStudentName = `예약학생 B ${unique}`;
@@ -606,6 +608,36 @@ async function createBookingFixture(unique) {
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
+    db.collection('studentPackages').doc(firstPackageId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: firstStudentId,
+      studentName: firstStudentName,
+      title: `E2E 단체 수강권 A ${unique}`,
+      packageType: 'group',
+      groupClassId,
+      groupClassIds: [groupClassId],
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
+      status: 'active',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPackages').doc(secondPackageId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: secondStudentId,
+      studentName: secondStudentName,
+      title: `E2E 단체 수강권 B ${unique}`,
+      packageType: 'group',
+      groupClassId,
+      groupClassIds: [groupClassId],
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
+      status: 'active',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
   ]);
 
   await Promise.all([
@@ -617,6 +649,8 @@ async function createBookingFixture(unique) {
       studentName: firstStudentName,
       name: firstStudentName,
       teacher: TEACHER_NAME,
+      packageId: firstPackageId,
+      packageType: 'group',
       status: 'active',
       studentStatus: 'active',
       attendanceCount: 0,
@@ -633,6 +667,8 @@ async function createBookingFixture(unique) {
       studentName: secondStudentName,
       name: secondStudentName,
       teacher: TEACHER_NAME,
+      packageId: secondPackageId,
+      packageType: 'group',
       status: 'active',
       studentStatus: 'active',
       attendanceCount: 0,
@@ -717,6 +753,8 @@ async function createBookingFixture(unique) {
     groupName,
     firstStudentId,
     secondStudentId,
+    firstPackageId,
+    secondPackageId,
     mismatchStudentName,
     firstStudentName,
     secondStudentName,
@@ -734,6 +772,8 @@ async function cleanupBookingFixture(setup) {
     db.collection('groupClasses').doc(setup.groupClassId),
     db.collection('privateStudents').doc(setup.firstStudentId),
     db.collection('privateStudents').doc(setup.secondStudentId),
+    db.collection('studentPackages').doc(setup.firstPackageId),
+    db.collection('studentPackages').doc(setup.secondPackageId),
     db.collection('privateStudents').doc(`e2e-booking-student-mismatch-${setup.groupClassId.replace('e2e-booking-group-', '')}`),
     db.collection('groupStudents').doc(`e2e-booking-gs-a-${setup.groupClassId.replace('e2e-booking-group-', '')}`),
     db.collection('groupStudents').doc(`e2e-booking-gs-b-${setup.groupClassId.replace('e2e-booking-group-', '')}`),

@@ -226,7 +226,7 @@ test('admin no-package calendar row shows no active 차감취소 action', async 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await selectCalendarDate(page, date);
     const row = await getCalendarPrivateRow(page, fixture.lessonId);
-    await expect(row).toContainText('수강권 미등록');
+    await expect(row).toContainText('수강권 등록 필요');
     await expect(row.getByRole('button', { name: '차감취소', exact: true })).toHaveCount(0);
     await expect(row.getByTestId('calendar-deduction-action-disabled-label')).toContainText(
       '수강권 등록 필요'

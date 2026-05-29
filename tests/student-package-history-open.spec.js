@@ -390,7 +390,7 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
   await expect(privatePackageCell).toContainText('jenny');
   await expect(privatePackageCell).toContainText('jenny · 잔여 3회 / 총 4회 · 사용 1회');
   await expect(studentRow.getByTestId('student-group-package-cell')).toHaveText(
-    '그룹 수강권 없음'
+    '단체 수강권 등록 필요'
   );
 });
 
@@ -453,7 +453,7 @@ test('수강권 문서가 없어도 학생 관리 목록에 개인 수업 진행
   await expect(privatePackageCell).toContainText('총 8회');
   await expect(privatePackageCell).toContainText('지난 2회');
   await expect(privatePackageCell).toContainText('예정 6회');
-  await expect(privatePackageCell).toContainText('개인 수강권 없음');
+  await expect(privatePackageCell).toContainText('개인 수강권 등록 필요');
 });
 
 test('관리자가 프리토킹 그룹 수강권을 만들면 summary에 groupCourseTypes가 반영된다', async ({

@@ -1123,7 +1123,7 @@ export default function StudentsSection({
                     </span>
                   ))
                 ) : (
-                  <span>개인 수강권 없음</span>
+                  <span>개인 수강권 등록 필요</span>
                 )}
                 <PrivateLessonProgressSummary
                   progress={privateLessonProgress}

@@ -183,6 +183,7 @@ async function createStudentBookingFixture(unique, options = {}) {
   const studentId = `e2e-student-booking-student-${unique}`;
   const otherStudentId = `e2e-student-booking-other-${unique}`;
   const eligibleLessonId = `e2e-student-booking-bookable-${unique}`;
+  const studentGroupPackageId = `pkg-${studentId}`;
   const fullLessonId = `e2e-student-booking-full-${unique}`;
   const closedLessonId = `e2e-student-booking-closed-${unique}`;
   const hiddenLessonId = `e2e-student-booking-hidden-${unique}`;
@@ -336,6 +337,7 @@ async function createStudentBookingFixture(unique, options = {}) {
     ),
     db.collection('studentGroupAccess').doc(accessId({ groupClassId: eligibleGroupClassId, studentId })),
     db.collection('studentGroupAccessSummary').doc(accessSummaryId({ studentId })),
+    db.collection('studentPackages').doc(studentGroupPackageId),
     db.collection('groupLessons').doc(eligibleLessonId),
     db.collection('groupLessons').doc(fullLessonId),
     db.collection('groupLessons').doc(closedLessonId),
@@ -430,9 +432,26 @@ async function createStudentBookingFixture(unique, options = {}) {
           groupClassId: eligibleGroupClassId,
           groupStudentId: '',
           studentId,
-          packageId: `pkg-${studentId}`,
+          packageId: studentGroupPackageId,
           status: 'active',
           studentStatus: 'active',
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        })
+      : Promise.resolve(),
+    studentLinked
+      ? db.collection('studentPackages').doc(studentGroupPackageId).set({
+          academyId: DEFAULT_E2E_ACADEMY_ID,
+          studentId,
+          studentName: `학생 ${unique}`,
+          title: `E2E 단체 수강권 ${unique}`,
+          packageType: 'group',
+          groupClassId: eligibleGroupClassId,
+          groupClassIds: [eligibleGroupClassId],
+          totalCount: 4,
+          usedCount: 0,
+          remainingCount: 4,
+          status: 'active',
           createdAt: nowTs,
           updatedAt: nowTs,
         })
@@ -700,7 +719,7 @@ test('student self-booking only shows eligible lessons and supports reserve/canc
     await expect(fullCard).toContainText('마감');
 
     const bookableCard = getLessonCard(page, 'Bookable');
-    await expect(bookableCard).toContainText('예약 가능');
+    await expect(bookableCard).toContainText('선택예약 가능');
     await expect(bookableCard).toContainText('남은 자리 1명');
     await expect(bookableCard.getByTestId('student-booking-reserve-button')).toHaveText('단체반 예약');
     await expect(page.locator('body')).not.toContainText('고정학생 1');
@@ -1073,6 +1092,23 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         groupClassId: beginnerClassId,
         groupCourseType: 'beginner_conversation',
         title: 'Beginner Course Package',
+        totalCount: 4,
+        usedCount: 0,
+        remainingCount: 4,
+        status: 'active',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPackages').doc(`e2e-course-free-package-${unique}`).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId,
+        studentName: `코스학생 ${unique}`,
+        teacher: TEACHER_NAME,
+        packageType: 'group',
+        groupClassId: freeClassId,
+        groupClassIds: [freeClassId],
+        groupCourseType: 'free_talking',
+        title: 'Free Talking Course Package',
         totalCount: 4,
         usedCount: 0,
         remainingCount: 4,

@@ -3084,14 +3084,21 @@ export default function Dashboard() {
           }
         }
         if (currentlyCancelled) {
-          const activeReservationSnapshot = await getDocs(
-            query(
-              collection(db, 'privateLessonReservations'),
-              where('academyId', '==', scopedAcademyId),
-              where('studentId', '==', resolvedStudentId),
-              where('status', '==', 'active')
+          let activeReservationSnapshot = null
+          try {
+            activeReservationSnapshot = await getDocs(
+              query(
+                collection(db, 'privateLessonReservations'),
+                where('academyId', '==', scopedAcademyId),
+                where('studentId', '==', resolvedStudentId),
+                where('status', '==', 'active')
+              )
             )
-          )
+          } catch (error) {
+            console.warn('차감복구 전 보충 예약 확인 실패:', error)
+            alert('이미 보충 예약으로 사용되어 차감복구할 수 없습니다.')
+            return
+          }
           const activeReservationById = new Map()
           privateLessonReservations.forEach((reservation) => {
             const reservationId = String(reservation.id || reservation.reservationId || '').trim()
@@ -3110,7 +3117,8 @@ export default function Dashboard() {
             const reservationTeacher = normalizeText(
               reservation.teacher || reservation.teacherName || ''
             )
-            return reservationTeacher && lessonTeacher && reservationTeacher === lessonTeacher
+            if (!reservationTeacher || !lessonTeacher) return true
+            return reservationTeacher === lessonTeacher
           })
           if (activeReservationsUsingPackage.length > 0) {
             alert('이미 보충 예약으로 사용되어 차감복구할 수 없습니다.')
@@ -3226,7 +3234,7 @@ export default function Dashboard() {
 
   function formatStudentPackageCellSummary(count, remainingTotal) {
     const c = Number(count) || 0
-    if (c <= 0) return '그룹 수강권 없음'
+    if (c <= 0) return '단체 수강권 등록 필요'
     const rem = Number(remainingTotal) || 0
     return `${c}개 / 남은 ${rem}회`
   }

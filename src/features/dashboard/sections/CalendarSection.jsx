@@ -122,7 +122,7 @@ function getPrivateLessonPackageContext({
       })
     : []
   const fallbackPackage =
-    !directPackageId && !linkedPrivatePackage && matchedStudentId
+    !linkedPrivatePackage && matchedStudentId
       ? findPrivatePackageForTeacherContext({
           studentPackages,
           academyId,
@@ -142,11 +142,11 @@ function getPrivateLessonPackageContext({
           __packageStub: true,
         }
       : null
-  const contextPackage = linkedPrivatePackage || linkedPackageStub || fallbackPackage
+  const contextPackage = linkedPrivatePackage || fallbackPackage || linkedPackageStub
   return {
     linkedPrivatePackage: linkedPrivatePackage || linkedPackageStub,
     contextPackage,
-    hasDirectPackageLink: Boolean(linkedPrivatePackage || linkedPackageStub),
+    hasDirectPackageLink: Boolean(directPackageId && contextPackage),
     hasTeacherScopedPackage: Boolean(contextPackage),
     hasAnyPrivatePackage: Boolean(contextPackage || studentPrivatePackages.length > 0),
     hasPackageMatchIncomplete: Boolean(!contextPackage && studentPrivatePackages.length > 0),
@@ -163,7 +163,7 @@ function getPrivatePackageStateLabel({
   if (!contextPackage) {
     return hasAnyPrivatePackage || hasPackageMatchIncomplete
       ? '수강권 연결 필요'
-      : '수강권 미등록'
+      : '수강권 등록 필요'
   }
 
   const remainingCount = Number(formatRemainingCountFromPackage(contextPackage))
@@ -865,7 +865,7 @@ export default function CalendarSection(props) {
                       : hasPackageMatchIncomplete
                       ? '수강권 연결 필요'
                       : lessonDateStr && lessonDateStr <= todayString
-                      ? '수강권 미등록'
+                      ? '수강권 등록 필요'
                       : '예정'
             const actionReason = isGroupRow || isPrivateReservationRow
               ? ''
