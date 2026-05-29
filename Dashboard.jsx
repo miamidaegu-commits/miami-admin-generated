@@ -2319,6 +2319,7 @@ export default function Dashboard() {
     privateStudents,
     studentPackages,
     lessons,
+    privateLessonReservations,
     studentSummaryGroupStudents,
     studentSummaryGroupLessons,
     groupClasses,
