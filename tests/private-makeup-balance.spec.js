@@ -511,12 +511,16 @@ test('fixed private package balance creates one makeup booking and prevents over
       ),
       contentType: 'application/json',
     });
-    const secondSlotCard = studentPage.locator(
-      `[data-testid="student-private-slot-card"][data-slot-id="${fixture.slotIds[1]}"]`
+    const secondBusySlotCard = studentPage.locator(
+      `[data-testid="student-private-busy-slot-card"][data-slot-id="${fixture.slotIds[1]}"]`
     );
-    await expect(secondSlotCard).toBeVisible({ timeout: 20000 });
-    await expect(secondSlotCard.getByTestId('student-private-slot-reserve-button')).toBeDisabled();
-    await expect(secondSlotCard).toContainText(/보충 가능 0회|수강권 등록 필요|수업 있음/);
+    await expect(secondBusySlotCard).toBeVisible({ timeout: 20000 });
+    await expect(secondBusySlotCard).toContainText('수업 있음');
+    await expect(
+      studentPage.locator(
+        `[data-testid="student-private-slot-card"][data-slot-id="${fixture.slotIds[1]}"]`
+      )
+    ).toHaveCount(0);
 
     await selectCalendarDate(page, fixture.pastDate);
     const restoreRow = page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${fixture.pastLessonId}"]`);

@@ -221,6 +221,8 @@ function getPrivateSlotDisplayLabel(status, fallbackLabel = '') {
       'closed',
       'my_reservation',
       'reserved_by_me',
+      'no_ticket',
+      'no_makeup',
     ].includes(status)
   ) {
     return getPrivateBookingStatusLabel(status)
@@ -2318,7 +2320,15 @@ export default function StudentBookingPage() {
                                     slot,
                                     canUsePrivateBooking
                                   )
+                                  const studentVisibleStatus = String(
+                                    slot.studentVisibleStatus || ''
+                                  ).trim()
+                                  const isStudentMaskedBusy =
+                                    studentVisibleStatus === 'busy' ||
+                                    bookingStatus === 'no_ticket' ||
+                                    bookingStatus === 'no_makeup'
                                   const isBusySlot =
+                                    isStudentMaskedBusy ||
                                     slot.isBusy === true ||
                                     bookingStatus === 'busy' ||
                                     bookingStatus === 'reserved' ||
@@ -2331,7 +2341,15 @@ export default function StudentBookingPage() {
                                     !busyPrivateReservationId &&
                                     slot.status === 'open'
                                   const statusLabel =
-                                    getPrivateSlotDisplayLabel(bookingStatus, slot.bookingStatusLabel)
+                                    isStudentMaskedBusy
+                                      ? getPrivateSlotDisplayLabel(
+                                          'busy',
+                                          slot.studentVisibleStatusLabel
+                                        )
+                                      : getPrivateSlotDisplayLabel(
+                                          bookingStatus,
+                                          slot.bookingStatusLabel
+                                        )
                                   const remainingCount = getPrivateSlotAvailableCount(slot)
 
                                   if (isBusySlot) {
@@ -2340,7 +2358,9 @@ export default function StudentBookingPage() {
                                         key={slot.id}
                                         data-testid="student-private-busy-slot-card"
                                         data-slot-id={slot.id}
-                                        style={getPrivateSlotCardStyle(bookingStatus)}
+                                        style={getPrivateSlotCardStyle(
+                                          isStudentMaskedBusy ? 'busy' : bookingStatus
+                                        )}
                                       >
                                         <div style={{ display: 'grid', gap: 6 }}>
                                           <div
@@ -2354,7 +2374,9 @@ export default function StudentBookingPage() {
                                             <strong style={{ fontSize: 14 }}>
                                               {slot.teacherName || slot.teacher || '1:1 수업'}
                                             </strong>
-                                            <span style={getPrivateSlotBadgeStyle(bookingStatus)}>
+                                            <span style={getPrivateSlotBadgeStyle(
+                                              isStudentMaskedBusy ? 'busy' : bookingStatus
+                                            )}>
                                               {statusLabel}
                                             </span>
                                           </div>

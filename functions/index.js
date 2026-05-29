@@ -1210,6 +1210,7 @@ function getPrivateBookingStatusLabel(status) {
   if (status === "reserved_by_me") return "내 예약";
   if (status === "reserved") return "수업 있음";
   if (status === "blocked") return "수업 있음";
+  if (status === "no_ticket") return "수업 있음";
   if (status === "no_package") return "수강권 등록 필요";
   if (status === "no_makeup") return "보충 가능 0회";
   return "예약 중지";
@@ -1244,7 +1245,7 @@ function computePrivateBookingStatus({
   if (status === "blocked") return "blocked";
   if (status !== "open") return "blocked";
   if (!packageSummary) {
-    return "no_package";
+    return "no_ticket";
   }
   if (Number(packageSummary.remainingCount || 0) <= 0) return "no_makeup";
   const window = computePrivateBookingWindow(slot);
@@ -1253,6 +1254,29 @@ function computePrivateBookingStatus({
   if (nowMillis >= window.bookingClosesAt) return "closed";
   if (!bookingEnabled || !pilotBookable) return "blocked";
   return "available";
+}
+
+function getPrivateSlotStudentVisibleStatus(bookingStatus) {
+  if (bookingStatus === "available") return "available";
+  if (
+    bookingStatus === "no_ticket" ||
+    bookingStatus === "no_makeup" ||
+    bookingStatus === "busy" ||
+    bookingStatus === "reserved"
+  ) {
+    return "busy";
+  }
+  return "available";
+}
+
+function getPrivateSlotDisabledReason(bookingStatus) {
+  if (bookingStatus === "no_ticket") return "no_ticket";
+  if (bookingStatus === "no_makeup") return "no_makeup";
+  if (bookingStatus === "closed") return "booking_window_closed";
+  if (bookingStatus === "not_open") return "booking_window_not_open";
+  if (bookingStatus === "blocked") return "inactive";
+  if (bookingStatus === "reserved" || bookingStatus === "busy") return "busy";
+  return "";
 }
 
 function buildPrivateTemplateSlotId({templateId, date, time}) {
@@ -2283,7 +2307,10 @@ function sanitizePrivateSlotAvailabilityRow({
     studentId,
   });
   const isBookable = bookingStatus === "available";
+  const studentVisibleStatus =
+    getPrivateSlotStudentVisibleStatus(bookingStatus);
   const isBusy =
+    studentVisibleStatus === "busy" ||
     bookingStatus === "busy" ||
     bookingStatus === "reserved" ||
     status === "blocked";
@@ -2337,6 +2364,12 @@ function sanitizePrivateSlotAvailabilityRow({
     isBusy,
     bookingStatus,
     bookingStatusLabel: getPrivateBookingStatusLabel(bookingStatus),
+    studentVisibleStatus,
+    studentVisibleStatusLabel:
+      getPrivateBookingStatusLabel(studentVisibleStatus),
+    disabledReason: isBookable ?
+      "" :
+      getPrivateSlotDisabledReason(bookingStatus),
     bookingOpensAtMillis: bookingOpensAt,
     bookingClosesAtMillis: bookingClosesAt,
     startsAtMillis: startsAt,
@@ -2448,6 +2481,9 @@ function buildBusyPrivateScheduleRow({
     isBusy: true,
     bookingStatus: safeStatus,
     bookingStatusLabel: getPrivateBookingStatusLabel(safeStatus),
+    studentVisibleStatus: "busy",
+    studentVisibleStatusLabel: getPrivateBookingStatusLabel("busy"),
+    disabledReason: "busy",
     bookingOpensAtMillis: window ? window.bookingOpensAt : null,
     bookingClosesAtMillis: window ? window.bookingClosesAt : null,
     startsAtMillis: startsAt,
@@ -2505,7 +2541,7 @@ function addBusyRowsFromQuerySnapshot({
     if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) return;
     const teacherKey = getPrivateScheduleTeacherKey(row);
     const packageSummary = packageByTeacherKey.get(teacherKey);
-    if (!teacherKey || !packageSummary) return;
+    if (!teacherKey) return;
     const key = getPrivateSlotConflictKey({
       teacher: teacherKey,
       teacherName: teacherKey,
@@ -2692,6 +2728,16 @@ function getSlotTeacherPackageSummary(slot, packageByTeacherKey) {
     if (summary) return summary;
   }
   return null;
+}
+
+function slotMatchesTeacherKeys(slot, teacherKeys) {
+  const slotTeacherKeys = [
+    normalizeTeacherKey(slot && slot.teacher),
+    normalizeTeacherKey(slot && slot.teacherName),
+    normalizeTeacherKey(slot && slot.teacherKey),
+    normalizeTeacherKey(slot && slot.teacherUid),
+  ].filter(Boolean);
+  return slotTeacherKeys.some((teacherKey) => teacherKeys.includes(teacherKey));
 }
 
 function getPrivateSlotConflictKey({teacher, teacherName, date, time}) {
@@ -2990,6 +3036,7 @@ function buildTemplateSlots({
   templates,
   academyId,
   packageByTeacherKey,
+  teacherKeys,
   conflictKeys,
   nowMillis,
 }) {
@@ -3002,7 +3049,7 @@ function buildTemplateSlots({
     if (status !== "active") return;
     const teacher = normalizeTeacherKey(data.teacherKey || data.teacher);
     const packageSummary = packageByTeacherKey.get(teacher);
-    if (!teacher || !packageSummary) return;
+    if (!teacher || !teacherKeys.includes(teacher)) return;
     const weekday = Number(data.weekday);
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) return;
     const time = normalizeId(data.time);
@@ -3841,6 +3888,10 @@ exports.listPrivateLessonSlotAvailability = onCall(
               slot,
               packageSummary.byTeacherKey,
           );
+          const hasTeacherScheduleAccess = slotMatchesTeacherKeys(
+              slot,
+              teacherKeys,
+          );
           const hasAccess = hasSlotAccess({
             slot,
             summary: effectiveSummary,
@@ -3850,7 +3901,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
           if (hasExplicitSlotEligibility(slot) && !hasAccess) {
             return;
           }
-          if (!hasAccess && !matchingPackage) {
+          if (!hasAccess && !matchingPackage && !hasTeacherScheduleAccess) {
             return;
           }
           byId.set(slotId, slot);
@@ -3921,10 +3972,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
             .filter(([slotId, slot]) => {
               const status = String(slot.status || "").trim();
               if (status === "open") {
-                return Boolean(getSlotTeacherPackageSummary(
-                    slot,
-                    packageSummary.byTeacherKey,
-                ));
+                return true;
               }
               if (status !== "reserved") return false;
               const reservation = activeReservationBySlotId.get(slotId);
@@ -3948,10 +3996,10 @@ exports.listPrivateLessonSlotAvailability = onCall(
               }),
             );
 
-        const busyRowsByKey = packageTeacherKeys.length > 0 ?
+        const busyRowsByKey = teacherKeys.length > 0 ?
           await loadBusyPrivateScheduleRows(db, {
             academyId,
-            teacherKeys: packageTeacherKeys,
+            teacherKeys,
             packageByTeacherKey: packageSummary.byTeacherKey,
             rangeStart,
             rangeEnd,
@@ -3968,7 +4016,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
         });
 
         const templateRows = [];
-        if (packageTeacherKeys.length > 0) {
+        if (teacherKeys.length > 0) {
           const templateSnap = await db
               .collection("privateLessonAvailabilityTemplates")
               .where("academyId", "==", academyId)
@@ -3985,6 +4033,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
             templates,
             academyId,
             packageByTeacherKey: packageSummary.byTeacherKey,
+            teacherKeys,
             conflictKeys,
             nowMillis,
           }).forEach(({slotId, slot, packageSummary: slotPackageSummary}) => {
