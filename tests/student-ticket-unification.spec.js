@@ -131,6 +131,35 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     statusLabel: '보충 가능 0회',
   });
 
+  const pastActiveBooking = computePrivateTicketBalance({
+    ticket,
+    fixedPrivateLessons: released,
+    privateReservations: [
+      privateReservation('r-past', {
+        packageId: ticket.id,
+        date: '2026-05-01',
+        time: '23:30',
+      }),
+    ],
+    studentId: STUDENT_ID,
+    teacherScope: { teacher: 'Don1', teacherKey: 'don1' },
+    now: NOW,
+  });
+  expect(pastActiveBooking).toMatchObject({
+    activeFutureReservationCount: 1,
+    availableToBook: 0,
+  });
+
+  const confirmedBooking = computePrivateTicketBalance({
+    ticket,
+    fixedPrivateLessons: released,
+    privateReservations: [privateReservation('r-confirmed', { packageId: ticket.id, status: 'confirmed' })],
+    studentId: STUDENT_ID,
+    teacherScope: { teacher: 'Don1', teacherKey: 'don1' },
+    now: NOW,
+  });
+  expect(confirmedBooking.availableToBook).toBe(0);
+
   const legacyUidOnlyFixedLessons = released.map((lesson, index) => ({
     ...lesson,
     teacher: 'Don',
@@ -163,6 +192,39 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     now: NOW,
   });
   expect(legacyUidBalance).toMatchObject({
+    futureFixedAllocatedCount: 3,
+    activeFutureReservationCount: 1,
+    availableToBook: 0,
+  });
+
+  const productionLikePastSlotBalance = computePrivateTicketBalance({
+    ticket: legacyUidTicket,
+    fixedPrivateLessons: legacyUidOnlyFixedLessons.map((lesson, index) =>
+      index === 0
+        ? lesson
+        : {
+            ...lesson,
+            date: `2026-06-0${index + 1}`,
+            time: '10:00',
+            startAt: undefined,
+          }
+    ),
+    privateReservations: [
+      privateReservation('r-prod-past-slot', {
+        packageId: legacyUidTicket.id,
+        teacher: 'don1',
+        teacherName: 'don1',
+        teacherKey: 'don1',
+        date: '2026-06-01',
+        time: '23:30',
+        startAt: undefined,
+      }),
+    ],
+    studentId: STUDENT_ID,
+    teacherScope: { teacherKey: 'don1', teacherUid: 'teacher-uid-don1' },
+    now: Date.UTC(2026, 5, 1, 14, 31, 0),
+  });
+  expect(productionLikePastSlotBalance).toMatchObject({
     futureFixedAllocatedCount: 3,
     activeFutureReservationCount: 1,
     availableToBook: 0,
