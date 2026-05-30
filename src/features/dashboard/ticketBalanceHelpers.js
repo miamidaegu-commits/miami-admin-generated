@@ -103,6 +103,12 @@ function isFutureAllocation(row, now) {
   return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= getKstTodayString(now)
 }
 
+function isActivePrivateReservationStatus(status) {
+  return ['active', 'reserved', 'confirmed', 'booked'].includes(
+    normalizeId(status).toLowerCase()
+  )
+}
+
 function isPrivateLessonReleasedFromDeduction(lesson) {
   const status = normalizeId(lesson?.status).toLowerCase()
   const cancellationType = normalizeId(lesson?.cancellationType).toLowerCase()
@@ -297,9 +303,9 @@ function buildBalanceResult({
 
   let activeFutureReservationCount = 0
   ;(Array.isArray(reservations) ? reservations : []).forEach((reservation) => {
-    if (!['active', 'reserved'].includes(normalizeId(reservation?.status).toLowerCase())) return
+    if (!isActivePrivateReservationStatus(reservation?.status)) return
     if (!rowMatchesTicketScope(reservation, ['packageId', 'deductionPackageId'])) return
-    if (isFutureAllocation(reservation, now)) activeFutureReservationCount += 1
+    activeFutureReservationCount += 1
   })
 
   const availableToBook = Math.max(

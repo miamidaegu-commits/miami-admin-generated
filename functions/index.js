@@ -606,7 +606,7 @@ function hasExplicitSlotEligibility(slot) {
 }
 
 function isActivePrivateReservation(data) {
-  return ["active", "reserved"].includes(
+  return ["active", "reserved", "confirmed", "booked"].includes(
       String((data && data.status) || "").trim().toLowerCase(),
   );
 }
@@ -3126,9 +3126,7 @@ function computePrivateTeacherPackageUsage({
     })) {
       return;
     }
-    if (isFuturePrivateAllocation(reservation, nowMillis)) {
-      activeFutureReservationAllocatedCount += 1;
-    }
+    activeFutureReservationAllocatedCount += 1;
   });
 
   const unallocatedRemainingCount =
