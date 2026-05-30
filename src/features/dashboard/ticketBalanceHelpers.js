@@ -97,7 +97,7 @@ function isNoDeductionLesson(row) {
 }
 
 function getPackageTeacherKeys(ticket) {
-  return [ticket?.teacherUid, ticket?.teacherKey, ticket?.teacher, ticket?.teacherName]
+  return [ticket?.teacherUid, ticket?.teacherUID, ticket?.teacherKey, ticket?.teacher, ticket?.teacherName]
     .map(normalizeKey)
     .filter(Boolean)
 }
@@ -139,7 +139,7 @@ function privateRowMatchesTicketScope({
   }
 
   const ticketKeys = getPackageTeacherKeys(ticket)
-  const rowKeys = [row?.teacherUid, row?.teacherKey, row?.teacher, row?.teacherName]
+  const rowKeys = [row?.teacherUid, row?.teacherUID, row?.teacherKey, row?.teacher, row?.teacherName]
     .map(normalizeKey)
     .filter(Boolean)
   if (ticketKeys.length === 0) return false
@@ -147,6 +147,7 @@ function privateRowMatchesTicketScope({
 
   const requestedKeys = [
     teacherScope?.teacherUid,
+    teacherScope?.teacherUID,
     teacherScope?.teacherKey,
     teacherScope?.teacher,
     teacherScope?.teacherName,
@@ -267,7 +268,7 @@ function buildBalanceResult({
 
   let activeFutureReservationCount = 0
   ;(Array.isArray(reservations) ? reservations : []).forEach((reservation) => {
-    if (normalizeId(reservation?.status).toLowerCase() !== 'active') return
+    if (!['active', 'reserved'].includes(normalizeId(reservation?.status).toLowerCase())) return
     if (!rowMatchesTicketScope(reservation, ['packageId', 'deductionPackageId'])) return
     if (isFutureAllocation(reservation, now)) activeFutureReservationCount += 1
   })

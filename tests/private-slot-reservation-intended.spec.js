@@ -990,7 +990,8 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(pageSource).toContain('student-private-calendar');
   expect(pageSource).toContain('예약은 수업 시작 7시간 전까지만 가능합니다.');
   expect(pageSource).toContain('예약 마감 · 수업 준비 중');
-  expect(pageSource).toContain('예약 가능 보충');
+  expect(pageSource).toContain('예약 가능');
+  expect(pageSource).not.toContain('예약 가능 보충');
   expect(helperSource).toContain("not_open: '예약 오픈 대기'");
 
   expect(dashboardSource).toContain('createPrivateAvailabilityTemplate');

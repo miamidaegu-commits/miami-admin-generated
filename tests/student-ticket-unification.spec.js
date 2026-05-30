@@ -131,6 +131,42 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     statusLabel: '보충 가능 0회',
   });
 
+  const legacyUidOnlyFixedLessons = released.map((lesson) => ({
+    ...lesson,
+    teacher: 'Don',
+    teacherName: 'Don',
+    teacherKey: '',
+    teacherUID: 'teacher-uid-don1',
+  }));
+  const legacyUidTicket = {
+    ...ticket,
+    teacher: 'Don',
+    teacherName: 'Don',
+    teacherKey: 'don1',
+    teacherUid: 'teacher-uid-don1',
+  };
+  const legacyUidBalance = computePrivateTicketBalance({
+    ticket: legacyUidTicket,
+    fixedPrivateLessons: legacyUidOnlyFixedLessons,
+    privateReservations: [
+      privateReservation('r-uid', {
+        packageId: ticket.id,
+        teacher: 'Don',
+        teacherName: 'Don',
+        teacherKey: '',
+        teacherUID: 'teacher-uid-don1',
+      }),
+    ],
+    studentId: STUDENT_ID,
+    teacherScope: { teacherKey: 'don1', teacherUid: 'teacher-uid-don1' },
+    now: NOW,
+  });
+  expect(legacyUidBalance).toMatchObject({
+    futureFixedAllocatedCount: 3,
+    activeFutureReservationCount: 1,
+    availableToBook: 0,
+  });
+
   const cancelledBooking = computePrivateTicketBalance({
     ticket,
     fixedPrivateLessons: released,

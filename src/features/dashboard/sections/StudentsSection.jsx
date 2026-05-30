@@ -87,8 +87,8 @@ function formatPrivateTicketScheduleSummary(balance) {
   const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
   const makeupAvailable = Math.max(0, Number(balance.makeupAvailableCount) || 0)
   const parts = [`고정 예정 ${fixedAllocated}회`]
-  if (activeReservations > 0) parts.push(`선택예약 ${activeReservations}회`)
-  parts.push(`보충 가능 ${makeupAvailable}회`)
+  if (activeReservations > 0) parts.push(`보충 예약 ${activeReservations}회`)
+  parts.push(`예약 가능 ${makeupAvailable}회`)
   return parts.join(' · ')
 }
 

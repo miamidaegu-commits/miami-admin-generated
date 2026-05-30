@@ -327,6 +327,24 @@ function getPrivateSlotTeacherDisplay(slot) {
   return `${displayName} · ${identity}`
 }
 
+function getPrivateTeacherIdentityKeys(row) {
+  const seen = new Set()
+  const out = []
+  ;[row?.teacherUid, row?.teacherUID, row?.teacherKey, row?.teacher, row?.teacherName].forEach((value) => {
+    const key = normalizeText(value || '')
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    out.push(key)
+  })
+  return out
+}
+
+function privateTeacherIdentitiesOverlap(a, b) {
+  const left = getPrivateTeacherIdentityKeys(a)
+  const right = new Set(getPrivateTeacherIdentityKeys(b))
+  return left.some((key) => right.has(key))
+}
+
 function normalizePrivateSlotEligibleStudentIds(values, privateStudents) {
   const allowedIds = new Set(privateStudents.map((student) => String(student.id || '').trim()))
   const out = []
@@ -1842,7 +1860,7 @@ export default function Dashboard() {
         query(
           collection(db, 'privateLessonReservations'),
           where('academyId', '==', currentAcademyId),
-          where('status', 'in', ['active', 'completed', 'no_show'])
+          where('status', 'in', ['active', 'reserved', 'completed', 'no_show'])
         ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
@@ -3186,14 +3204,20 @@ export default function Dashboard() {
           alert('수업의 학생과 수강권의 학생이 일치하지 않습니다.')
           return
         }
-        const pkgTeacher = normalizeText(selectedPackage.teacher || '')
-        if (!pkgTeacher || !lessonTeacher || pkgTeacher !== lessonTeacher) {
+        const pkgTeacherKeys = getPrivateTeacherIdentityKeys(selectedPackage)
+        const lessonTeacherKeys = getPrivateTeacherIdentityKeys(lesson)
+        if (
+          pkgTeacherKeys.length === 0 ||
+          lessonTeacherKeys.length === 0 ||
+          !privateTeacherIdentitiesOverlap(selectedPackage, lesson)
+        ) {
           alert('수업 담당 선생님과 수강권 담당 선생님이 일치하지 않습니다.')
           return
         }
+        const pkgTeacher = pkgTeacherKeys[0]
         if (!adminUser) {
           const myT = normalizeText(userProfile?.teacherName || '')
-          if (!myT || pkgTeacher !== myT) {
+          if (!myT || !pkgTeacherKeys.includes(myT)) {
             alert('본인 담당 수강권만 차감 처리할 수 있습니다.')
             return
           }
@@ -3229,11 +3253,10 @@ export default function Dashboard() {
             if (String(reservation.packageId || reservation.deductionPackageId || '').trim() !== packageId) {
               return false
             }
-            const reservationTeacher = normalizeText(
-              reservation.teacher || reservation.teacherName || ''
-            )
-            if (!reservationTeacher || !lessonTeacher) return true
-            return reservationTeacher === lessonTeacher
+            if (getPrivateTeacherIdentityKeys(reservation).length === 0 || lessonTeacherKeys.length === 0) {
+              return true
+            }
+            return privateTeacherIdentitiesOverlap(reservation, lesson)
           })
           if (activeReservationsUsingPackage.length > 0) {
             alert('이미 보충 예약으로 사용되어 차감복구할 수 없습니다.')
