@@ -590,13 +590,7 @@ function hasSlotAccess({slot, summary, slotId, studentId}) {
   );
   const teacherKeys = normalizeTeacherKeyList(summary && summary.teacherKeys);
   const activePackageIds = normalizeIdList(summary && summary.activePackageIds);
-  const slotTeacherKeys = [
-    normalizeTeacherKey(slot && slot.teacherUid),
-    normalizeTeacherKey(slot && slot.teacherUID),
-    normalizeTeacherKey(slot && slot.teacherKey),
-    normalizeTeacherKey(slot && slot.teacher),
-    normalizeTeacherKey(slot && slot.teacherName),
-  ].filter(Boolean);
+  const slotTeacherKeys = getPrivateTeacherScopeKeys(slot);
   const hasTeacherPackageAccess =
     activePackageIds.length > 0 &&
     slotTeacherKeys.some((teacherKey) => teacherKeys.includes(teacherKey));
@@ -820,49 +814,55 @@ function getOptionalStudentName({student, membership, reservation}) {
 }
 
 function getReservationTeacherKey(reservation, slot) {
-  return normalizeTeacherKey(reservation && reservation.teacherUid) ||
-    normalizeTeacherKey(reservation && reservation.teacherUID) ||
-    normalizeTeacherKey(slot && slot.teacherUid) ||
-    normalizeTeacherKey(slot && slot.teacherUID) ||
-    normalizeTeacherKey(reservation && reservation.teacherKey) ||
-    normalizeTeacherKey(slot && slot.teacherKey) ||
-    normalizeTeacherKey(reservation && reservation.teacher) ||
-    normalizeTeacherKey(slot && slot.teacher) ||
-    normalizeTeacherKey(reservation && reservation.teacherName) ||
-    normalizeTeacherKey(slot && slot.teacherName);
+  return getPrivateTeacherScopeKeys(reservation, slot)[0] || "";
 }
 
 function getReservationTeacherKeys(reservation, slot) {
+  return getPrivateTeacherScopeKeys(reservation, slot);
+}
+
+function getPrivateTeacherScopeKeys(...rows) {
+  const stableUidKeys = [];
+  const stableTeacherKeys = [];
+  const displayKeys = [];
+  rows.forEach((row) => {
+    if (!row) return;
+    [
+      row.teacherUid,
+      row.teacherUID,
+      row.teacherId,
+      row.teacherID,
+    ].forEach((value) => {
+      const key = normalizeTeacherKey(value);
+      if (key) stableUidKeys.push(key);
+    });
+    [row.teacherKey].forEach((value) => {
+      const key = normalizeTeacherKey(value);
+      if (key) stableTeacherKeys.push(key);
+    });
+    [
+      row.teacher,
+      row.teacherName,
+      row.displayName,
+      row.name,
+    ].forEach((value) => {
+      const key = normalizeTeacherKey(value);
+      if (key) displayKeys.push(key);
+    });
+  });
   return uniqueNormalizedTeacherKeyList([
-    reservation && reservation.teacherUid,
-    reservation && reservation.teacherUID,
-    slot && slot.teacherUid,
-    slot && slot.teacherUID,
-    reservation && reservation.teacherKey,
-    slot && slot.teacherKey,
-    reservation && reservation.teacher,
-    slot && slot.teacher,
-    reservation && reservation.teacherName,
-    slot && slot.teacherName,
+    ...stableUidKeys,
+    ...stableTeacherKeys,
+    ...displayKeys,
   ]);
 }
 
 function getPrivatePackageTeacherKey(pkg) {
-  return normalizeTeacherKey(pkg && pkg.teacherUid) ||
-    normalizeTeacherKey(pkg && pkg.teacherUID) ||
-    normalizeTeacherKey(pkg && pkg.teacherKey) ||
-    normalizeTeacherKey(pkg && pkg.teacher) ||
-    normalizeTeacherKey(pkg && pkg.teacherName);
+  return getPrivateTeacherScopeKeys(pkg)[0] || "";
 }
 
 function getPrivatePackageTeacherKeys(pkg) {
-  return uniqueNormalizedTeacherKeyList([
-    pkg && pkg.teacherUid,
-    pkg && pkg.teacherUID,
-    pkg && pkg.teacherKey,
-    pkg && pkg.teacher,
-    pkg && pkg.teacherName,
-  ]);
+  return getPrivateTeacherScopeKeys(pkg);
 }
 
 function getPrivatePackageRejectReason({
@@ -2373,8 +2373,11 @@ function sanitizePrivateSlotAvailabilityRow({
       normalizeTeacherKey(slot && slot.teacher) ||
       normalizeTeacherKey(slot && slot.teacherName),
     teacherUid: normalizeId(
-        (slot && slot.teacherUid) || (slot && slot.teacherUID),
+        (slot && slot.teacherUid) ||
+        (slot && slot.teacherUID) ||
+        (slot && slot.teacherId),
     ),
+    teacherId: normalizeId(slot && slot.teacherId),
     teacherEmail: normalizeId(slot && slot.teacherEmail),
     teacherName: normalizeId(slot && slot.teacherName),
     date: normalizeId(slot && slot.date),
@@ -2450,13 +2453,7 @@ function getPrivateScheduleDurationMinutes(row) {
 }
 
 function getPrivateScheduleTeacherKey(row) {
-  return normalizeTeacherKey(
-      (row && row.teacherKey) ||
-      (row && row.teacherUid) ||
-      (row && row.teacherUID) ||
-      (row && row.teacher) ||
-      (row && row.teacherName),
-  );
+  return getPrivateTeacherScopeKeys(row)[0] || "";
 }
 
 function isCancelledScheduleRow(row) {
@@ -2643,6 +2640,14 @@ async function loadBusyPrivateScheduleRows(db, {
       promise: db
           .collection("lessons")
           .where("academyId", "==", academyId)
+          .where("teacherId", "in", chunk)
+          .get(),
+    });
+    queryPromises.push({
+      source: "lessons",
+      promise: db
+          .collection("lessons")
+          .where("academyId", "==", academyId)
           .where("teacher", "in", chunk)
           .get(),
     });
@@ -2683,6 +2688,14 @@ async function loadBusyPrivateScheduleRows(db, {
       promise: db
           .collection("groupLessons")
           .where("academyId", "==", academyId)
+          .where("teacherId", "in", chunk)
+          .get(),
+    });
+    queryPromises.push({
+      source: "groupLessons",
+      promise: db
+          .collection("groupLessons")
+          .where("academyId", "==", academyId)
           .where("teacher", "in", chunk)
           .get(),
     });
@@ -2726,6 +2739,15 @@ async function loadBusyPrivateScheduleRows(db, {
       promise: db
           .collection("privateLessonReservations")
           .where("academyId", "==", academyId)
+          .where("teacherId", "in", chunk)
+          .where("status", "==", "active")
+          .get(),
+    });
+    queryPromises.push({
+      source: "privateLessonReservations",
+      promise: db
+          .collection("privateLessonReservations")
+          .where("academyId", "==", academyId)
           .where("teacher", "in", chunk)
           .where("status", "==", "active")
           .get(),
@@ -2763,6 +2785,15 @@ async function loadBusyPrivateScheduleRows(db, {
           .collection("privateLessonReservations")
           .where("academyId", "==", academyId)
           .where("teacherUID", "in", chunk)
+          .where("status", "==", "reserved")
+          .get(),
+    });
+    queryPromises.push({
+      source: "privateLessonReservations",
+      promise: db
+          .collection("privateLessonReservations")
+          .where("academyId", "==", academyId)
+          .where("teacherId", "in", chunk)
           .where("status", "==", "reserved")
           .get(),
     });
@@ -2810,6 +2841,15 @@ async function loadBusyPrivateScheduleRows(db, {
             .where("academyId", "==", academyId)
             .where("status", "==", status)
             .where("teacherUID", "in", chunk)
+            .get(),
+      });
+      queryPromises.push({
+        source: "privateLessonSlots",
+        promise: db
+            .collection("privateLessonSlots")
+            .where("academyId", "==", academyId)
+            .where("status", "==", status)
+            .where("teacherId", "in", chunk)
             .get(),
       });
       queryPromises.push({
@@ -2914,13 +2954,7 @@ function getPackageSummaryByTeacherKey(packageSnap, {
 }
 
 function getSlotTeacherPackageSummary(slot, packageByTeacherKey) {
-  const teacherKeys = [
-    normalizeTeacherKey(slot && slot.teacherUid),
-    normalizeTeacherKey(slot && slot.teacherUID),
-    normalizeTeacherKey(slot && slot.teacherKey),
-    normalizeTeacherKey(slot && slot.teacher),
-    normalizeTeacherKey(slot && slot.teacherName),
-  ].filter(Boolean);
+  const teacherKeys = getPrivateTeacherScopeKeys(slot);
   for (const teacherKey of teacherKeys) {
     const summary = packageByTeacherKey.get(teacherKey);
     if (summary) return summary;
@@ -2929,13 +2963,7 @@ function getSlotTeacherPackageSummary(slot, packageByTeacherKey) {
 }
 
 function slotMatchesTeacherKeys(slot, teacherKeys) {
-  const slotTeacherKeys = [
-    normalizeTeacherKey(slot && slot.teacherUid),
-    normalizeTeacherKey(slot && slot.teacherUID),
-    normalizeTeacherKey(slot && slot.teacherKey),
-    normalizeTeacherKey(slot && slot.teacher),
-    normalizeTeacherKey(slot && slot.teacherName),
-  ].filter(Boolean);
+  const slotTeacherKeys = getPrivateTeacherScopeKeys(slot);
   return slotTeacherKeys.some((teacherKey) => teacherKeys.includes(teacherKey));
 }
 
@@ -2958,13 +2986,7 @@ function getPrivateSlotConflictKey({
 }
 
 function getPrivateRowTeacherKeys(row) {
-  return uniqueNormalizedTeacherKeyList([
-    row && row.teacherUid,
-    row && row.teacherUID,
-    row && row.teacherKey,
-    row && row.teacher,
-    row && row.teacherName,
-  ]);
+  return getPrivateTeacherScopeKeys(row);
 }
 
 function getPrivateRowStudentId(row) {
@@ -2989,7 +3011,6 @@ function privateRowMatchesPackageScope({
       .filter(Boolean);
   if (rowPackageIds.length > 0) {
     if (packageId && rowPackageIds.includes(packageId)) return true;
-    return false;
   }
   const packageTeacherKeys = teacherKeys && teacherKeys.length > 0 ?
     teacherKeys :
@@ -2999,6 +3020,7 @@ function privateRowMatchesPackageScope({
   if (rowTeacherKeys.length > 0) {
     return rowTeacherKeys.some((key) => packageTeacherKeys.includes(key));
   }
+  if (rowPackageIds.length > 0) return false;
   return false;
 }
 
@@ -3215,16 +3237,21 @@ async function hasTeacherExactConflict(transaction, db, {
 function buildSlotFromAvailabilityTemplate({templateId, template, date, time}) {
   const teacher =
     normalizeTeacherKey(template.teacherKey || template.teacher) ||
-    normalizeTeacherKey(template.teacherUid || template.teacherUID) ||
+    normalizeTeacherKey(
+        template.teacherUid || template.teacherUID || template.teacherId,
+    ) ||
     normalizeTeacherKey(template.teacherName);
   const teacherKey = normalizeTeacherKey(template.teacherKey || teacher);
-  const teacherUid = normalizeId(template.teacherUid || template.teacherUID);
+  const teacherUid = normalizeId(
+      template.teacherUid || template.teacherUID || template.teacherId,
+  );
   const durationMinutes = Number(template.durationMinutes || 60);
   return {
     academyId: normalizeId(template.academyId),
     teacher,
     teacherKey,
     teacherUid,
+    teacherId: normalizeId(template.teacherId),
     teacherEmail: normalizeId(template.teacherEmail),
     teacherName: normalizeId(
         template.teacherName || template.teacher || teacher,
@@ -4155,6 +4182,22 @@ exports.listPrivateLessonSlotAvailability = onCall(
                           .collection("privateLessonSlots")
                           .where("academyId", "==", academyId)
                           .where("status", "==", status)
+                          .where("teacherUID", "in", chunk)
+                          .get(),
+                  );
+                  queryPromises.push(
+                      db
+                          .collection("privateLessonSlots")
+                          .where("academyId", "==", academyId)
+                          .where("status", "==", status)
+                          .where("teacherId", "in", chunk)
+                          .get(),
+                  );
+                  queryPromises.push(
+                      db
+                          .collection("privateLessonSlots")
+                          .where("academyId", "==", academyId)
+                          .where("status", "==", status)
                           .where("teacher", "in", chunk)
                           .get(),
                   );
@@ -4633,13 +4676,16 @@ exports.reservePrivateLessonSlot = onCall(
           const slotTeacherKey = getOptionalSlotString(slot, "teacherKey");
           const slotTeacherUid =
             getOptionalSlotString(slot, "teacherUid") ||
-            getOptionalSlotString(slot, "teacherUID");
+            getOptionalSlotString(slot, "teacherUID") ||
+            getOptionalSlotString(slot, "teacherId");
+          const slotTeacherId = getOptionalSlotString(slot, "teacherId");
           const slotTeacherEmail = getOptionalSlotString(slot, "teacherEmail");
           const subject = getOptionalSlotString(slot, "subject");
           const studentName = getOptionalStudentName({student, membership});
           if (teacherName) reservationData.teacherName = teacherName;
           if (slotTeacherKey) reservationData.teacherKey = slotTeacherKey;
           if (slotTeacherUid) reservationData.teacherUid = slotTeacherUid;
+          if (slotTeacherId) reservationData.teacherId = slotTeacherId;
           if (slotTeacherEmail) reservationData.teacherEmail = slotTeacherEmail;
           if (subject) reservationData.subject = subject;
           if (studentName) reservationData.studentName = studentName;

@@ -131,12 +131,13 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     statusLabel: '보충 가능 0회',
   });
 
-  const legacyUidOnlyFixedLessons = released.map((lesson) => ({
+  const legacyUidOnlyFixedLessons = released.map((lesson, index) => ({
     ...lesson,
     teacher: 'Don',
     teacherName: 'Don',
     teacherKey: '',
     teacherUID: 'teacher-uid-don1',
+    packageId: index === 1 ? ticket.id : 'legacy-private-ticket',
   }));
   const legacyUidTicket = {
     ...ticket,

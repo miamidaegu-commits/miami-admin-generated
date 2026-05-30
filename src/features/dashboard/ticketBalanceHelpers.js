@@ -26,6 +26,35 @@ function normalizeIdList(value) {
   return out
 }
 
+function getPrivateTeacherScopeKeys(...rows) {
+  const stableUidKeys = []
+  const stableTeacherKeys = []
+  const displayKeys = []
+  rows.forEach((row) => {
+    if (!row) return
+    ;[row.teacherUid, row.teacherUID, row.teacherId, row.teacherID].forEach((value) => {
+      const key = normalizeKey(value)
+      if (key) stableUidKeys.push(key)
+    })
+    ;[row.teacherKey].forEach((value) => {
+      const key = normalizeKey(value)
+      if (key) stableTeacherKeys.push(key)
+    })
+    ;[row.teacher, row.teacherName, row.displayName, row.name].forEach((value) => {
+      const key = normalizeKey(value)
+      if (key) displayKeys.push(key)
+    })
+  })
+  const seen = new Set()
+  const out = []
+  ;[...stableUidKeys, ...stableTeacherKeys, ...displayKeys].forEach((key) => {
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    out.push(key)
+  })
+  return out
+}
+
 function getKstTodayString(now = Date.now()) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Seoul',
@@ -97,9 +126,7 @@ function isNoDeductionLesson(row) {
 }
 
 function getPackageTeacherKeys(ticket) {
-  return [ticket?.teacherUid, ticket?.teacherUID, ticket?.teacherKey, ticket?.teacher, ticket?.teacherName]
-    .map(normalizeKey)
-    .filter(Boolean)
+  return getPrivateTeacherScopeKeys(ticket)
 }
 
 function getGroupClassScopeValues(row) {
@@ -135,22 +162,24 @@ function privateRowMatchesTicketScope({
   const rowPackageIds = packageIdFields.map((key) => normalizeId(row?.[key])).filter(Boolean)
   if (rowPackageIds.length > 0) {
     if (ticketId && rowPackageIds.includes(ticketId)) return true
-    return false
   }
 
   const ticketKeys = getPackageTeacherKeys(ticket)
-  const rowKeys = [row?.teacherUid, row?.teacherUID, row?.teacherKey, row?.teacher, row?.teacherName]
-    .map(normalizeKey)
-    .filter(Boolean)
+  const rowKeys = getPrivateTeacherScopeKeys(row)
   if (ticketKeys.length === 0) return false
   if (rowKeys.length > 0) return rowKeys.some((key) => ticketKeys.includes(key))
+  if (rowPackageIds.length > 0) return false
 
   const requestedKeys = [
     teacherScope?.teacherUid,
     teacherScope?.teacherUID,
+    teacherScope?.teacherId,
+    teacherScope?.teacherID,
     teacherScope?.teacherKey,
     teacherScope?.teacher,
     teacherScope?.teacherName,
+    teacherScope?.displayName,
+    teacherScope?.name,
   ]
     .map(normalizeKey)
     .filter(Boolean)

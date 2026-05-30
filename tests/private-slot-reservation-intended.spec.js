@@ -1009,8 +1009,10 @@ test('released fixed private slot behavior is wired server-side', async () => {
   expect(source).toContain('function findActivePrivatePackageForTeacher');
   expect(source).toMatch(/Number\(pkg\.remainingCount \|\| 0\)[\s\S]*<= 0/);
   expect(source).toMatch(
-    /function getReservationTeacherKey[\s\S]*reservation && reservation\.teacher[\s\S]*slot && slot\.teacher/
+    /function getReservationTeacherKey[\s\S]*getPrivateTeacherScopeKeys\(reservation, slot\)/
   );
+  expect(source).toContain('function getPrivateTeacherScopeKeys');
+  expect(source).toContain('row.teacherId');
   expect(source).toContain('slotType: "released_fixed"');
   expect(source).toContain('releasedFromFixed: true');
   expect(source).toContain('releasedByStudentId: studentId');

@@ -330,7 +330,17 @@ function getPrivateSlotTeacherDisplay(slot) {
 function getPrivateTeacherIdentityKeys(row) {
   const seen = new Set()
   const out = []
-  ;[row?.teacherUid, row?.teacherUID, row?.teacherKey, row?.teacher, row?.teacherName].forEach((value) => {
+  ;[
+    row?.teacherUid,
+    row?.teacherUID,
+    row?.teacherId,
+    row?.teacherID,
+    row?.teacherKey,
+    row?.teacher,
+    row?.teacherName,
+    row?.displayName,
+    row?.name,
+  ].forEach((value) => {
     const key = normalizeText(value || '')
     if (!key || seen.has(key)) return
     seen.add(key)

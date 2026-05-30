@@ -333,7 +333,7 @@ async function createFixture(unique) {
         time: '10:00',
         subject: `E2E 예정고정 ${index + 1} ${unique}`,
         isDeductCancelled: false,
-        packageId,
+        packageId: index === 0 ? packageId : `legacy-private-package-${unique}`,
         packageType: 'private',
         createdAt: now,
         updatedAt: now,
@@ -510,7 +510,7 @@ test('fixed private package balance creates one makeup booking and prevents over
     const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
     await expect(privatePackageCell).toContainText('잔여 4회 / 총 4회 · 사용 0회');
     await expect(privatePackageCell).toContainText('고정 예정 3회');
-    await expect(privatePackageCell).toContainText('예약 가능 1회');
+    await expect(privatePackageCell).toContainText('보충 가능 1회');
     await expect(privatePackageCell).not.toContainText('예정 4회');
 
     await selectCalendarDate(page, fixture.today);
@@ -653,7 +653,7 @@ test('fixed private package balance creates one makeup booking and prevents over
     await expect(studentSearchInput).toBeEnabled({ timeout: 30000 });
     await studentSearchInput.fill(fixture.studentName);
     await expect(privatePackageCell).toContainText('고정 예정 3회', { timeout: 15000 });
-    await expect(privatePackageCell).toContainText('예약 가능 1회');
+    await expect(privatePackageCell).toContainText('보충 가능 1회');
     await expect(privatePackageCell).not.toContainText('보충 예약 1회');
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));
