@@ -162,6 +162,7 @@ function privateTeacherValuesMatch(values, teacherValue) {
 function slotMatchesPrivateTeacherAccess(slot, teacherKeys) {
   return (
     privateTeacherValuesMatch(teacherKeys, slot?.teacherUid) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherUID) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacherKey) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacher) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacherName)
@@ -169,7 +170,7 @@ function slotMatchesPrivateTeacherAccess(slot, teacherKeys) {
 }
 
 function getPrivatePackageTeacherKey(pkg) {
-  return String(pkg?.teacher || pkg?.teacherName || pkg?.teacherKey || '').trim()
+  return String(pkg?.teacherUid || pkg?.teacherUID || pkg?.teacherKey || pkg?.teacher || pkg?.teacherName || '').trim()
 }
 
 function isActivePrivatePackage(pkg) {
@@ -343,7 +344,7 @@ function validatePrivateSlotBookingState(slot, mode) {
   if (mode === 'reserve') {
     if (slot.status !== 'open') throw new Error('이미 예약된 시간입니다.')
     if (getPrivateSlotAvailableCount(slot) <= 0) {
-      throw new Error('예약 가능한 보충 횟수가 없습니다.')
+      throw new Error('예약 가능한 횟수가 없습니다.')
     }
     return
   }
@@ -745,6 +746,7 @@ export default function StudentBookingPage() {
     const querySpecs = [
       ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherUID', values })),
       ...teacherChunks.map((values) => ({ type: 'teacher', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
     ]
@@ -974,6 +976,7 @@ export default function StudentBookingPage() {
       const querySpecs = [
         ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
         ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
+        ...teacherChunks.map((values) => ({ type: 'teacherUID', values })),
         ...teacherChunks.map((values) => ({ type: 'teacher', values })),
         ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
       ]
@@ -2435,7 +2438,7 @@ export default function StudentBookingPage() {
                                         ) : null}
                                         {canReserve ? (
                                           <div style={{ opacity: 0.72, fontSize: 12 }}>
-                                            예약 가능 보충: {remainingCount}회
+                                            예약 가능 {remainingCount}회
                                           </div>
                                         ) : null}
                                         <button
