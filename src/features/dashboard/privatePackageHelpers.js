@@ -201,6 +201,7 @@ export function computePrivateTeacherPackageUsage({
   teacherKey,
   teacherUid,
   teacherUID,
+  teacherId,
   studentId,
   academyId,
   now = Date.now(),
@@ -211,7 +212,7 @@ export function computePrivateTeacherPackageUsage({
     fixedPrivateLessons: privateLessons,
     privateReservations,
     studentId,
-    teacherScope: { teacher, teacherKey, teacherUid, teacherUID },
+    teacherScope: { teacher, teacherKey, teacherUid, teacherUID, teacherId },
     academyId,
     now,
   })

@@ -270,6 +270,7 @@ export default function useStudentsSectionViewModel({
           teacherKey: pkg.teacherKey,
           teacherUid: pkg.teacherUid,
           teacherUID: pkg.teacherUID,
+          teacherId: pkg.teacherId,
         })
       )
     }

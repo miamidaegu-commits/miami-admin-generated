@@ -163,14 +163,27 @@ function slotMatchesPrivateTeacherAccess(slot, teacherKeys) {
   return (
     privateTeacherValuesMatch(teacherKeys, slot?.teacherUid) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacherUID) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherId) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacherKey) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacher) ||
-    privateTeacherValuesMatch(teacherKeys, slot?.teacherName)
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherName) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.displayName) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.name)
   )
 }
 
 function getPrivatePackageTeacherKey(pkg) {
-  return String(pkg?.teacherUid || pkg?.teacherUID || pkg?.teacherKey || pkg?.teacher || pkg?.teacherName || '').trim()
+  return String(
+    pkg?.teacherUid ||
+      pkg?.teacherUID ||
+      pkg?.teacherId ||
+      pkg?.teacherKey ||
+      pkg?.teacher ||
+      pkg?.teacherName ||
+      pkg?.displayName ||
+      pkg?.name ||
+      ''
+  ).trim()
 }
 
 function isActivePrivatePackage(pkg) {
@@ -747,6 +760,7 @@ export default function StudentBookingPage() {
       ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherUID', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherId', values })),
       ...teacherChunks.map((values) => ({ type: 'teacher', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
     ]
@@ -977,6 +991,7 @@ export default function StudentBookingPage() {
         ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
         ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
         ...teacherChunks.map((values) => ({ type: 'teacherUID', values })),
+        ...teacherChunks.map((values) => ({ type: 'teacherId', values })),
         ...teacherChunks.map((values) => ({ type: 'teacher', values })),
         ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
       ]
