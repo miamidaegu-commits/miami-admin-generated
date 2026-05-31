@@ -239,6 +239,90 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     now: NOW,
   });
   expect(cancelledBooking.availableToBook).toBe(1);
+
+  const productionSmokePackage = {
+    id: 'BwNBuYoJVC9lCfJHX1QE',
+    academyId: ACADEMY_ID,
+    studentId: STUDENT_ID,
+    packageType: 'private',
+    teacher: 'don1',
+    totalCount: 4,
+    usedCount: 0,
+    remainingCount: 4,
+  };
+  const productionSmokeLessons = [
+    privateLesson('past-released', {
+      date: '2026-05-29',
+      time: '15:00',
+      packageId: productionSmokePackage.id,
+      teacher: 'don1',
+      teacherName: 'don1',
+      isDeductCancelled: true,
+    }),
+    privateLesson('future-1', {
+      date: '2026-06-05',
+      time: '15:00',
+      packageId: productionSmokePackage.id,
+      teacher: 'don1',
+      teacherName: 'don1',
+      startAt: Date.UTC(2026, 5, 5, 6, 0, 0),
+    }),
+    privateLesson('future-2', {
+      date: '2026-06-12',
+      time: '15:00',
+      packageId: productionSmokePackage.id,
+      teacher: 'don1',
+      teacherName: 'don1',
+      startAt: Date.UTC(2026, 5, 12, 6, 0, 0),
+    }),
+    privateLesson('future-3', {
+      date: '2026-06-19',
+      time: '15:00',
+      packageId: productionSmokePackage.id,
+      teacher: 'don1',
+      teacherName: 'don1',
+      startAt: Date.UTC(2026, 5, 19, 6, 0, 0),
+    }),
+  ];
+  const productionSmokeBeforeBooking = computePrivateTicketBalance({
+    ticket: productionSmokePackage,
+    fixedPrivateLessons: productionSmokeLessons,
+    privateReservations: [],
+    studentId: STUDENT_ID,
+    teacherScope: { teacher: 'don1' },
+    now: NOW,
+  });
+  expect(productionSmokeBeforeBooking).toMatchObject({
+    futureFixedAllocatedCount: 3,
+    activeFutureReservationCount: 0,
+    availableToBook: 1,
+    statusLabel: '보충 가능 1회',
+  });
+
+  const productionReservationShape = privateReservation('prod-reservation-shape', {
+    packageId: productionSmokePackage.id,
+    teacher: 'don1',
+    teacherName: 'Don',
+    teacherKey: '',
+    teacherUid: '',
+    teacherUID: '',
+    date: '2026-06-01',
+    time: '23:30',
+    startAt: undefined,
+  });
+  const productionSmokeAfterBooking = computePrivateTicketBalance({
+    ticket: productionSmokePackage,
+    fixedPrivateLessons: productionSmokeLessons,
+    privateReservations: [productionReservationShape],
+    studentId: STUDENT_ID,
+    teacherScope: { teacher: 'don1' },
+    now: NOW,
+  });
+  expect(productionSmokeAfterBooking).toMatchObject({
+    futureFixedAllocatedCount: 3,
+    activeFutureReservationCount: 1,
+    availableToBook: 0,
+  });
 });
 
 test('group fixed and flexible usage share one group ticket balance', () => {
