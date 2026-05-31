@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   query,
@@ -435,6 +436,9 @@ export default function StudentBookingPage() {
   const [linkedPrivateStudent, setLinkedPrivateStudent] = useState(null)
   const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
   const groupAccessRefreshTimerRef = useRef(null)
+  const groupLessonFetchRequestRef = useRef(0)
+  const reservationsRef = useRef([])
+  const locallyReservedGroupLessonIdsRef = useRef([])
 
   const scopedStudentId = String(studentId || currentMembership?.studentId || '').trim()
   const hasOperationalAcademy = isValidOperationalAcademyId(currentAcademyId)
@@ -442,6 +446,37 @@ export default function StudentBookingPage() {
     ? `${currentAcademyId}__${getTodayStorageDateString()}`
     : ''
   const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
+
+  useEffect(() => {
+    reservationsRef.current = reservations
+  }, [reservations])
+
+  useEffect(() => {
+    locallyReservedGroupLessonIdsRef.current = locallyReservedGroupLessonIds
+  }, [locallyReservedGroupLessonIds])
+
+  function mergeGroupLessonRows(rows, previousLessons = []) {
+    const byId = new Map(
+      rows.map((lesson) => [String(lesson.id || '').trim(), lesson])
+    )
+    const activeReservationLessonIds = new Set(
+      reservationsRef.current
+        .filter((reservation) => reservation.status === 'active')
+        .map((reservation) => String(reservation.lessonId || '').trim())
+        .filter(Boolean)
+    )
+    locallyReservedGroupLessonIdsRef.current.forEach((lessonId) => {
+      if (lessonId) activeReservationLessonIds.add(String(lessonId))
+    })
+    previousLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (!lessonId || byId.has(lessonId)) return
+      if (activeReservationLessonIds.has(lessonId)) {
+        byId.set(lessonId, lesson)
+      }
+    })
+    return Array.from(byId.values())
+  }
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
@@ -466,36 +501,104 @@ export default function StudentBookingPage() {
       })
     )
 
+    async function readGroupAccessFromSummary(summaryData) {
+      const nextIds = new Set()
+      const rawIds = Array.isArray(summaryData?.groupClassIds)
+        ? summaryData.groupClassIds
+        : []
+      rawIds.forEach((value) => {
+        const groupClassId = String(value || '').trim()
+        if (!groupClassId) return
+        nextIds.add(groupClassId)
+      })
+      const nextCourseTypes = new Set()
+      const rawCourseTypes = Array.isArray(summaryData?.groupCourseTypes)
+        ? summaryData.groupCourseTypes
+        : []
+      rawCourseTypes.forEach((value) => {
+        const groupCourseType = normalizeGroupCourseType(value)
+        if (!groupCourseType) return
+        nextCourseTypes.add(groupCourseType)
+      })
+      return {
+        classIds: Array.from(nextIds.values()),
+        courseTypes: Array.from(nextCourseTypes.values()),
+      }
+    }
+
+    async function fetchGroupLessonsForAccess() {
+      let classIds = []
+      let courseTypes = []
+      try {
+        const summarySnap = await getDocFromServer(summaryRef)
+        const access = await readGroupAccessFromSummary(
+          summarySnap.exists() ? summarySnap.data() : null
+        )
+        classIds = access.classIds
+        courseTypes = access.courseTypes
+        setAllowedGroupClassIds(classIds)
+        setAllowedGroupCourseTypes(courseTypes)
+      } catch (error) {
+        console.error('studentGroupAccessSummary server read 실패:', error)
+      }
+
+      if (classIds.length === 0 && courseTypes.length === 0) {
+        hasGroupLessonRowsRef.current = false
+        setLessons([])
+        setLessonsLoading(false)
+        setLessonsError('')
+        return
+      }
+
+      const requestId = groupLessonFetchRequestRef.current + 1
+      groupLessonFetchRequestRef.current = requestId
+      setLessonsLoading(!hasGroupLessonRowsRef.current)
+      setLessonsError('')
+
+      try {
+        const listGroupLessonAvailability = httpsCallable(
+          firebaseFunctions,
+          'listGroupLessonAvailability'
+        )
+        const result = await listGroupLessonAvailability({
+          academyId: currentAcademyId,
+        })
+        if (requestId !== groupLessonFetchRequestRef.current) return
+        const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        setLessons((previous) => mergeGroupLessonRows(rows, previous))
+        hasGroupLessonRowsRef.current = rows.length > 0
+      } catch (error) {
+        if (requestId !== groupLessonFetchRequestRef.current) return
+        console.error('student groupLessons 불러오기 실패:', error)
+        setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
+        setLessons([])
+        hasGroupLessonRowsRef.current = false
+      } finally {
+        if (requestId === groupLessonFetchRequestRef.current) {
+          setLessonsLoading(false)
+        }
+      }
+    }
+
+    void fetchGroupLessonsForAccess()
+
     const unsubscribe = onSnapshot(
       summaryRef,
       (snapshot) => {
-        const summaryData = snapshot.exists() ? snapshot.data() : null
-        const nextIds = new Set()
-        const rawIds = Array.isArray(summaryData?.groupClassIds)
-          ? summaryData.groupClassIds
-          : []
-        rawIds.forEach((value) => {
-          const groupClassId = String(value || '').trim()
-          if (!groupClassId) return
-          nextIds.add(groupClassId)
-        })
-        const nextCourseTypes = new Set()
-        const rawCourseTypes = Array.isArray(summaryData?.groupCourseTypes)
-          ? summaryData.groupCourseTypes
-          : []
-        rawCourseTypes.forEach((value) => {
-          const groupCourseType = normalizeGroupCourseType(value)
-          if (!groupCourseType) return
-          nextCourseTypes.add(groupCourseType)
-        })
-        setAllowedGroupClassIds(Array.from(nextIds.values()))
-        setAllowedGroupCourseTypes(Array.from(nextCourseTypes.values()))
-        setGroupLessonsRefreshKey((previous) => previous + 1)
+        void (async () => {
+          const access = await readGroupAccessFromSummary(
+            snapshot.exists() ? snapshot.data() : null
+          )
+          setAllowedGroupClassIds(access.classIds)
+          setAllowedGroupCourseTypes(access.courseTypes)
+          setGroupLessonsRefreshKey((previous) => previous + 1)
+          await fetchGroupLessonsForAccess()
+        })()
         if (groupAccessRefreshTimerRef.current) {
           clearTimeout(groupAccessRefreshTimerRef.current)
         }
         groupAccessRefreshTimerRef.current = window.setTimeout(() => {
-          setGroupLessonsRefreshKey((previous) => previous + 1)
+          void fetchGroupLessonsForAccess()
           groupAccessRefreshTimerRef.current = null
         }, 750)
         setAccessLoading(false)
@@ -512,6 +615,7 @@ export default function StudentBookingPage() {
     )
 
     return () => {
+      groupLessonFetchRequestRef.current += 1
       if (groupAccessRefreshTimerRef.current) {
         clearTimeout(groupAccessRefreshTimerRef.current)
         groupAccessRefreshTimerRef.current = null
@@ -736,79 +840,40 @@ export default function StudentBookingPage() {
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
-      hasGroupLessonRowsRef.current = false
-      setLessons([])
-      setLessonsLoading(false)
-      setLessonsError('')
       return
     }
     if (allowedGroupClassIds.length === 0 && allowedGroupCourseTypes.length === 0) {
-      hasGroupLessonRowsRef.current = false
-      setLessons([])
-      setLessonsLoading(false)
-      setLessonsError('')
       return
     }
 
-    setLessonsLoading(!hasGroupLessonRowsRef.current)
-    setLessonsError('')
-
     let cancelled = false
 
-    async function loadGroupLessonAvailability() {
+    async function refreshGroupLessonsAfterReservationChange() {
       const listGroupLessonAvailability = httpsCallable(
         firebaseFunctions,
         'listGroupLessonAvailability'
       )
-      const result = await listGroupLessonAvailability({
-        academyId: currentAcademyId,
-      })
-      return Array.isArray(result.data?.lessons) ? result.data.lessons : []
+      try {
+        const result = await listGroupLessonAvailability({
+          academyId: currentAcademyId,
+        })
+        if (cancelled) return
+        const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        setLessons((previous) => mergeGroupLessonRows(rows, previous))
+        hasGroupLessonRowsRef.current = rows.length > 0
+      } catch (error) {
+        if (cancelled) return
+        console.error('student groupLessons reservation refresh 실패:', error)
+      }
     }
 
-    loadGroupLessonAvailability()
-      .then((rows) => {
-        if (cancelled) return
-        setLessons((previous) => {
-          const byId = new Map(rows.map((lesson) => [String(lesson.id || '').trim(), lesson]))
-          const activeReservationLessonIds = new Set(
-            reservations
-              .filter((reservation) => reservation.status === 'active')
-              .map((reservation) => String(reservation.lessonId || '').trim())
-              .filter(Boolean)
-          )
-          locallyReservedGroupLessonIds.forEach((lessonId) => {
-            if (lessonId) activeReservationLessonIds.add(String(lessonId))
-          })
-          previous.forEach((lesson) => {
-            const lessonId = String(lesson.id || '').trim()
-            if (!lessonId || byId.has(lessonId)) return
-            if (activeReservationLessonIds.has(lessonId)) {
-              byId.set(lessonId, lesson)
-            }
-          })
-          const nextLessons = Array.from(byId.values())
-          hasGroupLessonRowsRef.current = nextLessons.length > 0
-          return nextLessons
-        })
-        setLessonsLoading(false)
-      })
-      .catch((error) => {
-        if (cancelled) return
-        console.error('student groupLessons 불러오기 실패:', error)
-        setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
-        setLessons([])
-        setLessonsLoading(false)
-      })
+    refreshGroupLessonsAfterReservationChange()
 
     return () => {
       cancelled = true
     }
   }, [
-    allowedGroupClassIds,
-    allowedGroupCourseTypes,
     currentAcademyId,
-    groupLessonsRefreshKey,
     hasOperationalAcademy,
     locallyReservedGroupLessonIds,
     reservations,
@@ -2364,8 +2429,11 @@ export default function StudentBookingPage() {
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {sortedLessons.map((lesson) => {
+                    const lessonId = String(lesson.id || '').trim()
                     const reservation = reservationByLessonId.get(lesson.id) || null
-                    const isReserved = reservation?.status === 'active'
+                    const isReserved =
+                      reservation?.status === 'active' ||
+                      locallyReservedGroupLessonIds.includes(lessonId)
                     const reservationId = buildGroupLessonReservationId({
                       academyId: currentAcademyId,
                       lessonId: lesson.id,
@@ -2392,7 +2460,9 @@ export default function StudentBookingPage() {
                     const hasGroupTicketAvailability =
                       !hasGroupTicketBalanceProjection ||
                       (Number.isFinite(groupTicketAvailableToBook) && groupTicketAvailableToBook > 0)
-                    const groupReserveDisabledReason = !hasRemainingSeats
+                    const groupReserveDisabledReason = isReserved
+                      ? '예약 완료'
+                      : !hasRemainingSeats
                       ? '마감'
                       : lesson.groupTicketStatusLabel && !hasGroupTicketAvailability
                         ? lesson.groupTicketStatusLabel

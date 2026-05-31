@@ -1200,6 +1200,10 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         ]),
         groupCourseTypes: expect.arrayContaining(['beginner_conversation']),
       });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: '내 수업 내역' })).toBeVisible({
+      timeout: 15000,
+    });
     await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
     await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);
     await expect(page.getByText('Course Deleted Hidden')).toHaveCount(0);
@@ -1221,6 +1225,10 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         groupClassIds: [legacyClassId, closedClassId, orphanClassId],
         groupCourseTypes: ['free_talking'],
       });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: '내 수업 내역' })).toBeVisible({
+      timeout: 15000,
+    });
     await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
     await expect(page.getByText('Course Beginner Only')).toHaveCount(0);
     await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);

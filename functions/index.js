@@ -470,28 +470,65 @@ function getGroupSeatAvailability({lesson, fixedMembers, reservations}) {
   const fixedAttendingCount =
     Math.max(0, fixedMemberCount - releasedFixedSeatCount);
   const guestReservedCount = guestReservedStudentIds.size;
+  const lessonBookedCount = Math.max(
+      0,
+      Math.floor(Number(lesson && lesson.bookedCount || 0)),
+  );
+  const effectiveGuestReservedCount = Math.max(
+      guestReservedCount,
+      Number.isFinite(lessonBookedCount) ? lessonBookedCount : 0,
+  );
   const remainingSeats =
-    Math.max(0, capacity - fixedAttendingCount - guestReservedCount);
+    Math.max(0, capacity - fixedAttendingCount - effectiveGuestReservedCount);
 
   return {
     capacity,
     fixedMemberCount,
     fixedAttendingCount,
     releasedFixedSeatCount,
-    guestReservedCount,
+    guestReservedCount: effectiveGuestReservedCount,
     remainingSeats,
     isFull: remainingSeats <= 0,
   };
 }
 
-function hasGroupLessonAccess({summary, lesson}) {
-  const groupClassId = getGroupLessonGroupId(lesson);
-  const groupCourseType = normalizeId(lesson.groupCourseType);
-  return (
-    normalizeIdList(summary && summary.groupClassIds).includes(groupClassId) ||
-    normalizeIdList(summary && summary.groupCourseTypes)
-        .includes(groupCourseType)
+function getLessonGroupClassIds(lesson) {
+  const ids = normalizeIdList(lesson && lesson.groupClassIds);
+  const primary = getGroupLessonGroupId(lesson);
+  if (primary && !ids.includes(primary)) {
+    ids.unshift(primary);
+  }
+  return ids;
+}
+
+function getEffectiveLessonCourseTypes(lesson, groupClassById) {
+  const types = new Set();
+  const fromLesson = normalizeId(lesson && lesson.groupCourseType);
+  if (fromLesson) types.add(fromLesson);
+
+  getLessonGroupClassIds(lesson).forEach((classId) => {
+    const groupClass = groupClassById && groupClassById.get(classId);
+    const fromClass = normalizeId(groupClass && groupClass.groupCourseType);
+    if (fromClass) types.add(fromClass);
+  });
+
+  return Array.from(types.values());
+}
+
+function hasGroupLessonAccess({summary, lesson, groupClassById = null}) {
+  const accessClassIds = normalizeIdList(summary && summary.groupClassIds);
+  const accessCourseTypes = normalizeIdList(
+      summary && summary.groupCourseTypes,
   );
+
+  if (getLessonGroupClassIds(lesson).some((classId) =>
+    accessClassIds.includes(classId),
+  )) {
+    return true;
+  }
+
+  return getEffectiveLessonCourseTypes(lesson, groupClassById)
+      .some((courseType) => accessCourseTypes.includes(courseType));
 }
 
 function sanitizeGroupLessonForStudent(docSnap, availability, ticketInfo = {}) {
@@ -3399,6 +3436,12 @@ exports.listGroupLessonAvailability = onCall(
                 .filter((docSnap) => isActiveGroupClass(docSnap.data() || {}))
                 .map((docSnap) => docSnap.id),
         );
+        const groupClassById = new Map(
+            groupClassesSnap.docs.map((docSnap) => [
+              docSnap.id,
+              {id: docSnap.id, ...docSnap.data()},
+            ]),
+        );
         const allGroupLessons = lessonSnap.docs.map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
@@ -3417,7 +3460,7 @@ exports.listGroupLessonAvailability = onCall(
                 !isCancelledOrDeletedGroupLesson(lesson) &&
                 lessonGroupId &&
                 activeGroupClassIds.has(lessonGroupId) &&
-                hasGroupLessonAccess({summary, lesson});
+                hasGroupLessonAccess({summary, lesson, groupClassById});
             })
             .map((docSnap) => {
               const lesson = {id: docSnap.id, ...docSnap.data()};
@@ -3567,7 +3610,17 @@ exports.reserveGroupLessonSeat = onCall(
                 .doc(`${academyId}__${studentId}`);
             const summarySnap = await transaction.get(summaryRef);
             const summary = summarySnap.exists ? summarySnap.data() || {} : {};
-            if (!hasGroupLessonAccess({summary, lesson})) {
+            const reserveAccessGroupClassById = new Map([
+              [lessonGroupId, {
+                id: groupClassSnap.id,
+                ...groupClassSnap.data(),
+              }],
+            ]);
+            if (!hasGroupLessonAccess({
+              summary,
+              lesson,
+              groupClassById: reserveAccessGroupClassById,
+            })) {
               throw new HttpsError(
                   "permission-denied",
                   "예약 가능한 반 권한이 없습니다.",
