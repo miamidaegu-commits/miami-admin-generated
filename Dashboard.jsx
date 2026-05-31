@@ -1870,7 +1870,16 @@ export default function Dashboard() {
         query(
           collection(db, 'privateLessonReservations'),
           where('academyId', '==', currentAcademyId),
-          where('status', 'in', ['active', 'reserved', 'completed', 'no_show'])
+          where('status', 'in', [
+            'active',
+            'reserved',
+            'confirmed',
+            'booked',
+            'completed',
+            'no_show',
+            'cancelled',
+            'canceled',
+          ])
         ),
         (snapshot) => {
           const rows = snapshot.docs.map((docItem) => ({
@@ -4701,6 +4710,16 @@ export default function Dashboard() {
     updateTeacherCountEditPermission,
     updateTeacherLessonDeductionPermission,
     busyTeacherId,
+    lessons,
+    privateLessonReservations,
+    privateLessonSlots,
+    privateStudents,
+    studentPackages,
+    rosterDataLoading:
+      loading ||
+      privateLessonReservationsLoading ||
+      privateLessonSlotsLoading ||
+      privateStudentsLoading,
   }
 
   return (

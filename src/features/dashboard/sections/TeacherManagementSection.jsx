@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { httpsCallable } from 'firebase/functions'
 import { functions as firebaseFunctions } from '../../../../firebase.js'
+import TeacherLessonRosterModal from '../modals/TeacherLessonRosterModal.jsx'
 
 const TEACHER_INVITATION_APP_URL_BY_PROJECT_ID = {
   'daegu-miami-production': 'https://daegumiami.com',
@@ -113,6 +114,12 @@ export default function TeacherManagementSection({
   updateTeacherCountEditPermission,
   updateTeacherLessonDeductionPermission,
   busyTeacherId,
+  lessons = [],
+  privateLessonReservations = [],
+  privateLessonSlots = [],
+  privateStudents = [],
+  studentPackages = [],
+  rosterDataLoading = false,
 }) {
   const isEditing = Boolean(teacherForm.id)
   const [inviteTeacher, setInviteTeacher] = useState(null)
@@ -124,6 +131,7 @@ export default function TeacherManagementSection({
   const [inviteCopied, setInviteCopied] = useState(false)
   const [permissionMessage, setPermissionMessage] = useState('')
   const [permissionError, setPermissionError] = useState('')
+  const [rosterTeacher, setRosterTeacher] = useState(null)
 
   const invitationMessage = useMemo(() => {
     const resetLink = String(inviteResult?.passwordResetLink || inviteResult?.resetLink || '').trim()
@@ -486,6 +494,21 @@ export default function TeacherManagementSection({
                 </button>
               </span>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => setRosterTeacher(teacher)}
+                  data-testid="teacher-lesson-roster-open-button"
+                  style={{
+                    padding: '7px 10px',
+                    borderRadius: 8,
+                    border: '1px solid #4b5875',
+                    background: '#1a2438',
+                    color: 'white',
+                    cursor: 'pointer',
+                  }}
+                >
+                  수업 현황
+                </button>
                 {active ? (
                   <button
                     type="button"
@@ -740,6 +763,20 @@ export default function TeacherManagementSection({
             </div>
           </div>
         </div>
+      ) : null}
+
+      {rosterTeacher ? (
+        <TeacherLessonRosterModal
+          teacher={rosterTeacher}
+          academyId={currentAcademyId}
+          lessons={lessons}
+          privateLessonReservations={privateLessonReservations}
+          privateLessonSlots={privateLessonSlots}
+          privateStudents={privateStudents}
+          studentPackages={studentPackages}
+          loading={rosterDataLoading}
+          onClose={() => setRosterTeacher(null)}
+        />
       ) : null}
     </section>
   )
