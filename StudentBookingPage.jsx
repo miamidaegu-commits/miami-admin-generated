@@ -48,6 +48,12 @@ import {
   getGroupCourseTypeLabel,
   normalizeGroupCourseType,
 } from './src/features/group-booking/groupCourseTypes.js'
+import {
+  buildStudentPrivateTicketSummariesFromCallablePackages,
+  buildStudentTicketSummaryViewModel,
+  formatStudentBookingIdentityLine,
+  resolveLinkedStudentDisplayName,
+} from './src/features/booking/studentTicketSummary.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
 function isEnabledFlag(value) {
@@ -422,6 +428,12 @@ export default function StudentBookingPage() {
   const [dailyMaterials, setDailyMaterials] = useState([])
   const [dailyMaterialsLoading, setDailyMaterialsLoading] = useState(false)
   const [dailyMaterialsError, setDailyMaterialsError] = useState('')
+  const [studentPackages, setStudentPackages] = useState([])
+  const [studentPackagesLoading, setStudentPackagesLoading] = useState(false)
+  const [studentPackagesResolved, setStudentPackagesResolved] = useState(false)
+  const [studentPackagesError, setStudentPackagesError] = useState('')
+  const [linkedPrivateStudent, setLinkedPrivateStudent] = useState(null)
+  const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
   const groupAccessRefreshTimerRef = useRef(null)
 
   const scopedStudentId = String(studentId || currentMembership?.studentId || '').trim()
@@ -651,6 +663,76 @@ export default function StudentBookingPage() {
       unsubscribe()
     }
   }, [currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
+
+  useEffect(() => {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      setStudentPackages([])
+      setStudentPackagesLoading(false)
+      setStudentPackagesResolved(false)
+      setStudentPackagesError('')
+      return
+    }
+
+    setStudentPackagesLoading(true)
+    setStudentPackagesResolved(false)
+    setStudentPackagesError('')
+
+    const packagesQuery = query(
+      collection(db, 'studentPackages'),
+      where('academyId', '==', currentAcademyId),
+      where('studentId', '==', scopedStudentId)
+    )
+
+    const unsubscribe = onSnapshot(
+      packagesQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }))
+        setStudentPackages(rows)
+        setStudentPackagesLoading(false)
+        setStudentPackagesResolved(true)
+      },
+      (error) => {
+        console.error('studentPackages 불러오기 실패:', error)
+        setStudentPackages([])
+        setStudentPackagesLoading(false)
+        setStudentPackagesResolved(true)
+        setStudentPackagesError('내 수강권 정보를 불러오지 못했습니다.')
+      }
+    )
+
+    return () => unsubscribe()
+  }, [currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
+
+  useEffect(() => {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      setLinkedPrivateStudent(null)
+      setLinkedPrivateStudentLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setLinkedPrivateStudentLoading(true)
+
+    getDoc(doc(db, 'privateStudents', scopedStudentId))
+      .then((snapshot) => {
+        if (cancelled) return
+        setLinkedPrivateStudent(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null)
+        setLinkedPrivateStudentLoading(false)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error('privateStudents 불러오기 실패:', error)
+        setLinkedPrivateStudent(null)
+        setLinkedPrivateStudentLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [hasOperationalAcademy, role, scopedStudentId])
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
@@ -1893,6 +1975,75 @@ export default function StudentBookingPage() {
     return ''
   }, [authLoading, hasOperationalAcademy, role, scopedStudentId, user])
 
+  const linkedStudentName = useMemo(() => {
+    const packageStudentName =
+      studentPackages
+        .map((pkg) => String(pkg?.studentName || '').trim())
+        .find(Boolean) || ''
+    return resolveLinkedStudentDisplayName({
+      membershipDisplayName: currentMembership?.displayName,
+      privateStudentRecord: linkedPrivateStudent,
+      packageStudentName,
+    })
+  }, [currentMembership?.displayName, linkedPrivateStudent, studentPackages])
+
+  const studentIdentityLine = useMemo(
+    () =>
+      formatStudentBookingIdentityLine({
+        academyName: currentAcademy?.name || currentAcademyId || '-',
+        studentName: linkedStudentName,
+        email: user?.email || '',
+      }),
+    [currentAcademy?.name, currentAcademyId, linkedStudentName, user?.email]
+  )
+
+  const studentTicketSummary = useMemo(() => {
+    if (!hasOperationalAcademy || !scopedStudentId) {
+      return {
+        privateSummaries: [],
+        groupSummaries: [],
+        hasPrivateTicket: false,
+        hasGroupTicket: false,
+      }
+    }
+    const fromPackages = buildStudentTicketSummaryViewModel({
+      packages: studentPackages,
+      privateLessons: studentPrivateLessons,
+      privateReservations,
+      groupReservations: reservations,
+      academyId: currentAcademyId,
+      studentId: scopedStudentId,
+    })
+    if (fromPackages.privateSummaries.length > 0 || fromPackages.groupSummaries.length > 0) {
+      return fromPackages
+    }
+    const privateSummaries = buildStudentPrivateTicketSummariesFromCallablePackages(privateSlots)
+    return {
+      privateSummaries,
+      groupSummaries: fromPackages.groupSummaries,
+      hasPrivateTicket: privateSummaries.length > 0,
+      hasGroupTicket: fromPackages.groupSummaries.length > 0,
+    }
+  }, [
+    currentAcademyId,
+    hasOperationalAcademy,
+    privateReservations,
+    privateSlots,
+    reservations,
+    scopedStudentId,
+    studentPackages,
+    studentPrivateLessons,
+  ])
+
+  const studentTicketSummaryLoading =
+    !studentPackagesResolved ||
+    studentPackagesLoading ||
+    !privateReservationsResolved ||
+    privateReservationsLoading ||
+    !studentPrivateLessonsResolved ||
+    studentPrivateLessonsLoading ||
+    linkedPrivateStudentLoading
+
   return (
     <div
       style={{
@@ -1917,9 +2068,20 @@ export default function StudentBookingPage() {
         >
           <div>
             <h1 style={{ margin: 0, fontSize: '2rem' }}>수업 예약</h1>
-            <p style={{ margin: '8px 0 0 0', opacity: 0.78 }}>
-              {currentAcademy?.name || currentAcademyId || '-'} · {user?.email || '-'}
+            <p
+              data-testid="student-booking-identity-line"
+              style={{ margin: '8px 0 0 0', opacity: 0.78 }}
+            >
+              {studentIdentityLine}
             </p>
+            {scopedStudentId ? (
+              <p
+                data-testid="student-booking-linked-student-id"
+                style={{ margin: '4px 0 0 0', opacity: 0.55, fontSize: 12 }}
+              >
+                학생 ID: {scopedStudentId}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -1945,6 +2107,107 @@ export default function StudentBookingPage() {
           </div>
 	        ) : (
 	          <div style={{ display: 'grid', gap: 20 }}>
+	            <section
+	              data-testid="student-ticket-summary-section"
+	              style={{
+	                border: '1px solid #3b4a66',
+	                borderRadius: 16,
+	                background: '#182235',
+	                padding: 18,
+	              }}
+	            >
+	              <h2 style={{ margin: '0 0 8px 0', fontSize: '1.1rem' }}>내 수강권</h2>
+	              <p style={{ margin: '0 0 12px 0', opacity: 0.72, fontSize: 14 }}>
+                잔여 횟수와 보충/선택예약 가능 횟수를 확인할 수 있습니다.
+              </p>
+	              {studentPackagesError ? (
+	                <p style={{ color: '#f4a7a7', margin: 0 }}>{studentPackagesError}</p>
+	              ) : null}
+	              {studentTicketSummaryLoading ? (
+	                <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
+	              ) : (
+	                <div style={{ display: 'grid', gap: 12 }}>
+	                  <div data-testid="student-private-ticket-summary-block">
+	                    <p style={{ margin: '0 0 8px 0', fontSize: 13, opacity: 0.72 }}>개인 수강권</p>
+	                    {studentTicketSummary.privateSummaries.length > 0 ? (
+	                      studentTicketSummary.privateSummaries.map((summary) => (
+	                        <div
+	                          key={summary.id}
+	                          data-testid="student-private-ticket-summary-row"
+	                          style={{
+	                            display: 'flex',
+	                            flexDirection: 'column',
+	                            gap: 4,
+	                            opacity: summary.muted ? 0.62 : 1,
+	                          }}
+	                        >
+	                          <span data-testid="student-private-ticket-summary-usage">
+	                            {summary.teacherLabel} · {summary.usageText}
+	                          </span>
+	                          {summary.scheduleText ? (
+	                            <span
+	                              data-testid="student-private-ticket-summary-schedule"
+	                              style={{ opacity: 0.86, fontSize: 14 }}
+	                            >
+	                              {summary.scheduleText}
+	                            </span>
+	                          ) : null}
+	                          {summary.statusText ? (
+	                            <span style={{ opacity: 0.72, fontSize: 13 }}>{summary.statusText}</span>
+	                          ) : null}
+	                        </div>
+	                      ))
+	                    ) : (
+	                      <p
+	                        data-testid="student-private-ticket-summary-empty"
+	                        style={{ margin: 0, opacity: 0.78 }}
+	                      >
+	                        개인 수강권 등록 필요
+	                      </p>
+	                    )}
+	                  </div>
+	                  <div data-testid="student-group-ticket-summary-block">
+	                    <p style={{ margin: '0 0 8px 0', fontSize: 13, opacity: 0.72 }}>단체 수강권</p>
+	                    {studentTicketSummary.groupSummaries.length > 0 ? (
+	                      studentTicketSummary.groupSummaries.map((summary) => (
+	                        <div
+	                          key={summary.id}
+	                          data-testid="student-group-ticket-summary-row"
+	                          style={{
+	                            display: 'flex',
+	                            flexDirection: 'column',
+	                            gap: 4,
+	                            opacity: summary.muted ? 0.62 : 1,
+	                          }}
+	                        >
+	                          <span data-testid="student-group-ticket-summary-usage">
+	                            {summary.classLabel} · {summary.usageText}
+	                          </span>
+	                          {summary.scheduleText ? (
+	                            <span
+	                              data-testid="student-group-ticket-summary-schedule"
+	                              style={{ opacity: 0.86, fontSize: 14 }}
+	                            >
+	                              {summary.scheduleText}
+	                            </span>
+	                          ) : null}
+	                          {summary.statusText ? (
+	                            <span style={{ opacity: 0.72, fontSize: 13 }}>{summary.statusText}</span>
+	                          ) : null}
+	                        </div>
+	                      ))
+	                    ) : (
+	                      <p
+	                        data-testid="student-group-ticket-summary-empty"
+	                        style={{ margin: 0, opacity: 0.78 }}
+	                      >
+	                        단체 수강권 등록 필요
+	                      </p>
+	                    )}
+	                  </div>
+	                </div>
+	              )}
+	            </section>
 	            <TodaySchedulePanel
 	              items={todayScheduleItems}
 	              loading={todayScheduleLoading}

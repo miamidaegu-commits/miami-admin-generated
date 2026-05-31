@@ -528,6 +528,14 @@ test('fixed private package balance creates one makeup booking and prevents over
     await expect(studentPage.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
       timeout: 15000,
     });
+    await expect(studentPage.getByTestId('student-booking-identity-line')).toContainText(fixture.studentName);
+    await expect(studentPage.getByTestId('student-booking-identity-line')).toContainText(fixture.email);
+    await expect(studentPage.getByTestId('student-ticket-summary-section')).toBeVisible({ timeout: 15000 });
+    await expect(studentPage.getByText('불러오는 중...', { exact: true })).toHaveCount(0, { timeout: 30000 });
+    const privateTicketSchedule = studentPage.getByTestId('student-private-ticket-summary-schedule').first();
+    await expect(privateTicketSchedule).toBeVisible({ timeout: 15000 });
+    await expect(privateTicketSchedule).toContainText('고정 예정 3회', { timeout: 15000 });
+    await expect(privateTicketSchedule).toContainText('보충 가능 1회');
     const firstSlotCard = studentPage.locator(
       `[data-testid="student-private-slot-card"][data-slot-id="${fixture.slotIds[0]}"]`
     );
@@ -562,6 +570,10 @@ test('fixed private package balance creates one makeup booking and prevents over
       ok: false,
     });
     expect(overbookResult.message).toContain('no-makeup-available');
+
+    await expect(privateTicketSchedule).toContainText('보충 예약 1회', { timeout: 15000 });
+    await expect(privateTicketSchedule).toContainText('예약 가능 0회');
+    await expect(privateTicketSchedule).not.toContainText('보충 가능 1회');
 
     await openDashboardSection(page, '학생 관리');
     await expect(studentSearchInput).toBeEnabled({ timeout: 30000 });
@@ -648,6 +660,10 @@ test('fixed private package balance creates one makeup booking and prevents over
     );
     await expect(restoredSlotCard).toBeVisible({ timeout: 20000 });
     await expect(restoredSlotCard).toContainText('예약 가능 1회');
+    await expect(studentPage.getByTestId('student-private-ticket-summary-schedule')).toContainText(
+      '보충 가능 1회',
+      { timeout: 15000 }
+    );
 
     await openDashboardSection(page, '학생 관리');
     await expect(studentSearchInput).toBeEnabled({ timeout: 30000 });
