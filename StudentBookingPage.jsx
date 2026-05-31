@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   query,
@@ -48,6 +49,12 @@ import {
   getGroupCourseTypeLabel,
   normalizeGroupCourseType,
 } from './src/features/group-booking/groupCourseTypes.js'
+import {
+  buildStudentPrivateTicketSummariesFromCallablePackages,
+  buildStudentTicketSummaryViewModel,
+  formatStudentBookingIdentityLine,
+  resolveLinkedStudentDisplayName,
+} from './src/features/booking/studentTicketSummary.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
 function isEnabledFlag(value) {
@@ -422,7 +429,16 @@ export default function StudentBookingPage() {
   const [dailyMaterials, setDailyMaterials] = useState([])
   const [dailyMaterialsLoading, setDailyMaterialsLoading] = useState(false)
   const [dailyMaterialsError, setDailyMaterialsError] = useState('')
+  const [studentPackages, setStudentPackages] = useState([])
+  const [studentPackagesLoading, setStudentPackagesLoading] = useState(false)
+  const [studentPackagesResolved, setStudentPackagesResolved] = useState(false)
+  const [studentPackagesError, setStudentPackagesError] = useState('')
+  const [linkedPrivateStudent, setLinkedPrivateStudent] = useState(null)
+  const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
   const groupAccessRefreshTimerRef = useRef(null)
+  const groupLessonFetchRequestRef = useRef(0)
+  const reservationsRef = useRef([])
+  const locallyReservedGroupLessonIdsRef = useRef([])
 
   const scopedStudentId = String(studentId || currentMembership?.studentId || '').trim()
   const hasOperationalAcademy = isValidOperationalAcademyId(currentAcademyId)
@@ -430,6 +446,37 @@ export default function StudentBookingPage() {
     ? `${currentAcademyId}__${getTodayStorageDateString()}`
     : ''
   const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
+
+  useEffect(() => {
+    reservationsRef.current = reservations
+  }, [reservations])
+
+  useEffect(() => {
+    locallyReservedGroupLessonIdsRef.current = locallyReservedGroupLessonIds
+  }, [locallyReservedGroupLessonIds])
+
+  function mergeGroupLessonRows(rows, previousLessons = []) {
+    const byId = new Map(
+      rows.map((lesson) => [String(lesson.id || '').trim(), lesson])
+    )
+    const activeReservationLessonIds = new Set(
+      reservationsRef.current
+        .filter((reservation) => reservation.status === 'active')
+        .map((reservation) => String(reservation.lessonId || '').trim())
+        .filter(Boolean)
+    )
+    locallyReservedGroupLessonIdsRef.current.forEach((lessonId) => {
+      if (lessonId) activeReservationLessonIds.add(String(lessonId))
+    })
+    previousLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (!lessonId || byId.has(lessonId)) return
+      if (activeReservationLessonIds.has(lessonId)) {
+        byId.set(lessonId, lesson)
+      }
+    })
+    return Array.from(byId.values())
+  }
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
@@ -454,36 +501,104 @@ export default function StudentBookingPage() {
       })
     )
 
+    async function readGroupAccessFromSummary(summaryData) {
+      const nextIds = new Set()
+      const rawIds = Array.isArray(summaryData?.groupClassIds)
+        ? summaryData.groupClassIds
+        : []
+      rawIds.forEach((value) => {
+        const groupClassId = String(value || '').trim()
+        if (!groupClassId) return
+        nextIds.add(groupClassId)
+      })
+      const nextCourseTypes = new Set()
+      const rawCourseTypes = Array.isArray(summaryData?.groupCourseTypes)
+        ? summaryData.groupCourseTypes
+        : []
+      rawCourseTypes.forEach((value) => {
+        const groupCourseType = normalizeGroupCourseType(value)
+        if (!groupCourseType) return
+        nextCourseTypes.add(groupCourseType)
+      })
+      return {
+        classIds: Array.from(nextIds.values()),
+        courseTypes: Array.from(nextCourseTypes.values()),
+      }
+    }
+
+    async function fetchGroupLessonsForAccess() {
+      let classIds = []
+      let courseTypes = []
+      try {
+        const summarySnap = await getDocFromServer(summaryRef)
+        const access = await readGroupAccessFromSummary(
+          summarySnap.exists() ? summarySnap.data() : null
+        )
+        classIds = access.classIds
+        courseTypes = access.courseTypes
+        setAllowedGroupClassIds(classIds)
+        setAllowedGroupCourseTypes(courseTypes)
+      } catch (error) {
+        console.error('studentGroupAccessSummary server read 실패:', error)
+      }
+
+      if (classIds.length === 0 && courseTypes.length === 0) {
+        hasGroupLessonRowsRef.current = false
+        setLessons([])
+        setLessonsLoading(false)
+        setLessonsError('')
+        return
+      }
+
+      const requestId = groupLessonFetchRequestRef.current + 1
+      groupLessonFetchRequestRef.current = requestId
+      setLessonsLoading(!hasGroupLessonRowsRef.current)
+      setLessonsError('')
+
+      try {
+        const listGroupLessonAvailability = httpsCallable(
+          firebaseFunctions,
+          'listGroupLessonAvailability'
+        )
+        const result = await listGroupLessonAvailability({
+          academyId: currentAcademyId,
+        })
+        if (requestId !== groupLessonFetchRequestRef.current) return
+        const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        setLessons((previous) => mergeGroupLessonRows(rows, previous))
+        hasGroupLessonRowsRef.current = rows.length > 0
+      } catch (error) {
+        if (requestId !== groupLessonFetchRequestRef.current) return
+        console.error('student groupLessons 불러오기 실패:', error)
+        setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
+        setLessons([])
+        hasGroupLessonRowsRef.current = false
+      } finally {
+        if (requestId === groupLessonFetchRequestRef.current) {
+          setLessonsLoading(false)
+        }
+      }
+    }
+
+    void fetchGroupLessonsForAccess()
+
     const unsubscribe = onSnapshot(
       summaryRef,
       (snapshot) => {
-        const summaryData = snapshot.exists() ? snapshot.data() : null
-        const nextIds = new Set()
-        const rawIds = Array.isArray(summaryData?.groupClassIds)
-          ? summaryData.groupClassIds
-          : []
-        rawIds.forEach((value) => {
-          const groupClassId = String(value || '').trim()
-          if (!groupClassId) return
-          nextIds.add(groupClassId)
-        })
-        const nextCourseTypes = new Set()
-        const rawCourseTypes = Array.isArray(summaryData?.groupCourseTypes)
-          ? summaryData.groupCourseTypes
-          : []
-        rawCourseTypes.forEach((value) => {
-          const groupCourseType = normalizeGroupCourseType(value)
-          if (!groupCourseType) return
-          nextCourseTypes.add(groupCourseType)
-        })
-        setAllowedGroupClassIds(Array.from(nextIds.values()))
-        setAllowedGroupCourseTypes(Array.from(nextCourseTypes.values()))
-        setGroupLessonsRefreshKey((previous) => previous + 1)
+        void (async () => {
+          const access = await readGroupAccessFromSummary(
+            snapshot.exists() ? snapshot.data() : null
+          )
+          setAllowedGroupClassIds(access.classIds)
+          setAllowedGroupCourseTypes(access.courseTypes)
+          setGroupLessonsRefreshKey((previous) => previous + 1)
+          await fetchGroupLessonsForAccess()
+        })()
         if (groupAccessRefreshTimerRef.current) {
           clearTimeout(groupAccessRefreshTimerRef.current)
         }
         groupAccessRefreshTimerRef.current = window.setTimeout(() => {
-          setGroupLessonsRefreshKey((previous) => previous + 1)
+          void fetchGroupLessonsForAccess()
           groupAccessRefreshTimerRef.current = null
         }, 750)
         setAccessLoading(false)
@@ -500,6 +615,7 @@ export default function StudentBookingPage() {
     )
 
     return () => {
+      groupLessonFetchRequestRef.current += 1
       if (groupAccessRefreshTimerRef.current) {
         clearTimeout(groupAccessRefreshTimerRef.current)
         groupAccessRefreshTimerRef.current = null
@@ -654,79 +770,110 @@ export default function StudentBookingPage() {
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
-      hasGroupLessonRowsRef.current = false
-      setLessons([])
-      setLessonsLoading(false)
-      setLessonsError('')
-      return
-    }
-    if (allowedGroupClassIds.length === 0 && allowedGroupCourseTypes.length === 0) {
-      hasGroupLessonRowsRef.current = false
-      setLessons([])
-      setLessonsLoading(false)
-      setLessonsError('')
+      setStudentPackages([])
+      setStudentPackagesLoading(false)
+      setStudentPackagesResolved(false)
+      setStudentPackagesError('')
       return
     }
 
-    setLessonsLoading(!hasGroupLessonRowsRef.current)
-    setLessonsError('')
+    setStudentPackagesLoading(true)
+    setStudentPackagesResolved(false)
+    setStudentPackagesError('')
+
+    const packagesQuery = query(
+      collection(db, 'studentPackages'),
+      where('academyId', '==', currentAcademyId),
+      where('studentId', '==', scopedStudentId)
+    )
+
+    const unsubscribe = onSnapshot(
+      packagesQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }))
+        setStudentPackages(rows)
+        setStudentPackagesLoading(false)
+        setStudentPackagesResolved(true)
+      },
+      (error) => {
+        console.error('studentPackages 불러오기 실패:', error)
+        setStudentPackages([])
+        setStudentPackagesLoading(false)
+        setStudentPackagesResolved(true)
+        setStudentPackagesError('내 수강권 정보를 불러오지 못했습니다.')
+      }
+    )
+
+    return () => unsubscribe()
+  }, [currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
+
+  useEffect(() => {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      setLinkedPrivateStudent(null)
+      setLinkedPrivateStudentLoading(false)
+      return
+    }
 
     let cancelled = false
+    setLinkedPrivateStudentLoading(true)
 
-    async function loadGroupLessonAvailability() {
-      const listGroupLessonAvailability = httpsCallable(
-        firebaseFunctions,
-        'listGroupLessonAvailability'
-      )
-      const result = await listGroupLessonAvailability({
-        academyId: currentAcademyId,
-      })
-      return Array.isArray(result.data?.lessons) ? result.data.lessons : []
-    }
-
-    loadGroupLessonAvailability()
-      .then((rows) => {
+    getDoc(doc(db, 'privateStudents', scopedStudentId))
+      .then((snapshot) => {
         if (cancelled) return
-        setLessons((previous) => {
-          const byId = new Map(rows.map((lesson) => [String(lesson.id || '').trim(), lesson]))
-          const activeReservationLessonIds = new Set(
-            reservations
-              .filter((reservation) => reservation.status === 'active')
-              .map((reservation) => String(reservation.lessonId || '').trim())
-              .filter(Boolean)
-          )
-          locallyReservedGroupLessonIds.forEach((lessonId) => {
-            if (lessonId) activeReservationLessonIds.add(String(lessonId))
-          })
-          previous.forEach((lesson) => {
-            const lessonId = String(lesson.id || '').trim()
-            if (!lessonId || byId.has(lessonId)) return
-            if (activeReservationLessonIds.has(lessonId)) {
-              byId.set(lessonId, lesson)
-            }
-          })
-          const nextLessons = Array.from(byId.values())
-          hasGroupLessonRowsRef.current = nextLessons.length > 0
-          return nextLessons
-        })
-        setLessonsLoading(false)
+        setLinkedPrivateStudent(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null)
+        setLinkedPrivateStudentLoading(false)
       })
       .catch((error) => {
         if (cancelled) return
-        console.error('student groupLessons 불러오기 실패:', error)
-        setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
-        setLessons([])
-        setLessonsLoading(false)
+        console.error('privateStudents 불러오기 실패:', error)
+        setLinkedPrivateStudent(null)
+        setLinkedPrivateStudentLoading(false)
       })
 
     return () => {
       cancelled = true
     }
+  }, [hasOperationalAcademy, role, scopedStudentId])
+
+  useEffect(() => {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      return
+    }
+    if (allowedGroupClassIds.length === 0 && allowedGroupCourseTypes.length === 0) {
+      return
+    }
+
+    let cancelled = false
+
+    async function refreshGroupLessonsAfterReservationChange() {
+      const listGroupLessonAvailability = httpsCallable(
+        firebaseFunctions,
+        'listGroupLessonAvailability'
+      )
+      try {
+        const result = await listGroupLessonAvailability({
+          academyId: currentAcademyId,
+        })
+        if (cancelled) return
+        const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        setLessons((previous) => mergeGroupLessonRows(rows, previous))
+        hasGroupLessonRowsRef.current = rows.length > 0
+      } catch (error) {
+        if (cancelled) return
+        console.error('student groupLessons reservation refresh 실패:', error)
+      }
+    }
+
+    refreshGroupLessonsAfterReservationChange()
+
+    return () => {
+      cancelled = true
+    }
   }, [
-    allowedGroupClassIds,
-    allowedGroupCourseTypes,
     currentAcademyId,
-    groupLessonsRefreshKey,
     hasOperationalAcademy,
     locallyReservedGroupLessonIds,
     reservations,
@@ -1893,6 +2040,75 @@ export default function StudentBookingPage() {
     return ''
   }, [authLoading, hasOperationalAcademy, role, scopedStudentId, user])
 
+  const linkedStudentName = useMemo(() => {
+    const packageStudentName =
+      studentPackages
+        .map((pkg) => String(pkg?.studentName || '').trim())
+        .find(Boolean) || ''
+    return resolveLinkedStudentDisplayName({
+      membershipDisplayName: currentMembership?.displayName,
+      privateStudentRecord: linkedPrivateStudent,
+      packageStudentName,
+    })
+  }, [currentMembership?.displayName, linkedPrivateStudent, studentPackages])
+
+  const studentIdentityLine = useMemo(
+    () =>
+      formatStudentBookingIdentityLine({
+        academyName: currentAcademy?.name || currentAcademyId || '-',
+        studentName: linkedStudentName,
+        email: user?.email || '',
+      }),
+    [currentAcademy?.name, currentAcademyId, linkedStudentName, user?.email]
+  )
+
+  const studentTicketSummary = useMemo(() => {
+    if (!hasOperationalAcademy || !scopedStudentId) {
+      return {
+        privateSummaries: [],
+        groupSummaries: [],
+        hasPrivateTicket: false,
+        hasGroupTicket: false,
+      }
+    }
+    const fromPackages = buildStudentTicketSummaryViewModel({
+      packages: studentPackages,
+      privateLessons: studentPrivateLessons,
+      privateReservations,
+      groupReservations: reservations,
+      academyId: currentAcademyId,
+      studentId: scopedStudentId,
+    })
+    if (fromPackages.privateSummaries.length > 0 || fromPackages.groupSummaries.length > 0) {
+      return fromPackages
+    }
+    const privateSummaries = buildStudentPrivateTicketSummariesFromCallablePackages(privateSlots)
+    return {
+      privateSummaries,
+      groupSummaries: fromPackages.groupSummaries,
+      hasPrivateTicket: privateSummaries.length > 0,
+      hasGroupTicket: fromPackages.groupSummaries.length > 0,
+    }
+  }, [
+    currentAcademyId,
+    hasOperationalAcademy,
+    privateReservations,
+    privateSlots,
+    reservations,
+    scopedStudentId,
+    studentPackages,
+    studentPrivateLessons,
+  ])
+
+  const studentTicketSummaryLoading =
+    !studentPackagesResolved ||
+    studentPackagesLoading ||
+    !privateReservationsResolved ||
+    privateReservationsLoading ||
+    !studentPrivateLessonsResolved ||
+    studentPrivateLessonsLoading ||
+    linkedPrivateStudentLoading
+
   return (
     <div
       style={{
@@ -1917,9 +2133,20 @@ export default function StudentBookingPage() {
         >
           <div>
             <h1 style={{ margin: 0, fontSize: '2rem' }}>수업 예약</h1>
-            <p style={{ margin: '8px 0 0 0', opacity: 0.78 }}>
-              {currentAcademy?.name || currentAcademyId || '-'} · {user?.email || '-'}
+            <p
+              data-testid="student-booking-identity-line"
+              style={{ margin: '8px 0 0 0', opacity: 0.78 }}
+            >
+              {studentIdentityLine}
             </p>
+            {scopedStudentId ? (
+              <p
+                data-testid="student-booking-linked-student-id"
+                style={{ margin: '4px 0 0 0', opacity: 0.55, fontSize: 12 }}
+              >
+                학생 ID: {scopedStudentId}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -1945,6 +2172,107 @@ export default function StudentBookingPage() {
           </div>
 	        ) : (
 	          <div style={{ display: 'grid', gap: 20 }}>
+	            <section
+	              data-testid="student-ticket-summary-section"
+	              style={{
+	                border: '1px solid #3b4a66',
+	                borderRadius: 16,
+	                background: '#182235',
+	                padding: 18,
+	              }}
+	            >
+	              <h2 style={{ margin: '0 0 8px 0', fontSize: '1.1rem' }}>내 수강권</h2>
+	              <p style={{ margin: '0 0 12px 0', opacity: 0.72, fontSize: 14 }}>
+                잔여 횟수와 보충/선택예약 가능 횟수를 확인할 수 있습니다.
+              </p>
+	              {studentPackagesError ? (
+	                <p style={{ color: '#f4a7a7', margin: 0 }}>{studentPackagesError}</p>
+	              ) : null}
+	              {studentTicketSummaryLoading ? (
+	                <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
+	              ) : (
+	                <div style={{ display: 'grid', gap: 12 }}>
+	                  <div data-testid="student-private-ticket-summary-block">
+	                    <p style={{ margin: '0 0 8px 0', fontSize: 13, opacity: 0.72 }}>개인 수강권</p>
+	                    {studentTicketSummary.privateSummaries.length > 0 ? (
+	                      studentTicketSummary.privateSummaries.map((summary) => (
+	                        <div
+	                          key={summary.id}
+	                          data-testid="student-private-ticket-summary-row"
+	                          style={{
+	                            display: 'flex',
+	                            flexDirection: 'column',
+	                            gap: 4,
+	                            opacity: summary.muted ? 0.62 : 1,
+	                          }}
+	                        >
+	                          <span data-testid="student-private-ticket-summary-usage">
+	                            {summary.teacherLabel} · {summary.usageText}
+	                          </span>
+	                          {summary.scheduleText ? (
+	                            <span
+	                              data-testid="student-private-ticket-summary-schedule"
+	                              style={{ opacity: 0.86, fontSize: 14 }}
+	                            >
+	                              {summary.scheduleText}
+	                            </span>
+	                          ) : null}
+	                          {summary.statusText ? (
+	                            <span style={{ opacity: 0.72, fontSize: 13 }}>{summary.statusText}</span>
+	                          ) : null}
+	                        </div>
+	                      ))
+	                    ) : (
+	                      <p
+	                        data-testid="student-private-ticket-summary-empty"
+	                        style={{ margin: 0, opacity: 0.78 }}
+	                      >
+	                        개인 수강권 등록 필요
+	                      </p>
+	                    )}
+	                  </div>
+	                  <div data-testid="student-group-ticket-summary-block">
+	                    <p style={{ margin: '0 0 8px 0', fontSize: 13, opacity: 0.72 }}>단체 수강권</p>
+	                    {studentTicketSummary.groupSummaries.length > 0 ? (
+	                      studentTicketSummary.groupSummaries.map((summary) => (
+	                        <div
+	                          key={summary.id}
+	                          data-testid="student-group-ticket-summary-row"
+	                          style={{
+	                            display: 'flex',
+	                            flexDirection: 'column',
+	                            gap: 4,
+	                            opacity: summary.muted ? 0.62 : 1,
+	                          }}
+	                        >
+	                          <span data-testid="student-group-ticket-summary-usage">
+	                            {summary.classLabel} · {summary.usageText}
+	                          </span>
+	                          {summary.scheduleText ? (
+	                            <span
+	                              data-testid="student-group-ticket-summary-schedule"
+	                              style={{ opacity: 0.86, fontSize: 14 }}
+	                            >
+	                              {summary.scheduleText}
+	                            </span>
+	                          ) : null}
+	                          {summary.statusText ? (
+	                            <span style={{ opacity: 0.72, fontSize: 13 }}>{summary.statusText}</span>
+	                          ) : null}
+	                        </div>
+	                      ))
+	                    ) : (
+	                      <p
+	                        data-testid="student-group-ticket-summary-empty"
+	                        style={{ margin: 0, opacity: 0.78 }}
+	                      >
+	                        단체 수강권 등록 필요
+	                      </p>
+	                    )}
+	                  </div>
+	                </div>
+	              )}
+	            </section>
 	            <TodaySchedulePanel
 	              items={todayScheduleItems}
 	              loading={todayScheduleLoading}
@@ -2101,8 +2429,11 @@ export default function StudentBookingPage() {
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {sortedLessons.map((lesson) => {
+                    const lessonId = String(lesson.id || '').trim()
                     const reservation = reservationByLessonId.get(lesson.id) || null
-                    const isReserved = reservation?.status === 'active'
+                    const isReserved =
+                      reservation?.status === 'active' ||
+                      locallyReservedGroupLessonIds.includes(lessonId)
                     const reservationId = buildGroupLessonReservationId({
                       academyId: currentAcademyId,
                       lessonId: lesson.id,
@@ -2129,7 +2460,9 @@ export default function StudentBookingPage() {
                     const hasGroupTicketAvailability =
                       !hasGroupTicketBalanceProjection ||
                       (Number.isFinite(groupTicketAvailableToBook) && groupTicketAvailableToBook > 0)
-                    const groupReserveDisabledReason = !hasRemainingSeats
+                    const groupReserveDisabledReason = isReserved
+                      ? '예약 완료'
+                      : !hasRemainingSeats
                       ? '마감'
                       : lesson.groupTicketStatusLabel && !hasGroupTicketAvailability
                         ? lesson.groupTicketStatusLabel

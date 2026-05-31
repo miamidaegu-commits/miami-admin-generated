@@ -102,6 +102,12 @@ service cloud.firestore {
         );
     }
 
+    function studentPackageBelongsToCurrentStudent(data) {
+      return hasStudentIdentity(data.academyId) &&
+        data.studentId is string &&
+        data.studentId == myStudentId(data.academyId);
+    }
+
     function creditTransactionBelongsToTeacher(data) {
       return isAcademyTeacherOrStaff(data.academyId) &&
         data.teacher is string &&
@@ -2172,7 +2178,8 @@ service cloud.firestore {
     match /studentPackages/{packageId} {
       allow read: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
-        studentPackageBelongsToTeacher(resource.data)
+        studentPackageBelongsToTeacher(resource.data) ||
+        studentPackageBelongsToCurrentStudent(resource.data)
       );
       allow create: if sameAcademyOnCreate() &&
         isAcademyAdmin(request.resource.data.academyId);

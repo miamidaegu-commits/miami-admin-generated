@@ -58,7 +58,10 @@ export function getGroupLessonSeatAvailability({
   const fixedMemberCount = fixedMemberIds.length
   const releasedFixedSeatCount = releasedFixedSeatIds.size
   const fixedAttendingCount = Math.max(0, fixedMemberCount - releasedFixedSeatCount)
-  const guestReservedCount = guestReservedStudentIds.size
+  const guestReservedCount = Math.max(
+    guestReservedStudentIds.size,
+    toSafeCount(lesson?.bookedCount),
+  )
   const remainingSeats = Math.max(0, capacity - fixedAttendingCount - guestReservedCount)
 
   return {
