@@ -642,8 +642,15 @@ function hasExplicitSlotEligibility(slot) {
   return normalizeIdList(slot && slot.eligibleStudentIds).length > 0;
 }
 
+const ACTIVE_PRIVATE_RESERVATION_STATUSES = [
+  "active",
+  "reserved",
+  "confirmed",
+  "booked",
+];
+
 function isActivePrivateReservation(data) {
-  return ["active", "reserved", "confirmed", "booked"].includes(
+  return ACTIVE_PRIVATE_RESERVATION_STATUSES.includes(
       String((data && data.status) || "").trim().toLowerCase(),
   );
 }
@@ -2606,6 +2613,10 @@ function addBusyRowsFromQuerySnapshot({
   snap.docs.forEach((docSnap) => {
     const row = docSnap.data() || {};
     if (normalizeId(row.academyId) !== academyId) return;
+    if (source === "privateLessonReservations" &&
+        !isActivePrivateReservation(row)) {
+      return;
+    }
     if (isCancelledScheduleRow(row)) return;
     const date = normalizeId(row.date || row.scheduleDate);
     const time = normalizeId(row.time || row.startTime || row.scheduleTime);
@@ -2744,113 +2755,23 @@ async function loadBusyPrivateScheduleRows(db, {
           .where("teacherName", "in", chunk)
           .get(),
     });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherKey", "in", chunk)
-          .where("status", "==", "active")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherUid", "in", chunk)
-          .where("status", "==", "active")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherUID", "in", chunk)
-          .where("status", "==", "active")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherId", "in", chunk)
-          .where("status", "==", "active")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacher", "in", chunk)
-          .where("status", "==", "active")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherName", "in", chunk)
-          .where("status", "==", "active")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherKey", "in", chunk)
-          .where("status", "==", "reserved")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherUid", "in", chunk)
-          .where("status", "==", "reserved")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherUID", "in", chunk)
-          .where("status", "==", "reserved")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherId", "in", chunk)
-          .where("status", "==", "reserved")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacher", "in", chunk)
-          .where("status", "==", "reserved")
-          .get(),
-    });
-    queryPromises.push({
-      source: "privateLessonReservations",
-      promise: db
-          .collection("privateLessonReservations")
-          .where("academyId", "==", academyId)
-          .where("teacherName", "in", chunk)
-          .where("status", "==", "reserved")
-          .get(),
+    [
+      "teacherKey",
+      "teacherUid",
+      "teacherUID",
+      "teacherId",
+      "teacher",
+      "teacherName",
+    ].forEach((field) => {
+      queryPromises.push({
+        source: "privateLessonReservations",
+        promise: db
+            .collection("privateLessonReservations")
+            .where("academyId", "==", academyId)
+            .where(field, "in", chunk)
+            .where("status", "in", ACTIVE_PRIVATE_RESERVATION_STATUSES)
+            .get(),
+      });
     });
     ["reserved", "blocked"].forEach((status) => {
       queryPromises.push({
@@ -3070,6 +2991,94 @@ function getPrivateRowStartMillis(row) {
   );
 }
 
+function getPrivateScheduleTimeRange(row) {
+  const startMillis = getPrivateRowStartMillis(row);
+  if (startMillis === null) return null;
+  const durationMinutes = getPrivateScheduleDurationMinutes(row);
+  return {
+    startMillis,
+    endMillis: startMillis + durationMinutes * 60 * 1000,
+  };
+}
+
+function privateTeacherScopeKeysOverlap(rowA, rowB) {
+  const keysA = getPrivateTeacherScopeKeys(rowA);
+  const keysB = getPrivateTeacherScopeKeys(rowB);
+  if (keysA.length === 0 || keysB.length === 0) return false;
+  return keysA.some((key) => keysB.includes(key));
+}
+
+function privateScheduleTimeRangesOverlap(rangeA, rangeB) {
+  if (!rangeA || !rangeB) return false;
+  return (
+    rangeA.startMillis < rangeB.endMillis &&
+    rangeB.startMillis < rangeA.endMillis
+  );
+}
+
+function privateSchedulesOverlap(candidate, existing) {
+  if (!candidate || !existing) return false;
+  const candidateAcademyId = normalizeId(candidate.academyId);
+  const existingAcademyId = normalizeId(existing.academyId);
+  if (
+    candidateAcademyId &&
+    existingAcademyId &&
+    candidateAcademyId !== existingAcademyId
+  ) {
+    return false;
+  }
+  const candidateRange = getPrivateScheduleTimeRange(candidate);
+  const existingRange = getPrivateScheduleTimeRange(existing);
+  if (!privateScheduleTimeRangesOverlap(candidateRange, existingRange)) {
+    return false;
+  }
+  return privateTeacherScopeKeysOverlap(candidate, existing);
+}
+
+function isTeacherBlockingScheduleRow(row) {
+  if (!row) return false;
+  if (isCancelledScheduleRow(row)) return false;
+  if (isActivePrivateReservation(row)) return true;
+  const status = normalizeId(row.status).toLowerCase();
+  if (status === "reserved" || status === "blocked" || status === "busy") {
+    return true;
+  }
+  if (status === "open") return false;
+  const date = normalizeId(row.date || row.scheduleDate || row.lessonDate);
+  const time = normalizeId(row.time || row.startTime || row.scheduleTime);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) &&
+    /^([01]\d|2[0-3]):([0-5]\d)$/.test(time);
+}
+
+function markOverlappingPrivateSlotBusy(slot) {
+  if (!slot || slot.bookingStatus === "my_reservation") return slot;
+  return {
+    ...slot,
+    isBusy: true,
+    isBookable: false,
+    isReservable: false,
+    bookingStatus: "busy",
+    statusLabel: getPrivateBookingStatusLabel("busy"),
+    bookingStatusLabel: getPrivateBookingStatusLabel("busy"),
+    studentVisibleStatus: "busy",
+    studentVisibleStatusLabel: getPrivateBookingStatusLabel("busy"),
+    disabledReason: "busy",
+  };
+}
+
+function slotOverlapsBusySchedule(slot, busyScheduleRows) {
+  if (
+    !slot ||
+    !Array.isArray(busyScheduleRows) ||
+    busyScheduleRows.length === 0
+  ) {
+    return false;
+  }
+  return busyScheduleRows.some((busyRow) =>
+    privateSchedulesOverlap(slot, busyRow),
+  );
+}
+
 function isFuturePrivateAllocation(row, nowMillis) {
   const startMillis = getPrivateRowStartMillis(row);
   if (startMillis !== null) return startMillis >= nowMillis;
@@ -3188,85 +3197,81 @@ function computePrivateTeacherPackageUsage({
   };
 }
 
-async function hasTeacherExactConflict(transaction, db, {
+async function hasTeacherScheduleConflict(transaction, db, {
   academyId,
   teacher,
   teacherName,
+  teacherKey: slotTeacherKey,
+  teacherUid,
+  teacherUID,
   date,
   time,
+  durationMinutes,
   ignoredSlotId = "",
 }) {
-  const teacherKeys = uniqueNormalizedTeacherKeyList([teacher, teacherName]);
-  const conflictKey = getPrivateSlotConflictKey({
+  const teacherKeys = uniqueNormalizedTeacherKeyList([
     teacher,
     teacherName,
+    slotTeacherKey,
+    teacherUid,
+    teacherUID,
+  ]);
+  const candidate = {
+    academyId,
+    teacher,
+    teacherName,
+    teacherKey: slotTeacherKey,
+    teacherUid,
+    teacherUID,
     date,
     time,
-  });
-  const snaps = [];
-  for (const teacherKey of teacherKeys) {
-    snaps.push(transaction.get(
-        db
-            .collection("privateLessonSlots")
-            .where("academyId", "==", academyId)
-            .where("teacher", "==", teacherKey),
-    ));
-    snaps.push(transaction.get(
-        db
-            .collection("lessons")
-            .where("academyId", "==", academyId)
-            .where("teacher", "==", teacherKey),
-    ));
-    snaps.push(transaction.get(
-        db
-            .collection("lessons")
-            .where("academyId", "==", academyId)
-            .where("teacherName", "==", teacherKey),
-    ));
-    snaps.push(transaction.get(
-        db
-            .collection("privateLessonReservations")
-            .where("academyId", "==", academyId)
-            .where("teacher", "==", teacherKey)
-            .where("status", "==", "active"),
-    ));
-    snaps.push(transaction.get(
-        db
-            .collection("privateLessonReservations")
-            .where("academyId", "==", academyId)
-            .where("teacherName", "==", teacherKey)
-            .where("status", "==", "active"),
-    ));
+    durationMinutes,
+  };
+  const queries = [];
+  const teacherFields = [
+    "teacherKey",
+    "teacherUid",
+    "teacherUID",
+    "teacherId",
+    "teacher",
+    "teacherName",
+  ];
+  for (const chunk of chunkValues(teacherKeys, PRIVATE_SLOT_QUERY_CHUNK_SIZE)) {
+    teacherFields.forEach((field) => {
+      queries.push(transaction.get(
+          db
+              .collection("lessons")
+              .where("academyId", "==", academyId)
+              .where(field, "in", chunk),
+      ));
+      queries.push(transaction.get(
+          db
+              .collection("privateLessonSlots")
+              .where("academyId", "==", academyId)
+              .where(field, "in", chunk),
+      ));
+      queries.push(transaction.get(
+          db
+              .collection("privateLessonReservations")
+              .where("academyId", "==", academyId)
+              .where(field, "in", chunk)
+              .where("status", "in", ACTIVE_PRIVATE_RESERVATION_STATUSES),
+      ));
+    });
   }
-  const groupLessonsPromise = transaction.get(
+  queries.push(transaction.get(
       db.collection("groupLessons").where("academyId", "==", academyId),
-  );
-  const [querySnaps, groupLessonSnap] = await Promise.all([
-    Promise.all(snaps),
-    groupLessonsPromise,
-  ]);
-  for (const snap of querySnaps) {
+  ));
+  const snaps = await Promise.all(queries);
+  for (const snap of snaps) {
     for (const docSnap of snap.docs) {
       if (ignoredSlotId && docSnap.id === ignoredSlotId) continue;
-      const row = docSnap.data() || {};
-      if (getPrivateSlotConflictKey(row) !== conflictKey) continue;
-      const status = normalizeId(row.status).toLowerCase();
-      if (
-        status === "cancelled" ||
-        status === "canceled" ||
-        row.isDeductCancelled === true
-      ) {
-        continue;
-      }
-      return true;
+      const row = {id: docSnap.id, ...docSnap.data()};
+      if (!isTeacherBlockingScheduleRow(row)) continue;
+      if (privateSchedulesOverlap(candidate, row)) return true;
     }
   }
-  return groupLessonSnap.docs.some((docSnap) => {
-    const row = docSnap.data() || {};
-    if (getPrivateSlotConflictKey(row) !== conflictKey) return false;
-    const status = normalizeId(row.status).toLowerCase();
-    return status !== "cancelled" && status !== "canceled";
-  });
+  return false;
 }
 
 function buildSlotFromAvailabilityTemplate({templateId, template, date, time}) {
@@ -3320,6 +3325,7 @@ function buildTemplateSlots({
   packageByTeacherKey,
   teacherKeys,
   conflictKeys,
+  conflictSchedules = [],
   nowMillis,
 }) {
   const today = getSeoulTodayDateString();
@@ -3345,6 +3351,10 @@ function buildTemplateSlots({
       const slot = {
         academyId,
         teacher,
+        teacherKey: normalizeTeacherKey(data.teacherKey || teacher),
+        teacherUid: normalizeId(
+            data.teacherUid || data.teacherUID || data.teacherId,
+        ),
         teacherName: normalizeId(data.teacherName || data.teacher || teacher),
         date,
         time,
@@ -3357,6 +3367,7 @@ function buildTemplateSlots({
       };
       const conflictKey = getPrivateSlotConflictKey(slot);
       if (conflictKeys.has(conflictKey)) return;
+      if (slotOverlapsBusySchedule(slot, conflictSchedules)) return;
       slots.push({
         slotId: buildPrivateTemplateSlotId({templateId: id, date, time}),
         slot,
@@ -4346,6 +4357,12 @@ exports.listPrivateLessonSlotAvailability = onCall(
           }
           return !busyRowsByKey.has(key);
         });
+        const busyScheduleRows = Array.from(busyRowsByKey.values());
+        manualSlots = manualSlots.map((row) => {
+          if (row.bookingStatus === "my_reservation") return row;
+          if (!slotOverlapsBusySchedule(row, busyScheduleRows)) return row;
+          return markOverlappingPrivateSlotBusy(row);
+        });
 
         const templateRows = [];
         if (teacherKeys.length > 0) {
@@ -4367,6 +4384,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
             packageByTeacherKey: packageSummary.byTeacherKey,
             teacherKeys,
             conflictKeys,
+            conflictSchedules: busyScheduleRows,
             nowMillis,
           }).forEach(({slotId, slot, packageSummary: slotPackageSummary}) => {
             templateRows.push(sanitizePrivateSlotAvailabilityRow({
@@ -4613,19 +4631,23 @@ exports.reservePrivateLessonSlot = onCall(
                 "no-makeup-available",
             );
           }
-          const hasTeacherConflict = await hasTeacherExactConflict(
+          const hasTeacherConflict = await hasTeacherScheduleConflict(
               transaction,
               db,
               {
                 academyId,
                 teacher,
                 teacherName: slot.teacherName,
+                teacherKey: slot.teacherKey,
+                teacherUid: slot.teacherUid || slot.teacherUID,
+                teacherUID: slot.teacherUID,
                 date,
                 time,
+                durationMinutes: getPrivateScheduleDurationMinutes(slot),
                 ignoredSlotId: slotSnap.exists ? slotId : "",
               },
           );
-          if (hasTeacherConflict && shouldCreateGeneratedSlot) {
+          if (hasTeacherConflict) {
             throw new HttpsError("failed-precondition", "slot-not-available");
           }
           const reservationId = privateReservationDocId({
