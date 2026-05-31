@@ -1953,3 +1953,345 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
     await cleanupFixture(fixture).catch(() => {});
   }
 });
+
+test('private schedule overlap helper detects partial time conflicts', async () => {
+  const overlap = await import('../src/features/booking/privateScheduleOverlap.js');
+  const teacher = {
+    academyId: 'academy-1',
+    teacherUid: 'don-uid',
+    teacherKey: 'don1',
+    teacherName: 'Don',
+  };
+  const existingReservation = {
+    ...teacher,
+    date: '2026-06-01',
+    time: '23:30',
+    durationMinutes: 50,
+    status: 'active',
+  };
+  const overlappingSlot = {
+    ...teacher,
+    date: '2026-06-01',
+    time: '23:10',
+    durationMinutes: 50,
+    status: 'open',
+  };
+  const nonOverlappingSlot = {
+    ...teacher,
+    date: '2026-06-01',
+    time: '21:00',
+    durationMinutes: 50,
+    status: 'open',
+  };
+  const otherTeacherSlot = {
+    academyId: 'academy-1',
+    teacherName: 'Other',
+    date: '2026-06-01',
+    time: '23:10',
+    durationMinutes: 50,
+    status: 'open',
+  };
+
+  expect(overlap.privateSchedulesOverlap(overlappingSlot, existingReservation)).toBe(true);
+  expect(overlap.privateSchedulesOverlap(nonOverlappingSlot, existingReservation)).toBe(false);
+  expect(overlap.privateSchedulesOverlap(otherTeacherSlot, existingReservation)).toBe(false);
+  expect(overlap.isActivePrivateReservation({ status: 'active' })).toBe(true);
+  expect(overlap.isActivePrivateReservation({ status: 'reserved' })).toBe(true);
+  expect(overlap.isActivePrivateReservation({ status: 'cancelled' })).toBe(false);
+  expect(overlap.isTeacherBlockingScheduleRow({ status: 'cancelled', date: '2026-06-01', time: '23:30' })).toBe(
+    false
+  );
+  expect(overlap.isTeacherBlockingScheduleRow(existingReservation)).toBe(true);
+});
+
+test('private slot overlap guard is wired through availability and reservation callables', async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  expect(source).toContain('function privateSchedulesOverlap(');
+  expect(source).toContain('function hasTeacherScheduleConflict(');
+  expect(source).not.toContain('function hasTeacherExactConflict(');
+  expect(source).toMatch(
+    /listPrivateLessonSlotAvailability[\s\S]*markOverlappingPrivateSlotBusy/
+  );
+  expect(source).toMatch(
+    /reservePrivateLessonSlot[\s\S]*hasTeacherScheduleConflict[\s\S]*slot-not-available/
+  );
+  expect(source).toMatch(
+    /reservePrivateLessonSlot[\s\S]*durationMinutes: getPrivateScheduleDurationMinutes\(slot\)/
+  );
+  expect(source).toContain('ACTIVE_PRIVATE_RESERVATION_STATUSES');
+});
+
+function getFirebaseConfigFromEnv() {
+  return {
+    apiKey: process.env.VITE_FIREBASE_API_KEY,
+    authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: process.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: process.env.VITE_FIREBASE_APP_ID,
+  };
+}
+
+async function reservePrivateLessonSlotViaPage(page, { academyId, slotId }) {
+  return page.evaluate(
+    async ({ firebaseConfig, academyId, slotId }) => {
+      const [{ getApp, getApps, initializeApp }, authModule, functionsModule] = await Promise.all([
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js'),
+      ]);
+      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const auth = authModule.getAuth(app);
+      if (!auth.currentUser) {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Auth user not ready.')), 15000);
+          const unsubscribe = authModule.onAuthStateChanged(auth, (user) => {
+            if (!user) return;
+            clearTimeout(timeout);
+            unsubscribe();
+            resolve();
+          });
+        });
+      }
+      const functions = functionsModule.getFunctions(app, 'us-central1');
+      const reservePrivateLessonSlot = functionsModule.httpsCallable(functions, 'reservePrivateLessonSlot');
+      try {
+        const result = await reservePrivateLessonSlot({
+          academyId,
+          slotId,
+          privateSlotBooking: 'enabled',
+        });
+        return { ok: true, data: result.data };
+      } catch (error) {
+        return {
+          ok: false,
+          code: error?.code || '',
+          message: error?.message || '',
+        };
+      }
+    },
+    {
+      firebaseConfig: getFirebaseConfigFromEnv(),
+      academyId,
+      slotId,
+    }
+  );
+}
+
+async function createOverlapFixture(unique) {
+  const db = getDb();
+  const auth = getAuth();
+  const nowTs = admin.firestore.Timestamp.now();
+  const teacherKey = 'don1';
+  const teacherUid = `don-uid-${unique}`;
+  const date = '2026-06-01';
+  const existingTime = '23:30';
+  const overlappingTime = '23:10';
+  const openTime = '21:00';
+  const existingSlotId = `e2e-overlap-existing-${unique}`;
+  const overlappingSlotId = `e2e-overlap-open-${unique}`;
+  const openSlotId = `e2e-overlap-clear-${unique}`;
+  const existingReservationDocId = reservationId(existingSlotId, `other-student-${unique}`);
+  const studentId = `e2e-overlap-student-${unique}`;
+  const bookingOpensAt = admin.firestore.Timestamp.fromMillis(Date.now() - 60 * 60 * 1000);
+  const bookingClosesAt = admin.firestore.Timestamp.fromMillis(Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+  const student = await createStudentFixture(db, auth, {
+    unique,
+    roleName: 'overlap',
+    studentId,
+    teacherAccess: true,
+    teacherKey,
+    allowedSlotIds: [overlappingSlotId, openSlotId],
+    paidLessons: 2,
+    privateSlotBookingPilotEnabled: true,
+  });
+
+  await Promise.all([
+    db.collection('privateLessonSlots').doc(existingSlotId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherKey,
+      teacherUid,
+      teacherName: 'Don',
+      date,
+      time: existingTime,
+      subject: `E2E Overlap Existing ${unique}`,
+      capacity: 1,
+      reservedCount: 1,
+      durationMinutes: 50,
+      status: 'reserved',
+      reservedStudentId: `other-student-${unique}`,
+      reservationId: existingReservationDocId,
+      bookingOpensAt,
+      bookingClosesAt,
+      createdByUid: 'e2e-admin-sdk',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      reservedAt: nowTs,
+      cancelledAt: null,
+    }),
+    db.collection('privateLessonReservations').doc(existingReservationDocId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      slotId: existingSlotId,
+      studentId: `other-student-${unique}`,
+      studentName: `Other Student ${unique}`,
+      teacher: teacherKey,
+      teacherKey,
+      teacherUid,
+      teacherName: 'Don',
+      date,
+      time: existingTime,
+      status: 'active',
+      source: 'student',
+      reservedAt: nowTs,
+      cancelledAt: null,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('privateLessonSlots').doc(overlappingSlotId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherKey,
+      teacherUid,
+      teacherName: 'Don',
+      date,
+      time: overlappingTime,
+      subject: `E2E Overlap Candidate ${unique}`,
+      capacity: 1,
+      reservedCount: 0,
+      durationMinutes: 50,
+      status: 'open',
+      bookingOpensAt,
+      bookingClosesAt,
+      createdByUid: 'e2e-admin-sdk',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      reservedAt: null,
+      cancelledAt: null,
+    }),
+    db.collection('privateLessonSlots').doc(openSlotId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherKey,
+      teacherUid,
+      teacherName: 'Don',
+      date,
+      time: openTime,
+      subject: `E2E Overlap Clear ${unique}`,
+      capacity: 1,
+      reservedCount: 0,
+      durationMinutes: 50,
+      status: 'open',
+      bookingOpensAt,
+      bookingClosesAt,
+      createdByUid: 'e2e-admin-sdk',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      reservedAt: null,
+      cancelledAt: null,
+    }),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(studentId)).set(
+      {
+        teacherKeys: [teacherKey],
+        activePackageIds: [student.packageId],
+        allowedSlotIds: [overlappingSlotId, openSlotId],
+        allowedPrivateLessonSlotIds: [overlappingSlotId, openSlotId],
+        privateSlotBookingPilotEnabled: true,
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    ),
+  ]);
+
+  return {
+    student,
+    teacherKey,
+    teacherUid,
+    date,
+    existingTime,
+    overlappingTime,
+    openTime,
+    existingSlotId,
+    overlappingSlotId,
+    openSlotId,
+    existingReservationDocId,
+  };
+}
+
+async function cleanupOverlapFixture(fixture) {
+  if (!fixture) return;
+  const db = getDb();
+  const auth = getAuth();
+  const refs = [
+    db.collection('privateLessonSlots').doc(fixture.existingSlotId),
+    db.collection('privateLessonSlots').doc(fixture.overlappingSlotId),
+    db.collection('privateLessonSlots').doc(fixture.openSlotId),
+    db.collection('privateLessonReservations').doc(fixture.existingReservationDocId),
+    db.collection('privateLessonReservations').doc(
+      reservationId(fixture.overlappingSlotId, fixture.student.studentId)
+    ),
+    db.collection('privateLessonReservations').doc(
+      reservationId(fixture.openSlotId, fixture.student.studentId)
+    ),
+    db.collection('privateStudents').doc(fixture.student.studentId),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(fixture.student.studentId)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(fixture.student.studentId)),
+    db.collection('studentPackages').doc(fixture.student.packageId),
+    db.collection('users').doc(fixture.student.uid),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.student.uid}`),
+  ];
+  await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
+  await auth.deleteUser(fixture.student.uid).catch(() => {});
+}
+
+test('overlapping private slots are hidden from available view and rejected on reserve', async ({
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private overlap setup을 실행합니다.');
+  test.setTimeout(180000);
+
+  let fixture = null;
+  const contexts = [];
+
+  try {
+    fixture = await createOverlapFixture(`${Date.now()}-${testInfo.workerIndex}-overlap`);
+    const db = getDb();
+    const context = await browser.newContext();
+    contexts.push(context);
+    const page = await context.newPage();
+    await loginAsStudentWithPrivateBooking(page, fixture.student.email);
+
+    await page.getByRole('button', { name: '예약 가능한 시간만' }).click();
+    await expect(
+      page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: fixture.overlappingTime })
+    ).toHaveCount(0, { timeout: 15000 });
+    const clearSlotCards = page
+      .locator('[data-testid="student-private-slot-card"]')
+      .filter({ hasText: fixture.openTime });
+    await expect(clearSlotCards, 'non-overlapping slot should remain bookable').toHaveCount(1, {
+      timeout: 15000,
+    });
+    await expect(
+      clearSlotCards.first().getByTestId('student-private-slot-reserve-button')
+    ).toBeEnabled();
+
+    await page.getByRole('button', { name: '전체 시간 보기' }).click();
+    await expect(
+      page.locator('[data-testid="student-private-busy-slot-card"]').filter({ hasText: fixture.overlappingTime })
+    ).toHaveCount(1, { timeout: 15000 });
+
+    const reserveResult = await reservePrivateLessonSlotViaPage(page, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      slotId: fixture.overlappingSlotId,
+    });
+    expect(reserveResult.ok, JSON.stringify(reserveResult)).toBe(false);
+    expect(`${reserveResult.code} ${reserveResult.message}`).toMatch(/slot-not-available|failed-precondition/i);
+    expect(await getReservation(db, fixture.overlappingSlotId, fixture.student.studentId)).toBeNull();
+  } finally {
+    await Promise.all(contexts.map((context) => context.close().catch(() => {})));
+    await cleanupOverlapFixture(fixture).catch(() => {});
+  }
+});
