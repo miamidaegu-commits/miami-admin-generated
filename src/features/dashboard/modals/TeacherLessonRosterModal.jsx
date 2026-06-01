@@ -47,6 +47,22 @@ function RosterTable({ rows, emptyLabel, testIdPrefix, showCancellationHandling 
           <div data-testid="teacher-lesson-roster-status-label">
             상태: {cleanText(row.statusLabel)}
           </div>
+          {row.reservationCreatedAtLabel ? (
+            <div
+              data-testid="teacher-lesson-roster-reservation-created-at"
+              style={{ opacity: 0.82 }}
+            >
+              예약 신청: {row.reservationCreatedAtLabel}
+            </div>
+          ) : null}
+          {row.reservationCancelledAtLabel ? (
+            <div
+              data-testid="teacher-lesson-roster-reservation-cancelled-at"
+              style={{ opacity: 0.82 }}
+            >
+              취소 처리: {row.reservationCancelledAtLabel}
+            </div>
+          ) : null}
           {row.cancelAllowanceValue ? (
             <div
               data-testid="teacher-lesson-roster-cancel-count"
@@ -55,7 +71,7 @@ function RosterTable({ rows, emptyLabel, testIdPrefix, showCancellationHandling 
               취소 가능: {row.cancelAllowanceValue}
             </div>
           ) : null}
-          {showCancellationHandling && row.cancellationHandlingLabel ? (
+          {showCancellationHandling && !row.reservationCancelledAtLabel && row.cancellationHandlingLabel ? (
             <div
               data-testid="teacher-lesson-roster-cancellation-handling-label"
               style={{ opacity: 0.82 }}

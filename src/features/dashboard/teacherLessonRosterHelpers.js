@@ -111,6 +111,83 @@ function getKstDateTimeMillis(dateValue, timeValue) {
   )
 }
 
+function getTimestampMillis(value) {
+  if (!value) return null
+  if (typeof value.toMillis === 'function') {
+    const millis = value.toMillis()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof value.toDate === 'function') {
+    const millis = value.toDate().getTime()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (value instanceof Date) {
+    const millis = value.getTime()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null
+  if (typeof value === 'string') {
+    const millis = Date.parse(value)
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof value === 'object' && value.seconds != null) {
+    const millis = Number(value.seconds) * 1000 + Math.floor(Number(value.nanoseconds || 0) / 1000000)
+    return Number.isFinite(millis) ? millis : null
+  }
+  return null
+}
+
+function formatKstAuditDateTime(value) {
+  const millis = getTimestampMillis(value)
+  if (millis === null) return ''
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(millis))
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
+}
+
+export function formatReservationCreatedAt(reservation) {
+  return (
+    formatKstAuditDateTime(
+      reservation?.reservedAt || reservation?.createdAt || reservation?.bookedAt
+    ) || '기록 없음'
+  )
+}
+
+export function mapCancelledByLabel(value) {
+  const row = value && typeof value === 'object' ? value : null
+  const actor = normalizeId(row ? row.cancelledBy || row.canceledBy || row.cancelledByRole : value)
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+  const reason = normalizeId(row?.cancellationReason || row?.cancelledReason || '').toLowerCase()
+  if (['student', 'studentcancelled', 'learner'].includes(actor) || reason.includes('student')) {
+    return '학생 취소'
+  }
+  if (
+    ['admin', 'administrator', 'manager', 'staff', 'dashboard'].includes(actor) ||
+    reason.includes('admin')
+  ) {
+    return '관리자 취소'
+  }
+  if (['teacher', 'instructor'].includes(actor) || reason.includes('teacher')) {
+    return '선생님 취소'
+  }
+  return '취소됨'
+}
+
+export function formatReservationCancelledAt(reservation) {
+  const cancelledAt = formatKstAuditDateTime(reservation?.cancelledAt || reservation?.canceledAt)
+  if (!cancelledAt) return '-'
+  return `${cancelledAt} · ${mapCancelledByLabel(reservation)}`
+}
+
 function getSortKey(date, time) {
   return `${normalizeId(date)} ${normalizeId(time)}`.trim()
 }
@@ -159,10 +236,8 @@ export function getCancellationHandlingLabel({ sourceKind, lesson, reservation, 
     return '취소됨'
   }
   if (sourceKind === 'reservation') {
-    const cancelledBy = normalizeId(reservation?.cancelledBy).toLowerCase()
-    if (cancelledBy === 'student') return '학생 취소'
-    if (cancelledBy === 'admin') return '관리자 취소'
-    if (cancelledBy === 'teacher') return '선생님 취소'
+    const cancelledByLabel = mapCancelledByLabel(reservation)
+    if (cancelledByLabel !== '취소됨') return cancelledByLabel
     const source = normalizeId(reservation?.source).toLowerCase()
     if (source === 'student') return '학생 취소'
     if (source === 'admin') return '관리자 취소'
@@ -216,6 +291,10 @@ function buildRosterEntry({
     lessonTypeLabel,
     subjectLabel: resolveSubjectLabel(subject),
     statusLabel,
+    reservationCreatedAtLabel:
+      sourceKind === 'reservation' ? formatReservationCreatedAt(reservation) : '',
+    reservationCancelledAtLabel:
+      sourceKind === 'reservation' ? formatReservationCancelledAt(reservation) : '',
     directCancelLabel: getStudentCancelLabel(studentId, cancelAllowanceByStudentId, sourceKind),
     cancelAllowanceValue: getStudentCancelAllowanceValue(
       studentId,

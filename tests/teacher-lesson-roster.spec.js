@@ -10,8 +10,11 @@ import {
 } from './fixtures/test-data.js';
 import {
   buildTeacherLessonRoster,
+  formatReservationCancelledAt,
+  formatReservationCreatedAt,
   formatStudentDirectCancelLabel,
   getCancellationHandlingLabel,
+  mapCancelledByLabel,
   STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT,
 } from '../src/features/dashboard/teacherLessonRosterHelpers.js';
 
@@ -59,6 +62,8 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
   };
   const futureDate = '2026-09-07';
   const pastDate = '2025-01-15';
+  const reservedAt = new Date(Date.UTC(2026, 5, 1, 14, 42));
+  const cancelledAt = new Date(Date.UTC(2026, 5, 1, 15, 15));
   const roster = buildTeacherLessonRoster({
     academyId: 'academy-1',
     teacher,
@@ -118,6 +123,8 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
         status: 'active',
         subject: 'Future Reservation',
         sourceType: 'open_booking',
+        reservedAt,
+        createdAt: new Date(Date.UTC(2026, 4, 30, 1, 0)),
       },
       {
         id: 'reservation-cancelled',
@@ -129,6 +136,23 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
         time: '20:00',
         status: 'cancelled',
         subject: 'Cancelled Reservation',
+        reservedAt,
+        cancelledAt,
+        cancelledBy: 'student',
+      },
+      {
+        id: 'reservation-admin-cancelled',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-a',
+        studentId: 'student-6',
+        studentName: 'Admin Cancelled Reservation Student',
+        date: pastDate,
+        time: '21:00',
+        status: 'cancelled',
+        subject: 'Admin Cancelled Reservation',
+        reservedAt,
+        cancelledAt,
+        cancelledBy: 'admin',
       },
     ],
     studentPrivateBookingStats: [
@@ -143,6 +167,13 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
         academyId: 'academy-1',
         studentId: 'student-4',
         studentCancelCount: 2,
+      },
+      {
+        id: 'academy-1__student-6',
+        academyId: 'academy-1',
+        studentId: 'student-6',
+        studentCancelCount: 3,
+        studentCancelLimit: 6,
       },
     ],
     nowMillis: Date.UTC(2026, 5, 1, 3, 0, 0),
@@ -182,6 +213,14 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
       ?.cancelAllowanceValue
   ).toBe('1/2회');
   expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.reservationCreatedAtLabel
+  ).toBe('2026-06-01 23:42');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.reservationCancelledAtLabel
+  ).toBe('-');
+  expect(
     roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.lessonTypeLabel
   ).toBe('고정 1:1');
   expect(
@@ -192,12 +231,36 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
   ).toBe('');
   expect(roster.past.map((row) => row.studentName)).toEqual(['Past Student']);
   expect(roster.cancelled.map((row) => row.studentName).sort()).toEqual(
-    ['Cancelled Lesson Student', 'Cancelled Reservation Student'].sort()
+    [
+      'Admin Cancelled Reservation Student',
+      'Cancelled Lesson Student',
+      'Cancelled Reservation Student',
+    ].sort()
   );
   expect(
     roster.cancelled.find((row) => row.studentName === 'Cancelled Reservation Student')
       ?.directCancelLabel
   ).toBe('취소 가능 0/2회');
+  expect(
+    roster.cancelled.find((row) => row.studentName === 'Cancelled Reservation Student')
+      ?.reservationCancelledAtLabel
+  ).toBe('2026-06-02 00:15 · 학생 취소');
+  expect(
+    roster.cancelled.find((row) => row.studentName === 'Admin Cancelled Reservation Student')
+      ?.reservationCancelledAtLabel
+  ).toBe('2026-06-02 00:15 · 관리자 취소');
+  expect(formatReservationCreatedAt({ reservedAt, createdAt: cancelledAt })).toBe(
+    '2026-06-01 23:42'
+  );
+  expect(formatReservationCreatedAt({ createdAt: reservedAt })).toBe('2026-06-01 23:42');
+  expect(formatReservationCreatedAt({})).toBe('기록 없음');
+  expect(formatReservationCancelledAt({ cancelledAt, cancelledBy: 'teacher' })).toBe(
+    '2026-06-02 00:15 · 선생님 취소'
+  );
+  expect(formatReservationCancelledAt({ cancelledBy: 'student' })).toBe('-');
+  expect(mapCancelledByLabel('admin')).toBe('관리자 취소');
+  expect(mapCancelledByLabel({ cancellationReason: 'student_cancelled' })).toBe('학생 취소');
+  expect(mapCancelledByLabel('unknown')).toBe('취소됨');
   expect(
     getCancellationHandlingLabel({
       sourceKind: 'lesson',
@@ -239,11 +302,17 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
   const otherTeacherLessonId = `e2e-roster-other-teacher-${unique}`;
   const futureSlotId = `e2e-roster-slot-${unique}`;
   const futureReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${futureSlotId}__e2e-roster-student-2-${unique}`;
-  const cancelledReservationId = `${DEFAULT_E2E_ACADEMY_ID}__e2e-roster-slot-cancelled-${unique}__e2e-roster-student-4-${unique}`;
+  const studentCancelledSlotId = `e2e-roster-slot-student-cancelled-${unique}`;
+  const adminCancelledSlotId = `e2e-roster-slot-admin-cancelled-${unique}`;
+  const cancelledReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${studentCancelledSlotId}__e2e-roster-student-4-${unique}`;
+  const adminCancelledReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${adminCancelledSlotId}__e2e-roster-student-5-${unique}`;
   const student1Id = `e2e-roster-student-1-${unique}`;
   const student2Id = `e2e-roster-student-2-${unique}`;
   const student3Id = `e2e-roster-student-3-${unique}`;
   const student4Id = `e2e-roster-student-4-${unique}`;
+  const student5Id = `e2e-roster-student-5-${unique}`;
+  const reservedAtTs = admin.firestore.Timestamp.fromDate(new Date(Date.UTC(2026, 5, 1, 14, 42)));
+  const cancelledAtTs = admin.firestore.Timestamp.fromDate(new Date(Date.UTC(2026, 5, 1, 15, 15)));
 
   const refs = [
     db.collection('teachers').doc(teacherAId),
@@ -253,14 +322,19 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     db.collection('lessons').doc(pastFixedLessonId),
     db.collection('lessons').doc(otherTeacherLessonId),
     db.collection('privateLessonSlots').doc(futureSlotId),
-    db.collection('privateLessonSlots').doc(`e2e-roster-slot-cancelled-${unique}`),
+    db.collection('privateLessonSlots').doc(studentCancelledSlotId),
+    db.collection('privateLessonSlots').doc(adminCancelledSlotId),
     db.collection('privateLessonReservations').doc(futureReservationId),
     db.collection('privateLessonReservations').doc(cancelledReservationId),
+    db.collection('privateLessonReservations').doc(adminCancelledReservationId),
     db.collection('privateStudents').doc(student1Id),
     db.collection('privateStudents').doc(student2Id),
     db.collection('privateStudents').doc(student3Id),
     db.collection('privateStudents').doc(student4Id),
+    db.collection('privateStudents').doc(student5Id),
     db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student2Id)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student4Id)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student5Id)),
   ];
 
   try {
@@ -316,6 +390,13 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
       db.collection('privateStudents').doc(student4Id).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
         name: `Roster Cancelled Reservation ${unique}`,
+        teacher: teacherAKey,
+        status: 'active',
+        updatedAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(student5Id).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Admin Cancelled Reservation ${unique}`,
         teacher: teacherAKey,
         status: 'active',
         updatedAt: nowTs,
@@ -387,12 +468,14 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
         status: 'active',
         source: 'student',
         sourceType: 'open_booking',
+        reservedAt: reservedAtTs,
+        cancelledAt: null,
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
       db.collection('privateLessonReservations').doc(cancelledReservationId).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
-        slotId: `e2e-roster-slot-cancelled-${unique}`,
+        slotId: studentCancelledSlotId,
         studentId: student4Id,
         studentName: `Roster Cancelled Reservation ${unique}`,
         teacher: teacherAKey,
@@ -401,6 +484,26 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
         time: '20:00',
         status: 'cancelled',
         source: 'student',
+        reservedAt: reservedAtTs,
+        cancelledAt: cancelledAtTs,
+        cancelledBy: 'student',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonReservations').doc(adminCancelledReservationId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: adminCancelledSlotId,
+        studentId: student5Id,
+        studentName: `Roster Admin Cancelled Reservation ${unique}`,
+        teacher: teacherAKey,
+        teacherName: teacherAKey,
+        date: pastDate,
+        time: '21:00',
+        status: 'cancelled',
+        source: 'student',
+        reservedAt: reservedAtTs,
+        cancelledAt: cancelledAtTs,
+        cancelledBy: 'admin',
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
@@ -408,6 +511,22 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
         academyId: DEFAULT_E2E_ACADEMY_ID,
         studentId: student2Id,
         studentCancelCount: 1,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student4Id)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student4Id,
+        studentCancelCount: 3,
+        studentCancelLimit: 6,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student5Id)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student5Id,
+        studentCancelCount: 1,
+        studentCancelLimit: 6,
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
@@ -436,11 +555,22 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     await expect(upcomingSection).toContainText('구분:');
     await expect(upcomingSection).toContainText('수업명:');
     await expect(upcomingSection).toContainText('상태:');
+    const activeReservationRow = upcomingSection
+      .locator('[data-testid="teacher-lesson-roster-row"]')
+      .filter({ hasText: `Roster Reservation Future ${unique}` });
+    await expect(activeReservationRow).toContainText('예약 신청: 2026-06-01 23:42');
+    await expect(activeReservationRow).toContainText('취소 처리: -');
+    await expect(activeReservationRow).not.toContainText('[object Object]');
     await expect(
       upcomingSection
         .locator('[data-testid="teacher-lesson-roster-row"]')
         .filter({ hasText: `Roster Fixed Future ${unique}` })
     ).not.toContainText('취소 가능:');
+    await expect(
+      upcomingSection
+        .locator('[data-testid="teacher-lesson-roster-row"]')
+        .filter({ hasText: `Roster Fixed Future ${unique}` })
+    ).not.toContainText('예약 신청:');
     await expect(upcomingSection).not.toContainText(`Other Teacher Student ${unique}`);
 
     const pastSection = modal.getByTestId('teacher-lesson-roster-past-section');
@@ -448,6 +578,16 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
 
     const cancelledSection = modal.getByTestId('teacher-lesson-roster-cancelled-section');
     await expect(cancelledSection).toContainText(`Roster Cancelled Reservation ${unique}`);
+    await expect(cancelledSection).toContainText(`Roster Admin Cancelled Reservation ${unique}`);
+    const studentCancelledRow = cancelledSection
+      .locator('[data-testid="teacher-lesson-roster-row"]')
+      .filter({ hasText: `Roster Cancelled Reservation ${unique}` });
+    await expect(studentCancelledRow).toContainText('취소 처리: 2026-06-02 00:15 · 학생 취소');
+    const adminCancelledRow = cancelledSection
+      .locator('[data-testid="teacher-lesson-roster-row"]')
+      .filter({ hasText: `Roster Admin Cancelled Reservation ${unique}` });
+    await expect(adminCancelledRow).toContainText('취소 처리: 2026-06-02 00:15 · 관리자 취소');
+    await expect(cancelledSection).not.toContainText('[object Object]');
 
     await expect(modal).not.toContainText(/price|payment|billing|결제|금액/i);
 
