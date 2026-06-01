@@ -119,6 +119,7 @@ export default function TeacherManagementSection({
   privateLessonSlots = [],
   privateStudents = [],
   studentPackages = [],
+  studentPrivateBookingStats = [],
   rosterDataLoading = false,
 }) {
   const isEditing = Boolean(teacherForm.id)
@@ -774,6 +775,7 @@ export default function TeacherManagementSection({
           privateLessonSlots={privateLessonSlots}
           privateStudents={privateStudents}
           studentPackages={studentPackages}
+          studentPrivateBookingStats={studentPrivateBookingStats}
           loading={rosterDataLoading}
           onClose={() => setRosterTeacher(null)}
         />

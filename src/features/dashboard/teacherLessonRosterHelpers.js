@@ -4,6 +4,9 @@ import {
   normalizeText,
 } from './dashboardViewUtils.js'
 
+// Keep in sync with STUDENT_PRIVATE_CANCEL_LIMIT in functions/index.js.
+export const STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT = 2
+
 const ACTIVE_RESERVATION_STATUSES = new Set([
   'active',
   'reserved',
@@ -104,6 +107,39 @@ function getKstDateTimeMillis(dateValue, timeValue) {
 
 function getSortKey(date, time) {
   return `${normalizeId(date)} ${normalizeId(time)}`.trim()
+}
+
+function resolveStudentId(row) {
+  return normalizeId(row?.studentId || row?.studentID)
+}
+
+function buildStudentCancelStatsByStudentId(statsRows, academyId) {
+  const map = new Map()
+  ;(Array.isArray(statsRows) ? statsRows : []).forEach((row) => {
+    if (normalizeId(row.academyId) !== normalizeId(academyId)) return
+    const studentId = normalizeId(row.studentId)
+    if (!studentId) return
+    const rawCount = Number(row.studentCancelCount)
+    if (!Number.isFinite(rawCount) || rawCount < 0) return
+    map.set(
+      studentId,
+      Math.min(STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT, Math.floor(rawCount)),
+    )
+  })
+  return map
+}
+
+export function formatStudentDirectCancelLabel(usedCount) {
+  const used = Number(usedCount)
+  if (!Number.isFinite(used) || used < 0) return ''
+  const safeUsed = Math.min(STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT, Math.floor(used))
+  return `직접취소 ${safeUsed}/${STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT}회 사용`
+}
+
+function getDirectCancelLabel(studentId, cancelStatsByStudentId) {
+  const safeStudentId = normalizeId(studentId)
+  if (!safeStudentId || !cancelStatsByStudentId.has(safeStudentId)) return ''
+  return formatStudentDirectCancelLabel(cancelStatsByStudentId.get(safeStudentId))
 }
 
 function resolveStudentName(row, studentById) {
@@ -211,11 +247,16 @@ export function buildTeacherLessonRoster({
   privateLessonSlots = [],
   privateStudents = [],
   studentPackages = [],
+  studentPrivateBookingStats = [],
   nowMillis = Date.now(),
   pastLimit = 30,
 }) {
   const teacherScope = getTeacherScopeFromRecord(teacher)
   const scopedAcademyId = normalizeId(academyId)
+  const cancelStatsByStudentId = buildStudentCancelStatsByStudentId(
+    studentPrivateBookingStats,
+    scopedAcademyId,
+  )
   const studentById = new Map(
     (Array.isArray(privateStudents) ? privateStudents : []).map((student) => [
       normalizeId(student.id),
@@ -257,6 +298,7 @@ export function buildTeacherLessonRoster({
     entries.push({
       id: `lesson:${lesson.id}`,
       sourceKind: 'lesson',
+      studentId: resolveStudentId(lesson),
       date,
       time,
       studentName: resolveStudentName(lesson, studentById),
@@ -268,6 +310,7 @@ export function buildTeacherLessonRoster({
         lesson,
         packageById,
       }),
+      directCancelLabel: getDirectCancelLabel(resolveStudentId(lesson), cancelStatsByStudentId),
       bucket,
       sortKey: getSortKey(date, time),
     })
@@ -297,6 +340,7 @@ export function buildTeacherLessonRoster({
       entries.push({
         id: `reservation:${reservation.id}`,
         sourceKind: 'reservation',
+        studentId: resolveStudentId(reservation),
         date,
         time,
         studentName: resolveStudentName(reservation, studentById),
@@ -312,6 +356,10 @@ export function buildTeacherLessonRoster({
           reservation,
           packageById,
         }),
+        directCancelLabel: getDirectCancelLabel(
+          resolveStudentId(reservation),
+          cancelStatsByStudentId,
+        ),
         bucket,
         sortKey: getSortKey(date, time),
       })

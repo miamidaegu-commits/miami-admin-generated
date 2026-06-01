@@ -8,7 +8,11 @@ import {
   ADMIN_PASSWORD,
   DEFAULT_E2E_ACADEMY_ID,
 } from './fixtures/test-data.js';
-import { buildTeacherLessonRoster } from '../src/features/dashboard/teacherLessonRosterHelpers.js';
+import {
+  buildTeacherLessonRoster,
+  formatStudentDirectCancelLabel,
+  STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT,
+} from '../src/features/dashboard/teacherLessonRosterHelpers.js';
 
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
 const ADMIN_APP_NAME = 'teacher-lesson-roster-e2e';
@@ -39,6 +43,10 @@ function upcomingMondayYmd(daysFromNow = 7) {
     date.setUTCDate(date.getUTCDate() + 1);
   }
   return date.toISOString().slice(0, 10);
+}
+
+function privateBookingStatsId(studentId) {
+  return `${DEFAULT_E2E_ACADEMY_ID}__${studentId}`;
 }
 
 test('teacher lesson roster helper groups upcoming, past, and cancelled rows', async () => {
@@ -122,17 +130,46 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
         subject: 'Cancelled Reservation',
       },
     ],
+    studentPrivateBookingStats: [
+      {
+        id: 'academy-1__student-2',
+        academyId: 'academy-1',
+        studentId: 'student-2',
+        studentCancelCount: 1,
+      },
+      {
+        id: 'academy-1__student-4',
+        academyId: 'academy-1',
+        studentId: 'student-4',
+        studentCancelCount: 2,
+      },
+    ],
     nowMillis: Date.UTC(2026, 5, 1, 3, 0, 0),
   });
+
+  expect(formatStudentDirectCancelLabel(1)).toBe('직접취소 1/2회 사용');
+  expect(formatStudentDirectCancelLabel(2)).toBe('직접취소 2/2회 사용');
+  expect(STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT).toBe(2);
 
   expect(roster.upcoming.map((row) => row.studentName)).toEqual([
     'Fixed Future Student',
     'Reservation Future Student',
   ]);
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.directCancelLabel
+  ).toBe('직접취소 1/2회 사용');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.directCancelLabel
+  ).toBe('');
   expect(roster.past.map((row) => row.studentName)).toEqual(['Past Student']);
   expect(roster.cancelled.map((row) => row.studentName).sort()).toEqual(
     ['Cancelled Lesson Student', 'Cancelled Reservation Student'].sort()
   );
+  expect(
+    roster.cancelled.find((row) => row.studentName === 'Cancelled Reservation Student')
+      ?.directCancelLabel
+  ).toBe('직접취소 2/2회 사용');
   expect(roster.upcoming.every((row) => !/price|payment|billing/i.test(JSON.stringify(row)))).toBe(
     true
   );
@@ -181,6 +218,7 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     db.collection('privateStudents').doc(student2Id),
     db.collection('privateStudents').doc(student3Id),
     db.collection('privateStudents').doc(student4Id),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student2Id)),
   ];
 
   try {
@@ -324,6 +362,13 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student2Id)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student2Id,
+        studentCancelCount: 1,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
     ]);
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
@@ -344,6 +389,12 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     const upcomingSection = modal.getByTestId('teacher-lesson-roster-upcoming-section');
     await expect(upcomingSection).toContainText(`Roster Fixed Future ${unique}`);
     await expect(upcomingSection).toContainText(`Roster Reservation Future ${unique}`);
+    await expect(upcomingSection).toContainText('직접취소 1/2회 사용');
+    await expect(
+      upcomingSection
+        .locator('[data-testid="teacher-lesson-roster-row"]')
+        .filter({ hasText: `Roster Fixed Future ${unique}` })
+    ).not.toContainText('직접취소');
     await expect(upcomingSection).not.toContainText(`Other Teacher Student ${unique}`);
 
     const pastSection = modal.getByTestId('teacher-lesson-roster-past-section');

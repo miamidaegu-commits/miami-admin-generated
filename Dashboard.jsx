@@ -720,6 +720,9 @@ export default function Dashboard() {
 
   const [busyDeletingPrivateLessonId, setBusyDeletingPrivateLessonId] = useState(null)
   const [studentPackages, setStudentPackages] = useState([])
+  const [studentPrivateBookingStats, setStudentPrivateBookingStats] = useState([])
+  const [studentPrivateBookingStatsLoading, setStudentPrivateBookingStatsLoading] =
+    useState(false)
 
   useEffect(() => {
     if (userProfile?.role !== 'admin' || !isValidOperationalAcademyId(currentAcademyId)) {
@@ -1554,6 +1557,41 @@ export default function Dashboard() {
 
     setStudentPackages([])
   }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+
+  useEffect(() => {
+    if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
+      setStudentPrivateBookingStats([])
+      setStudentPrivateBookingStatsLoading(false)
+      return
+    }
+    if (userProfile?.role !== 'admin') {
+      setStudentPrivateBookingStats([])
+      setStudentPrivateBookingStatsLoading(false)
+      return
+    }
+
+    setStudentPrivateBookingStatsLoading(true)
+    const unsubscribe = onSnapshot(
+      query(
+        collection(db, 'studentPrivateBookingStats'),
+        where('academyId', '==', currentAcademyId)
+      ),
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }))
+        setStudentPrivateBookingStats(rows)
+        setStudentPrivateBookingStatsLoading(false)
+      },
+      (error) => {
+        console.error('studentPrivateBookingStats 불러오기 실패:', error)
+        setStudentPrivateBookingStats([])
+        setStudentPrivateBookingStatsLoading(false)
+      }
+    )
+    return () => unsubscribe()
+  }, [currentAcademyId, user?.uid, userProfile?.role])
 
   useEffect(() => {
     if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId) || !userProfile?.role) {
@@ -4715,11 +4753,13 @@ export default function Dashboard() {
     privateLessonSlots,
     privateStudents,
     studentPackages,
+    studentPrivateBookingStats,
     rosterDataLoading:
       loading ||
       privateLessonReservationsLoading ||
       privateLessonSlotsLoading ||
-      privateStudentsLoading,
+      privateStudentsLoading ||
+      studentPrivateBookingStatsLoading,
   }
 
   return (

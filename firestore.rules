@@ -1864,6 +1864,13 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /studentPrivateBookingStats/{statsId} {
+      allow read: if sameAcademyOnRead() &&
+        isAcademyAdmin(resource.data.academyId);
+
+      allow create, update, delete: if false;
+    }
+
     match /privateLessonSlots/{slotId} {
       allow get: if (
         sameAcademyOnRead() && (

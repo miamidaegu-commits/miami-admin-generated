@@ -45,6 +45,14 @@ function RosterTable({ rows, emptyLabel, testIdPrefix }) {
             {' · '}
             {cleanText(row.subject)}
           </div>
+          {row.directCancelLabel ? (
+            <div
+              data-testid="teacher-lesson-roster-cancel-count"
+              style={{ opacity: 0.78, fontSize: 12 }}
+            >
+              {row.directCancelLabel}
+            </div>
+          ) : null}
         </article>
       ))}
     </div>
@@ -59,6 +67,7 @@ export default function TeacherLessonRosterModal({
   privateLessonSlots,
   privateStudents,
   studentPackages,
+  studentPrivateBookingStats = [],
   loading,
   onClose,
 }) {
@@ -80,6 +89,7 @@ export default function TeacherLessonRosterModal({
       privateLessonSlots,
       privateStudents,
       studentPackages,
+      studentPrivateBookingStats,
     })
   }, [
     academyId,
@@ -89,6 +99,7 @@ export default function TeacherLessonRosterModal({
     privateLessonSlots,
     privateStudents,
     studentPackages,
+    studentPrivateBookingStats,
   ])
 
   return (
