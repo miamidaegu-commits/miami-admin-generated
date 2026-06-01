@@ -147,8 +147,9 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
     nowMillis: Date.UTC(2026, 5, 1, 3, 0, 0),
   });
 
-  expect(formatStudentDirectCancelLabel(1)).toBe('직접취소 1/2회 사용');
-  expect(formatStudentDirectCancelLabel(2)).toBe('직접취소 2/2회 사용');
+  expect(formatStudentDirectCancelLabel(1)).toBe('취소 가능 1/2회');
+  expect(formatStudentDirectCancelLabel(2)).toBe('취소 가능 0/2회');
+  expect(formatStudentDirectCancelLabel(2, 6)).toBe('취소 가능 4/6회');
   expect(STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT).toBe(2);
 
   expect(roster.upcoming.map((row) => row.studentName)).toEqual([
@@ -158,7 +159,7 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
   expect(
     roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
       ?.directCancelLabel
-  ).toBe('직접취소 1/2회 사용');
+  ).toBe('취소 가능 1/2회');
   expect(
     roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.directCancelLabel
   ).toBe('');
@@ -169,7 +170,7 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
   expect(
     roster.cancelled.find((row) => row.studentName === 'Cancelled Reservation Student')
       ?.directCancelLabel
-  ).toBe('직접취소 2/2회 사용');
+  ).toBe('취소 가능 0/2회');
   expect(roster.upcoming.every((row) => !/price|payment|billing/i.test(JSON.stringify(row)))).toBe(
     true
   );
@@ -389,12 +390,12 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     const upcomingSection = modal.getByTestId('teacher-lesson-roster-upcoming-section');
     await expect(upcomingSection).toContainText(`Roster Fixed Future ${unique}`);
     await expect(upcomingSection).toContainText(`Roster Reservation Future ${unique}`);
-    await expect(upcomingSection).toContainText('직접취소 1/2회 사용');
+    await expect(upcomingSection).toContainText('취소 가능 1/2회');
     await expect(
       upcomingSection
         .locator('[data-testid="teacher-lesson-roster-row"]')
         .filter({ hasText: `Roster Fixed Future ${unique}` })
-    ).not.toContainText('직접취소');
+    ).not.toContainText('취소 가능');
     await expect(upcomingSection).not.toContainText(`Other Teacher Student ${unique}`);
 
     const pastSection = modal.getByTestId('teacher-lesson-roster-past-section');
@@ -421,6 +422,129 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     await expect(emptyModal.getByTestId('teacher-lesson-roster-past-empty')).toContainText(
       '지난 수업 없음'
     );
+  } finally {
+    await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
+  }
+});
+
+test('admin can raise student private cancellation allowance and roster reflects it', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 admin allowance E2E를 실행합니다.');
+  test.setTimeout(240000);
+
+  const db = getDb();
+  const nowTs = admin.firestore.Timestamp.now();
+  const unique = `${Date.now()}-${testInfo.workerIndex}-allowance`;
+  const teacherId = `e2e-allowance-teacher-${unique}`;
+  const teacherKey = `allowance-teacher-${unique}`;
+  const teacherName = `Allowance Teacher ${unique}`;
+  const studentId = `e2e-allowance-student-${unique}`;
+  const studentName = `Allowance Student ${unique}`;
+  const futureDate = upcomingMondayYmd(10);
+  const futureSlotId = `e2e-allowance-slot-${unique}`;
+  const futureReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${futureSlotId}__${studentId}`;
+
+  const refs = [
+    db.collection('teachers').doc(teacherId),
+    db.collection('privateStudents').doc(studentId),
+    db.collection('privateLessonSlots').doc(futureSlotId),
+    db.collection('privateLessonReservations').doc(futureReservationId),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(studentId)),
+  ];
+
+  try {
+    await Promise.all([
+      db.collection('teachers').doc(teacherId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: teacherName,
+        teacherKey,
+        teacherName,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(studentId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: studentName,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonSlots').doc(futureSlotId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        teacher: teacherKey,
+        teacherName,
+        date: futureDate,
+        time: '18:00',
+        subject: `E2E Allowance Reservation ${unique}`,
+        durationMinutes: 50,
+        status: 'reserved',
+        reservedStudentId: studentId,
+        reservationId: futureReservationId,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonReservations').doc(futureReservationId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: futureSlotId,
+        studentId,
+        studentName,
+        teacher: teacherKey,
+        teacherName,
+        date: futureDate,
+        time: '18:00',
+        status: 'active',
+        source: 'student',
+        sourceType: 'open_booking',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(studentId)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId,
+        studentCancelCount: 2,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+    ]);
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '학생 관리');
+
+    const studentRow = page.getByTestId('student-row').filter({ hasText: studentName }).first();
+    await expect(studentRow).toBeVisible({ timeout: 15000 });
+    await studentRow.getByTestId('student-cancel-allowance-open-button').click();
+
+    const allowanceModal = page.getByTestId('student-cancel-allowance-modal');
+    await expect(allowanceModal).toBeVisible({ timeout: 15000 });
+    await expect(allowanceModal.getByTestId('student-cancel-allowance-summary')).toContainText(
+      '취소 사용 2/2회 · 남은 0회'
+    );
+
+    await allowanceModal.getByTestId('student-cancel-allowance-limit-input').fill('6');
+    await allowanceModal.getByTestId('student-cancel-allowance-save-button').click();
+    await expect(allowanceModal.getByTestId('student-cancel-allowance-success')).toContainText(
+      '저장'
+    );
+    await expect(allowanceModal.getByTestId('student-cancel-allowance-summary')).toContainText(
+      '취소 사용 2/6회 · 남은 4회'
+    );
+    await allowanceModal.getByTestId('student-cancel-allowance-close-button').click();
+    await expect(allowanceModal).toHaveCount(0);
+
+    await openDashboardSection(page, '선생님 관리');
+    const teacherRow = page
+      .getByTestId('teacher-management-row')
+      .filter({ hasText: teacherName })
+      .first();
+    await expect(teacherRow).toBeVisible({ timeout: 15000 });
+    await teacherRow.getByTestId('teacher-lesson-roster-open-button').click();
+
+    const rosterModal = page.getByTestId('teacher-lesson-roster-modal');
+    await expect(rosterModal).toBeVisible({ timeout: 15000 });
+    await expect(rosterModal.getByTestId('teacher-lesson-roster-upcoming-section')).toContainText(
+      '취소 가능 4/6회'
+    );
+    await expect(rosterModal).not.toContainText(/price|payment|billing|결제|금액/i);
   } finally {
     await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
   }

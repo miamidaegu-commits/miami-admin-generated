@@ -4425,6 +4425,7 @@ export default function Dashboard() {
     loading: privateStudentsLoading,
     currentAcademyId,
     privateStudents,
+    studentPrivateBookingStats,
     isAdmin,
     groupClasses,
     studentSummaryGroupLessons,

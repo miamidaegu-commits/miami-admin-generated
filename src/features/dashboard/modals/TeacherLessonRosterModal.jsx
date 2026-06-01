@@ -156,9 +156,6 @@ export default function TeacherLessonRosterModal({
             </h2>
             <div style={{ marginTop: 6, opacity: 0.75, fontSize: 12 }}>
               teacherKey: {teacherKey}
-              {roster.teacherScopeKeys.length > 0 ?
-                ` · scope: ${roster.teacherScopeKeys.join(', ')}` :
-                ''}
             </div>
           </div>
           <button

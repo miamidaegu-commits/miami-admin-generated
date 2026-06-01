@@ -20,6 +20,7 @@ setGlobalOptions({maxInstances: 10});
 const OWNER_EMAIL = "miamidaegu@gmail.com";
 const REGION = "us-central1";
 const STUDENT_PRIVATE_CANCEL_LIMIT = 2;
+const STUDENT_PRIVATE_CANCEL_LIMIT_MAX = 24;
 const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000;
 const PRIVATE_SLOT_BOOKING_CUTOFF_MS = 7 * 60 * 60 * 1000;
 const PRIVATE_SLOT_AVAILABILITY_LIMIT = 100;
@@ -216,6 +217,51 @@ async function createStudentAccessSummaryDocsIfMissing(db, {
   }
 
   await Promise.all(writes);
+}
+
+function readNonNegativeInteger(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    return 0;
+  }
+  return Math.floor(n);
+}
+
+function readStudentCancelLimit(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    return STUDENT_PRIVATE_CANCEL_LIMIT;
+  }
+  return Math.min(STUDENT_PRIVATE_CANCEL_LIMIT_MAX, Math.floor(n));
+}
+
+function resolveStudentPrivateCancelAllowance(stats) {
+  const data = stats || {};
+  const studentCancelCount = readNonNegativeInteger(data.studentCancelCount);
+  const studentCancelLimit = readStudentCancelLimit(data.studentCancelLimit);
+  return {
+    studentCancelCount,
+    studentCancelLimit,
+    remainingCancelCount: Math.max(0, studentCancelLimit - studentCancelCount),
+  };
+}
+
+function parseStudentCancelLimitInput(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) {
+    throw new HttpsError(
+        "invalid-argument",
+        "studentCancelLimit must be an integer.",
+    );
+  }
+  if (n < 0 || n > STUDENT_PRIVATE_CANCEL_LIMIT_MAX) {
+    throw new HttpsError(
+        "invalid-argument",
+        `studentCancelLimit must be between 0 and ` +
+        `${STUDENT_PRIVATE_CANCEL_LIMIT_MAX}.`,
+    );
+  }
+  return n;
 }
 
 async function requireAcademyAdmin(db, academyId, uid) {
@@ -4110,13 +4156,18 @@ exports.listPrivateLessonSlotAvailability = onCall(
         const summaryRef = db
             .collection("studentPrivateAccessSummary")
             .doc(`${academyId}__${studentId}`);
+        const statsRef = db
+            .collection("studentPrivateBookingStats")
+            .doc(`${academyId}__${studentId}`);
         const [
           summarySnap,
+          statsSnap,
           packageSnap,
           privateLessonsSnap,
           privateReservationsSnap,
         ] = await Promise.all([
           summaryRef.get(),
+          statsRef.get(),
           db
               .collection("studentPackages")
               .where("academyId", "==", academyId)
@@ -4411,7 +4462,11 @@ exports.listPrivateLessonSlotAvailability = onCall(
             })
             .slice(0, PRIVATE_SLOT_AVAILABILITY_LIMIT);
 
-        return {ok: true, academyId, slots};
+        const cancelAllowance = resolveStudentPrivateCancelAllowance(
+            statsSnap.exists ? statsSnap.data() : {},
+        );
+
+        return {ok: true, academyId, slots, cancelAllowance};
       } catch (error) {
         throw asHttpsError(error);
       }
@@ -4928,12 +4983,8 @@ exports.cancelPrivateLessonReservation = onCall(
           }
 
           const stats = statsSnap.exists ? statsSnap.data() || {} : {};
-          const studentCancelCount = Number(stats.studentCancelCount || 0);
-          const safeStudentCancelCount =
-            Number.isFinite(studentCancelCount) && studentCancelCount > 0 ?
-              Math.floor(studentCancelCount) :
-              0;
-          if (safeStudentCancelCount >= STUDENT_PRIVATE_CANCEL_LIMIT) {
+          const allowance = resolveStudentPrivateCancelAllowance(stats);
+          if (allowance.studentCancelCount >= allowance.studentCancelLimit) {
             throw new HttpsError(
                 "failed-precondition",
                 "1:1 예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.",
@@ -4952,7 +5003,7 @@ exports.cancelPrivateLessonReservation = onCall(
           transaction.set(statsRef, {
             academyId,
             studentId,
-            studentCancelCount: safeStudentCancelCount + 1,
+            studentCancelCount: allowance.studentCancelCount + 1,
             createdAt:
               statsSnap.exists && stats.createdAt ? stats.createdAt : now,
             updatedAt: now,
@@ -5113,6 +5164,82 @@ exports.adminCancelPrivateLessonReservation = onCall(
 
           return {ok: true, academyId, slotId, studentId, reservationId};
         });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.updateStudentPrivateCancelAllowance = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const studentId = requireString(data, "studentId");
+        const studentCancelLimit = parseStudentCancelLimitInput(
+            data.studentCancelLimit,
+        );
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        await requireAcademyAdmin(db, academyId, uid);
+
+        const studentSnap = await db
+            .collection("privateStudents")
+            .doc(studentId)
+            .get();
+        if (!studentSnap.exists) {
+          throw new HttpsError("not-found", "Student not found.");
+        }
+        const studentData = studentSnap.data() || {};
+        if (normalizeId(studentData.academyId) !== academyId) {
+          throw new HttpsError(
+              "permission-denied",
+              "Student does not belong to academy.",
+          );
+        }
+
+        const statsRef = db
+            .collection("studentPrivateBookingStats")
+            .doc(`${academyId}__${studentId}`);
+        const statsSnap = await statsRef.get();
+        const stats = statsSnap.exists ? statsSnap.data() || {} : {};
+        const allowance = resolveStudentPrivateCancelAllowance(stats);
+        if (studentCancelLimit < allowance.studentCancelCount) {
+          throw new HttpsError(
+              "failed-precondition",
+              "studentCancelLimit cannot be less than current " +
+              "studentCancelCount.",
+          );
+        }
+
+        const actorEmail = String(request.auth.token.email || "").trim();
+        const now = admin.firestore.FieldValue.serverTimestamp();
+        await statsRef.set({
+          academyId,
+          studentId,
+          studentCancelLimit,
+          updatedAt: now,
+          updatedBy: uid,
+          updatedByEmail: actorEmail,
+        }, {merge: true});
+
+        return {
+          ok: true,
+          studentId,
+          studentCancelCount: allowance.studentCancelCount,
+          studentCancelLimit,
+          remainingCancelCount: Math.max(
+              0,
+              studentCancelLimit - allowance.studentCancelCount,
+          ),
+        };
       } catch (error) {
         throw asHttpsError(error);
       }

@@ -3,9 +3,14 @@ import {
   lessonTimeInputValue,
   normalizeText,
 } from './dashboardViewUtils.js'
+import {
+  STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT,
+  computeStudentPrivateCancelAllowance,
+  formatTeacherRosterStudentCancelLabel,
+} from '../booking/studentPrivateCancelAllowance.js'
 
 // Keep in sync with STUDENT_PRIVATE_CANCEL_LIMIT in functions/index.js.
-export const STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT = 2
+export const STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT = STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT
 
 const ACTIVE_RESERVATION_STATUSES = new Set([
   'active',
@@ -113,33 +118,33 @@ function resolveStudentId(row) {
   return normalizeId(row?.studentId || row?.studentID)
 }
 
-function buildStudentCancelStatsByStudentId(statsRows, academyId) {
+function buildStudentCancelAllowanceByStudentId(statsRows, academyId) {
   const map = new Map()
   ;(Array.isArray(statsRows) ? statsRows : []).forEach((row) => {
     if (normalizeId(row.academyId) !== normalizeId(academyId)) return
     const studentId = normalizeId(row.studentId)
     if (!studentId) return
-    const rawCount = Number(row.studentCancelCount)
-    if (!Number.isFinite(rawCount) || rawCount < 0) return
-    map.set(
-      studentId,
-      Math.min(STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT, Math.floor(rawCount)),
-    )
+    map.set(studentId, computeStudentPrivateCancelAllowance(row))
   })
   return map
 }
 
-export function formatStudentDirectCancelLabel(usedCount) {
-  const used = Number(usedCount)
-  if (!Number.isFinite(used) || used < 0) return ''
-  const safeUsed = Math.min(STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT, Math.floor(used))
-  return `직접취소 ${safeUsed}/${STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT}회 사용`
+export function formatStudentDirectCancelLabel(usedCount, limit = STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT) {
+  return formatTeacherRosterStudentCancelLabel(
+    computeStudentPrivateCancelAllowance({
+      studentCancelCount: usedCount,
+      studentCancelLimit: limit,
+    })
+  )
 }
 
-function getDirectCancelLabel(studentId, cancelStatsByStudentId) {
+function getStudentCancelLabel(studentId, cancelAllowanceByStudentId, sourceKind) {
+  if (sourceKind !== 'reservation') return ''
   const safeStudentId = normalizeId(studentId)
-  if (!safeStudentId || !cancelStatsByStudentId.has(safeStudentId)) return ''
-  return formatStudentDirectCancelLabel(cancelStatsByStudentId.get(safeStudentId))
+  if (!safeStudentId || !cancelAllowanceByStudentId.has(safeStudentId)) return ''
+  return formatTeacherRosterStudentCancelLabel(
+    cancelAllowanceByStudentId.get(safeStudentId)
+  )
 }
 
 function resolveStudentName(row, studentById) {
@@ -170,7 +175,7 @@ function getTicketContextLabel({ sourceKind, reservation, lesson, packageById })
   if (sourceKind === 'reservation') {
     const sourceType = normalizeId(reservation?.sourceType).toLowerCase()
     if (sourceType === 'released_fixed_slot') return '보충 예약'
-    return pkg ? '예약 가능' : '보충 예약'
+    return '예약 완료'
   }
   if (pkg?.packageType === 'private') return '고정 예정'
   return ''
@@ -253,7 +258,7 @@ export function buildTeacherLessonRoster({
 }) {
   const teacherScope = getTeacherScopeFromRecord(teacher)
   const scopedAcademyId = normalizeId(academyId)
-  const cancelStatsByStudentId = buildStudentCancelStatsByStudentId(
+  const cancelAllowanceByStudentId = buildStudentCancelAllowanceByStudentId(
     studentPrivateBookingStats,
     scopedAcademyId,
   )
@@ -310,7 +315,7 @@ export function buildTeacherLessonRoster({
         lesson,
         packageById,
       }),
-      directCancelLabel: getDirectCancelLabel(resolveStudentId(lesson), cancelStatsByStudentId),
+      directCancelLabel: '',
       bucket,
       sortKey: getSortKey(date, time),
     })
@@ -356,9 +361,10 @@ export function buildTeacherLessonRoster({
           reservation,
           packageById,
         }),
-        directCancelLabel: getDirectCancelLabel(
+        directCancelLabel: getStudentCancelLabel(
           resolveStudentId(reservation),
-          cancelStatsByStudentId,
+          cancelAllowanceByStudentId,
+          'reservation',
         ),
         bucket,
         sortKey: getSortKey(date, time),
