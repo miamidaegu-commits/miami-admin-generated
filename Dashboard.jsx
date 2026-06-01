@@ -125,6 +125,11 @@ import {
   addStudentPrivateSlotAccessBatch,
   removeStudentPrivateSlotAccessBatch,
 } from './src/features/private-booking/studentPrivateAccessSummaryClient.js'
+import {
+  buildPrivateWeeklyBulkSlotPlan,
+  normalizePrivateWeeklySlotWeekdays,
+  parsePrivateWeeklySlotTimeList,
+} from './src/features/booking/privateWeeklySlotBulk.js'
 import { findActivePrivatePackageForTeacher } from './src/features/dashboard/privatePackageHelpers.js'
 import {
   canViewBillingFields,
@@ -713,7 +718,16 @@ export default function Dashboard() {
     durationMinutes: '60',
     status: 'active',
   })
+  const [privateAvailabilityBulkForm, setPrivateAvailabilityBulkForm] = useState({
+    teacher: '',
+    weekdays: ['1'],
+    timesText: '',
+    durationMinutes: '50',
+    status: 'active',
+  })
   const [privateAvailabilityTemplateErrors, setPrivateAvailabilityTemplateErrors] = useState({})
+  const [privateAvailabilityBulkErrors, setPrivateAvailabilityBulkErrors] = useState({})
+  const [privateAvailabilityBulkResult, setPrivateAvailabilityBulkResult] = useState(null)
   const [busyPrivateAvailabilityTemplateId, setBusyPrivateAvailabilityTemplateId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
@@ -4085,6 +4099,130 @@ export default function Dashboard() {
     }
   }
 
+  function validatePrivateAvailabilityBulkForm() {
+    const errors = {}
+    const teacher = String(privateAvailabilityBulkForm.teacher || '').trim()
+    const teacherOption = teacherSelectOptions.find((option) => option.value === teacher) || null
+    const teacherFields = buildPrivateSlotTeacherFields(teacherOption || teacher)
+    const weekdays = normalizePrivateWeeklySlotWeekdays(privateAvailabilityBulkForm.weekdays)
+    const { times, invalidTimes } = parsePrivateWeeklySlotTimeList(
+      privateAvailabilityBulkForm.timesText
+    )
+    const durationMinutes = Number.parseInt(
+      String(privateAvailabilityBulkForm.durationMinutes || ''),
+      10
+    )
+    const status = String(privateAvailabilityBulkForm.status || 'active').trim()
+    if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
+    if (weekdays.length === 0) errors.weekdays = '요일을 하나 이상 선택해주세요.'
+    if (times.length === 0) errors.timesText = '시작 시간을 하나 이상 입력해주세요.'
+    if (invalidTimes.length > 0) {
+      errors.timesText = `올바른 HH:mm 시간이 아닙니다: ${invalidTimes.join(', ')}`
+    }
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 10 || durationMinutes > 180) {
+      errors.durationMinutes = '10~180분 사이로 입력해주세요.'
+    }
+    if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
+
+    const value = { teacher, teacherFields, weekdays, times, durationMinutes, status }
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      value,
+    }
+  }
+
+  function buildPrivateAvailabilityBulkPlan(value) {
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    return buildPrivateWeeklyBulkSlotPlan({
+      academyId: scopedAcademyId,
+      teacherFields: value.teacherFields,
+      weekdays: value.weekdays,
+      times: value.times,
+      durationMinutes: value.durationMinutes,
+      status: value.status,
+      existingTemplates: privateAvailabilityTemplates,
+    })
+  }
+
+  function previewPrivateAvailabilityBulkTemplates() {
+    const result = validatePrivateAvailabilityBulkForm()
+    setPrivateAvailabilityBulkErrors(result.errors)
+    if (!result.valid) return
+    try {
+      const plan = buildPrivateAvailabilityBulkPlan(result.value)
+      setPrivateAvailabilityBulkResult({
+        mode: 'preview',
+        createdCount: plan.createdRows.length,
+        skippedDuplicateCount: plan.skippedDuplicateRows.length,
+        skippedOverlapCount: plan.skippedOverlapRows.length,
+        errorCount: plan.errorRows.length,
+        requestedCount: plan.requestedRows.length,
+      })
+    } catch (error) {
+      console.error('기본 1:1 슬롯 미리보기 실패:', error)
+      alert(`기본 1:1 슬롯 미리보기 실패: ${error.message}`)
+    }
+  }
+
+  async function createPrivateAvailabilityBulkTemplates() {
+    if (!isAdmin) {
+      alert('기본 1:1 슬롯 일괄 등록은 관리자만 설정할 수 있습니다.')
+      return
+    }
+    const result = validatePrivateAvailabilityBulkForm()
+    setPrivateAvailabilityBulkErrors(result.errors)
+    if (!result.valid) return
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const plan = buildPrivateAvailabilityBulkPlan(result.value)
+      setBusyPrivateAvailabilityTemplateId('__bulk__')
+
+      for (let index = 0; index < plan.createdRows.length; index += 400) {
+        const batch = writeBatch(db)
+        plan.createdRows.slice(index, index + 400).forEach((row) => {
+          const templateRef = doc(collection(db, 'privateLessonAvailabilityTemplates'))
+          batch.set(templateRef, {
+            academyId: scopedAcademyId,
+            teacher: row.teacher,
+            teacherName: row.teacherName,
+            teacherKey: row.teacherKey,
+            teacherUid: row.teacherUid,
+            teacherEmail: row.teacherEmail,
+            weekday: row.weekday,
+            time: row.time,
+            durationMinutes: row.durationMinutes,
+            status: row.status,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          })
+        })
+        await batch.commit()
+      }
+
+      setPrivateAvailabilityBulkResult({
+        mode: 'created',
+        createdCount: plan.createdRows.length,
+        skippedDuplicateCount: plan.skippedDuplicateRows.length,
+        skippedOverlapCount: plan.skippedOverlapRows.length,
+        errorCount: plan.errorRows.length,
+        requestedCount: plan.requestedRows.length,
+      })
+      setPrivateAvailabilityBulkForm((prev) => ({
+        ...prev,
+        timesText: '',
+        durationMinutes: prev.durationMinutes || '50',
+        status: 'active',
+      }))
+    } catch (error) {
+      console.error('기본 1:1 슬롯 일괄 등록 실패:', error)
+      alert(`기본 1:1 슬롯 일괄 등록 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateAvailabilityTemplateId('')
+    }
+  }
+
   async function createPrivateAvailabilityTemplate() {
     if (!isAdmin) {
       alert('주간 1:1 가능 시간은 관리자만 설정할 수 있습니다.')
@@ -4512,6 +4650,12 @@ export default function Dashboard() {
     setPrivateSlotForm,
     privateSlotFormErrors,
     privateSlotCreateResult,
+    privateAvailabilityBulkForm,
+    setPrivateAvailabilityBulkForm,
+    privateAvailabilityBulkErrors,
+    privateAvailabilityBulkResult,
+    previewPrivateAvailabilityBulkTemplates,
+    createPrivateAvailabilityBulkTemplates,
     privateAvailabilityTemplateForm,
     setPrivateAvailabilityTemplateForm,
     privateAvailabilityTemplateErrors,
