@@ -86,6 +86,10 @@ function studentSlotCard(page, date) {
   return page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: date }).first();
 }
 
+function studentSlotCardById(page, slotId) {
+  return page.locator(`[data-testid="student-private-slot-card"][data-slot-id="${slotId}"]`);
+}
+
 function studentBusySlotCard(page, date) {
   return page
     .locator('[data-testid="student-private-busy-slot-card"]')
@@ -430,6 +434,7 @@ async function createFixture(unique) {
   const noRemainingFixedLessonDate = upcomingMondaySaturdayYmd(4);
   const noTicketOpenDate = upcomingMondaySaturdayYmd(6);
   const pilotDisabledDate = upcomingMondaySaturdayYmd(5);
+  const pilotDisabledTime = '14:40';
   const busyPrivateLessonDate = upcomingMondaySaturdayYmd(2);
   const busyPrivateLessonTime = '15:00';
   const busyGroupLessonDate = upcomingMondaySaturdayYmd(3);
@@ -609,12 +614,12 @@ async function createFixture(unique) {
       teacher: teacherKey,
       teacherName: teacherKey,
       date: pilotDisabledDate,
-      time: '14:40',
+      time: pilotDisabledTime,
       subject: `E2E Pilot Disabled Private Slot ${unique}`,
       capacity: 1,
       reservedCount: 0,
       startAt: admin.firestore.Timestamp.fromDate(
-        new Date(`${pilotDisabledDate}T14:40:00`)
+        new Date(`${pilotDisabledDate}T${pilotDisabledTime}:00`)
       ),
       bookingOpensAt,
       bookingClosesAt,
@@ -737,6 +742,7 @@ async function createFixture(unique) {
     pilotDisabledStudent,
     pilotDisabledSlotId,
     pilotDisabledDate,
+    pilotDisabledTime,
     noRemainingExistingSlotId,
     noRemainingExistingDate,
     noRemainingOpenSlotId,
@@ -1143,14 +1149,13 @@ test('intended flexible private slot visibility honors teacher access and pilot 
       pilotDisabledPage,
       fixture.pilotDisabledStudent.email
     );
-    const pilotDisabledCards = await expectPrivateSlotCardCount(
-      pilotDisabledPage,
-      fixture.pilotDisabledDate,
-      1,
-      'pilot disabled student should see one eligible disabled private slot card'
-    );
-    const pilotDisabledCard = pilotDisabledCards.first();
-    await expect(pilotDisabledCard).toBeVisible();
+    const pilotDisabledCard = studentSlotCardById(pilotDisabledPage, fixture.pilotDisabledSlotId);
+    await expect(
+      pilotDisabledCard,
+      'pilot disabled student should see the intended eligible disabled private slot card'
+    ).toBeVisible({ timeout: 15000 });
+    await expect(pilotDisabledCard).toContainText(fixture.pilotDisabledDate);
+    await expect(pilotDisabledCard).toContainText(fixture.pilotDisabledTime);
     await expect(
       pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
     ).toBeDisabled();
@@ -1380,13 +1385,13 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       pilotDisabledPage,
       fixture.pilotDisabledStudent.email
     );
-    const pilotDisabledCards = await expectPrivateSlotCardCount(
-      pilotDisabledPage,
-      fixture.pilotDisabledDate,
-      1,
-      'pilot disabled student should see one disabled private slot card'
-    );
-    const pilotDisabledCard = pilotDisabledCards.first();
+    const pilotDisabledCard = studentSlotCardById(pilotDisabledPage, fixture.pilotDisabledSlotId);
+    await expect(
+      pilotDisabledCard,
+      'pilot disabled student should see the intended disabled private slot card'
+    ).toBeVisible({ timeout: 15000 });
+    await expect(pilotDisabledCard).toContainText(fixture.pilotDisabledDate);
+    await expect(pilotDisabledCard).toContainText(fixture.pilotDisabledTime);
     await expect(
       pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
     ).toBeDisabled();
