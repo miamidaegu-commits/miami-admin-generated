@@ -6,7 +6,7 @@ function cleanText(value, fallback = '-') {
   return text || fallback
 }
 
-function RosterTable({ rows, emptyLabel, testIdPrefix }) {
+function RosterTable({ rows, emptyLabel, testIdPrefix, showCancellationHandling = false }) {
   if (!rows.length) {
     return (
       <p data-testid={`${testIdPrefix}-empty`} style={{ margin: 0, opacity: 0.72, fontSize: 13 }}>
@@ -32,25 +32,35 @@ function RosterTable({ rows, emptyLabel, testIdPrefix }) {
             fontSize: 13,
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-            <strong>
-              {row.date} · {row.time}
-            </strong>
-            <span style={{ color: '#9ee6b2' }}>{row.statusLabel}</span>
+          <div style={{ fontWeight: 700 }}>
+            {row.date} · {row.time}
           </div>
-          <div>{cleanText(row.studentName)}</div>
-          <div style={{ opacity: 0.82 }}>
-            {row.lessonTypeLabel}
-            {row.ticketContextLabel ? ` · ${row.ticketContextLabel}` : ''}
-            {' · '}
-            {cleanText(row.subject)}
+          <div data-testid="teacher-lesson-roster-student-label">
+            학생: {cleanText(row.studentDisplayName || row.studentName, '이름 없음')}
           </div>
-          {row.directCancelLabel ? (
+          <div data-testid="teacher-lesson-roster-type-label">
+            구분: {cleanText(row.lessonTypeLabel)}
+          </div>
+          <div data-testid="teacher-lesson-roster-subject-label">
+            수업명: {cleanText(row.subjectLabel || row.subject, '1:1 수업')}
+          </div>
+          <div data-testid="teacher-lesson-roster-status-label">
+            상태: {cleanText(row.statusLabel)}
+          </div>
+          {row.cancelAllowanceValue ? (
             <div
               data-testid="teacher-lesson-roster-cancel-count"
-              style={{ opacity: 0.78, fontSize: 12 }}
+              style={{ opacity: 0.82 }}
             >
-              {row.directCancelLabel}
+              취소 가능: {row.cancelAllowanceValue}
+            </div>
+          ) : null}
+          {showCancellationHandling && row.cancellationHandlingLabel ? (
+            <div
+              data-testid="teacher-lesson-roster-cancellation-handling-label"
+              style={{ opacity: 0.82 }}
+            >
+              취소 처리: {row.cancellationHandlingLabel}
             </div>
           ) : null}
         </article>
@@ -203,6 +213,7 @@ export default function TeacherLessonRosterModal({
                 rows={roster.cancelled}
                 emptyLabel="취소/차감취소 수업 없음"
                 testIdPrefix="teacher-lesson-roster-cancelled"
+                showCancellationHandling
               />
             </section>
           </div>
