@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
   STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT,
+  buildPrivateReservationCancelConfirmMessage,
   computeStudentPrivateCancelAllowance,
   formatAdminStudentCancelAllowanceSummary,
   formatStudentPrivateCancelPolicyGuide,
@@ -65,11 +66,31 @@ test('format labels use friendly cancellation wording', () => {
   expect(formatAdminStudentCancelAllowanceSummary(allowance)).toBe(
     '취소 사용 2/6회 · 남은 4회'
   );
-  expect(formatStudentPrivateCancelPolicyGuide({ limit: 6, remaining: 4 })).toEqual([
+  expect(formatStudentPrivateCancelPolicyGuide({ limit: 6, used: 2, remaining: 4 })).toEqual([
     '예약 취소는 최대 6회까지 가능합니다.',
-    '남은 취소 가능 횟수: 4/6회',
+    '취소 사용 2/6회 · 남은 취소 가능 4회',
   ]);
   expect(STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT).toBe(2);
+});
+
+test('cancel confirmation shows used, remaining, and after-cancel counts', () => {
+  const allowance = computeStudentPrivateCancelAllowance({
+    studentCancelCount: 2,
+    studentCancelLimit: 6,
+  });
+  const message = buildPrivateReservationCancelConfirmMessage(allowance, { loaded: true });
+  expect(message).toContain('예약을 취소하시겠습니까?');
+  expect(message).toContain('취소 사용 2/6회');
+  expect(message).toContain('남은 취소 가능 4회');
+  expect(message).toContain('이번 취소 후 남은 취소 가능 3회');
+  expect(message).toContain('이 취소도 횟수에 포함됩니다.');
+  expect(buildPrivateReservationCancelConfirmMessage(
+    computeStudentPrivateCancelAllowance({ studentCancelCount: 2, studentCancelLimit: 2 }),
+    { loaded: true }
+  )).toBe('예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.');
+  expect(buildPrivateReservationCancelConfirmMessage(null, { loaded: false })).toContain(
+    '예약 취소는 최대 2회까지 가능하며'
+  );
 });
 
 test('updateStudentPrivateCancelAllowance callable enforces admin and limit rules', async () => {

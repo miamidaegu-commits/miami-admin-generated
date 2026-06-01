@@ -26,46 +26,90 @@ export function formatTeacherRosterStudentCancelLabel(allowance) {
   return `취소 가능 ${allowance.remaining}/${allowance.limit}회`
 }
 
+export function formatTeacherRosterCancelAllowanceValue(allowance) {
+  if (!allowance) return ''
+  return `${allowance.remaining}/${allowance.limit}회`
+}
+
+export function formatStudentPrivateCancelUsageSummary(allowance) {
+  if (!allowance) return ''
+  return `취소 사용 ${allowance.used}/${allowance.limit}회 · 남은 취소 가능 ${allowance.remaining}회`
+}
+
 export function formatAdminStudentCancelAllowanceSummary(allowance) {
   if (!allowance) return ''
   return `취소 사용 ${allowance.used}/${allowance.limit}회 · 남은 ${allowance.remaining}회`
 }
 
-export function formatStudentPrivateCancelPolicyGuide({ limit, remaining }) {
-  const safeLimit =
-    Number.isFinite(Number(limit)) && Number(limit) > 0
-      ? Math.floor(Number(limit))
-      : STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT
-  const lines = [`예약 취소는 최대 ${safeLimit}회까지 가능합니다.`]
-  if (Number.isFinite(Number(remaining))) {
-    const safeRemaining = Math.max(0, Math.floor(Number(remaining)))
-    lines.push(`남은 취소 가능 횟수: ${safeRemaining}/${safeLimit}회`)
-  }
-  return lines
+export function formatStudentPrivateCancelPolicyGuide({ limit, used, remaining } = {}) {
+  const allowance = computeStudentPrivateCancelAllowance({
+    studentCancelCount: used,
+    studentCancelLimit: limit,
+  })
+  const safeRemaining =
+    Number.isFinite(Number(remaining)) ?
+      Math.max(0, Math.floor(Number(remaining))) :
+      allowance.remaining
+  const safeUsed =
+    Number.isFinite(Number(used)) ?
+      Math.max(0, Math.floor(Number(used))) :
+      allowance.used
+  const safeLimit = allowance.limit
+  return [
+    `예약 취소는 최대 ${safeLimit}회까지 가능합니다.`,
+    `취소 사용 ${safeUsed}/${safeLimit}회 · 남은 취소 가능 ${safeRemaining}회`,
+  ]
 }
 
-export function buildPrivateSlotReserveConfirmMessage(limit = STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT) {
-  const safeLimit =
-    Number.isFinite(Number(limit)) && Number(limit) > 0
-      ? Math.floor(Number(limit))
-      : STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT
+export function buildPrivateSlotReserveConfirmMessage(
+  allowanceOrLimit = STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT
+) {
+  const allowance =
+    typeof allowanceOrLimit === 'object' && allowanceOrLimit !== null ?
+      computeStudentPrivateCancelAllowance(allowanceOrLimit) :
+      computeStudentPrivateCancelAllowance({
+        studentCancelLimit: allowanceOrLimit,
+      })
   return (
     `1:1 수업을 예약하시겠습니까?\n\n` +
     `취소는 수업 시작 6시간 전까지만 가능하며, ` +
-    `예약 취소는 최대 ${safeLimit}회까지 가능합니다.`
+    `예약 취소는 최대 ${allowance.limit}회까지 가능합니다.`
   )
 }
 
-export function buildPrivateReservationCancelConfirmMessage(
-  limit = STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT
-) {
-  const safeLimit =
-    Number.isFinite(Number(limit)) && Number(limit) > 0
-      ? Math.floor(Number(limit))
-      : STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT
+function resolveCancelAllowanceInput(allowance) {
+  if (!allowance) return computeStudentPrivateCancelAllowance({})
+  if (
+    typeof allowance.used !== 'undefined' ||
+    typeof allowance.remaining !== 'undefined'
+  ) {
+    return computeStudentPrivateCancelAllowance({
+      studentCancelCount: allowance.used,
+      studentCancelLimit: allowance.limit,
+    })
+  }
+  return computeStudentPrivateCancelAllowance(allowance)
+}
+
+export function buildPrivateReservationCancelConfirmMessage(allowance, { loaded = true } = {}) {
+  const resolved = resolveCancelAllowanceInput(allowance)
+  if (!loaded) {
+    return (
+      `예약을 취소하시겠습니까?\n\n` +
+      `예약 취소는 최대 ${STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT}회까지 가능하며, ` +
+      `이 취소도 횟수에 포함됩니다.`
+    )
+  }
+  if (resolved.remaining <= 0) {
+    return '예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+  }
+  const afterRemaining = Math.max(0, resolved.remaining - 1)
   return (
     `예약을 취소하시겠습니까?\n\n` +
-    `예약 취소는 최대 ${safeLimit}회까지 가능하며, 이 취소도 횟수에 포함됩니다.`
+    `취소 사용 ${resolved.used}/${resolved.limit}회\n` +
+    `남은 취소 가능 ${resolved.remaining}회\n` +
+    `이번 취소 후 남은 취소 가능 ${afterRemaining}회\n` +
+    `이 취소도 횟수에 포함됩니다.`
   )
 }
 

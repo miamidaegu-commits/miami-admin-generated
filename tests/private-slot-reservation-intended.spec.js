@@ -1123,7 +1123,7 @@ test('intended flexible private slot visibility honors teacher access and pilot 
       '예약 취소는 최대 2회까지 가능합니다.'
     );
     await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
-      '2회를 초과하면 학원에 문의해 주세요.'
+      '취소 사용 0/2회 · 남은 취소 가능 2회'
     );
     await expect(studentSlotCard(eligiblePage, fixture.date)).toBeVisible({ timeout: 15000 });
     await expect(studentSlotCard(eligiblePage, fixture.date)).toContainText(fixture.time);
@@ -1620,7 +1620,9 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
         () =>
           bookingDialogs.some(
             (message) =>
-              message.includes('예약 취소는 최대 2회') &&
+              message.includes('취소 사용 0/2회') &&
+              message.includes('남은 취소 가능 2회') &&
+              message.includes('이번 취소 후 남은 취소 가능 1회') &&
               message.includes('이 취소도 횟수에 포함')
           ),
         { timeout: 15000 }
@@ -1928,7 +1930,7 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
     await reservationCard.getByTestId('student-private-reservation-cancel-button').click();
     await expect
       .poll(
-        () => dialogs.some((message) => message.includes('1:1 예약 취소 가능 횟수')),
+        () => dialogs.some((message) => message.includes('예약 취소 가능 횟수를 모두 사용')),
         { timeout: 15000 }
       )
       .toBe(true);

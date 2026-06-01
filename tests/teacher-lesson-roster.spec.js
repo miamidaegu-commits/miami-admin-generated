@@ -11,6 +11,7 @@ import {
 import {
   buildTeacherLessonRoster,
   formatStudentDirectCancelLabel,
+  getCancellationHandlingLabel,
   STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT,
 } from '../src/features/dashboard/teacherLessonRosterHelpers.js';
 
@@ -161,6 +162,32 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
       ?.directCancelLabel
   ).toBe('취소 가능 1/2회');
   expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.studentDisplayName
+  ).toBe('Reservation Future Student');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.lessonTypeLabel
+  ).toBe('1:1 예약');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.subjectLabel
+  ).toBe('Future Reservation');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.statusLabel
+  ).toBe('예약 완료');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.cancelAllowanceValue
+  ).toBe('1/2회');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.lessonTypeLabel
+  ).toBe('고정 1:1');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.subjectLabel
+  ).toBe('Fixed Future Lesson');
+  expect(
     roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.directCancelLabel
   ).toBe('');
   expect(roster.past.map((row) => row.studentName)).toEqual(['Past Student']);
@@ -171,6 +198,20 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
     roster.cancelled.find((row) => row.studentName === 'Cancelled Reservation Student')
       ?.directCancelLabel
   ).toBe('취소 가능 0/2회');
+  expect(
+    getCancellationHandlingLabel({
+      sourceKind: 'lesson',
+      lesson: { isDeductCancelled: true },
+      bucket: 'cancelled',
+    })
+  ).toBe('차감취소');
+  expect(
+    getCancellationHandlingLabel({
+      sourceKind: 'reservation',
+      reservation: { cancelledBy: 'student' },
+      bucket: 'cancelled',
+    })
+  ).toBe('학생 취소');
   expect(roster.upcoming.every((row) => !/price|payment|billing/i.test(JSON.stringify(row)))).toBe(
     true
   );
@@ -390,12 +431,16 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     const upcomingSection = modal.getByTestId('teacher-lesson-roster-upcoming-section');
     await expect(upcomingSection).toContainText(`Roster Fixed Future ${unique}`);
     await expect(upcomingSection).toContainText(`Roster Reservation Future ${unique}`);
-    await expect(upcomingSection).toContainText('취소 가능 1/2회');
+    await expect(upcomingSection).toContainText('취소 가능: 1/2회');
+    await expect(upcomingSection).toContainText('학생:');
+    await expect(upcomingSection).toContainText('구분:');
+    await expect(upcomingSection).toContainText('수업명:');
+    await expect(upcomingSection).toContainText('상태:');
     await expect(
       upcomingSection
         .locator('[data-testid="teacher-lesson-roster-row"]')
         .filter({ hasText: `Roster Fixed Future ${unique}` })
-    ).not.toContainText('취소 가능');
+    ).not.toContainText('취소 가능:');
     await expect(upcomingSection).not.toContainText(`Other Teacher Student ${unique}`);
 
     const pastSection = modal.getByTestId('teacher-lesson-roster-past-section');
@@ -542,7 +587,7 @@ test('admin can raise student private cancellation allowance and roster reflects
     const rosterModal = page.getByTestId('teacher-lesson-roster-modal');
     await expect(rosterModal).toBeVisible({ timeout: 15000 });
     await expect(rosterModal.getByTestId('teacher-lesson-roster-upcoming-section')).toContainText(
-      '취소 가능 4/6회'
+      '취소 가능: 4/6회'
     );
     await expect(rosterModal).not.toContainText(/price|payment|billing|결제|금액/i);
   } finally {

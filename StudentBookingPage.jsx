@@ -444,6 +444,7 @@ export default function StudentBookingPage() {
   const [privateCancelAllowance, setPrivateCancelAllowance] = useState(() =>
     computeStudentPrivateCancelAllowance({})
   )
+  const [privateCancelAllowanceLoaded, setPrivateCancelAllowanceLoaded] = useState(false)
   const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
   const groupAccessRefreshTimerRef = useRef(null)
   const groupLessonFetchRequestRef = useRef(0)
@@ -460,10 +461,16 @@ export default function StudentBookingPage() {
     () =>
       formatStudentPrivateCancelPolicyGuide({
         limit: privateCancelAllowance.limit,
+        used: privateCancelAllowance.used,
         remaining: privateCancelAllowance.remaining,
       }),
     [privateCancelAllowance]
   )
+
+  useEffect(() => {
+    setPrivateCancelAllowance(computeStudentPrivateCancelAllowance({}))
+    setPrivateCancelAllowanceLoaded(false)
+  }, [currentAcademyId, scopedStudentId])
 
   useEffect(() => {
     reservationsRef.current = reservations
@@ -1019,6 +1026,7 @@ export default function StudentBookingPage() {
       setPrivateCancelAllowance(
         applyCallableCancelAllowance(response?.data?.cancelAllowance)
       )
+      setPrivateCancelAllowanceLoaded(response?.data?.cancelAllowance != null)
       const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
       const rows = canUsePrivateBooking
         ? serverRows
@@ -1255,6 +1263,7 @@ export default function StudentBookingPage() {
         setPrivateCancelAllowance(
           applyCallableCancelAllowance(response?.data?.cancelAllowance)
         )
+        setPrivateCancelAllowanceLoaded(response?.data?.cancelAllowance != null)
         const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
         const rows = canUsePrivateBooking
           ? serverRows
@@ -1910,7 +1919,7 @@ export default function StudentBookingPage() {
       alert('이미 예약됨')
       return
     }
-    if (!window.confirm(buildPrivateSlotReserveConfirmMessage(privateCancelAllowance.limit))) {
+    if (!window.confirm(buildPrivateSlotReserveConfirmMessage(privateCancelAllowance))) {
       return
     }
 
@@ -2014,7 +2023,18 @@ export default function StudentBookingPage() {
       slotId: reservation.slotId,
       studentId: scopedStudentId,
     })
-    if (!window.confirm(buildPrivateReservationCancelConfirmMessage(privateCancelAllowance.limit))) {
+    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(
+      privateCancelAllowance,
+      { loaded: privateCancelAllowanceLoaded }
+    )
+    if (
+      privateCancelAllowanceLoaded &&
+      privateCancelAllowance.remaining <= 0
+    ) {
+      alert(cancelConfirmMessage)
+      return
+    }
+    if (!window.confirm(cancelConfirmMessage)) {
       return
     }
 
