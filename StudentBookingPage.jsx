@@ -55,6 +55,12 @@ import {
   formatStudentBookingIdentityLine,
   resolveLinkedStudentDisplayName,
 } from './src/features/booking/studentTicketSummary.js'
+import {
+  buildPrivateSlotReserveConfirmMessage,
+  buildPrivateReservationCancelConfirmMessage,
+  computeStudentPrivateCancelAllowance,
+  formatStudentPrivateCancelPolicyGuide,
+} from './src/features/booking/studentPrivateCancelAllowance.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
 function isEnabledFlag(value) {
@@ -76,11 +82,12 @@ const PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE = PRIVATE_SLOT_BOOKING_OVERRIDE_ENA
   ? { privateSlotBooking: 'enabled' }
   : {}
 
-const PRIVATE_SLOT_RESERVE_CONFIRM_MESSAGE =
-  '1:1 수업을 예약하시겠습니까?\n\n취소는 수업 시작 6시간 전까지만 가능하며, 학생 직접 취소는 최대 2회까지 가능합니다.'
-
-const PRIVATE_RESERVATION_CANCEL_CONFIRM_MESSAGE =
-  '예약을 취소하시겠습니까?\n\n학생 직접 취소는 최대 2회까지 가능하며, 이 취소도 횟수에 포함됩니다.'
+function applyCallableCancelAllowance(cancelAllowance) {
+  return computeStudentPrivateCancelAllowance({
+    studentCancelCount: cancelAllowance?.studentCancelCount,
+    studentCancelLimit: cancelAllowance?.studentCancelLimit,
+  })
+}
 
 function chunkValues(values, size) {
   const out = []
@@ -434,6 +441,9 @@ export default function StudentBookingPage() {
   const [studentPackagesResolved, setStudentPackagesResolved] = useState(false)
   const [studentPackagesError, setStudentPackagesError] = useState('')
   const [linkedPrivateStudent, setLinkedPrivateStudent] = useState(null)
+  const [privateCancelAllowance, setPrivateCancelAllowance] = useState(() =>
+    computeStudentPrivateCancelAllowance({})
+  )
   const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
   const groupAccessRefreshTimerRef = useRef(null)
   const groupLessonFetchRequestRef = useRef(0)
@@ -446,6 +456,14 @@ export default function StudentBookingPage() {
     ? `${currentAcademyId}__${getTodayStorageDateString()}`
     : ''
   const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
+  const privateCancelPolicyLines = useMemo(
+    () =>
+      formatStudentPrivateCancelPolicyGuide({
+        limit: privateCancelAllowance.limit,
+        remaining: privateCancelAllowance.remaining,
+      }),
+    [privateCancelAllowance]
+  )
 
   useEffect(() => {
     reservationsRef.current = reservations
@@ -998,6 +1016,9 @@ export default function StudentBookingPage() {
         academyId: currentAcademyId,
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
+      setPrivateCancelAllowance(
+        applyCallableCancelAllowance(response?.data?.cancelAllowance)
+      )
       const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
       const rows = canUsePrivateBooking
         ? serverRows
@@ -1231,6 +1252,9 @@ export default function StudentBookingPage() {
           ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
         })
         if (cancelled) return
+        setPrivateCancelAllowance(
+          applyCallableCancelAllowance(response?.data?.cancelAllowance)
+        )
         const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
         const rows = canUsePrivateBooking
           ? serverRows
@@ -1886,7 +1910,7 @@ export default function StudentBookingPage() {
       alert('이미 예약됨')
       return
     }
-    if (!window.confirm(PRIVATE_SLOT_RESERVE_CONFIRM_MESSAGE)) {
+    if (!window.confirm(buildPrivateSlotReserveConfirmMessage(privateCancelAllowance.limit))) {
       return
     }
 
@@ -1990,7 +2014,7 @@ export default function StudentBookingPage() {
       slotId: reservation.slotId,
       studentId: scopedStudentId,
     })
-    if (!window.confirm(PRIVATE_RESERVATION_CANCEL_CONFIRM_MESSAGE)) {
+    if (!window.confirm(buildPrivateReservationCancelConfirmMessage(privateCancelAllowance.limit))) {
       return
     }
 
@@ -2614,8 +2638,10 @@ export default function StudentBookingPage() {
               >
                 <div>예약은 수업 시작 7시간 전까지만 가능합니다.</div>
                 <div>취소는 수업 시작 6시간 전까지만 가능합니다.</div>
-                <div>학생 직접 취소는 최대 2회까지 가능합니다.</div>
-                <div>2회를 초과하면 학원에 문의해 주세요.</div>
+                {privateCancelPolicyLines.map((line) => (
+                  <div key={line}>{line}</div>
+                ))}
+                <div>{privateCancelAllowance.limit}회를 초과하면 학원에 문의해 주세요.</div>
               </div>
 
               {privateAccessError ? <p style={{ color: '#f4a7a7' }}>{privateAccessError}</p> : null}

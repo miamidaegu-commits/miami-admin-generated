@@ -28,6 +28,13 @@ import {
 } from '../dashboardViewUtils.js'
 import { setStudentPrivateSlotBookingPilotEnabled } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+import {
+  computeStudentPrivateCancelAllowance,
+  formatAdminStudentCancelAllowanceSummary,
+  STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT,
+  STUDENT_PRIVATE_CANCEL_LIMIT_MAX,
+  validateStudentCancelLimitInput,
+} from '../../booking/studentPrivateCancelAllowance.js'
 
 function cleanText(value, fallback = '-') {
   const text = String(value ?? '').trim()
@@ -337,6 +344,7 @@ export default function StudentsSection({
   openStudentPackageReRegisterModal,
   formatStudentFirstRegisteredForTable,
   formatStudentPackageCellSummary,
+  studentPrivateBookingStats = [],
 }) {
   const [studentAccountLinkModalStudent, setStudentAccountLinkModalStudent] = useState(null)
   const [studentAccountEmail, setStudentAccountEmail] = useState('')
@@ -354,6 +362,23 @@ export default function StudentsSection({
   const [studentPrivateAccessSummaryByStudentId, setStudentPrivateAccessSummaryByStudentId] =
     useState(new Map())
   const [busyPrivateSlotPilotStudentId, setBusyPrivateSlotPilotStudentId] = useState('')
+  const [cancelAllowanceModalStudent, setCancelAllowanceModalStudent] = useState(null)
+  const [cancelAllowanceDraftLimit, setCancelAllowanceDraftLimit] = useState('')
+  const [cancelAllowanceBusy, setCancelAllowanceBusy] = useState(false)
+  const [cancelAllowanceError, setCancelAllowanceError] = useState('')
+  const [cancelAllowanceSuccess, setCancelAllowanceSuccess] = useState('')
+
+  const studentCancelAllowanceByStudentId = useMemo(() => {
+    const map = new Map()
+    ;(Array.isArray(studentPrivateBookingStats) ? studentPrivateBookingStats : []).forEach((row) => {
+      const scopedAcademyId = String(currentAcademyId || '').trim()
+      if (String(row?.academyId || '').trim() !== scopedAcademyId) return
+      const studentId = String(row?.studentId || '').trim()
+      if (!studentId) return
+      map.set(studentId, computeStudentPrivateCancelAllowance(row))
+    })
+    return map
+  }, [studentPrivateBookingStats, currentAcademyId])
 
   useEffect(() => {
     if (!isAdmin || !currentAcademyId) {
@@ -689,6 +714,75 @@ export default function StudentsSection({
       alert(`1:1 예약 테스트 권한 변경 실패: ${error.message}`)
     } finally {
       setBusyPrivateSlotPilotStudentId('')
+    }
+  }
+
+  function resolveStudentCancelAllowance(student) {
+    const studentId = String(student?.id || '').trim()
+    if (!studentId) {
+      return computeStudentPrivateCancelAllowance({})
+    }
+    return (
+      studentCancelAllowanceByStudentId.get(studentId) ||
+      computeStudentPrivateCancelAllowance({})
+    )
+  }
+
+  function openCancelAllowanceModal(student) {
+    const allowance = resolveStudentCancelAllowance(student)
+    setCancelAllowanceModalStudent(student)
+    setCancelAllowanceDraftLimit(String(allowance.limit))
+    setCancelAllowanceError('')
+    setCancelAllowanceSuccess('')
+  }
+
+  function closeCancelAllowanceModal() {
+    if (cancelAllowanceBusy) return
+    setCancelAllowanceModalStudent(null)
+    setCancelAllowanceDraftLimit('')
+    setCancelAllowanceError('')
+    setCancelAllowanceSuccess('')
+  }
+
+  async function submitCancelAllowanceUpdate() {
+    if (!cancelAllowanceModalStudent?.id || !currentAcademyId || cancelAllowanceBusy) return
+    const allowance = resolveStudentCancelAllowance(cancelAllowanceModalStudent)
+    const validation = validateStudentCancelLimitInput({
+      limit: cancelAllowanceDraftLimit,
+      used: allowance.used,
+      max: STUDENT_PRIVATE_CANCEL_LIMIT_MAX,
+    })
+    if (!validation.ok) {
+      setCancelAllowanceError(validation.message)
+      setCancelAllowanceSuccess('')
+      return
+    }
+
+    setCancelAllowanceBusy(true)
+    setCancelAllowanceError('')
+    setCancelAllowanceSuccess('')
+    try {
+      const updateStudentPrivateCancelAllowance = httpsCallable(
+        firebaseFunctions,
+        'updateStudentPrivateCancelAllowance'
+      )
+      const result = await updateStudentPrivateCancelAllowance({
+        academyId: currentAcademyId,
+        studentId: cancelAllowanceModalStudent.id,
+        studentCancelLimit: validation.limit,
+      })
+      const data = result?.data || {}
+      const updatedAllowance = computeStudentPrivateCancelAllowance({
+        studentCancelCount: data.studentCancelCount,
+        studentCancelLimit: data.studentCancelLimit,
+      })
+      setCancelAllowanceDraftLimit(String(updatedAllowance.limit))
+      setCancelAllowanceSuccess('취소 가능 한도를 저장했습니다.')
+    } catch (error) {
+      console.error('취소 가능 한도 저장 실패:', error)
+      setCancelAllowanceError(error?.message || '취소 가능 한도 저장에 실패했습니다.')
+    } finally {
+      setCancelAllowanceBusy(false)
     }
   }
 
@@ -1308,6 +1402,33 @@ export default function StudentsSection({
                       : privateSlotBookingPilotEnabled
                         ? '1:1 예약 테스트 해제'
                         : '1:1 예약 테스트 허용'}
+                  </button>
+                ) : null}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => openCancelAllowanceModal(student)}
+                    disabled={
+                      rowBusy ||
+                      busyStudentId === '__add__' ||
+                      cancelAllowanceBusy
+                    }
+                    data-testid="student-cancel-allowance-open-button"
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #4a5568',
+                      background: '#1f2937',
+                      color: 'white',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__' || cancelAllowanceBusy
+                          ? 'not-allowed'
+                          : 'pointer',
+                      fontSize: 12,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    취소 가능 횟수
                   </button>
                 ) : null}
                 {isAdmin ? (
@@ -2338,6 +2459,152 @@ export default function StudentsSection({
               }}
             >
               {studentAccountLinkBusy ? '초대 링크 만드는 중...' : '초대 링크 만들기'}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
+    {isAdmin && cancelAllowanceModalStudent ? (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="student-cancel-allowance-modal-title"
+        data-testid="student-cancel-allowance-modal"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 1125,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          background: 'rgba(0, 0, 0, 0.55)',
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closeCancelAllowanceModal()
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 420,
+            border: '1px solid #2e3240',
+            borderRadius: 12,
+            background: '#151922',
+            color: 'white',
+            padding: 20,
+            boxSizing: 'border-box',
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <h2
+            id="student-cancel-allowance-modal-title"
+            style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}
+          >
+            취소 가능 횟수
+          </h2>
+          <p style={{ margin: '10px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+            학생: {cleanText(cancelAllowanceModalStudent?.name)}
+          </p>
+          {(() => {
+            const allowance = resolveStudentCancelAllowance(cancelAllowanceModalStudent)
+            return (
+              <div
+                data-testid="student-cancel-allowance-summary"
+                style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7, opacity: 0.9 }}
+              >
+                <div>현재 취소 사용: {allowance.used}회</div>
+                <div>현재 취소 가능 한도: {allowance.limit}회</div>
+                <div>남은 취소 가능: {allowance.remaining}회</div>
+                <div style={{ marginTop: 8, opacity: 0.85 }}>
+                  {formatAdminStudentCancelAllowanceSummary(allowance)}
+                </div>
+              </div>
+            )
+          })()}
+          <label style={{ display: 'grid', gap: 6, marginTop: 16, fontSize: 13 }}>
+            <span>새 취소 가능 한도</span>
+            <input
+              type="number"
+              min={resolveStudentCancelAllowance(cancelAllowanceModalStudent).used}
+              max={STUDENT_PRIVATE_CANCEL_LIMIT_MAX}
+              step={1}
+              value={cancelAllowanceDraftLimit}
+              onChange={(event) => {
+                setCancelAllowanceDraftLimit(event.target.value)
+                setCancelAllowanceError('')
+                setCancelAllowanceSuccess('')
+              }}
+              data-testid="student-cancel-allowance-limit-input"
+              disabled={cancelAllowanceBusy}
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid #444',
+                background: '#101521',
+                color: 'white',
+              }}
+            />
+          </label>
+          <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 12 }}>
+            기본 한도는 {STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT}회이며, 최대{' '}
+            {STUDENT_PRIVATE_CANCEL_LIMIT_MAX}회까지 설정할 수 있습니다.
+          </p>
+          {cancelAllowanceError ? (
+            <p
+              data-testid="student-cancel-allowance-error"
+              style={{ margin: '12px 0 0 0', color: '#f4a7a7', fontSize: 13 }}
+            >
+              {cancelAllowanceError}
+            </p>
+          ) : null}
+          {cancelAllowanceSuccess ? (
+            <p
+              data-testid="student-cancel-allowance-success"
+              style={{ margin: '12px 0 0 0', color: '#9ee6b2', fontSize: 13 }}
+            >
+              {cancelAllowanceSuccess}
+            </p>
+          ) : null}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 8,
+              marginTop: 18,
+            }}
+          >
+            <button
+              type="button"
+              onClick={closeCancelAllowanceModal}
+              disabled={cancelAllowanceBusy}
+              data-testid="student-cancel-allowance-close-button"
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #555',
+                background: 'transparent',
+                color: 'white',
+                cursor: cancelAllowanceBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              닫기
+            </button>
+            <button
+              type="button"
+              onClick={submitCancelAllowanceUpdate}
+              disabled={cancelAllowanceBusy}
+              data-testid="student-cancel-allowance-save-button"
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #335544',
+                background: '#243528',
+                color: 'white',
+                cursor: cancelAllowanceBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {cancelAllowanceBusy ? '저장 중...' : '저장'}
             </button>
           </div>
         </div>
