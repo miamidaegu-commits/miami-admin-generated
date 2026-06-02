@@ -36,7 +36,7 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     await expect(packageDialog).toBeVisible();
 
     await packageDialog.getByLabel('수강권 유형').selectOption('private');
-    await packageDialog.getByRole('button', { name: '횟수권' }).click();
+    await packageDialog.getByRole('button', { name: '횟수 수강권' }).click();
     await packageDialog.getByLabel('제목').fill(packageTitle);
     await packageDialog.getByLabel(/총 횟수/).fill('8');
 

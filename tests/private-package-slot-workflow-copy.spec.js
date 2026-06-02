@@ -1,0 +1,189 @@
+import { test, expect } from '@playwright/test';
+import {
+  getStudentRow,
+  getStudentSearchInput,
+  loginAsAdmin,
+  openDashboardSection,
+} from './e2e-helpers.js';
+import { createTempStudent, cleanupTempStudentData } from './e2e-firebase-helpers.js';
+import {
+  createAdminSeededPrivateLesson,
+  createAdminSeededPrivateReservation,
+  cleanupAdminSeededPrivatePackageWorkflowCopyFixture,
+  createAdminSeededStudentPackage,
+} from './e2e-admin-helpers.js';
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
+
+const ACADEMY_ID = 'academy_e2e_default';
+const TEACHER = 'don1';
+
+function futureYmd(daysFromNow) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysFromNow);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function openPackageAddDialog(page, studentName) {
+  await openDashboardSection(page, '학생 관리');
+  const studentSearchInput = getStudentSearchInput(page);
+  await studentSearchInput.fill(studentName);
+
+  const studentRow = getStudentRow(page, studentName);
+  await expect(studentRow).toBeVisible();
+  await studentRow.getByRole('button', { name: '수강권 추가', exact: true }).click();
+
+  const dialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('수강권 유형').selectOption('private');
+  return dialog;
+}
+
+test('private package add modal explains package counts and fixed assignment workflow', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
+
+  const unique = Date.now();
+  const studentName = `E2E 수강권설명 ${unique}`;
+  let tempStudent = null;
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    tempStudent = await createTempStudent(page, {
+      studentName,
+      teacherName: TEACHER,
+      note: 'E2E private package workflow copy test',
+    });
+
+    const dialog = await openPackageAddDialog(page, studentName);
+
+    await expect(dialog.getByRole('button', { name: '정기 수강권', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '횟수 수강권', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '정기등록', exact: true })).toHaveCount(0);
+    await expect(dialog).toContainText('수강권은 수업을 들을 수 있는 횟수만 등록합니다');
+    await expect(dialog).toContainText('고정 수업 일정은 1:1 예약 시간 관리 > 고정 1:1 수업 배정');
+    await expect(dialog).toContainText('주당 횟수와 등록 주수로 총 횟수를 자동 계산합니다.');
+
+    await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
+    await expect(dialog).toContainText('총 횟수를 직접 입력합니다.');
+  } finally {
+    if (tempStudent) await cleanupTempStudentData(page, tempStudent);
+  }
+});
+
+test('duplicate private package warning shows actionable capacity details and reuse actions', async ({
+  page,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(120000);
+
+  const unique = Date.now();
+  const studentName = `E2E 수강권중복 ${unique}`;
+  let tempStudent = null;
+  const cleanupFixture = { academyId: ACADEMY_ID, lessonIds: [], reservationIds: [] };
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    tempStudent = await createTempStudent(page, {
+      studentName,
+      teacherName: TEACHER,
+      note: 'E2E private package duplicate copy test',
+    });
+
+    const packageSeed = await createAdminSeededStudentPackage({
+      academyId: ACADEMY_ID,
+      studentId: tempStudent.studentId,
+      studentName,
+      title: `E2E 현재 수강권 ${unique}`,
+      packageType: 'private',
+      teacher: TEACHER,
+      teacherName: TEACHER,
+      totalCount: 4,
+      remainingCount: 4,
+      usedCount: 0,
+      registrationStartDate: '2026-05-29',
+      registrationWeeks: 4,
+      weeklyFrequency: 1,
+      expiresAt: '2099-01-01',
+    });
+
+    const seededRows = await Promise.all([
+      createAdminSeededPrivateLesson({
+        academyId: ACADEMY_ID,
+        studentId: tempStudent.studentId,
+        studentName,
+        packageId: packageSeed.packageId,
+        teacher: TEACHER,
+        teacherName: TEACHER,
+        date: futureYmd(10),
+        time: '10:00',
+        subject: `E2E 고정1 ${unique}`,
+      }),
+      createAdminSeededPrivateLesson({
+        academyId: ACADEMY_ID,
+        studentId: tempStudent.studentId,
+        studentName,
+        packageId: packageSeed.packageId,
+        teacher: TEACHER,
+        teacherName: TEACHER,
+        date: futureYmd(17),
+        time: '10:00',
+        subject: `E2E 고정2 ${unique}`,
+      }),
+      createAdminSeededPrivateLesson({
+        academyId: ACADEMY_ID,
+        studentId: tempStudent.studentId,
+        studentName,
+        packageId: packageSeed.packageId,
+        teacher: TEACHER,
+        teacherName: TEACHER,
+        date: futureYmd(24),
+        time: '10:00',
+        subject: `E2E 고정3 ${unique}`,
+      }),
+      createAdminSeededPrivateReservation({
+        academyId: ACADEMY_ID,
+        studentId: tempStudent.studentId,
+        studentName,
+        packageId: packageSeed.packageId,
+        teacher: TEACHER,
+        teacherName: TEACHER,
+        date: futureYmd(12),
+        time: '11:00',
+        status: 'active',
+      }),
+    ]);
+    cleanupFixture.lessonIds = seededRows
+      .filter((row) => row.lessonId)
+      .map((row) => row.lessonId);
+    cleanupFixture.reservationIds = seededRows
+      .filter((row) => row.reservationId)
+      .map((row) => row.reservationId);
+
+    const dialog = await openPackageAddDialog(page, studentName);
+    const guidance = dialog.getByTestId('student-package-duplicate-guidance');
+    await expect(guidance).toBeVisible();
+    await expect(guidance).toContainText('이미 사용 중인 개인 수강권이 있습니다.');
+    await expect(guidance).toContainText('기존 수강권의 총 횟수/기간을 늘리거나');
+    await expect(guidance).toContainText(`E2E 현재 수강권 ${unique}`);
+    await expect(guidance).toContainText('총 4회 · 사용 0회 · 잔여 4회');
+    await expect(guidance).toContainText('고정 예정 3회 · 예약 1회 · 새 배정 가능 0회');
+
+    await dialog.getByTestId('student-package-edit-existing-button').click();
+    await expect(page.getByRole('dialog', { name: '수강권 수정' })).toBeVisible();
+    await page.getByRole('button', { name: '취소', exact: true }).click();
+
+    const reopened = await openPackageAddDialog(page, studentName);
+    await reopened.getByTestId('student-package-go-fixed-assignment-button').click();
+    await expect(page.getByRole('heading', { name: '고정 1:1 수업 배정' })).toBeVisible();
+  } finally {
+    await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
+    if (tempStudent) await cleanupTempStudentData(page, tempStudent);
+  }
+});

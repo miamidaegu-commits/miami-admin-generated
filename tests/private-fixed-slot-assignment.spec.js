@@ -457,7 +457,11 @@ test('fixed private slot assignment enforces private package capacity', async ({
     const section = await fillAssignmentForm(page, fixture);
     await section.getByTestId('private-fixed-assignment-preview-button').click();
     await expect(section.getByTestId('private-fixed-assignment-preview')).toContainText(
-      '수강권 잔여/예약 가능 횟수가 부족합니다',
+      '수강권 새 배정 가능 횟수가 부족합니다',
+      { timeout: 15000 }
+    );
+    await expect(section.getByTestId('private-fixed-assignment-preview')).toContainText(
+      '필요 4회 · 새 배정 가능 2회',
       { timeout: 15000 }
     );
     await section.getByTestId('private-fixed-assignment-submit-button').click();

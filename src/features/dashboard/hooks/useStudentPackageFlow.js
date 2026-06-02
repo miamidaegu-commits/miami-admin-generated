@@ -40,6 +40,7 @@ import {
 } from '../../group-booking/groupCourseTypes.js'
 import { syncStudentGroupCourseTypeAccessSummary } from '../../group-booking/studentGroupAccessSummaryClient.js'
 import { addStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
+import { computePrivateTeacherPackageUsage } from '../privatePackageHelpers.js'
 
 const DEFAULT_STUDENT_PACKAGE_FORM = {
   packageType: 'private',
@@ -93,6 +94,7 @@ export default function useStudentPackageFlow({
   groupClasses,
   studentPackages,
   lessons,
+  privateLessonReservations = [],
   studentSummaryGroupLessons,
   buildGroupPackageCoverageLessons,
   addCreditTransaction,
@@ -228,12 +230,35 @@ export default function useStudentPackageFlow({
     })
     const studentId = String(student.id).trim()
 
-    return studentPackages.filter((pkg) => {
-      if (String(pkg.studentId || '').trim() !== studentId) return false
-      if (!isStudentPackageRowActive(pkg)) return false
-      return studentPackageAttentionScope(pkg) === scopeKey
-    })
+    return studentPackages
+      .filter((pkg) => {
+        if (String(pkg.studentId || '').trim() !== studentId) return false
+        if (!isStudentPackageRowActive(pkg)) return false
+        return studentPackageAttentionScope(pkg) === scopeKey
+      })
+      .map((pkg) => {
+        if (packageType !== 'private') return pkg
+        const balance = computePrivateTeacherPackageUsage({
+          privatePackage: pkg,
+          privateLessons: lessons,
+          privateReservations: privateLessonReservations,
+          academyId: currentAcademyId,
+          studentId,
+          teacher: pkg.teacher || pkg.teacherName,
+          teacherKey: pkg.teacherKey,
+          teacherUid: pkg.teacherUid,
+          teacherUID: pkg.teacherUID,
+          teacherId: pkg.teacherId,
+        })
+        return {
+          ...pkg,
+          privateAssignmentBalance: balance,
+        }
+      })
   }, [
+    currentAcademyId,
+    lessons,
+    privateLessonReservations,
     studentPackageModalStudent,
     studentPackageForm.packageType,
     studentPackageForm.groupClassId,
@@ -614,8 +639,17 @@ export default function useStudentPackageFlow({
       return studentPackageAttentionScope(pkg) === scopeKey
     })
     if (activeSameScope.length > 0) {
+      const confirmMessage =
+        result.packageType === 'private'
+          ? [
+              '이미 사용 중인 개인 수강권이 있습니다.',
+              '새 고정수업을 더 배정하려면 기존 수강권의 총 횟수/기간을 늘리거나, 기존 예약/수업을 취소하거나, 새 기간의 수강권을 등록하세요.',
+              '',
+              '그래도 새 수강권을 발급할까요?',
+            ].join('\n')
+          : '같은 범위의 사용 중 수강권이 이미 있습니다. 그래도 새 수강권을 발급할까요?'
       const ok = window.confirm(
-        '같은 범위의 사용 중 수강권이 이미 있습니다. 그래도 새 수강권을 발급할까요?'
+        confirmMessage
       )
       if (!ok) return
     }
