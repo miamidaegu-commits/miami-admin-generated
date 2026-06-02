@@ -2890,6 +2890,7 @@ export default function Dashboard() {
     groupClasses,
     studentPackages,
     lessons,
+    privateLessonReservations,
     studentSummaryGroupLessons,
     buildGroupPackageCoverageLessons,
     addCreditTransaction,
@@ -2945,6 +2946,17 @@ export default function Dashboard() {
     addCreditTransaction,
     studentDocFieldToYmdString,
   })
+
+  function openExistingStudentPackageFromAddModal(pkg) {
+    if (!pkg?.id) return
+    closeStudentPackageModal()
+    openStudentPackageEditModal(pkg)
+  }
+
+  function goToFixedPrivateAssignmentFromPackageModal() {
+    closeStudentPackageModal()
+    setActiveSection('privateSlots')
+  }
 
   const {
     postGroupScheduleRebuildModalData,
@@ -4461,8 +4473,15 @@ export default function Dashboard() {
       })
       availableAssignmentCount = Math.max(0, Number(balance.makeupAvailableCount) || 0)
       if (dates.length > 0 && availableAssignmentCount < dates.length) {
-        blockingReasons.push('수강권 잔여/예약 가능 횟수가 부족합니다')
-        errors.packageId = '수강권 잔여/예약 가능 횟수가 부족합니다'
+        const fixedAllocated = Math.max(0, Number(balance.futureFixedAllocatedCount) || 0)
+        const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
+        const capacityMessage = [
+          '수강권 새 배정 가능 횟수가 부족합니다.',
+          `필요 ${dates.length}회 · 새 배정 가능 ${availableAssignmentCount}회`,
+          `현재 고정 예정 ${fixedAllocated}회 · 예약 ${activeReservations}회`,
+        ].join(' ')
+        blockingReasons.push(capacityMessage)
+        errors.packageId = capacityMessage
       }
     }
 
@@ -5144,6 +5163,8 @@ export default function Dashboard() {
     nextGroupLessonDateByGroupId,
     studentPackageGroupAutoSummary,
     studentPackageModalActiveSameScopeDuplicates,
+    openExistingStudentPackageFromAddModal,
+    goToFixedPrivateAssignmentFromPackageModal,
     isStudentPackageModalSubmitting,
     closeStudentPackageModal,
     submitStudentPackageModal,

@@ -663,7 +663,7 @@ export function buildAutoGroupStudentPackageTitle({
   return `${name} · ${d} 시작 · ${w}주`
 }
 
-/** 정기등록 개인 수강권: 등록 주수 × 주당 횟수 (둘 다 1 이상 정수일 때만 유효, 아니면 0) */
+/** 정기 수강권: 등록 주수 × 주당 횟수 (둘 다 1 이상 정수일 때만 유효, 아니면 0) */
 export function computePrivateRegularTotalCount({ registrationWeeks, weeklyFrequency }) {
   const w =
     typeof registrationWeeks === 'number'
@@ -678,7 +678,7 @@ export function computePrivateRegularTotalCount({ registrationWeeks, weeklyFrequ
   return w * f
 }
 
-/** 개인 정기등록 수강권 제목 미입력 시 저장·표시용 기본 제목 */
+/** 개인 정기 수강권 제목 미입력 시 저장·표시용 기본 제목 */
 export function buildAutoPrivateStudentPackageTitle({
   studentName,
   registrationStartDate,

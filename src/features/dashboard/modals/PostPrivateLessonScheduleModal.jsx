@@ -81,7 +81,7 @@ export default function PostPrivateLessonScheduleModal({
               background: 'rgba(40, 55, 110, 0.25)',
             }}
           >
-            정기등록 기준으로 첫 수업과 반복 시간을 확인해주세요.
+            정기 수강권 기준으로 첫 수업과 반복 시간을 확인해주세요.
             {weeklyFrequencyStr === '2' || weeklyFrequencyStr === '3' ? (
               <>
                 {' '}

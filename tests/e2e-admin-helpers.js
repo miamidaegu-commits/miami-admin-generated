@@ -138,6 +138,18 @@ export async function createAdminSeededStudentPackage(params = {}) {
     remainingCount,
     status: String(params.status || 'active').trim(),
     startDate: String(params.startDate || '').trim(),
+    ...(params.registrationStartDate !== undefined
+      ? { registrationStartDate: String(params.registrationStartDate || '').trim() }
+      : {}),
+    ...(params.registrationWeeks !== undefined
+      ? { registrationWeeks: Number(params.registrationWeeks) || null }
+      : {}),
+    ...(params.weeklyFrequency !== undefined
+      ? { weeklyFrequency: Number(params.weeklyFrequency) || null }
+      : {}),
+    ...(params.privatePackageMode !== undefined
+      ? { privatePackageMode: String(params.privatePackageMode || '').trim() }
+      : {}),
     expiresAt: String(params.expiresAt || '2099-01-01').trim(),
     createdAt: now,
     updatedAt: now,
@@ -300,6 +312,60 @@ export async function createAdminSeededPrivateLesson(params = {}) {
     teacher,
     packageId: String(params.packageId || '').trim(),
   };
+}
+
+export async function createAdminSeededPrivateReservation(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const reservationRef = params.reservationId
+    ? db.collection('privateLessonReservations').doc(String(params.reservationId))
+    : db.collection('privateLessonReservations').doc();
+  const now = timestampNow();
+  const studentId = String(params.studentId || `e2e_reservation_student_${Date.now()}`).trim();
+  const studentName = String(params.studentName || `E2E 예약학생 ${Date.now()}`).trim();
+  const teacher = String(params.teacher || 'teacher').trim();
+  const date = String(params.date || '').trim();
+  const time = String(params.time || '10:00').trim();
+  const startDate = parseLegacyLessonDateTime(date, time);
+
+  await reservationRef.set({
+    academyId,
+    slotId: String(params.slotId || '').trim(),
+    studentId,
+    studentName,
+    teacher,
+    teacherName: String(params.teacherName || teacher).trim(),
+    packageId: String(params.packageId || '').trim(),
+    deductionPackageId: String(params.deductionPackageId || params.packageId || '').trim(),
+    date,
+    time,
+    status: String(params.status || 'active').trim(),
+    ...(startDate ? { startAt: admin.firestore.Timestamp.fromDate(startDate) } : {}),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    reservationId: reservationRef.id,
+    studentId,
+    studentName,
+    teacher,
+    packageId: String(params.packageId || '').trim(),
+  };
+}
+
+export async function cleanupAdminSeededPrivatePackageWorkflowCopyFixture(fixture = {}) {
+  const academyId = String(fixture.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  await Promise.all(
+    (Array.isArray(fixture.lessonIds) ? fixture.lessonIds : []).map((id) =>
+      deleteKnownAcademyDoc(getDb(), 'lessons', id, academyId)
+    )
+  );
+  await Promise.all(
+    (Array.isArray(fixture.reservationIds) ? fixture.reservationIds : []).map((id) =>
+      deleteKnownAcademyDoc(getDb(), 'privateLessonReservations', id, academyId)
+    )
+  );
 }
 
 export async function createAdminSeededPrivateLessonEditFixture(params = {}) {

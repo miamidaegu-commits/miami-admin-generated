@@ -21,6 +21,8 @@ export default function StudentPackageModal({
   nextGroupLessonDateByGroupId,
   studentPackageGroupAutoSummary,
   studentPackageModalActiveSameScopeDuplicates,
+  openExistingStudentPackageFromAddModal,
+  goToFixedPrivateAssignmentFromPackageModal,
   isStudentPackageModalSubmitting,
   closeStudentPackageModal,
   submitStudentPackageModal,
@@ -69,6 +71,7 @@ export default function StudentPackageModal({
     : isPrivateRegular
       ? String(privateRegularComputed || 0)
       : String(studentPackageForm.totalCount || '')
+  const primaryDuplicatePackage = studentPackageModalActiveSameScopeDuplicates[0] || null
 
   return (
         <div
@@ -114,7 +117,9 @@ export default function StudentPackageModal({
               {studentPackageModalStudent.name || '-'} · {studentPackageModalStudent.teacher || '-'}
               <br />
               <span style={{ fontSize: 12, opacity: 0.78 }}>
-                저장 후 첫 수업 예약 또는 반 등록을 이어서 할 수 있습니다.
+                수강권은 수업을 들을 수 있는 횟수만 등록합니다.
+                <br />
+                고정 수업 일정은 1:1 예약 시간 관리 &gt; 고정 1:1 수업 배정에서 생성하세요.
               </span>
             </p>
 
@@ -174,6 +179,9 @@ export default function StudentPackageModal({
                   }}
                 >
                   <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.9 }}>수강권 모드</span>
+                  <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, opacity: 0.8 }}>
+                    개인 수강권 등록 후, 고정 수업은 기본 1:1 슬롯에 배정해 생성합니다.
+                  </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     <button
                       type="button"
@@ -201,7 +209,7 @@ export default function StudentPackageModal({
                         fontSize: 13,
                       }}
                     >
-                      정기등록
+                      정기 수강권
                     </button>
                     <button
                       type="button"
@@ -228,8 +236,13 @@ export default function StudentPackageModal({
                         fontSize: 13,
                       }}
                     >
-                      횟수권
+                      횟수 수강권
                     </button>
+                  </div>
+                  <div style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.78 }}>
+                    {isPrivateRegular
+                      ? '주당 횟수와 등록 주수로 총 횟수를 자동 계산합니다.'
+                      : '총 횟수를 직접 입력합니다.'}
                   </div>
 
                   {isPrivateRegular ? (
@@ -652,6 +665,7 @@ export default function StudentPackageModal({
 
             {studentPackageModalActiveSameScopeDuplicates.length > 0 ? (
               <div
+                data-testid="student-package-duplicate-guidance"
                 style={{
                   marginTop: 16,
                   padding: '10px 12px',
@@ -663,23 +677,104 @@ export default function StudentPackageModal({
                 }}
               >
                 <div style={{ fontWeight: 600, marginBottom: 8, opacity: 0.95 }}>
-                  같은 범위의 사용 중 수강권이 이미 있습니다.
+                  {isPrivatePackage
+                    ? '이미 사용 중인 개인 수강권이 있습니다.'
+                    : '같은 범위의 사용 중 수강권이 이미 있습니다.'}
                 </div>
+                {isPrivatePackage ? (
+                  <p style={{ margin: '0 0 10px 0', opacity: 0.9 }}>
+                    새 고정수업을 더 배정하려면 기존 수강권의 총 횟수/기간을 늘리거나,
+                    기존 예약/수업을 취소하거나, 새 기간의 수강권을 등록하세요.
+                  </p>
+                ) : null}
                 <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.9 }}>
-                  {studentPackageModalActiveSameScopeDuplicates.map((p) => (
-                    <li key={p.id} style={{ marginBottom: 6 }}>
-                      <span style={{ opacity: 0.85 }}>제목</span> {String(p.title || '').trim() || '-'}
-                      {' · '}
-                      <span style={{ opacity: 0.85 }}>남은</span>{' '}
-                      {p.remainingCount != null && p.remainingCount !== ''
-                        ? String(p.remainingCount)
-                        : '-'}
-                      {' · '}
-                      <span style={{ opacity: 0.85 }}>만료</span>{' '}
-                      {formatGroupStudentStartDate(p.expiresAt)}
-                    </li>
-                  ))}
+                  {studentPackageModalActiveSameScopeDuplicates.map((p) => {
+                    const balance = isPrivatePackage ? p.privateAssignmentBalance || null : null
+                    const fixedScheduled = Math.max(
+                      0,
+                      Number(balance?.futureFixedAllocatedCount) || 0
+                    )
+                    const activeReservations = Math.max(
+                      0,
+                      Number(balance?.activeFutureReservationCount) || 0
+                    )
+                    const availableForAssignment = Math.max(
+                      0,
+                      Number(balance?.makeupAvailableCount) || 0
+                    )
+                    const startDate = formatGroupStudentStartDate(p.registrationStartDate)
+                    const weeklyFrequency = Number(p.weeklyFrequency || 0)
+                    const registrationWeeks = Number(p.registrationWeeks || 0)
+                    const scheduleParts = []
+                    if (startDate !== '-') scheduleParts.push(`${startDate} 시작`)
+                    if (weeklyFrequency > 0) scheduleParts.push(`주${weeklyFrequency}회`)
+                    if (registrationWeeks > 0) scheduleParts.push(`${registrationWeeks}주`)
+                    return (
+                      <li key={p.id} style={{ marginBottom: 8 }}>
+                        <div>
+                          <span style={{ opacity: 0.85 }}>현재 수강권:</span>{' '}
+                          {String(p.title || '').trim() || '-'}
+                          {scheduleParts.length > 0 ? ` · ${scheduleParts.join(' · ')}` : ''}
+                        </div>
+                        {isPrivatePackage ? (
+                          <div>
+                            총 {Number(p.totalCount ?? 0) || 0}회 · 사용{' '}
+                            {Number(p.usedCount ?? 0) || 0}회 · 잔여{' '}
+                            {Number(p.remainingCount ?? 0) || 0}회 · 고정 예정 {fixedScheduled}회 ·
+                            예약 {activeReservations}회 · 새 배정 가능 {availableForAssignment}회
+                          </div>
+                        ) : (
+                          <div>
+                            총 {Number(p.totalCount ?? 0) || 0}회 · 사용{' '}
+                            {Number(p.usedCount ?? 0) || 0}회 · 잔여{' '}
+                            {Number(p.remainingCount ?? 0) || 0}회
+                          </div>
+                        )}
+                        {p.expiresAt ? (
+                          <div style={{ opacity: 0.82 }}>
+                            만료 {formatGroupStudentStartDate(p.expiresAt)}
+                          </div>
+                        ) : null}
+                      </li>
+                    )
+                  })}
                 </ul>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                  {primaryDuplicatePackage && openExistingStudentPackageFromAddModal ? (
+                    <button
+                      type="button"
+                      onClick={() => openExistingStudentPackageFromAddModal(primaryDuplicatePackage)}
+                      data-testid="student-package-edit-existing-button"
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #665533',
+                        background: '#2b281b',
+                        color: '#ffe8b8',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      기존 수강권 수정
+                    </button>
+                  ) : null}
+                  {isPrivatePackage && goToFixedPrivateAssignmentFromPackageModal ? (
+                    <button
+                      type="button"
+                      onClick={goToFixedPrivateAssignmentFromPackageModal}
+                      data-testid="student-package-go-fixed-assignment-button"
+                      style={{
+                        padding: '7px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #4a6fff55',
+                        background: '#1f2a44',
+                        color: 'white',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      고정 1:1 수업 배정으로 이동
+                    </button>
+                  ) : null}
+                </div>
               </div>
             ) : null}
 
