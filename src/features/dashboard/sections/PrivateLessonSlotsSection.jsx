@@ -50,6 +50,67 @@ function getPrivateSlotTeacherDisplay(row) {
   return `${displayName} · ${identity}`
 }
 
+function isYmd(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim())
+}
+
+function getTemplateTeacherKeys(template) {
+  const seen = new Set()
+  const out = []
+  ;[
+    template?.teacherUid,
+    template?.teacherUID,
+    template?.teacherId,
+    template?.teacherID,
+    template?.teacherKey,
+    template?.teacher,
+    template?.teacherName,
+  ].forEach((value) => {
+    const key = String(value || '').trim().toLowerCase()
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    out.push(key)
+  })
+  return out
+}
+
+function getTeacherOptionKeys(option) {
+  return [
+    option?.value,
+    option?.teacherUid,
+    option?.teacherKey,
+    option?.displayName,
+    option?.label,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+}
+
+function privateTemplateMatchesTeacherOption(template, option) {
+  if (!option) return true
+  const templateKeys = getTemplateTeacherKeys(template)
+  const optionKeys = getTeacherOptionKeys(option)
+  if (templateKeys.length === 0 || optionKeys.length === 0) return false
+  return optionKeys.some((key) => templateKeys.includes(key))
+}
+
+function getTemplateAssignmentDefaultRange(template) {
+  return {
+    startDate: isYmd(template?.effectiveStartDate) ? String(template.effectiveStartDate) : '',
+    endDate: isYmd(template?.effectiveEndDate) ? String(template.effectiveEndDate) : '',
+  }
+}
+
+function getTemplateAssignmentOptionLabel(template) {
+  const range =
+    template.effectiveStartDate && template.effectiveEndDate
+      ? `${template.effectiveStartDate} ~ ${template.effectiveEndDate}`
+      : '전체 기간'
+  return `${getPrivateSlotTeacherDisplay(template)} · ${weekdayLabel(template.weekday)} ${
+    template.time || '-'
+  } · ${Number(template.durationMinutes || 0) || '-'}분 · ${range}`
+}
+
 function normalizeEligibleStudentIds(values) {
   const out = []
   const seen = new Set()
@@ -93,6 +154,14 @@ export default function PrivateLessonSlotsSection({
   privateAvailabilityTemplatesLoading,
   busyPrivateAvailabilityTemplateId,
   privateStudents = [],
+  privateFixedSlotAssignmentForm,
+  setPrivateFixedSlotAssignmentForm,
+  privateFixedSlotAssignmentErrors,
+  privateFixedSlotAssignmentPreview,
+  privateFixedSlotAssignmentPackageOptions = [],
+  previewPrivateFixedSlotAssignment,
+  createPrivateFixedSlotAssignment,
+  busyPrivateFixedSlotAssignment,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -119,6 +188,27 @@ export default function PrivateLessonSlotsSection({
         `${a.name || a.id} ${a.teacher}`.localeCompare(`${b.name || b.id} ${b.teacher}`, 'ko')
       )
   }, [privateStudents])
+
+  const selectedAssignmentTeacherOption = useMemo(
+    () =>
+      teacherSelectOptions.find(
+        (option) => option.value === String(privateFixedSlotAssignmentForm?.teacher || '').trim()
+      ) || null,
+    [privateFixedSlotAssignmentForm?.teacher, teacherSelectOptions]
+  )
+
+  const privateFixedAssignmentTemplateOptions = useMemo(() => {
+    return [...privateAvailabilityTemplates]
+      .filter((template) => String(template.status || 'active') === 'active')
+      .filter((template) =>
+        privateTemplateMatchesTeacherOption(template, selectedAssignmentTeacherOption)
+      )
+      .sort((a, b) => {
+        const aKey = `${getPrivateSlotTeacherDisplay(a)} ${a.weekday} ${a.time || ''}`
+        const bKey = `${getPrivateSlotTeacherDisplay(b)} ${b.weekday} ${b.time || ''}`
+        return aKey.localeCompare(bKey, 'ko')
+      })
+  }, [privateAvailabilityTemplates, selectedAssignmentTeacherOption])
 
   const reservationsBySlotId = new Map()
   privateLessonReservations.forEach((reservation) => {
@@ -631,6 +721,287 @@ export default function PrivateLessonSlotsSection({
                 })}
               </div>
             )}
+          </section>
+
+          <section
+            data-testid="private-fixed-slot-assignment-section"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 8,
+              background: '#151922',
+              marginBottom: 20,
+            }}
+          >
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16 }}>고정 1:1 수업 배정</h3>
+              <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
+                주간 기본 슬롯은 선생님 가능 시간으로 유지하고, 선택한 기간의 실제 고정 1:1
+                수업만 생성합니다.
+              </p>
+            </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                createPrivateFixedSlotAssignment()
+              }}
+              style={{ display: 'grid', gap: 12 }}
+            >
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  선생님
+                  <select
+                    value={privateFixedSlotAssignmentForm.teacher}
+                    data-testid="private-fixed-assignment-teacher-select"
+                    onChange={(event) =>
+                      setPrivateFixedSlotAssignmentForm((prev) => ({
+                        ...prev,
+                        teacher: event.target.value,
+                        templateId: '',
+                        packageId: '',
+                        startDate: '',
+                        endDate: '',
+                      }))
+                    }
+                  >
+                    <option value="">선택</option>
+                    {teacherSelectOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  기본 슬롯 선택
+                  <select
+                    value={privateFixedSlotAssignmentForm.templateId}
+                    data-testid="private-fixed-assignment-template-select"
+                    onChange={(event) => {
+                      const templateId = event.target.value
+                      const template =
+                        privateAvailabilityTemplates.find((row) => row.id === templateId) || null
+                      const range = getTemplateAssignmentDefaultRange(template)
+                      setPrivateFixedSlotAssignmentForm((prev) => ({
+                        ...prev,
+                        templateId,
+                        packageId: '',
+                        startDate: range.startDate || prev.startDate,
+                        endDate: range.endDate || prev.endDate,
+                      }))
+                    }}
+                  >
+                    <option value="">선택</option>
+                    {privateFixedAssignmentTemplateOptions.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {getTemplateAssignmentOptionLabel(template)}
+                      </option>
+                    ))}
+                  </select>
+                  {privateFixedSlotAssignmentErrors.templateId ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateFixedSlotAssignmentErrors.templateId}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  학생
+                  <select
+                    value={privateFixedSlotAssignmentForm.studentId}
+                    data-testid="private-fixed-assignment-student-select"
+                    onChange={(event) =>
+                      setPrivateFixedSlotAssignmentForm((prev) => ({
+                        ...prev,
+                        studentId: event.target.value,
+                        packageId: '',
+                      }))
+                    }
+                  >
+                    <option value="">선택</option>
+                    {privateStudentOptions.map((student) => (
+                      <option key={student.id} value={student.id}>
+                        {student.name || student.id}
+                        {student.teacher ? ` · ${student.teacher}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {privateFixedSlotAssignmentErrors.studentId ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateFixedSlotAssignmentErrors.studentId}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  개인 수강권
+                  <select
+                    value={privateFixedSlotAssignmentForm.packageId}
+                    data-testid="private-fixed-assignment-package-select"
+                    onChange={(event) =>
+                      setPrivateFixedSlotAssignmentForm((prev) => ({
+                        ...prev,
+                        packageId: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">선택</option>
+                    {privateFixedSlotAssignmentPackageOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {privateFixedSlotAssignmentForm.studentId &&
+                  privateFixedSlotAssignmentForm.templateId &&
+                  privateFixedSlotAssignmentPackageOptions.length === 0 ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      조건에 맞는 개인 수강권이 없습니다.
+                    </span>
+                  ) : null}
+                  {privateFixedSlotAssignmentErrors.packageId ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateFixedSlotAssignmentErrors.packageId}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  수업명
+                  <input
+                    type="text"
+                    value={privateFixedSlotAssignmentForm.subject}
+                    data-testid="private-fixed-assignment-subject-input"
+                    onChange={(event) =>
+                      setPrivateFixedSlotAssignmentForm((prev) => ({
+                        ...prev,
+                        subject: event.target.value,
+                      }))
+                    }
+                    placeholder="1:1 수업"
+                  />
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  시작일
+                  <input
+                    type="date"
+                    value={privateFixedSlotAssignmentForm.startDate}
+                    data-testid="private-fixed-assignment-start-date-input"
+                    onChange={(event) =>
+                      setPrivateFixedSlotAssignmentForm((prev) => ({
+                        ...prev,
+                        startDate: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  종료일
+                  <input
+                    type="date"
+                    value={privateFixedSlotAssignmentForm.endDate}
+                    data-testid="private-fixed-assignment-end-date-input"
+                    onChange={(event) =>
+                      setPrivateFixedSlotAssignmentForm((prev) => ({
+                        ...prev,
+                        endDate: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+
+              {privateFixedSlotAssignmentErrors.dateRange ||
+              privateFixedSlotAssignmentErrors.academy ? (
+                <p style={{ margin: 0, color: '#f4a7a7', fontSize: 13 }}>
+                  {privateFixedSlotAssignmentErrors.dateRange ||
+                    privateFixedSlotAssignmentErrors.academy}
+                </p>
+              ) : null}
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={previewPrivateFixedSlotAssignment}
+                  disabled={busyPrivateFixedSlotAssignment}
+                  data-testid="private-fixed-assignment-preview-button"
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                    cursor: busyPrivateFixedSlotAssignment ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  미리보기
+                </button>
+                <button
+                  type="submit"
+                  disabled={busyPrivateFixedSlotAssignment}
+                  data-testid="private-fixed-assignment-submit-button"
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #456034',
+                    background: '#2d4d2d',
+                    color: 'white',
+                    cursor: busyPrivateFixedSlotAssignment ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {busyPrivateFixedSlotAssignment ? '생성 중...' : '배정 생성'}
+                </button>
+              </div>
+
+              {privateFixedSlotAssignmentPreview ? (
+                <div
+                  data-testid="private-fixed-assignment-preview"
+                  style={{
+                    display: 'grid',
+                    gap: 8,
+                    border: '1px solid #2e3240',
+                    borderRadius: 8,
+                    padding: 12,
+                    fontSize: 13,
+                  }}
+                >
+                  <strong>
+                    {privateFixedSlotAssignmentPreview.mode === 'created'
+                      ? `생성 완료 ${privateFixedSlotAssignmentPreview.requestedCount}회`
+                      : `생성 예정 ${privateFixedSlotAssignmentPreview.requestedCount}회`}
+                  </strong>
+                  {privateFixedSlotAssignmentPreview.dates.length > 0 ? (
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      {privateFixedSlotAssignmentPreview.dates.map((date) => (
+                        <span key={date} data-testid="private-fixed-assignment-preview-date">
+                          {date} {privateAvailabilityTemplates.find(
+                            (row) => row.id === privateFixedSlotAssignmentForm.templateId
+                          )?.time || ''}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {privateFixedSlotAssignmentPreview.blockingReasons.length > 0 ? (
+                    <div style={{ color: '#f4a7a7', display: 'grid', gap: 4 }}>
+                      {privateFixedSlotAssignmentPreview.blockingReasons.map((reason) => (
+                        <span key={reason}>{reason}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </form>
           </section>
 
           <form
