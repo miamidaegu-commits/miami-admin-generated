@@ -1015,6 +1015,8 @@ service cloud.firestore {
           "weekday",
           "time",
           "durationMinutes",
+          "effectiveStartDate",
+          "effectiveEndDate",
           "status",
           "createdAt",
           "updatedAt"
@@ -1028,6 +1030,15 @@ service cloud.firestore {
         (!("teacherName" in data.keys()) || data.teacherName is string) &&
         (!("teacherUid" in data.keys()) || data.teacherUid is string) &&
         (!("teacherEmail" in data.keys()) || data.teacherEmail is string) &&
+        (!("effectiveStartDate" in data.keys()) ||
+          (data.effectiveStartDate is string &&
+            data.effectiveStartDate.matches("^\\d{4}-\\d{2}-\\d{2}$"))) &&
+        (!("effectiveEndDate" in data.keys()) ||
+          (data.effectiveEndDate is string &&
+            data.effectiveEndDate.matches("^\\d{4}-\\d{2}-\\d{2}$"))) &&
+        (!("effectiveStartDate" in data.keys()) ||
+          !("effectiveEndDate" in data.keys()) ||
+          data.effectiveEndDate >= data.effectiveStartDate) &&
         data.weekday is int &&
         data.weekday >= 1 &&
         data.weekday <= 6 &&

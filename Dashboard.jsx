@@ -724,6 +724,8 @@ export default function Dashboard() {
     timesText: '',
     durationMinutes: '50',
     status: 'active',
+    effectiveStartDate: '',
+    effectiveEndDate: '',
   })
   const [privateAvailabilityTemplateErrors, setPrivateAvailabilityTemplateErrors] = useState({})
   const [privateAvailabilityBulkErrors, setPrivateAvailabilityBulkErrors] = useState({})
@@ -4113,6 +4115,8 @@ export default function Dashboard() {
       10
     )
     const status = String(privateAvailabilityBulkForm.status || 'active').trim()
+    const effectiveStartDate = String(privateAvailabilityBulkForm.effectiveStartDate || '').trim()
+    const effectiveEndDate = String(privateAvailabilityBulkForm.effectiveEndDate || '').trim()
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (weekdays.length === 0) errors.weekdays = '요일을 하나 이상 선택해주세요.'
     if (times.length === 0) errors.timesText = '시작 시간을 하나 이상 입력해주세요.'
@@ -4123,8 +4127,30 @@ export default function Dashboard() {
       errors.durationMinutes = '10~180분 사이로 입력해주세요.'
     }
     if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate)) {
+      errors.effectiveStartDate = '시작일을 선택해주세요.'
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate)) {
+      errors.effectiveEndDate = '종료일을 선택해주세요.'
+    }
+    if (
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate) &&
+      effectiveEndDate < effectiveStartDate
+    ) {
+      errors.effectiveEndDate = '종료일은 시작일 이후여야 합니다.'
+    }
 
-    const value = { teacher, teacherFields, weekdays, times, durationMinutes, status }
+    const value = {
+      teacher,
+      teacherFields,
+      weekdays,
+      times,
+      durationMinutes,
+      status,
+      effectiveStartDate,
+      effectiveEndDate,
+    }
     return {
       valid: Object.keys(errors).length === 0,
       errors,
@@ -4141,6 +4167,8 @@ export default function Dashboard() {
       times: value.times,
       durationMinutes: value.durationMinutes,
       status: value.status,
+      effectiveStartDate: value.effectiveStartDate,
+      effectiveEndDate: value.effectiveEndDate,
       existingTemplates: privateAvailabilityTemplates,
     })
   }
@@ -4158,6 +4186,8 @@ export default function Dashboard() {
         skippedOverlapCount: plan.skippedOverlapRows.length,
         errorCount: plan.errorRows.length,
         requestedCount: plan.requestedRows.length,
+        effectiveStartDate: result.value.effectiveStartDate,
+        effectiveEndDate: result.value.effectiveEndDate,
       })
     } catch (error) {
       console.error('기본 1:1 슬롯 미리보기 실패:', error)
@@ -4194,6 +4224,8 @@ export default function Dashboard() {
             time: row.time,
             durationMinutes: row.durationMinutes,
             status: row.status,
+            effectiveStartDate: row.effectiveStartDate,
+            effectiveEndDate: row.effectiveEndDate,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           })
@@ -4208,6 +4240,8 @@ export default function Dashboard() {
         skippedOverlapCount: plan.skippedOverlapRows.length,
         errorCount: plan.errorRows.length,
         requestedCount: plan.requestedRows.length,
+        effectiveStartDate: result.value.effectiveStartDate,
+        effectiveEndDate: result.value.effectiveEndDate,
       })
       setPrivateAvailabilityBulkForm((prev) => ({
         ...prev,
