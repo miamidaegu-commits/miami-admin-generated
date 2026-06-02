@@ -250,6 +250,46 @@ export default function PrivateLessonSlotsSection({
                     <option value="inactive">비활성</option>
                   </select>
                 </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  시작일
+                  <input
+                    type="date"
+                    value={privateAvailabilityBulkForm.effectiveStartDate}
+                    data-testid="private-weekly-bulk-start-date-input"
+                    onChange={(event) =>
+                      setPrivateAvailabilityBulkForm((prev) => ({
+                        ...prev,
+                        effectiveStartDate: event.target.value,
+                      }))
+                    }
+                  />
+                  {privateAvailabilityBulkErrors.effectiveStartDate ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateAvailabilityBulkErrors.effectiveStartDate}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  종료일
+                  <input
+                    type="date"
+                    value={privateAvailabilityBulkForm.effectiveEndDate}
+                    data-testid="private-weekly-bulk-end-date-input"
+                    onChange={(event) =>
+                      setPrivateAvailabilityBulkForm((prev) => ({
+                        ...prev,
+                        effectiveEndDate: event.target.value,
+                      }))
+                    }
+                  />
+                  {privateAvailabilityBulkErrors.effectiveEndDate ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateAvailabilityBulkErrors.effectiveEndDate}
+                    </span>
+                  ) : null}
+                </label>
               </div>
 
               <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
@@ -358,6 +398,10 @@ export default function PrivateLessonSlotsSection({
                   {privateAvailabilityBulkResult.skippedDuplicateCount}개 · 시간 겹침 제외{' '}
                   {privateAvailabilityBulkResult.skippedOverlapCount}개 · 오류{' '}
                   {privateAvailabilityBulkResult.errorCount}개
+                  {privateAvailabilityBulkResult.effectiveStartDate &&
+                  privateAvailabilityBulkResult.effectiveEndDate
+                    ? ` · 기간: ${privateAvailabilityBulkResult.effectiveStartDate} ~ ${privateAvailabilityBulkResult.effectiveEndDate}`
+                    : ''}
                 </div>
               ) : null}
             </form>
@@ -519,7 +563,7 @@ export default function PrivateLessonSlotsSection({
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr auto',
+                    gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr auto',
                     gap: 8,
                     alignItems: 'center',
                     opacity: 0.72,
@@ -532,6 +576,7 @@ export default function PrivateLessonSlotsSection({
                   <span>시간</span>
                   <span>분</span>
                   <span>상태</span>
+                  <span>기간</span>
                   <span>작업</span>
                 </div>
                 {privateAvailabilityTemplates.map((template) => {
@@ -543,7 +588,7 @@ export default function PrivateLessonSlotsSection({
                       data-testid="private-availability-template-row"
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr auto',
+                        gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr auto',
                         gap: 8,
                         alignItems: 'center',
                         border: '1px solid #2e3240',
@@ -556,6 +601,11 @@ export default function PrivateLessonSlotsSection({
                       <span>{template.time || '-'}</span>
                       <span>{Number(template.durationMinutes || 0) || '-'}분</span>
                       <span>{status === 'active' ? '사용' : '비활성'}</span>
+                      <span>
+                        {template.effectiveStartDate && template.effectiveEndDate
+                          ? `${template.effectiveStartDate} ~ ${template.effectiveEndDate}`
+                          : '전체 기간'}
+                      </span>
                       <button
                         type="button"
                         disabled={busy}

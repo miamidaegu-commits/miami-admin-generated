@@ -53,6 +53,34 @@ function rangesOverlap(aStart, aDuration, bStart, bDuration) {
   return aStart < bStart + bDuration && bStart < aStart + aDuration
 }
 
+function normalizeDate(value) {
+  const text = normalizeText(value)
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : ''
+}
+
+function getRangeStart(row) {
+  return normalizeDate(row?.effectiveStartDate) || '0000-01-01'
+}
+
+function getRangeEnd(row) {
+  return normalizeDate(row?.effectiveEndDate) || '9999-12-31'
+}
+
+export function privateWeeklySlotDateRangesOverlap(a, b) {
+  if (!a || !b) return false
+  return getRangeStart(a) <= getRangeEnd(b) && getRangeStart(b) <= getRangeEnd(a)
+}
+
+export function privateWeeklyTemplateAppliesToDate(template, date) {
+  const safeDate = normalizeDate(date)
+  if (!safeDate) return false
+  const effectiveStartDate = normalizeDate(template?.effectiveStartDate)
+  const effectiveEndDate = normalizeDate(template?.effectiveEndDate)
+  if (effectiveStartDate && safeDate < effectiveStartDate) return false
+  if (effectiveEndDate && safeDate > effectiveEndDate) return false
+  return true
+}
+
 export const PRIVATE_WEEKLY_SLOT_WEEKDAYS = [
   { value: '1', label: '월요일', shortLabel: '월' },
   { value: '2', label: '화요일', shortLabel: '화' },
@@ -102,6 +130,7 @@ export function privateWeeklySlotsOverlap(a, b) {
   }
   if (String(a.weekday) !== String(b.weekday)) return false
   if (!sameTeacherScope(a, b)) return false
+  if (!privateWeeklySlotDateRangesOverlap(a, b)) return false
   const aStart = timeToMinutes(a.time)
   const bStart = timeToMinutes(b.time)
   if (aStart === null || bStart === null) return false
@@ -118,7 +147,8 @@ export function isExactPrivateWeeklySlotDuplicate(a, b) {
     String(a.weekday) === String(b.weekday) &&
     normalizeText(a.time) === normalizeText(b.time) &&
     Number(a.durationMinutes) === Number(b.durationMinutes) &&
-    sameTeacherScope(a, b)
+    sameTeacherScope(a, b) &&
+    privateWeeklySlotDateRangesOverlap(a, b)
   )
 }
 
@@ -129,6 +159,8 @@ export function buildPrivateWeeklyBulkSlotPlan({
   times,
   durationMinutes,
   status = 'active',
+  effectiveStartDate = '',
+  effectiveEndDate = '',
   existingTemplates = [],
 }) {
   const requestedRows = []
@@ -150,6 +182,8 @@ export function buildPrivateWeeklyBulkSlotPlan({
         time,
         durationMinutes,
         status,
+        effectiveStartDate,
+        effectiveEndDate,
       })
     })
   })
