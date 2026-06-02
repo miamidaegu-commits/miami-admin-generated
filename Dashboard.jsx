@@ -130,7 +130,15 @@ import {
   normalizePrivateWeeklySlotWeekdays,
   parsePrivateWeeklySlotTimeList,
 } from './src/features/booking/privateWeeklySlotBulk.js'
-import { findActivePrivatePackageForTeacher } from './src/features/dashboard/privatePackageHelpers.js'
+import {
+  isTeacherBlockingScheduleRow,
+  privateSchedulesOverlap,
+} from './src/features/booking/privateScheduleOverlap.js'
+import {
+  computePrivateTeacherPackageUsage,
+  findActivePrivatePackageForTeacher,
+  isActivePrivatePackageForTeacher,
+} from './src/features/dashboard/privatePackageHelpers.js'
 import {
   canViewBillingFields,
   stripBillingFieldsForRestrictedViewer,
@@ -319,6 +327,67 @@ function buildPrivateSlotTeacherFields(optionOrValue) {
     teacherUid,
     teacherEmail,
   }
+}
+
+function buildPrivateTemplateTeacherFields(template) {
+  const teacherUid = String(
+    template?.teacherUid || template?.teacherUID || template?.teacherId || template?.teacherID || ''
+  ).trim()
+  const teacherKey = normalizeText(template?.teacherKey || template?.teacher || template?.teacherName || '')
+  const teacherName = String(template?.teacherName || template?.teacher || teacherKey || teacherUid).trim()
+  const teacherEmail = String(template?.teacherEmail || '').trim()
+  const teacher = String(template?.teacher || teacherKey || teacherUid).trim()
+  return {
+    teacher,
+    teacherName,
+    teacherKey: teacherKey || teacher,
+    teacherUid,
+    teacherUID: teacherUid,
+    teacherId: String(template?.teacherId || '').trim() || teacherUid,
+    teacherEmail,
+  }
+}
+
+function isYmd(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim())
+}
+
+function addDaysToStorageYmd(ymd, days) {
+  const base = parseYmdToLocalDate(ymd)
+  if (!base) return ''
+  base.setDate(base.getDate() + days)
+  return getStorageDateStringFromDate(base)
+}
+
+function generatePrivateFixedAssignmentDates({ template, startDate, endDate }) {
+  if (!template || !isYmd(startDate) || !isYmd(endDate) || endDate < startDate) return []
+  const templateStart = isYmd(template.effectiveStartDate) ? String(template.effectiveStartDate) : ''
+  const templateEnd = isYmd(template.effectiveEndDate) ? String(template.effectiveEndDate) : ''
+  const clippedStart = templateStart && templateStart > startDate ? templateStart : startDate
+  const clippedEnd = templateEnd && templateEnd < endDate ? templateEnd : endDate
+  if (clippedEnd < clippedStart) return []
+
+  const weekday = Number(template.weekday)
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) return []
+  let nextDate = clippedStart
+  const start = parseYmdToLocalDate(nextDate)
+  if (!start) return []
+  const offset = (weekday - start.getDay() + 7) % 7
+  nextDate = addDaysToStorageYmd(clippedStart, offset)
+
+  const dates = []
+  while (nextDate && nextDate <= clippedEnd && dates.length <= 370) {
+    dates.push(nextDate)
+    nextDate = addDaysToStorageYmd(nextDate, 7)
+  }
+  return dates
+}
+
+function formatPrivatePackageAssignmentOption(pkg, availableCount) {
+  const title = String(pkg?.title || '개인 수강권').trim()
+  const remaining = Number(pkg?.remainingCount ?? 0)
+  const safeAvailable = Math.max(0, Number(availableCount ?? 0) || 0)
+  return `${title} · 잔여 ${remaining}회 · 예약 가능 ${safeAvailable}회`
 }
 
 function getPrivateSlotTeacherDisplay(slot) {
@@ -731,6 +800,18 @@ export default function Dashboard() {
   const [privateAvailabilityBulkErrors, setPrivateAvailabilityBulkErrors] = useState({})
   const [privateAvailabilityBulkResult, setPrivateAvailabilityBulkResult] = useState(null)
   const [busyPrivateAvailabilityTemplateId, setBusyPrivateAvailabilityTemplateId] = useState('')
+  const [privateFixedSlotAssignmentForm, setPrivateFixedSlotAssignmentForm] = useState({
+    teacher: '',
+    templateId: '',
+    studentId: '',
+    packageId: '',
+    subject: '1:1 수업',
+    startDate: '',
+    endDate: '',
+  })
+  const [privateFixedSlotAssignmentErrors, setPrivateFixedSlotAssignmentErrors] = useState({})
+  const [privateFixedSlotAssignmentPreview, setPrivateFixedSlotAssignmentPreview] = useState(null)
+  const [busyPrivateFixedSlotAssignment, setBusyPrivateFixedSlotAssignment] = useState(false)
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
 
@@ -4257,6 +4338,270 @@ export default function Dashboard() {
     }
   }
 
+  function buildPrivateFixedSlotAssignmentPlan() {
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    const errors = {}
+    const templateId = String(privateFixedSlotAssignmentForm.templateId || '').trim()
+    const studentId = String(privateFixedSlotAssignmentForm.studentId || '').trim()
+    const packageId = String(privateFixedSlotAssignmentForm.packageId || '').trim()
+    const subject = String(privateFixedSlotAssignmentForm.subject || '').trim() || '1:1 수업'
+    const startDate = String(privateFixedSlotAssignmentForm.startDate || '').trim()
+    const endDate = String(privateFixedSlotAssignmentForm.endDate || '').trim()
+    const today = getTodayStorageDateString()
+
+    const template =
+      privateAvailabilityTemplates.find((row) => String(row.id || '').trim() === templateId) || null
+    if (!template) errors.templateId = '선택한 기본 슬롯이 없습니다'
+    if (!studentId) errors.studentId = '학생을 선택해 주세요'
+    if (!packageId) errors.packageId = '개인 수강권을 선택해 주세요'
+    if (!isYmd(startDate) || !isYmd(endDate) || endDate < startDate) {
+      errors.dateRange = '시작일/종료일을 확인해 주세요'
+    }
+
+    const student = privateStudents.find((row) => String(row.id || '').trim() === studentId) || null
+    if (studentId && !student) errors.studentId = '선택한 학생을 찾을 수 없습니다'
+
+    const selectedPackage =
+      studentPackages.find((row) => String(row.id || '').trim() === packageId) || null
+    if (packageId && !selectedPackage) errors.packageId = '선택한 개인 수강권을 찾을 수 없습니다'
+
+    let dates = []
+    if (template && isYmd(startDate) && isYmd(endDate) && endDate >= startDate) {
+      dates = generatePrivateFixedAssignmentDates({ template, startDate, endDate })
+      if (dates.length === 0) errors.dateRange = '기간 안에 생성할 수업이 없습니다'
+    }
+
+    const pastDates = dates.filter((date) => date < today)
+    if (pastDates.length > 0) {
+      errors.dateRange = '과거 날짜에는 고정 1:1 수업을 생성할 수 없습니다'
+    }
+
+    const blockingReasons = []
+    const conflictDetails = []
+    const duplicateDetails = []
+    let balance = null
+    let availableAssignmentCount = 0
+    const teacherFields = template ? buildPrivateTemplateTeacherFields(template) : null
+    const durationMinutes = Number(template?.durationMinutes || 0)
+    const safeDurationMinutes =
+      Number.isFinite(durationMinutes) && durationMinutes > 0 ? Math.floor(durationMinutes) : 60
+
+    if (template && student && selectedPackage && teacherFields) {
+      try {
+        assertSameAcademy(template, scopedAcademyId, '기본 슬롯')
+        assertSameAcademy(student, scopedAcademyId, '학생')
+        assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
+      } catch (error) {
+        errors.academy = error.message
+      }
+
+      const packageMatchesTeacher = isActivePrivatePackageForTeacher({
+        pkg: selectedPackage,
+        academyId: scopedAcademyId,
+        studentId,
+        teacher: teacherFields.teacher,
+        teacherKey: teacherFields.teacherKey,
+        teacherUid: teacherFields.teacherUid,
+      })
+      if (!packageMatchesTeacher) {
+        errors.packageId = '선택한 학생/선생님에 연결된 개인 수강권을 선택해 주세요'
+      }
+
+      const blockingRows = [
+        ...lessons.map((lesson) => ({ source: 'lessons', row: lesson })),
+        ...privateLessonReservations.map((reservation) => ({
+          source: 'privateLessonReservations',
+          row: reservation,
+        })),
+        ...privateLessonSlots.map((slot) => ({ source: 'privateLessonSlots', row: slot })),
+      ].filter(({ row }) => isTeacherBlockingScheduleRow(row))
+
+      dates.forEach((date) => {
+        const candidate = {
+          academyId: scopedAcademyId,
+          ...teacherFields,
+          date,
+          time: String(template.time || '').trim(),
+          durationMinutes: safeDurationMinutes,
+        }
+        const duplicate = lessons.find((lesson) => {
+          const lessonStudentId = String(lesson.studentId || lesson.studentID || '').trim()
+          return (
+            lessonStudentId === studentId &&
+            String(lesson.date || '').trim() === date &&
+            String(lesson.time || '').trim() === candidate.time &&
+            isTeacherBlockingScheduleRow(lesson) &&
+            privateSchedulesOverlap(candidate, lesson)
+          )
+        })
+        if (duplicate) duplicateDetails.push(`${date} ${candidate.time}`)
+
+        const conflict = blockingRows.find(({ row }) => privateSchedulesOverlap(candidate, row))
+        if (conflict) {
+          conflictDetails.push({
+            date,
+            time: candidate.time,
+            source: conflict.source,
+            id: conflict.row.id || '',
+          })
+        }
+      })
+
+      balance = computePrivateTeacherPackageUsage({
+        privatePackage: selectedPackage,
+        privateLessons: lessons,
+        privateReservations: privateLessonReservations,
+        academyId: scopedAcademyId,
+        studentId,
+        teacher: teacherFields.teacher,
+        teacherKey: teacherFields.teacherKey,
+        teacherUid: teacherFields.teacherUid,
+        teacherUID: teacherFields.teacherUID,
+        teacherId: teacherFields.teacherId,
+      })
+      availableAssignmentCount = Math.max(0, Number(balance.makeupAvailableCount) || 0)
+      if (dates.length > 0 && availableAssignmentCount < dates.length) {
+        blockingReasons.push('수강권 잔여/예약 가능 횟수가 부족합니다')
+        errors.packageId = '수강권 잔여/예약 가능 횟수가 부족합니다'
+      }
+    }
+
+    if (conflictDetails.length > 0) {
+      blockingReasons.push('이미 같은 시간에 수업이 있습니다')
+    }
+    if (duplicateDetails.length > 0) {
+      blockingReasons.push('이미 같은 학생에게 같은 날짜/시간 고정수업이 있습니다')
+    }
+
+    const uniqueBlockingReasons = Array.from(new Set(blockingReasons))
+    const valid = Object.keys(errors).length === 0 && uniqueBlockingReasons.length === 0
+    return {
+      valid,
+      errors,
+      template,
+      teacherFields,
+      student,
+      selectedPackage,
+      subject,
+      dates,
+      durationMinutes: safeDurationMinutes,
+      blockingReasons: uniqueBlockingReasons,
+      conflictDetails,
+      duplicateDetails: Array.from(new Set(duplicateDetails)),
+      balance,
+      availableAssignmentCount,
+    }
+  }
+
+  function previewPrivateFixedSlotAssignment() {
+    try {
+      const plan = buildPrivateFixedSlotAssignmentPlan()
+      setPrivateFixedSlotAssignmentErrors(plan.errors)
+      setPrivateFixedSlotAssignmentPreview({
+        mode: 'preview',
+        dates: plan.dates,
+        blockingReasons: plan.blockingReasons,
+        conflictDetails: plan.conflictDetails,
+        duplicateDetails: plan.duplicateDetails,
+        availableAssignmentCount: plan.availableAssignmentCount,
+        requestedCount: plan.dates.length,
+        canCreate: plan.valid,
+      })
+    } catch (error) {
+      console.error('고정 1:1 수업 배정 미리보기 실패:', error)
+      alert(`고정 1:1 수업 배정 미리보기 실패: ${error.message}`)
+    }
+  }
+
+  async function createPrivateFixedSlotAssignment() {
+    if (!isAdmin) {
+      alert('고정 1:1 수업 배정은 관리자만 생성할 수 있습니다.')
+      return
+    }
+    const plan = buildPrivateFixedSlotAssignmentPlan()
+    setPrivateFixedSlotAssignmentErrors(plan.errors)
+    setPrivateFixedSlotAssignmentPreview({
+      mode: 'preview',
+      dates: plan.dates,
+      blockingReasons: plan.blockingReasons,
+      conflictDetails: plan.conflictDetails,
+      duplicateDetails: plan.duplicateDetails,
+      availableAssignmentCount: plan.availableAssignmentCount,
+      requestedCount: plan.dates.length,
+      canCreate: plan.valid,
+    })
+    if (!plan.valid) return
+
+    try {
+      setBusyPrivateFixedSlotAssignment(true)
+      const batch = writeBatch(db)
+      const batchId = `fixed-private-assignment-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`
+      const studentName = String(plan.student?.name || plan.student?.studentName || '').trim() || '-'
+      const packageTitle = String(plan.selectedPackage?.title || '고정 1:1').trim()
+      plan.dates.forEach((date) => {
+        const lessonRef = doc(collection(db, 'lessons'))
+        const start = parseLegacyLessonToDate(date, plan.template.time)
+        batch.set(lessonRef, {
+          academyId: requireCurrentAcademyId(currentAcademyId),
+          teacher: plan.teacherFields.teacher,
+          teacherName: plan.teacherFields.teacherName,
+          teacherKey: plan.teacherFields.teacherKey,
+          teacherUid: plan.teacherFields.teacherUid,
+          teacherUID: plan.teacherFields.teacherUID,
+          teacherId: plan.teacherFields.teacherId,
+          student: studentName,
+          studentName,
+          studentId: plan.student.id,
+          studentID: plan.student.id,
+          date,
+          time: String(plan.template.time || '').trim(),
+          subject: plan.subject,
+          durationMinutes: plan.durationMinutes,
+          completed: false,
+          completedAt: null,
+          isDeductCancelled: false,
+          deductMemo: '',
+          packageId: plan.selectedPackage.id,
+          packageType: 'private',
+          packageTitle,
+          billingType: 'private',
+          sourceType: 'fixed-private-slot-assignment',
+          privateLessonAvailabilityTemplateId: plan.template.id,
+          fixedPrivateAssignmentBatchId: batchId,
+          seriesID: batchId,
+          createdBy: String(userProfile?.name || user?.email || user?.uid || '').trim(),
+          createdByUID: user?.uid || '',
+          createdByUid: user?.uid || '',
+          ...(start ? { startAt: Timestamp.fromDate(start) } : {}),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+      })
+      await batch.commit()
+      setPrivateFixedSlotAssignmentPreview({
+        mode: 'created',
+        dates: plan.dates,
+        blockingReasons: [],
+        conflictDetails: [],
+        duplicateDetails: [],
+        availableAssignmentCount: plan.availableAssignmentCount - plan.dates.length,
+        requestedCount: plan.dates.length,
+        canCreate: false,
+      })
+      setPrivateFixedSlotAssignmentForm((prev) => ({
+        ...prev,
+        packageId: '',
+      }))
+    } catch (error) {
+      console.error('고정 1:1 수업 배정 생성 실패:', error)
+      alert(`고정 1:1 수업 배정 생성 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateFixedSlotAssignment(false)
+    }
+  }
+
   async function createPrivateAvailabilityTemplate() {
     if (!isAdmin) {
       alert('주간 1:1 가능 시간은 관리자만 설정할 수 있습니다.')
@@ -4677,6 +5022,57 @@ export default function Dashboard() {
     requiresLessonApproval: userProfile?.requiresLessonApproval === true,
   }
 
+  const privateFixedSlotAssignmentPackageOptions = useMemo(() => {
+    const studentId = String(privateFixedSlotAssignmentForm.studentId || '').trim()
+    const templateId = String(privateFixedSlotAssignmentForm.templateId || '').trim()
+    if (!studentId || !templateId || !isValidOperationalAcademyId(currentAcademyId)) return []
+    const template =
+      privateAvailabilityTemplates.find((row) => String(row.id || '').trim() === templateId) || null
+    if (!template) return []
+    const teacherFields = buildPrivateTemplateTeacherFields(template)
+    return studentPackages
+      .filter((pkg) =>
+        isActivePrivatePackageForTeacher({
+          pkg,
+          academyId: currentAcademyId,
+          studentId,
+          teacher: teacherFields.teacher,
+          teacherKey: teacherFields.teacherKey,
+          teacherUid: teacherFields.teacherUid,
+        })
+      )
+      .map((pkg) => {
+        const balance = computePrivateTeacherPackageUsage({
+          privatePackage: pkg,
+          privateLessons: lessons,
+          privateReservations: privateLessonReservations,
+          academyId: currentAcademyId,
+          studentId,
+          teacher: teacherFields.teacher,
+          teacherKey: teacherFields.teacherKey,
+          teacherUid: teacherFields.teacherUid,
+          teacherUID: teacherFields.teacherUID,
+          teacherId: teacherFields.teacherId,
+        })
+        const availableCount = Math.max(0, Number(balance.makeupAvailableCount) || 0)
+        return {
+          id: String(pkg.id || '').trim(),
+          label: formatPrivatePackageAssignmentOption(pkg, availableCount),
+          availableCount,
+        }
+      })
+      .filter((option) => option.id)
+      .sort((a, b) => b.availableCount - a.availableCount || a.label.localeCompare(b.label, 'ko'))
+  }, [
+    currentAcademyId,
+    lessons,
+    privateAvailabilityTemplates,
+    privateFixedSlotAssignmentForm.studentId,
+    privateFixedSlotAssignmentForm.templateId,
+    privateLessonReservations,
+    studentPackages,
+  ])
+
   const privateLessonSlotsSectionProps = {
     canManagePrivateSlots: isAdmin,
     teacherSelectOptions,
@@ -4699,6 +5095,14 @@ export default function Dashboard() {
     privateAvailabilityTemplatesLoading,
     busyPrivateAvailabilityTemplateId,
     privateStudents,
+    privateFixedSlotAssignmentForm,
+    setPrivateFixedSlotAssignmentForm,
+    privateFixedSlotAssignmentErrors,
+    privateFixedSlotAssignmentPreview,
+    privateFixedSlotAssignmentPackageOptions,
+    previewPrivateFixedSlotAssignment,
+    createPrivateFixedSlotAssignment,
+    busyPrivateFixedSlotAssignment,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',
