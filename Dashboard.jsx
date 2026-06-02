@@ -702,7 +702,7 @@ export default function Dashboard() {
     teacher: '',
     date: '',
     time: '',
-    durationMinutes: '50',
+    durationMinutes: '60',
     eligibleStudentIds: [],
     repeatWeekly: false,
     repeatWeeks: '1',
@@ -722,7 +722,7 @@ export default function Dashboard() {
     teacher: '',
     weekdays: ['1'],
     timesText: '',
-    durationMinutes: '50',
+    durationMinutes: '60',
     status: 'active',
     effectiveStartDate: '',
     effectiveEndDate: '',
@@ -4059,7 +4059,7 @@ export default function Dashboard() {
         ...prev,
         date: '',
         time: '',
-        durationMinutes: prev.durationMinutes || '50',
+        durationMinutes: prev.durationMinutes || '60',
         eligibleStudentIds: [],
         repeatWeekly: false,
         repeatWeeks: prev.repeatWeeks || '1',
@@ -4246,7 +4246,7 @@ export default function Dashboard() {
       setPrivateAvailabilityBulkForm((prev) => ({
         ...prev,
         timesText: '',
-        durationMinutes: prev.durationMinutes || '50',
+        durationMinutes: prev.durationMinutes || '60',
         status: 'active',
       }))
     } catch (error) {
