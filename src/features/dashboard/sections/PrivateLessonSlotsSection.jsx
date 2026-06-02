@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { PRIVATE_WEEKLY_SLOT_WEEKDAYS } from '../../booking/privateWeeklySlotBulk.js'
 
 function slotStatusLabel(status) {
   if (status === 'reserved') return '예약 완료'
@@ -30,7 +31,7 @@ const WEEKDAY_OPTIONS = [
 ]
 
 function weekdayLabel(value) {
-  return WEEKDAY_OPTIONS.find((option) => option.value === String(value))?.label || '-'
+  return PRIVATE_WEEKLY_SLOT_WEEKDAYS.find((option) => option.value === String(value))?.label || '-'
 }
 
 function getShortIdentity(value) {
@@ -77,6 +78,12 @@ export default function PrivateLessonSlotsSection({
   setPrivateSlotForm,
   privateSlotFormErrors,
   privateSlotCreateResult,
+  privateAvailabilityBulkForm,
+  setPrivateAvailabilityBulkForm,
+  privateAvailabilityBulkErrors,
+  privateAvailabilityBulkResult,
+  previewPrivateAvailabilityBulkTemplates,
+  createPrivateAvailabilityBulkTemplates,
   privateAvailabilityTemplateForm,
   setPrivateAvailabilityTemplateForm,
   privateAvailabilityTemplateErrors,
@@ -142,6 +149,220 @@ export default function PrivateLessonSlotsSection({
 
       {canManagePrivateSlots ? (
         <>
+          <section
+            data-testid="private-weekly-slot-bulk-section"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 8,
+              background: '#151922',
+              marginBottom: 20,
+            }}
+          >
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16 }}>기본 1:1 슬롯 일괄 등록</h3>
+              <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
+                선생님별 반복 요일과 시작 시간을 한 번에 등록합니다. 학생 화면에는 기존처럼
+                이번 주와 다음 주 범위만 표시됩니다.
+              </p>
+            </div>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                createPrivateAvailabilityBulkTemplates()
+              }}
+              style={{
+                display: 'grid',
+                gap: 12,
+              }}
+            >
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  선생님
+                  <select
+                    value={privateAvailabilityBulkForm.teacher}
+                    data-testid="private-weekly-bulk-teacher-select"
+                    onChange={(event) =>
+                      setPrivateAvailabilityBulkForm((prev) => ({
+                        ...prev,
+                        teacher: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">선택</option>
+                    {teacherSelectOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {privateAvailabilityBulkErrors.teacher ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateAvailabilityBulkErrors.teacher}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  분
+                  <input
+                    type="number"
+                    min="10"
+                    max="180"
+                    step="5"
+                    value={privateAvailabilityBulkForm.durationMinutes}
+                    data-testid="private-weekly-bulk-duration-input"
+                    onChange={(event) =>
+                      setPrivateAvailabilityBulkForm((prev) => ({
+                        ...prev,
+                        durationMinutes: event.target.value,
+                      }))
+                    }
+                  />
+                  {privateAvailabilityBulkErrors.durationMinutes ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateAvailabilityBulkErrors.durationMinutes}
+                    </span>
+                  ) : null}
+                </label>
+
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  상태
+                  <select
+                    value={privateAvailabilityBulkForm.status}
+                    data-testid="private-weekly-bulk-status-select"
+                    onChange={(event) =>
+                      setPrivateAvailabilityBulkForm((prev) => ({
+                        ...prev,
+                        status: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="active">사용</option>
+                    <option value="inactive">비활성</option>
+                  </select>
+                </label>
+              </div>
+
+              <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                <span>요일</span>
+                <div
+                  data-testid="private-weekly-bulk-weekday-group"
+                  style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}
+                >
+                  {PRIVATE_WEEKLY_SLOT_WEEKDAYS.map((option) => (
+                    <label
+                      key={option.value}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+                    >
+                      <input
+                        type="checkbox"
+                        value={option.value}
+                        checked={(privateAvailabilityBulkForm.weekdays || []).includes(option.value)}
+                        data-testid={`private-weekly-bulk-weekday-${option.value}`}
+                        onChange={(event) =>
+                          setPrivateAvailabilityBulkForm((prev) => {
+                            const current = Array.isArray(prev.weekdays) ? prev.weekdays : []
+                            const next = event.target.checked
+                              ? [...current, option.value]
+                              : current.filter((value) => value !== option.value)
+                            return { ...prev, weekdays: next }
+                          })
+                        }
+                      />
+                      {option.shortLabel}
+                    </label>
+                  ))}
+                  <span style={{ opacity: 0.62 }}>일요일은 현재 예약 정책상 제외</span>
+                </div>
+                {privateAvailabilityBulkErrors.weekdays ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityBulkErrors.weekdays}
+                  </span>
+                ) : null}
+              </div>
+
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                시작 시간 목록
+                <textarea
+                  value={privateAvailabilityBulkForm.timesText}
+                  data-testid="private-weekly-bulk-times-input"
+                  placeholder="13:00, 14:10, 15:20, 16:30"
+                  rows={3}
+                  onChange={(event) =>
+                    setPrivateAvailabilityBulkForm((prev) => ({
+                      ...prev,
+                      timesText: event.target.value,
+                    }))
+                  }
+                  style={{ resize: 'vertical' }}
+                />
+                {privateAvailabilityBulkErrors.timesText ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityBulkErrors.timesText}
+                  </span>
+                ) : null}
+              </label>
+
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={previewPrivateAvailabilityBulkTemplates}
+                  disabled={busyPrivateAvailabilityTemplateId === '__bulk__'}
+                  data-testid="private-weekly-bulk-preview-button"
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                    cursor:
+                      busyPrivateAvailabilityTemplateId === '__bulk__' ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  미리보기
+                </button>
+                <button
+                  type="submit"
+                  disabled={busyPrivateAvailabilityTemplateId === '__bulk__'}
+                  data-testid="private-weekly-bulk-submit-button"
+                  style={{
+                    padding: '10px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #456034',
+                    background: '#2d4d2d',
+                    color: 'white',
+                    cursor:
+                      busyPrivateAvailabilityTemplateId === '__bulk__' ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {busyPrivateAvailabilityTemplateId === '__bulk__' ? '등록 중...' : '등록'}
+                </button>
+              </div>
+
+              {privateAvailabilityBulkResult ? (
+                <div
+                  data-testid="private-weekly-bulk-result"
+                  style={{ color: '#b8f7c0', fontSize: 13 }}
+                >
+                  {privateAvailabilityBulkResult.mode === 'preview' ? '미리보기 · ' : ''}
+                  생성 {privateAvailabilityBulkResult.createdCount}개 · 중복 제외{' '}
+                  {privateAvailabilityBulkResult.skippedDuplicateCount}개 · 시간 겹침 제외{' '}
+                  {privateAvailabilityBulkResult.skippedOverlapCount}개 · 오류{' '}
+                  {privateAvailabilityBulkResult.errorCount}개
+                </div>
+              ) : null}
+            </form>
+          </section>
+
           <section
             data-testid="private-availability-template-section"
             style={{
@@ -295,6 +516,24 @@ export default function PrivateLessonSlotsSection({
               <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 가능 시간이 없습니다.</p>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr auto',
+                    gap: 8,
+                    alignItems: 'center',
+                    opacity: 0.72,
+                    fontSize: 12,
+                    padding: '0 10px',
+                  }}
+                >
+                  <span>선생님</span>
+                  <span>요일</span>
+                  <span>시간</span>
+                  <span>분</span>
+                  <span>상태</span>
+                  <span>작업</span>
+                </div>
                 {privateAvailabilityTemplates.map((template) => {
                   const busy = busyPrivateAvailabilityTemplateId === template.id
                   const status = String(template.status || 'active') === 'active' ? 'active' : 'inactive'
@@ -304,7 +543,7 @@ export default function PrivateLessonSlotsSection({
                       data-testid="private-availability-template-row"
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '1fr 0.8fr 0.8fr 0.8fr auto',
+                        gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr auto',
                         gap: 8,
                         alignItems: 'center',
                         border: '1px solid #2e3240',
@@ -315,7 +554,8 @@ export default function PrivateLessonSlotsSection({
                       <span>{getPrivateSlotTeacherDisplay(template)}</span>
                       <span>{weekdayLabel(template.weekday)}</span>
                       <span>{template.time || '-'}</span>
-                      <span>{status === 'active' ? '사용' : '중지'}</span>
+                      <span>{Number(template.durationMinutes || 0) || '-'}분</span>
+                      <span>{status === 'active' ? '사용' : '비활성'}</span>
                       <button
                         type="button"
                         disabled={busy}
@@ -334,7 +574,7 @@ export default function PrivateLessonSlotsSection({
                           cursor: busy ? 'not-allowed' : 'pointer',
                         }}
                       >
-                        {busy ? '처리 중...' : status === 'active' ? '중지' : '사용'}
+                        {busy ? '처리 중...' : status === 'active' ? '비활성화' : '사용'}
                       </button>
                     </div>
                   )
