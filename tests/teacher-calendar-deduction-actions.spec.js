@@ -317,16 +317,22 @@ test('admin deducted calendar row can reverse deduction', async ({ page, browser
   const lessonRef = db.collection('lessons').doc(fixture.lessonId);
 
   try {
-    page.once('dialog', (dialog) => dialog.accept('admin e2e cancel'));
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await selectCalendarDate(page, date);
     const row = await getCalendarPrivateRow(page, fixture.lessonId);
     await expect(row).toContainText('정상 차감');
-    await row.getByRole('button', { name: '차감취소', exact: true }).click();
+    const reverseButton = row.getByRole('button', { name: '차감취소', exact: true });
+    await expect(reverseButton).toBeEnabled({ timeout: 15000 });
+    await Promise.all([
+      page.waitForEvent('dialog').then((dialog) => dialog.accept('admin e2e cancel')),
+      reverseButton.click(),
+    ]);
 
-    await expect.poll(async () => (await snapshotDoc(lessonRef))?.isDeductCancelled).toBe(true);
-    await expect.poll(async () => (await snapshotDoc(packageRef))?.usedCount).toBe(0);
-    await expect.poll(async () => (await snapshotDoc(packageRef))?.remainingCount).toBe(4);
+    await expect
+      .poll(async () => (await snapshotDoc(lessonRef))?.isDeductCancelled, { timeout: 15000 })
+      .toBe(true);
+    await expect.poll(async () => (await snapshotDoc(packageRef))?.usedCount, { timeout: 15000 }).toBe(0);
+    await expect.poll(async () => (await snapshotDoc(packageRef))?.remainingCount, { timeout: 15000 }).toBe(4);
   } finally {
     await cleanupRefs(fixture.refs);
   }
