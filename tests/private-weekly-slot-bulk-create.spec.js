@@ -15,6 +15,7 @@ import {
 import {
   buildPrivateWeeklyBulkSlotPlan,
   parsePrivateWeeklySlotTimeList,
+  privateWeeklyTemplateAppliesToDate,
   privateWeeklySlotsOverlap,
 } from '../src/features/booking/privateWeeklySlotBulk.js';
 
@@ -59,6 +60,12 @@ async function queryTemplatesForTeacher(db, teacherKey) {
   return snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
 }
 
+async function seedWeeklyTemplates(db, rows) {
+  await Promise.all(
+    rows.map((row) => db.collection('privateLessonAvailabilityTemplates').doc().set(row))
+  );
+}
+
 test('private weekly slot bulk helpers parse times and detect overlap', async () => {
   expect(parsePrivateWeeklySlotTimeList('13:00, 14:10\n15:20')).toEqual({
     times: ['13:00', '14:10', '15:20'],
@@ -75,13 +82,22 @@ test('private weekly slot bulk helpers parse times and detect overlap', async ()
     teacherKey: 'don1',
     teacherName: 'Don',
   };
-  const existing = { ...teacher, weekday: 1, time: '13:00', durationMinutes: 60 };
+  const existing = {
+    ...teacher,
+    weekday: 1,
+    time: '13:00',
+    durationMinutes: 60,
+    effectiveStartDate: '2026-06-01',
+    effectiveEndDate: '2026-08-31',
+  };
   expect(
     privateWeeklySlotsOverlap(existing, {
       ...teacher,
       weekday: 1,
       time: '13:30',
       durationMinutes: 50,
+      effectiveStartDate: '2026-07-01',
+      effectiveEndDate: '2026-07-31',
     })
   ).toBe(true);
   expect(
@@ -90,6 +106,18 @@ test('private weekly slot bulk helpers parse times and detect overlap', async ()
       weekday: 1,
       time: '14:00',
       durationMinutes: 50,
+      effectiveStartDate: '2026-07-01',
+      effectiveEndDate: '2026-07-31',
+    })
+  ).toBe(false);
+  expect(
+    privateWeeklySlotsOverlap(existing, {
+      ...teacher,
+      weekday: 1,
+      time: '13:30',
+      durationMinutes: 50,
+      effectiveStartDate: '2026-09-01',
+      effectiveEndDate: '2026-09-30',
     })
   ).toBe(false);
   expect(
@@ -101,8 +129,14 @@ test('private weekly slot bulk helpers parse times and detect overlap', async ()
       weekday: 1,
       time: '13:30',
       durationMinutes: 50,
+      effectiveStartDate: '2026-07-01',
+      effectiveEndDate: '2026-07-31',
     })
   ).toBe(false);
+  expect(privateWeeklyTemplateAppliesToDate(existing, '2026-06-01')).toBe(true);
+  expect(privateWeeklyTemplateAppliesToDate(existing, '2026-08-31')).toBe(true);
+  expect(privateWeeklyTemplateAppliesToDate(existing, '2026-09-01')).toBe(false);
+  expect(privateWeeklyTemplateAppliesToDate({ ...teacher, weekday: 1 }, '2026-12-01')).toBe(true);
 
   const plan = buildPrivateWeeklyBulkSlotPlan({
     academyId: DEFAULT_E2E_ACADEMY_ID,
@@ -110,14 +144,75 @@ test('private weekly slot bulk helpers parse times and detect overlap', async ()
     weekdays: ['1'],
     times: ['13:00', '13:30', '14:10'],
     durationMinutes: 50,
-    existingTemplates: [{ ...teacher, weekday: 1, time: '13:00', durationMinutes: 50 }],
+    effectiveStartDate: '2026-06-01',
+    effectiveEndDate: '2026-08-31',
+    existingTemplates: [
+      {
+        ...teacher,
+        weekday: 1,
+        time: '13:00',
+        durationMinutes: 50,
+        effectiveStartDate: '2026-06-01',
+        effectiveEndDate: '2026-08-31',
+      },
+    ],
   });
   expect(plan.createdRows.map((row) => row.time)).toEqual(['14:10']);
   expect(plan.skippedDuplicateRows.map((row) => row.time)).toEqual(['13:00']);
   expect(plan.skippedOverlapRows.map((row) => row.time)).toEqual(['13:30']);
+
+  const nonOverlappingRangePlan = buildPrivateWeeklyBulkSlotPlan({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    teacherFields: teacher,
+    weekdays: ['1'],
+    times: ['13:00'],
+    durationMinutes: 50,
+    effectiveStartDate: '2026-09-01',
+    effectiveEndDate: '2026-11-30',
+    existingTemplates: [
+      {
+        ...teacher,
+        weekday: 1,
+        time: '13:00',
+        durationMinutes: 50,
+        effectiveStartDate: '2026-06-01',
+        effectiveEndDate: '2026-08-31',
+      },
+      existing,
+    ],
+  });
+  expect(nonOverlappingRangePlan.createdRows.map((row) => row.time)).toEqual(['13:00']);
+  expect(nonOverlappingRangePlan.skippedDuplicateRows).toHaveLength(0);
+  expect(nonOverlappingRangePlan.skippedOverlapRows).toHaveLength(0);
+
+  const nonOverlappingRangeTimeOverlapPlan = buildPrivateWeeklyBulkSlotPlan({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    teacherFields: teacher,
+    weekdays: ['1'],
+    times: ['13:30'],
+    durationMinutes: 50,
+    effectiveStartDate: '2026-09-01',
+    effectiveEndDate: '2026-09-30',
+    existingTemplates: [existing],
+  });
+  expect(nonOverlappingRangeTimeOverlapPlan.createdRows.map((row) => row.time)).toEqual(['13:30']);
+  expect(nonOverlappingRangeTimeOverlapPlan.skippedOverlapRows).toHaveLength(0);
 });
 
-test('admin bulk creates weekly private base slots and skips duplicates and overlaps', async ({
+test('weekly template availability wiring preserves short window and honors effective range', async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  expect(source).toContain('function privateAvailabilityTemplateAppliesToDate');
+  expect(source).toMatch(
+    /buildTemplateSlots[\s\S]*privateAvailabilityTemplateAppliesToDate\(data, date\)/
+  );
+  expect(source).toMatch(
+    /reservePrivateLessonSlot[\s\S]*privateAvailabilityTemplateAppliesToDate\([\s\S]*template,[\s\S]*requestedDate/
+  );
+  expect(source).toContain('const weeks = [currentMonday, addSeoulDays(currentMonday, 7)]');
+  expect(source).toContain('const rangeEnd = addSeoulDays(currentMonday, 12)');
+});
+
+test('admin bulk previews weekly private base slots with ranges and skips duplicates and overlaps', async ({
   page,
 }, testInfo) => {
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 bulk weekly slot E2E를 실행합니다.');
@@ -158,28 +253,67 @@ test('admin bulk creates weekly private base slots and skips duplicates and over
       '13:00, 14:10, 15:20, 16:30'
     );
     await bulkSection.getByTestId('private-weekly-bulk-duration-input').fill('50');
-    await bulkSection.getByTestId('private-weekly-bulk-submit-button').click();
+    await bulkSection.getByTestId('private-weekly-bulk-start-date-input').fill('2026-06-01');
+    await bulkSection.getByTestId('private-weekly-bulk-end-date-input').fill('2026-08-31');
+    await bulkSection.getByTestId('private-weekly-bulk-preview-button').click();
     await expect(bulkSection.getByTestId('private-weekly-bulk-result')).toContainText(
       '생성 8개',
       { timeout: 15000 }
     );
+    await expect(bulkSection.getByTestId('private-weekly-bulk-result')).toContainText(
+      '기간: 2026-06-01 ~ 2026-08-31',
+      { timeout: 15000 }
+    );
 
+    await seedWeeklyTemplates(
+      db,
+      [1, 3].flatMap((weekday) =>
+        ['13:00', '14:10', '15:20', '16:30'].map((time) => ({
+          academyId: DEFAULT_E2E_ACADEMY_ID,
+          teacher: teacherKey,
+          teacherName,
+          teacherKey,
+          weekday,
+          time,
+          durationMinutes: 50,
+          status: 'active',
+          effectiveStartDate: '2026-06-01',
+          effectiveEndDate: '2026-08-31',
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        }))
+      )
+    );
     await expect
-      .poll(async () => (await queryTemplatesForTeacher(db, teacherKey)).length, {
-        timeout: 15000,
-      })
+      .poll(async () => (await queryTemplatesForTeacher(db, teacherKey)).length, { timeout: 15000 })
       .toBe(8);
+    const initialTemplates = await queryTemplatesForTeacher(db, teacherKey);
+    expect(
+      initialTemplates.every(
+        (template) =>
+          template.effectiveStartDate === '2026-06-01' &&
+          template.effectiveEndDate === '2026-08-31'
+      )
+    ).toBe(true);
 
     await expect(
       page
         .locator('[data-testid="private-availability-template-row"]')
         .filter({ hasText: teacherName })
     ).toHaveCount(8, { timeout: 15000 });
+    await expect(
+      page
+        .locator('[data-testid="private-availability-template-row"]')
+        .filter({ hasText: teacherName })
+        .first()
+    ).toContainText('2026-06-01 ~ 2026-08-31');
 
     await bulkSection.getByTestId('private-weekly-bulk-times-input').fill(
       '13:00, 14:10, 15:20, 16:30'
     );
-    await bulkSection.getByTestId('private-weekly-bulk-submit-button').click();
+    await bulkSection.getByTestId('private-weekly-bulk-start-date-input').fill('2026-08-01');
+    await bulkSection.getByTestId('private-weekly-bulk-end-date-input').fill('2026-10-31');
+    await bulkSection.getByTestId('private-weekly-bulk-preview-button').click();
     await expect(bulkSection.getByTestId('private-weekly-bulk-result')).toContainText(
       '생성 0개 · 중복 제외 8개',
       { timeout: 15000 }
@@ -188,9 +322,21 @@ test('admin bulk creates weekly private base slots and skips duplicates and over
 
     await bulkSection.getByTestId('private-weekly-bulk-weekday-3').uncheck();
     await bulkSection.getByTestId('private-weekly-bulk-times-input').fill('13:30');
-    await bulkSection.getByTestId('private-weekly-bulk-submit-button').click();
+    await bulkSection.getByTestId('private-weekly-bulk-start-date-input').fill('2026-07-01');
+    await bulkSection.getByTestId('private-weekly-bulk-end-date-input').fill('2026-07-31');
+    await bulkSection.getByTestId('private-weekly-bulk-preview-button').click();
     await expect(bulkSection.getByTestId('private-weekly-bulk-result')).toContainText(
       '생성 0개 · 중복 제외 0개 · 시간 겹침 제외 1개',
+      { timeout: 15000 }
+    );
+    expect(await queryTemplatesForTeacher(db, teacherKey)).toHaveLength(8);
+
+    await bulkSection.getByTestId('private-weekly-bulk-times-input').fill('13:00, 13:30');
+    await bulkSection.getByTestId('private-weekly-bulk-start-date-input').fill('2026-09-01');
+    await bulkSection.getByTestId('private-weekly-bulk-end-date-input').fill('2026-11-30');
+    await bulkSection.getByTestId('private-weekly-bulk-preview-button').click();
+    await expect(bulkSection.getByTestId('private-weekly-bulk-result')).toContainText(
+      '생성 1개 · 중복 제외 0개 · 시간 겹침 제외 1개',
       { timeout: 15000 }
     );
     expect(await queryTemplatesForTeacher(db, teacherKey)).toHaveLength(8);

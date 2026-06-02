@@ -1393,6 +1393,26 @@ function buildPrivateTemplateSlotId({templateId, date, time}) {
     `${safeDate}__${safeTime}`;
 }
 
+function privateAvailabilityTemplateAppliesToDate(template, date) {
+  const safeDate = normalizeId(date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) return false;
+  const effectiveStartDate = normalizeId(
+      template && template.effectiveStartDate,
+  );
+  const effectiveEndDate = normalizeId(
+      template && template.effectiveEndDate,
+  );
+  if (/^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate) &&
+      safeDate < effectiveStartDate) {
+    return false;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate) &&
+      safeDate > effectiveEndDate) {
+    return false;
+  }
+  return true;
+}
+
 function getPrivateSlotStartMillis(slot) {
   const startAtMillis = getTimestampMillis(slot && slot.startAt);
   if (startAtMillis !== null) return startAtMillis;
@@ -3392,6 +3412,7 @@ function buildTemplateSlots({
     if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) return;
     weeks.forEach((weekStartsOn) => {
       const date = addSeoulDays(weekStartsOn, weekday - 1);
+      if (!privateAvailabilityTemplateAppliesToDate(data, date)) return;
       const startsAt = getSeoulDateTimeMillis(date, time);
       if (startsAt === null || startsAt < nowMillis) return;
       const slot = {
@@ -4530,6 +4551,12 @@ exports.reservePrivateLessonSlot = onCall(
             }
             const weekday = getSeoulWeekday(requestedDate);
             if (weekday !== Number(template.weekday)) {
+              throw new HttpsError("failed-precondition", "slot-not-available");
+            }
+            if (!privateAvailabilityTemplateAppliesToDate(
+                template,
+                requestedDate,
+            )) {
               throw new HttpsError("failed-precondition", "slot-not-available");
             }
             if (normalizeId(template.time) !== requestedTime) {
