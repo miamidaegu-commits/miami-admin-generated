@@ -249,10 +249,17 @@ test('admin bulk previews weekly private base slots with ranges and skips duplic
       teacherName
     );
     await bulkSection.getByTestId('private-weekly-bulk-weekday-3').check();
+    await expect(bulkSection.getByTestId('private-weekly-bulk-duration-input')).toHaveValue('60');
+    await expect(
+      page
+        .getByTestId('private-availability-template-section')
+        .locator('input[type="number"]')
+        .first()
+    ).toHaveValue('60');
+    await expect(page.getByLabel('1:1 수업 진행 시간')).toHaveValue('60');
     await bulkSection.getByTestId('private-weekly-bulk-times-input').fill(
       '13:00, 14:10, 15:20, 16:30'
     );
-    await bulkSection.getByTestId('private-weekly-bulk-duration-input').fill('50');
     await bulkSection.getByTestId('private-weekly-bulk-start-date-input').fill('2026-06-01');
     await bulkSection.getByTestId('private-weekly-bulk-end-date-input').fill('2026-08-31');
     await bulkSection.getByTestId('private-weekly-bulk-preview-button').click();
@@ -275,7 +282,7 @@ test('admin bulk previews weekly private base slots with ranges and skips duplic
           teacherKey,
           weekday,
           time,
-          durationMinutes: 50,
+          durationMinutes: 60,
           status: 'active',
           effectiveStartDate: '2026-06-01',
           effectiveEndDate: '2026-08-31',
