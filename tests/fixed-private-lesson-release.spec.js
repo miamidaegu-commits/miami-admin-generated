@@ -521,8 +521,19 @@ test.describe('fixed private lesson release', () => {
     await expect(calendarRow).toContainText(fixture.originalStudentName);
     await expect(calendarRow).toContainText(fixture.time);
     await expect(calendarRow).not.toContainText('07:20');
+    await expect(calendarRow.getByTestId('calendar-fixed-private-action-button')).toHaveText(
+      '고정수업 처리'
+    );
+    await expect(calendarRow.getByRole('button', { name: '수정', exact: true })).toBeVisible();
+    await expect(calendarRow.getByTestId('calendar-package-count-edit-button')).toHaveCount(0);
+    await expect(calendarRow.getByRole('button', { name: '삭제', exact: true })).toHaveCount(0);
+    await calendarRow.getByTestId('calendar-fixed-private-action-button').click();
+    const actionModal = page.getByTestId('fixed-private-lesson-action-modal');
+    await expect(actionModal).toBeVisible();
+    await expect(actionModal).toContainText('학생이 못 오는 경우 사용합니다.');
+    await expect(actionModal).toContainText('선생님/학원 사정으로 수업 자체가 없는 경우 사용합니다.');
     page.once('dialog', (dialog) => dialog.accept());
-    await calendarRow.getByTestId('calendar-fixed-private-release-button').click();
+    await actionModal.getByTestId('fixed-private-lesson-action-release-button').click();
     await expect(calendarRow).toContainText('자리 공개', { timeout: 15000 });
     await expectLessonPatch(fixture.fixedLessonId, {
       status: 'cancelled',
@@ -567,8 +578,12 @@ test.describe('fixed private lesson release', () => {
       .filter({ hasText: fixture.cancelOnlyTime })
       .first();
     await expect(row).toBeVisible({ timeout: 45000 });
+    await row.getByTestId('private-fixed-lesson-action-button').click();
+    const actionModal = page.getByTestId('fixed-private-lesson-action-modal');
+    await expect(actionModal).toContainText('학생이 못 오는 경우 사용합니다.');
+    await expect(actionModal).toContainText('같은 시간대는 다른 학생에게 공개되지 않습니다.');
     page.once('dialog', (dialog) => dialog.accept());
-    await row.getByTestId('private-fixed-lesson-cancel-button').click();
+    await actionModal.getByTestId('fixed-private-lesson-action-cancel-button').click();
     await expect(row).toContainText('수업 취소', { timeout: 15000 });
     await expectLessonPatch(fixture.cancelOnlyLessonId, {
       status: 'cancelled',
