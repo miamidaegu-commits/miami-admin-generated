@@ -740,6 +740,10 @@ export default function PrivateLessonSlotsSection({
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
                 주간 기본 슬롯은 선생님 가능 시간으로 유지하고, 선택한 기간의 실제 고정 1:1
                 수업만 생성합니다.
+                <br />
+                수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.
+                <br />
+                수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.
               </p>
             </div>
             <form
@@ -984,6 +988,17 @@ export default function PrivateLessonSlotsSection({
                       ? `생성 완료 ${privateFixedSlotAssignmentPreview.requestedCount}회`
                       : `생성 예정 ${privateFixedSlotAssignmentPreview.requestedCount}회`}
                   </strong>
+                  {privateFixedSlotAssignmentPreview.mode === 'created' &&
+                  Number.isFinite(Number(privateFixedSlotAssignmentPreview.availableAssignmentCount)) ? (
+                    <div>
+                      생성 후 새 배정 가능{' '}
+                      {Math.max(
+                        0,
+                        Number(privateFixedSlotAssignmentPreview.availableAssignmentCount) || 0
+                      )}
+                      회
+                    </div>
+                  ) : null}
                   {privateFixedSlotAssignmentPreview.dates.length > 0 ? (
                     <div style={{ display: 'grid', gap: 4 }}>
                       {privateFixedSlotAssignmentPreview.dates.map((date) => (

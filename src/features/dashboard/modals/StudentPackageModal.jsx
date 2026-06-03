@@ -159,6 +159,29 @@ export default function StudentPackageModal({
               </span>
             </p>
 
+            {isPrivatePackage ? (
+              <div
+                data-testid="student-package-private-workflow-guide"
+                style={{
+                  margin: '0 0 16px 0',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #2e3240',
+                  background: '#1a1d26',
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>운영 순서</div>
+                <div>1) 수강권 등록/추가 등록: 학생에게 수업 가능 횟수를 부여합니다.</div>
+                <div>2) 기본 1:1 슬롯 등록: 선생님의 가능한 요일/시간을 만듭니다.</div>
+                <div>
+                  3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 실제 수업 날짜를
+                  생성합니다.
+                </div>
+              </div>
+            ) : null}
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>수강권 유형</span>
@@ -793,6 +816,9 @@ export default function StudentPackageModal({
                     }}
                   >
                     <div style={{ fontWeight: 600 }}>기존 수강권에 추가 등록</div>
+                    <div style={{ opacity: 0.84 }}>
+                      같은 선생님 수강권에 횟수와 결제 이력을 더합니다.
+                    </div>
                     <div style={{ opacity: 0.92 }}>
                       현재 수강권:{' '}
                       <strong>{String(primaryDuplicatePackage.title || '').trim() || '-'}</strong>
@@ -812,6 +838,23 @@ export default function StudentPackageModal({
                       등록 회차: {Number.isFinite(topUpRegistrationRound) && topUpRegistrationRound > 0
                         ? `${topUpRegistrationRound}회차 등록`
                         : '추가 등록'}
+                    </div>
+                    <div
+                      data-testid="private-package-situation-guidance"
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        background: 'rgba(0, 0, 0, 0.16)',
+                        fontSize: 12,
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>상황별 선택</div>
+                      <div>2회차/3회차 결제 등록 → 기존 수강권에 추가 등록</div>
+                      <div>결제일/금액/횟수 오입력 수정 → 기존 수강권 수정</div>
+                      <div>별도 계약으로 분리 → 새 수강권으로 발급</div>
+                      <div>수업 날짜 생성 → 고정 1:1 수업 배정으로 이동</div>
                     </div>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <span style={{ opacity: 0.85 }}>등록명 (선택)</span>
@@ -1033,17 +1076,72 @@ export default function StudentPackageModal({
                       일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.
                     </div>
                     {isPrivateTopUpFlow ? (
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setStudentPackageForm((prev) => ({
+                              ...prev,
+                              privateDuplicateAction: 'new',
+                            }))
+                          }
+                          data-testid="private-package-force-new-button"
+                          style={{
+                            justifySelf: 'flex-start',
+                            padding: '7px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #665533',
+                            background: '#2b281b',
+                            color: '#ffe8b8',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          새 수강권으로 발급
+                        </button>
+                        <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                          별도 수강권을 새로 만듭니다. 일반적인 추가 등록에는 사용하지
+                          마세요.
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setStudentPackageForm((prev) => ({
+                              ...prev,
+                              privateDuplicateAction: 'topUp',
+                            }))
+                          }
+                          data-testid="private-package-use-top-up-button"
+                          style={{
+                            justifySelf: 'flex-start',
+                            padding: '7px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #4a6fff55',
+                            background: '#1f2a44',
+                            color: 'white',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          기존 수강권에 추가 등록
+                        </button>
+                        <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                          같은 선생님 수강권에 횟수와 결제 이력을 더합니다.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                  {primaryDuplicatePackage && openExistingStudentPackageFromAddModal ? (
+                    <div style={{ display: 'grid', gap: 4, maxWidth: 220 }}>
                       <button
                         type="button"
-                        onClick={() =>
-                          setStudentPackageForm((prev) => ({
-                            ...prev,
-                            privateDuplicateAction: 'new',
-                          }))
-                        }
-                        data-testid="private-package-force-new-button"
+                        onClick={() => openExistingStudentPackageFromAddModal(primaryDuplicatePackage)}
+                        data-testid="student-package-edit-existing-button"
                         style={{
-                          alignSelf: 'flex-start',
+                          justifySelf: 'flex-start',
                           padding: '7px 10px',
                           borderRadius: 8,
                           border: '1px solid #665533',
@@ -1052,20 +1150,21 @@ export default function StudentPackageModal({
                           cursor: 'pointer',
                         }}
                       >
-                        새 수강권으로 발급
+                        기존 수강권 수정
                       </button>
-                    ) : (
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        잘못 입력한 정보를 고칠 때 사용합니다.
+                      </span>
+                    </div>
+                  ) : null}
+                  {isPrivatePackage && goToFixedPrivateAssignmentFromPackageModal ? (
+                    <div style={{ display: 'grid', gap: 4, maxWidth: 260 }}>
                       <button
                         type="button"
-                        onClick={() =>
-                          setStudentPackageForm((prev) => ({
-                            ...prev,
-                            privateDuplicateAction: 'topUp',
-                          }))
-                        }
-                        data-testid="private-package-use-top-up-button"
+                        onClick={goToFixedPrivateAssignmentFromPackageModal}
+                        data-testid="student-package-go-fixed-assignment-button"
                         style={{
-                          alignSelf: 'flex-start',
+                          justifySelf: 'flex-start',
                           padding: '7px 10px',
                           borderRadius: 8,
                           border: '1px solid #4a6fff55',
@@ -1074,45 +1173,12 @@ export default function StudentPackageModal({
                           cursor: 'pointer',
                         }}
                       >
-                        기존 수강권에 추가 등록
+                        고정 1:1 수업 배정으로 이동
                       </button>
-                    )}
-                  </div>
-                ) : null}
-                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                  {primaryDuplicatePackage && openExistingStudentPackageFromAddModal ? (
-                    <button
-                      type="button"
-                      onClick={() => openExistingStudentPackageFromAddModal(primaryDuplicatePackage)}
-                      data-testid="student-package-edit-existing-button"
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #665533',
-                        background: '#2b281b',
-                        color: '#ffe8b8',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      기존 수강권 수정
-                    </button>
-                  ) : null}
-                  {isPrivatePackage && goToFixedPrivateAssignmentFromPackageModal ? (
-                    <button
-                      type="button"
-                      onClick={goToFixedPrivateAssignmentFromPackageModal}
-                      data-testid="student-package-go-fixed-assignment-button"
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #4a6fff55',
-                        background: '#1f2a44',
-                        color: 'white',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      고정 1:1 수업 배정으로 이동
-                    </button>
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        수강권 횟수를 실제 수업 일정으로 배정합니다.
+                      </span>
+                    </div>
                   ) : null}
                 </div>
               </div>

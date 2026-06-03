@@ -298,6 +298,8 @@ async function fillAssignmentForm(page, fixture) {
   await openDashboardSection(page, '1:1 예약 시간 관리');
   const section = page.getByTestId('private-fixed-slot-assignment-section');
   await expect(section).toBeVisible({ timeout: 15000 });
+  await expect(section).toContainText('수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.');
+  await expect(section).toContainText('수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.');
   await selectTeacherOption(
     section.getByTestId('private-fixed-assignment-teacher-select'),
     fixture.teacher.name,
@@ -361,6 +363,7 @@ test('admin can assign fixed private lessons from a weekly template', async ({
     }
     await section.getByTestId('private-fixed-assignment-submit-button').click();
     await expect(preview).toContainText('생성 완료 4회', { timeout: 15000 });
+    await expect(preview).toContainText('생성 후 새 배정 가능 0회', { timeout: 15000 });
 
     await expect
       .poll(async () => (await queryLessonsByPackage(fixture.packageId)).length, { timeout: 15000 })

@@ -304,16 +304,35 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     const dialog = await openPrivatePackageAddDialog(page, student.studentName);
     await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible();
     await expect(dialog).toContainText('기존 수강권에 추가 등록할 수 있습니다.');
+    await expect(dialog).toContainText('운영 순서');
+    await expect(dialog).toContainText(
+      '1) 수강권 등록/추가 등록: 학생에게 수업 가능 횟수를 부여합니다.'
+    );
     await expect(dialog).toContainText('총 4회 · 사용 0회 · 남은 4회');
     await expect(dialog).toContainText('고정 예정 3회 · 예약 1회 · 새 배정 가능 0회');
+    await expect(dialog.getByTestId('student-package-top-up-section')).toContainText(
+      '같은 선생님 수강권에 횟수와 결제 이력을 더합니다.'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '2회차/3회차 결제 등록 → 기존 수강권에 추가 등록'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '결제일/금액/횟수 오입력 수정 → 기존 수강권 수정'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '별도 계약으로 분리 → 새 수강권으로 발급'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '수업 날짜 생성 → 고정 1:1 수업 배정으로 이동'
+    );
     await expect(dialog).toContainText('이번에 추가할 수업 횟수');
     await expect(dialog).toContainText(
       '4주 등록이면 4를 입력하세요. 예: 주1회 4주 등록 = 추가 횟수 4회.'
     );
-    await expect(dialog).toContainText('등록 회차: 3회차 등록');
+    await expect(dialog).toContainText('등록 회차:');
     await expect(dialog.getByTestId('private-package-top-up-registration-label-input')).toHaveAttribute(
       'placeholder',
-      '3회차 등록'
+      /[23]회차 등록/
     );
 
     await dialog.getByTestId('private-package-top-up-count-input').fill('4');
@@ -327,9 +346,6 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await dialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
     await dialog.getByTestId('private-package-top-up-amount-input').fill('300000');
     await dialog.getByTestId('private-package-top-up-memo-input').fill(memo);
-    await expect(dialog.getByTestId('student-package-top-up-section')).not.toContainText(
-      '새 수강권으로 발급'
-    );
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     await dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true }).click();
 

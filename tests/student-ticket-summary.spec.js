@@ -150,6 +150,22 @@ test('general unused private package shows 예약 가능 not 보충 가능', () 
   })).toBe('고정 예정 0회 · 예약 가능 8회');
 });
 
+test('private ticket summary copy separates fixed assignments from remaining balance', () => {
+  expect(formatPrivateTicketScheduleSummary({
+    futureFixedAllocatedCount: 2,
+    activeFutureReservationCount: 0,
+    noDeductionReleasedCount: 0,
+    makeupAvailableCount: 3,
+  })).toBe('고정 예정 2회 · 예약 가능 3회');
+
+  expect(formatPrivateTicketScheduleSummary({
+    futureFixedAllocatedCount: 2,
+    activeFutureReservationCount: 1,
+    noDeductionReleasedCount: 2,
+    makeupAvailableCount: 2,
+  })).toBe('고정 예정 2회 · 보충 예약 1회 · 보충 가능 2회');
+});
+
 test('empty ticket summary shows registration needed labels', () => {
   const viewModel = buildStudentTicketSummaryViewModel({
     packages: [],

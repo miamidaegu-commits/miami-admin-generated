@@ -67,6 +67,18 @@ test('private package add modal explains package counts and fixed assignment wor
     await expect(dialog.getByRole('button', { name: '정기등록', exact: true })).toHaveCount(0);
     await expect(dialog).toContainText('수강권은 수업을 들을 수 있는 횟수만 등록합니다');
     await expect(dialog).toContainText('고정 수업 일정은 1:1 예약 시간 관리 > 고정 1:1 수업 배정');
+    await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
+      '운영 순서'
+    );
+    await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
+      '1) 수강권 등록/추가 등록: 학생에게 수업 가능 횟수를 부여합니다.'
+    );
+    await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
+      '2) 기본 1:1 슬롯 등록: 선생님의 가능한 요일/시간을 만듭니다.'
+    );
+    await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
+      '3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 실제 수업 날짜를 생성합니다.'
+    );
     await expect(dialog).toContainText('주당 횟수와 등록 주수로 총 횟수를 자동 계산합니다.');
 
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
@@ -176,13 +188,36 @@ test('duplicate private package warning shows actionable capacity details and re
     await expect(guidance).toContainText('총 4회 · 사용 0회 · 남은 4회');
     await expect(guidance).toContainText('고정 예정 3회 · 예약 1회 · 새 배정 가능 0회');
 
-    await expect(dialog.getByTestId('student-package-top-up-section')).not.toContainText(
-      '새 수강권으로 발급'
+    await expect(dialog.getByTestId('student-package-top-up-section')).toContainText(
+      '같은 선생님 수강권에 횟수와 결제 이력을 더합니다.'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '2회차/3회차 결제 등록 → 기존 수강권에 추가 등록'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '결제일/금액/횟수 오입력 수정 → 기존 수강권 수정'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '별도 계약으로 분리 → 새 수강권으로 발급'
+    );
+    await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
+      '수업 날짜 생성 → 고정 1:1 수업 배정으로 이동'
     );
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
+    await expect(dialog.getByTestId('private-package-other-options')).toContainText(
+      '별도 수강권을 새로 만듭니다. 일반적인 추가 등록에는 사용하지 마세요.'
+    );
     await dialog.getByTestId('private-package-force-new-button').click();
     await expect(dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true })).toBeVisible();
+    await expect(dialog.getByTestId('private-package-other-options')).toContainText(
+      '같은 선생님 수강권에 횟수와 결제 이력을 더합니다.'
+    );
     await dialog.getByTestId('private-package-use-top-up-button').click();
+    await expect(dialog.getByTestId('private-package-other-options')).toContainText(
+      '별도 수강권을 새로 만듭니다. 일반적인 추가 등록에는 사용하지 마세요.'
+    );
+    await expect(guidance).toContainText('잘못 입력한 정보를 고칠 때 사용합니다.');
+    await expect(guidance).toContainText('수강권 횟수를 실제 수업 일정으로 배정합니다.');
     await dialog.getByTestId('student-package-edit-existing-button').click();
     await expect(page.getByRole('dialog', { name: '수강권 수정' })).toBeVisible();
     await page.getByRole('button', { name: '취소', exact: true }).click();
@@ -190,6 +225,12 @@ test('duplicate private package warning shows actionable capacity details and re
     const reopened = await openPackageAddDialog(page, studentName);
     await reopened.getByTestId('student-package-go-fixed-assignment-button').click();
     await expect(page.getByRole('heading', { name: '고정 1:1 수업 배정' })).toBeVisible();
+    await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
+      '수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.'
+    );
+    await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
+      '수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.'
+    );
   } finally {
     await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
     if (tempStudent) await cleanupTempStudentData(page, tempStudent);
