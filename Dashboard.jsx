@@ -385,7 +385,7 @@ function generatePrivateFixedAssignmentDates({ template, startDate, endDate }) {
 
 function formatPrivatePackageAssignmentOption(pkg, availableCount) {
   const title = String(pkg?.title || '개인 수강권').trim()
-  const remaining = Number(pkg?.remainingCount ?? 0)
+  const total = Number(pkg?.totalCount ?? 0)
   const safeAvailable = Math.max(0, Number(availableCount ?? 0) || 0)
   const teacherDisplay = String(pkg?.teacherName || '').trim()
   const teacherKey = String(pkg?.teacherKey || pkg?.teacher || '').trim()
@@ -393,7 +393,13 @@ function formatPrivatePackageAssignmentOption(pkg, availableCount) {
     teacherDisplay && teacherKey && teacherDisplay !== teacherKey
       ? `${teacherDisplay} · ${teacherKey}`
       : teacherDisplay || teacherKey || '선생님 미지정'
-  return `${title} · ${teacherScope} 전용 · 잔여 ${remaining}회 · 새 배정 가능 ${safeAvailable}회`
+  const startDate = String(pkg?.registrationStartDate || pkg?.startDate || '').trim()
+  const topUpLabel =
+    Number(pkg?.topUpCount || 0) > 0 || pkg?.lastTopUpAt ? ' · 추가 등록 포함' : ''
+  const prefix = /^\d{4}-\d{2}-\d{2}$/.test(startDate)
+    ? `${startDate} 시작`
+    : title
+  return `${prefix} · ${teacherScope} 전용 · 총 ${Number.isFinite(total) ? total : 0}회 · 새 배정 가능 ${safeAvailable}회${topUpLabel}`
 }
 
 function getPrivateSlotTeacherDisplay(slot) {

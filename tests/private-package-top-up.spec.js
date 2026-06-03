@@ -101,8 +101,10 @@ async function createCreditTransaction({
   packageTitle,
   actionType = 'package_created',
   deltaCount = 4,
+  registrationRound,
+  memo,
 }) {
-  await getDb().collection('creditTransactions').add({
+  const payload = {
     academyId: DEFAULT_E2E_ACADEMY_ID,
     studentId,
     studentName,
@@ -115,11 +117,16 @@ async function createCreditTransaction({
     sourceId: packageId,
     actionType,
     deltaCount,
-    memo: `${packageTitle} · 신규 수강권 발급`,
+    memo: memo || `${packageTitle} · 신규 수강권 발급`,
     actorUid: 'e2e-admin',
     actorRole: 'admin',
     createdAt: admin.firestore.Timestamp.now(),
-  });
+  };
+  if (registrationRound != null) {
+    payload.registrationRound = registrationRound;
+    payload.roundNumber = registrationRound;
+  }
+  await getDb().collection('creditTransactions').add(payload);
 }
 
 async function cleanupFixture(fixture) {
@@ -227,7 +234,18 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
       studentName: student.studentName,
       teacher: teacherKey,
       packageTitle,
-      deltaCount: 4,
+      deltaCount: 2,
+    });
+    await createCreditTransaction({
+      packageId: studentPackage.packageId,
+      studentId: student.studentId,
+      studentName: student.studentName,
+      teacher: teacherKey,
+      packageTitle,
+      actionType: 'private_package_top_up',
+      deltaCount: 2,
+      registrationRound: 2,
+      memo: '2회차 등록 · +2회',
     });
     await Promise.all([
       createAdminSeededPrivateLesson({
@@ -282,8 +300,17 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await expect(dialog).toContainText('기존 수강권에 추가 등록할 수 있습니다.');
     await expect(dialog).toContainText('총 4회 · 사용 0회 · 남은 4회');
     await expect(dialog).toContainText('고정 예정 3회 · 예약 1회 · 새 배정 가능 0회');
+    await expect(dialog).toContainText('이번에 추가할 수업 횟수');
+    await expect(dialog).toContainText(
+      '4주 등록이면 4를 입력하세요. 예: 주1회 4주 등록 = 추가 횟수 4회.'
+    );
+    await expect(dialog).toContainText('등록 회차: 3회차 등록');
 
     await dialog.getByTestId('private-package-top-up-count-input').fill('4');
+    const preview = dialog.getByTestId('private-package-top-up-preview');
+    await expect(preview).toContainText('이번 추가: +4회');
+    await expect(preview).toContainText('저장 후 총 횟수: 8회');
+    await expect(preview).toContainText('저장 후 새 배정 가능: 4회');
     await dialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
     await dialog.getByTestId('private-package-top-up-amount-input').fill('300000');
     await dialog.getByTestId('private-package-top-up-memo-input').fill(memo);
@@ -335,7 +362,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     const historyDialog = page.getByRole('dialog', { name: '수강권 이력' });
     await expect(historyDialog).toBeVisible();
     await expect(historyDialog).toContainText('수강권 발급');
-    await expect(historyDialog).toContainText('2회차 등록');
+    await expect(historyDialog).toContainText('3회차 등록');
     await expect(historyDialog).toContainText('+4');
     await expect(historyDialog).toContainText(`결제일 ${paymentDate}`);
     await expect(historyDialog).toContainText('결제 금액 300000');
@@ -383,6 +410,8 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
       )
       .toContain(studentPackage.packageId);
     await expect(packageSelect).toContainText('새 배정 가능 4회', { timeout: 15000 });
+    await expect(packageSelect).toContainText('총 8회', { timeout: 15000 });
+    await expect(packageSelect).toContainText('추가 등록 포함', { timeout: 15000 });
   } finally {
     await cleanupFixture(fixture).catch(() => {});
   }
