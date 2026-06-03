@@ -325,6 +325,12 @@ async function fillAssignmentForm(page, fixture) {
       { timeout: 15000 }
     )
     .toContain(fixture.packageId);
+  await expect(section.getByTestId('private-fixed-assignment-package-select')).toContainText(
+    `${fixture.teacher.name} · ${fixture.teacher.key} 전용`
+  );
+  await expect(section.getByTestId('private-fixed-assignment-package-select')).toContainText(
+    '새 배정 가능'
+  );
   await section.getByTestId('private-fixed-assignment-package-select').selectOption(fixture.packageId);
   await section.getByTestId('private-fixed-assignment-subject-input').fill('E2E 고정 1:1');
   await section.getByTestId('private-fixed-assignment-start-date-input').fill(addDays(fixture.dates[0], -7));

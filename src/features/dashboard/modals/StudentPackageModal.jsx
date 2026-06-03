@@ -11,6 +11,13 @@ import {
   normalizeGroupCourseType,
 } from '../../group-booking/groupCourseTypes.js'
 
+function formatTeacherScopeLabel(row) {
+  const display = String(row?.teacherName || row?.displayName || row?.name || '').trim()
+  const key = String(row?.teacherKey || row?.teacher || '').trim()
+  if (display && key && display !== key) return `${display} · ${key}`
+  return display || key || '-'
+}
+
 export default function StudentPackageModal({
   studentPackageModalStudent,
   studentPackageForm,
@@ -66,6 +73,7 @@ export default function StudentPackageModal({
           weeklyFrequency: studentPackageForm.weeklyFrequency,
         })
       : ''
+  const privateTeacherScopeLabel = formatTeacherScopeLabel(studentPackageModalStudent)
   const autoTotalCount = isGroupPackage
     ? String(studentPackageGroupAutoSummary?.computedTotalCount ?? 0)
     : isPrivateRegular
@@ -181,6 +189,10 @@ export default function StudentPackageModal({
                   <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.9 }}>수강권 모드</span>
                   <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, opacity: 0.8 }}>
                     개인 수강권 등록 후, 고정 수업은 기본 1:1 슬롯에 배정해 생성합니다.
+                    <br />
+                    개인 수강권은 선택한 선생님 수업에만 사용할 수 있습니다.
+                    <br />
+                    사용 가능 선생님: {privateTeacherScopeLabel}
                   </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     <button
@@ -250,7 +262,7 @@ export default function StudentPackageModal({
                       <label
                         style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
                       >
-                        <span style={{ opacity: 0.85 }}>시작일</span>
+                        <span style={{ opacity: 0.85 }}>수강권 시작일</span>
                         <input
                           type="date"
                           value={studentPackageForm.registrationStartDate}
@@ -495,7 +507,7 @@ export default function StudentPackageModal({
                   </label>
 
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                    <span style={{ opacity: 0.85 }}>시작일</span>
+                    <span style={{ opacity: 0.85 }}>수강권 시작일</span>
                     <input
                       type="date"
                       value={studentPackageForm.registrationStartDate}
@@ -613,6 +625,34 @@ export default function StudentPackageModal({
                   </span>
                 ) : null}
               </label>
+
+              {canViewPaymentFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>결제일 (선택)</span>
+                  <input
+                    type="date"
+                    value={studentPackageForm.paymentDate}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({ ...prev, paymentDate: e.target.value }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                    결제일은 실제 결제한 날짜입니다. 수강권 시작일과 다를 수 있습니다.
+                  </span>
+                  {studentPackageFormErrors.paymentDate ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageFormErrors.paymentDate}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
 
               {canViewPaymentFields ? (
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>

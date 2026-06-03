@@ -53,6 +53,7 @@ const DEFAULT_STUDENT_PACKAGE_FORM = {
   weeklyFrequency: '1',
   privatePackageMode: 'regular',
   expiresAt: '',
+  paymentDate: '',
   amountPaid: '',
   memo: '',
 }
@@ -389,6 +390,7 @@ export default function useStudentPackageFlow({
           registrationWeeks,
           weeklyFrequency,
           privatePackageMode,
+          paymentDate: String(sourcePackage.paymentDate || '').trim(),
         })
       )
     } else {
@@ -446,9 +448,9 @@ export default function useStudentPackageFlow({
       if (!groupCourseType) errors.groupCourseType = '코스 유형을 선택해주세요.'
       registrationStartDate = String(form.registrationStartDate || '').trim()
       if (!registrationStartDate) {
-        errors.registrationStartDate = '시작일을 선택해주세요.'
+        errors.registrationStartDate = '수강권 시작일을 선택해주세요.'
       } else if (!/^\d{4}-\d{2}-\d{2}$/.test(registrationStartDate)) {
-        errors.registrationStartDate = '시작일 형식이 올바르지 않습니다.'
+        errors.registrationStartDate = '수강권 시작일 형식이 올바르지 않습니다.'
       } else if (!parseYmdToLocalDate(registrationStartDate)) {
         errors.registrationStartDate = '유효한 날짜를 선택해주세요.'
       }
@@ -463,9 +465,9 @@ export default function useStudentPackageFlow({
       groupClassId = ''
       registrationStartDate = String(form.registrationStartDate || '').trim()
       if (!registrationStartDate) {
-        errors.registrationStartDate = '시작일을 선택해주세요.'
+        errors.registrationStartDate = '수강권 시작일을 선택해주세요.'
       } else if (!/^\d{4}-\d{2}-\d{2}$/.test(registrationStartDate)) {
-        errors.registrationStartDate = '시작일 형식이 올바르지 않습니다.'
+        errors.registrationStartDate = '수강권 시작일 형식이 올바르지 않습니다.'
       } else if (!parseYmdToLocalDate(registrationStartDate)) {
         errors.registrationStartDate = '유효한 날짜를 선택해주세요.'
       }
@@ -542,6 +544,15 @@ export default function useStudentPackageFlow({
       }
     }
 
+    const paymentDate = String(form.paymentDate || '').trim()
+    if (paymentDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+        errors.paymentDate = '결제일 형식이 올바르지 않습니다.'
+      } else if (!parseYmdToLocalDate(paymentDate)) {
+        errors.paymentDate = '유효한 결제일을 선택해주세요.'
+      }
+    }
+
     return {
       valid: Object.keys(errors).length === 0,
       errors,
@@ -555,6 +566,7 @@ export default function useStudentPackageFlow({
       weeklyFrequency,
       privatePackageMode,
       expiresAt: expiresAtTs,
+      paymentDate,
       amountPaid,
       memo: String(form.memo || '').trim(),
     }
@@ -709,6 +721,7 @@ export default function useStudentPackageFlow({
             : null,
         coverageEndDate: coverageEndDate || '',
         expiresAt: result.expiresAt,
+        paymentDate: result.paymentDate,
         amountPaid: result.amountPaid,
         memo: result.memo,
         createdAt: serverTimestamp(),
