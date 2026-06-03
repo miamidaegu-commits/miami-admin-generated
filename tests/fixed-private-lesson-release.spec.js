@@ -516,8 +516,11 @@ test.describe('fixed private lesson release', () => {
       )
       .first();
     await expect(calendarRow).toBeVisible({ timeout: 20000 });
+    await expect(calendarRow).toHaveAttribute('data-date', fixture.date);
+    await expect(calendarRow).toHaveAttribute('data-time', fixture.time);
     await expect(calendarRow).toContainText(fixture.originalStudentName);
     await expect(calendarRow).toContainText(fixture.time);
+    await expect(calendarRow).not.toContainText('07:20');
     page.once('dialog', (dialog) => dialog.accept());
     await calendarRow.getByTestId('calendar-fixed-private-release-button').click();
     await expect(calendarRow).toContainText('자리 공개', { timeout: 15000 });

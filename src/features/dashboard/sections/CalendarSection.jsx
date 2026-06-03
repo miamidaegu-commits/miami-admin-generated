@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import {
-  formatDate,
+  formatLessonDateLabel,
   formatLessonSessionNumber,
-  formatTime,
+  formatLessonTimeLabel,
   getLessonDate,
   getLessonStorageDateString,
   getStudentName,
@@ -256,7 +256,7 @@ function CalendarPrivateLessonDetailModal({
         <div style={{ display: 'grid', gap: 8, fontSize: 13, lineHeight: 1.5 }}>
           <div>학생: {detail.studentName || '-'}</div>
           <div>
-            일시: {formatDate(detail.lessonDate)} {formatTime(detail.lessonDate)}
+            일시: {formatLessonDateLabel(detail.lesson)} {formatLessonTimeLabel(detail.lesson)}
           </div>
           <div>과목: {detail.subject || '-'}</div>
           <div>상태: {detail.statusLabel}</div>
@@ -1027,8 +1027,8 @@ export default function CalendarSection(props) {
                       : undefined,
                 }}
               >
-                <span>{formatDate(lessonDate)}</span>
-                <span>{formatTime(lessonDate)}</span>
+                <span>{formatLessonDateLabel(lesson)}</span>
+                <span>{formatLessonTimeLabel(lesson)}</span>
                 <span style={{ lineHeight: 1.45 }}>
                   <span style={badgeStyle}>
                     {isGroupRow ? '그룹' : isPrivateReservationRow ? '예약 1:1' : '개인'}

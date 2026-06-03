@@ -60,6 +60,36 @@ export function formatTime(date) {
   }).format(date)
 }
 
+function formatStorageDateLabel(dateStr) {
+  const match = String(dateStr || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return ''
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (!year || !month || !day) return ''
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+  }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+export function formatLessonDateLabel(lesson) {
+  const dateStr = String(lesson?.date || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return formatStorageDateLabel(dateStr) || dateStr
+  }
+  return formatDate(getLessonDate(lesson))
+}
+
+export function formatLessonTimeLabel(lesson) {
+  const timeStr = String(lesson?.time || '').trim()
+  if (/^([01]\d|2[0-3]):([0-5]\d)$/.test(timeStr)) return timeStr
+  return formatTime(getLessonDate(lesson))
+}
+
 export function getStudentName(lesson) {
   return lesson.studentName || lesson.student || '-'
 }
