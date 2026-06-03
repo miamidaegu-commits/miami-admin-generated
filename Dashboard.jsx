@@ -824,6 +824,7 @@ export default function Dashboard() {
   const [privateFixedSlotAssignmentErrors, setPrivateFixedSlotAssignmentErrors] = useState({})
   const [privateFixedSlotAssignmentPreview, setPrivateFixedSlotAssignmentPreview] = useState(null)
   const [busyPrivateFixedSlotAssignment, setBusyPrivateFixedSlotAssignment] = useState(false)
+  const [busyFixedPrivateLessonCancelId, setBusyFixedPrivateLessonCancelId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
 
@@ -4934,6 +4935,41 @@ export default function Dashboard() {
     }
   }
 
+  async function cancelFixedPrivateLessonOccurrence(lesson, cancellationType) {
+    const type = String(cancellationType || '').trim()
+    const isSeatRelease = type === 'seat_released'
+    if (!isAdmin) {
+      alert('고정 1:1 수업 취소 권한이 없습니다.')
+      return
+    }
+    if (!lesson?.id) return
+    const label = `${getLessonStorageDateString(lesson)} ${lessonTimeInputValue(lesson)} ${lesson.subject || ''}`.trim()
+    const message = isSeatRelease
+      ? '이 고정 1:1 수업을 취소하고 같은 시간대를 다른 학생이 예약할 수 있게 공개할까요?\n' +
+        `${label || lesson.id}\n\n` +
+        '기존 학생은 해당 1회 수업 배정에서 제외됩니다.'
+      : '이 고정 1:1 수업을 취소할까요?\n' +
+        `${label || lesson.id}\n\n` +
+        '이 시간은 다른 학생에게 공개되지 않습니다.'
+    if (!window.confirm(message)) return
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(lesson, scopedAcademyId, '고정 1:1 수업')
+      setBusyFixedPrivateLessonCancelId(lesson.id)
+      const callable = httpsCallable(firebaseFunctions, 'cancelFixedPrivateLessonOccurrence')
+      await callable({
+        academyId: scopedAcademyId,
+        lessonId: lesson.id,
+        cancellationType: isSeatRelease ? 'seat_released' : 'lesson_cancelled',
+      })
+    } catch (error) {
+      console.error('고정 1:1 수업 취소 실패:', error)
+      alert(`고정 1:1 수업 취소 실패: ${error.message}`)
+    } finally {
+      setBusyFixedPrivateLessonCancelId('')
+    }
+  }
+
   const calendarSectionProps = {
     month: {
       view: 'month',
@@ -4978,10 +5014,12 @@ export default function Dashboard() {
       canManagePrivateLessonDeductions,
       busyLessonId,
       busyPrivateLessonCrudId,
+      busyFixedPrivateLessonCancelId,
       busyPrivateLessonAdd,
       busyPrivateReservationOutcomeId,
       openPrivateLessonEditModal,
       handleDeletePrivateLesson,
+      onCancelFixedPrivateLesson: cancelFixedPrivateLessonOccurrence,
       onMarkPrivateReservationOutcome: markPrivateReservationOutcome,
       onReversePrivateReservationOutcome: reversePrivateReservationOutcome,
       canEditLesson,
@@ -5168,6 +5206,9 @@ export default function Dashboard() {
     privateLessonReservationsLoading,
     busyPrivateSlotActionId,
     cancelPrivateSlotOrReservation,
+    privateFixedLessons: lessons,
+    busyFixedPrivateLessonCancelId,
+    onCancelFixedPrivateLesson: cancelFixedPrivateLessonOccurrence,
     isAdmin,
   }
 

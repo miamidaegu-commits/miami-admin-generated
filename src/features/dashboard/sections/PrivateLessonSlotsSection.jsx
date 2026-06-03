@@ -21,6 +21,37 @@ function reservationStatusLabel(status) {
   return status === 'active' ? '예약 완료' : '예약 취소됨'
 }
 
+function isFixedPrivateLesson(lesson) {
+  return (
+    String(lesson?.packageType || '').trim() === 'private' &&
+    String(lesson?.sourceType || '').trim() === 'fixed-private-slot-assignment'
+  )
+}
+
+function fixedLessonStatusLabel(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  if (status === 'cancelled' || status === 'canceled') {
+    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+    return '수업 취소'
+  }
+  return '배정됨'
+}
+
+function fixedLessonMatchesReservation(lesson, reservation) {
+  if (!lesson || !reservation) return false
+  const lessonDate = String(lesson.date || '').trim()
+  const lessonTime = String(lesson.time || '').trim()
+  const reservationDate = String(reservation.date || '').trim()
+  const reservationTime = String(reservation.time || '').trim()
+  if (!lessonDate || !lessonTime || lessonDate !== reservationDate || lessonTime !== reservationTime) {
+    return false
+  }
+  const lessonTeacherKeys = getPrivateSlotTeacherDisplay(lesson).toLowerCase().split(' · ')
+  const reservationTeacherLabel = getPrivateSlotTeacherDisplay(reservation).toLowerCase()
+  return lessonTeacherKeys.some((key) => key && reservationTeacherLabel.includes(key))
+}
+
 const WEEKDAY_OPTIONS = [
   { value: '1', label: '월요일' },
   { value: '2', label: '화요일' },
@@ -171,6 +202,9 @@ export default function PrivateLessonSlotsSection({
   privateLessonReservationsLoading,
   busyPrivateSlotActionId,
   cancelPrivateSlotOrReservation,
+  privateFixedLessons = [],
+  busyFixedPrivateLessonCancelId = '',
+  onCancelFixedPrivateLesson,
   isAdmin,
 }) {
   const [editingEligibilitySlotId, setEditingEligibilitySlotId] = useState('')
@@ -217,6 +251,23 @@ export default function PrivateLessonSlotsSection({
     if (!reservationsBySlotId.has(slotId)) reservationsBySlotId.set(slotId, [])
     reservationsBySlotId.get(slotId).push(reservation)
   })
+
+  const futureFixedPrivateLessons = useMemo(() => {
+    const today = new Date()
+    const y = today.getFullYear()
+    const m = String(today.getMonth() + 1).padStart(2, '0')
+    const d = String(today.getDate()).padStart(2, '0')
+    const todayYmd = `${y}-${m}-${d}`
+    return (Array.isArray(privateFixedLessons) ? privateFixedLessons : [])
+      .filter((lesson) => isFixedPrivateLesson(lesson))
+      .filter((lesson) => String(lesson.date || '').trim() >= todayYmd)
+      .sort((a, b) =>
+        `${a.date || ''} ${a.time || ''} ${a.teacherName || a.teacher || ''}`.localeCompare(
+          `${b.date || ''} ${b.time || ''} ${b.teacherName || b.teacher || ''}`,
+          'ko'
+        )
+      )
+  }, [privateFixedLessons])
 
   if (!isAdmin) return null
 
@@ -1020,6 +1071,117 @@ export default function PrivateLessonSlotsSection({
                 </div>
               ) : null}
             </form>
+          </section>
+
+          <section
+            data-testid="private-fixed-lessons-management-section"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 8,
+              background: '#151922',
+              marginBottom: 20,
+            }}
+          >
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16 }}>고정 1:1 수업 일정</h3>
+              <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
+                수강권으로 배정된 날짜별 고정수업을 한 번씩 취소하거나 공개합니다.
+              </p>
+            </div>
+            {futureFixedPrivateLessons.length === 0 ? (
+              <p style={{ margin: 0, opacity: 0.78 }}>예정된 고정 1:1 수업이 없습니다.</p>
+            ) : (
+              <div className="activity-table">
+                <div
+                  className="table-head"
+                  style={{ gridTemplateColumns: '0.9fr 0.65fr 0.9fr 0.9fr 1fr 0.8fr minmax(160px, auto)' }}
+                >
+                  <span>날짜</span>
+                  <span>시간</span>
+                  <span>선생님</span>
+                  <span>학생</span>
+                  <span>수업명</span>
+                  <span>상태</span>
+                  <span>작업</span>
+                </div>
+                {futureFixedPrivateLessons.map((lesson) => {
+                  const statusLabel = fixedLessonStatusLabel(lesson)
+                  const isCancelled = statusLabel !== '배정됨'
+                  const matchingReservation = privateLessonReservations.find(
+                    (reservation) =>
+                      String(reservation.status || '').trim() === 'active' &&
+                      fixedLessonMatchesReservation(lesson, reservation)
+                  )
+                  const busy = busyFixedPrivateLessonCancelId === lesson.id
+                  return (
+                    <div
+                      key={lesson.id}
+                      className="table-row"
+                      data-testid="private-fixed-lesson-row"
+                      data-lesson-id={lesson.id}
+                      style={{ gridTemplateColumns: '0.9fr 0.65fr 0.9fr 0.9fr 1fr 0.8fr minmax(160px, auto)' }}
+                    >
+                      <span>{lesson.date || '-'}</span>
+                      <span>{lesson.time || '-'}</span>
+                      <span>{getPrivateSlotTeacherDisplay(lesson)}</span>
+                      <span>{lesson.studentName || lesson.student || lesson.studentId || '-'}</span>
+                      <span>{lesson.subject || '1:1 수업'}</span>
+                      <span>
+                        {statusLabel}
+                        {matchingReservation ? (
+                          <span style={{ display: 'block', marginTop: 4, opacity: 0.72, fontSize: 12 }}>
+                            예약: {matchingReservation.studentName || matchingReservation.studentId || '-'}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {!isCancelled ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onCancelFixedPrivateLesson?.(lesson, 'seat_released')}
+                              disabled={busy}
+                              data-testid="private-fixed-lesson-release-button"
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #4a6fff55',
+                                background: '#1f2a44',
+                                color: 'white',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {busy ? '처리 중...' : '자리 공개'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onCancelFixedPrivateLesson?.(lesson, 'lesson_cancelled')}
+                              disabled={busy}
+                              data-testid="private-fixed-lesson-cancel-button"
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #665533',
+                                background: '#3a321f',
+                                color: '#ffe8b8',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {busy ? '처리 중...' : '수업 취소'}
+                            </button>
+                          </>
+                        ) : (
+                          <span style={{ opacity: 0.65, fontSize: 12 }}>처리 완료</span>
+                        )}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </section>
 
           <form
