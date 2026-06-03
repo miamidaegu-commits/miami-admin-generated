@@ -15,6 +15,7 @@ import {
 const require = createRequire(import.meta.url);
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
 const ADMIN_APP_NAME = 'private-slot-teacher-identity-e2e';
+const HOUR_MS = 60 * 60 * 1000;
 
 function hasServiceAccount() {
   return fs.existsSync(SERVICE_ACCOUNT_PATH);
@@ -65,10 +66,52 @@ function ensureMondaySaturdayYmd(date) {
   return parsed.toISOString().slice(0, 10);
 }
 
-function upcomingMondaySaturdayYmd(daysFromNow) {
-  return ensureMondaySaturdayYmd(
-    formatSeoulDateTime(new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000)).date
-  );
+function addDaysYmd(ymd, days) {
+  const parsed = new Date(`${ymd}T00:00:00Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + days);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function getMondayForYmd(ymd) {
+  const parsed = new Date(`${ymd}T00:00:00Z`);
+  const weekday = parsed.getUTCDay();
+  const mondayOffset = weekday === 0 ? -6 : 1 - weekday;
+  parsed.setUTCDate(parsed.getUTCDate() + mondayOffset);
+  return parsed.toISOString().slice(0, 10);
+}
+
+function seoulDateTimeMillis(ymd, time) {
+  const [year, month, day] = String(ymd).split('-').map(Number);
+  const [hour, minute] = String(time).split(':').map(Number);
+  return Date.UTC(year, month - 1, day, hour - 9, minute, 0, 0);
+}
+
+function uniqueMinute(unique, offset = 0) {
+  const digits = String(unique).replace(/\D/g, '');
+  const seed = Number(digits.slice(-4)) || 0;
+  return String((seed + offset) % 50).padStart(2, '0');
+}
+
+function nextBookablePrivateSlotDateTime(unique, minuteOffset = 0) {
+  const nowMillis = Date.now();
+  const minimumStartMillis = nowMillis + 8 * HOUR_MS;
+  const today = formatSeoulDateTime(new Date(nowMillis)).date;
+  const minute = uniqueMinute(unique, minuteOffset);
+  const candidateTimes = [`10:${minute}`, `13:${minute}`, `16:${minute}`, `20:${minute}`];
+
+  for (let offset = 0; offset <= 12; offset += 1) {
+    const date = ensureMondaySaturdayYmd(addDaysYmd(today, offset));
+    if (date !== addDaysYmd(today, offset)) continue;
+    const bookingOpensAt = seoulDateTimeMillis(addDaysYmd(getMondayForYmd(date), -3), '00:00');
+    if (nowMillis < bookingOpensAt) continue;
+    for (const time of candidateTimes) {
+      if (seoulDateTimeMillis(date, time) > minimumStartMillis) {
+        return { date, time };
+      }
+    }
+  }
+
+  throw new Error('Unable to find a bookable private slot date/time for the E2E fixture.');
 }
 
 function privateSummaryId(studentId) {
@@ -110,12 +153,15 @@ async function createFixture(unique) {
   const legacyTeacherKey = `legacy-don-${unique}`;
   const otherSlotId = `e2e-private-identity-other-slot-${unique}`;
   const legacySlotId = `e2e-private-identity-legacy-slot-${unique}`;
-  const date = upcomingMondaySaturdayYmd(3);
-  const otherDate = upcomingMondaySaturdayYmd(4);
-  const legacyDate = upcomingMondaySaturdayYmd(5);
-  const time = `13:${String(Number(unique.slice(-1).replace(/\D/g, '')) || 0).padStart(2, '0')}`;
-  const otherTime = '14:20';
-  const legacyTime = '15:30';
+  const primarySlotTime = nextBookablePrivateSlotDateTime(unique, 0);
+  const otherSlotTime = nextBookablePrivateSlotDateTime(unique, 11);
+  const legacySlotTime = nextBookablePrivateSlotDateTime(unique, 22);
+  const date = primarySlotTime.date;
+  const time = primarySlotTime.time;
+  const otherDate = otherSlotTime.date;
+  const otherTime = otherSlotTime.time;
+  const legacyDate = legacySlotTime.date;
+  const legacyTime = legacySlotTime.time;
   const user = await auth.createUser({
     email: studentEmail,
     password: TEST_STUDENT_PASSWORD,
