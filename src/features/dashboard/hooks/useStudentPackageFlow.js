@@ -90,6 +90,19 @@ function createDefaultPostPrivateLessonScheduleForm(overrides = {}) {
   }
 }
 
+function countPrivatePackageRegistrationEvents(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => {
+    const actionType = String(row?.actionType || '').trim()
+    const deltaCount = Number(row?.deltaCount || 0)
+    return (
+      deltaCount > 0 &&
+      (actionType === 'package_created' ||
+        actionType === 'private_package_top_up' ||
+        actionType === 'package_top_up')
+    )
+  }).length
+}
+
 export default function useStudentPackageFlow({
   activeSection,
   userProfile,
@@ -112,6 +125,8 @@ export default function useStudentPackageFlow({
   const [studentPackageFormErrors, setStudentPackageFormErrors] = useState({})
   const [busyStudentPackageSubmit, setBusyStudentPackageSubmit] = useState(false)
   const [, setStudentPackageReRegisterSourcePackage] = useState(null)
+  const [studentPackageTopUpRoundsByPackageId, setStudentPackageTopUpRoundsByPackageId] =
+    useState({})
 
   const [postPrivateLessonScheduleModalData, setPostPrivateLessonScheduleModalData] =
     useState(null)
@@ -210,7 +225,7 @@ export default function useStudentPackageFlow({
     buildGroupPackageCoverageLessons,
   ])
 
-  const studentPackageModalActiveSameScopeDuplicates = useMemo(() => {
+  const studentPackageModalActiveSameScopeBasePackages = useMemo(() => {
     const student = studentPackageModalStudent
     if (!student?.id) return []
 
@@ -268,6 +283,65 @@ export default function useStudentPackageFlow({
     studentPackageForm.groupClassId,
     studentPackages,
   ])
+
+  useEffect(() => {
+    const privatePackageIds = studentPackageModalActiveSameScopeBasePackages
+      .filter((pkg) => String(pkg.packageType || '').trim() === 'private')
+      .map((pkg) => String(pkg.id || '').trim())
+      .filter(Boolean)
+    if (privatePackageIds.length === 0) return
+
+    let cancelled = false
+    async function loadTopUpRounds() {
+      try {
+        const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+        const entries = await Promise.all(
+          privatePackageIds.map(async (packageId) => {
+            const txSnap = await getDocs(
+              query(
+                collection(db, 'creditTransactions'),
+                where('academyId', '==', scopedAcademyId),
+                where('packageId', '==', packageId)
+              )
+            )
+            const count = countPrivatePackageRegistrationEvents(
+              txSnap.docs.map((docItem) => docItem.data() || {})
+            )
+            return [packageId, Math.max(2, count + 1)]
+          })
+        )
+        if (!cancelled) {
+          setStudentPackageTopUpRoundsByPackageId((prev) => ({
+            ...prev,
+            ...Object.fromEntries(entries),
+          }))
+        }
+      } catch (error) {
+        console.warn('개인 수강권 등록 회차 조회 실패:', error)
+      }
+    }
+    void loadTopUpRounds()
+    return () => {
+      cancelled = true
+    }
+  }, [
+    currentAcademyId,
+    studentPackageModalActiveSameScopeBasePackages
+      .map((pkg) => String(pkg.id || '').trim())
+      .filter(Boolean)
+      .join('|'),
+  ])
+
+  const studentPackageModalActiveSameScopeDuplicates = useMemo(() => {
+    return studentPackageModalActiveSameScopeBasePackages.map((pkg) => {
+      if (String(pkg.packageType || '').trim() !== 'private') return pkg
+      const packageId = String(pkg.id || '').trim()
+      return {
+        ...pkg,
+        nextRegistrationRound: studentPackageTopUpRoundsByPackageId[packageId] || 2,
+      }
+    })
+  }, [studentPackageModalActiveSameScopeBasePackages, studentPackageTopUpRoundsByPackageId])
 
   const postGroupReEnrollMinStartYmd = useMemo(() => {
     if (!postGroupReEnrollModalData?.groupClassId) return ''
@@ -452,7 +526,7 @@ export default function useStudentPackageFlow({
     if (isPrivateTopUp) {
       const topUpParsed = parseRequiredMinOneIntField(form.totalCount)
       if (!topUpParsed.ok) {
-        errors.totalCount = '추가 횟수는 1 이상의 정수여야 합니다.'
+        errors.totalCount = '이번에 추가할 수업 횟수는 1 이상의 정수여야 합니다.'
       }
 
       return {
@@ -656,22 +730,16 @@ export default function useStudentPackageFlow({
               where('packageId', '==', targetPackage.id)
             )
           )
-          const registrationEventCount = txSnap.docs.filter((docItem) => {
-            const row = docItem.data() || {}
-            const actionType = String(row.actionType || '').trim()
-            const deltaCount = Number(row.deltaCount || 0)
-            return (
-              deltaCount > 0 &&
-              (actionType === 'package_created' ||
-                actionType === 'private_package_top_up' ||
-                actionType === 'package_top_up')
-            )
-          }).length
+          const registrationEventCount = countPrivatePackageRegistrationEvents(
+            txSnap.docs.map((docItem) => docItem.data() || {})
+          )
           const registrationRound = Math.max(2, registrationEventCount + 1)
 
           await updateDoc(doc(db, 'studentPackages', targetPackage.id), {
             totalCount: increment(topUpCount),
             remainingCount: increment(topUpCount),
+            topUpCount: increment(1),
+            lastTopUpAt: serverTimestamp(),
             status: 'active',
             updatedAt: serverTimestamp(),
           })

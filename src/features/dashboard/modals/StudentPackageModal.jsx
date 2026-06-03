@@ -97,6 +97,17 @@ export default function StudentPackageModal({
     0,
     Number(primaryDuplicateBalance?.makeupAvailableCount) || 0
   )
+  const topUpCountInput = String(studentPackageForm.totalCount || '').trim()
+  const topUpCountPreview = /^[1-9]\d*$/.test(topUpCountInput)
+    ? Number.parseInt(topUpCountInput, 10)
+    : 0
+  const topUpTotalCountPreview =
+    (Number(primaryDuplicatePackage?.totalCount ?? 0) || 0) + topUpCountPreview
+  const topUpAvailableForAssignmentPreview =
+    primaryDuplicateAvailableForAssignment + topUpCountPreview
+  const topUpRegistrationRound = Number(primaryDuplicatePackage?.nextRegistrationRound || 2)
+  const hasMultiplePrivateDuplicatePackages =
+    isPrivatePackage && studentPackageModalActiveSameScopeDuplicates.length > 1
 
   return (
         <div
@@ -753,6 +764,20 @@ export default function StudentPackageModal({
                     기존 수강권에 추가 등록할 수 있습니다.
                   </p>
                 ) : null}
+                {hasMultiplePrivateDuplicatePackages ? (
+                  <div
+                    data-testid="student-package-multiple-duplicates-warning"
+                    style={{
+                      margin: '0 0 10px 0',
+                      color: '#f2c27a',
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    같은 선생님 수강권이 여러 개 있습니다. 일반적으로 하나의 수강권에 추가
+                    등록하는 것을 권장합니다.
+                  </div>
+                ) : null}
                 {isPrivateTopUpFlow && primaryDuplicatePackage ? (
                   <div
                     data-testid="student-package-top-up-section"
@@ -783,9 +808,13 @@ export default function StudentPackageModal({
                       {primaryDuplicateAvailableForAssignment}회
                     </div>
                     <div>사용 가능 선생님: {formatTeacherScopeLabel(primaryDuplicatePackage)}</div>
-                    <div style={{ opacity: 0.78 }}>등록 구분: 추가 등록</div>
+                    <div style={{ opacity: 0.78 }}>
+                      등록 회차: {Number.isFinite(topUpRegistrationRound) && topUpRegistrationRound > 0
+                        ? `${topUpRegistrationRound}회차 등록`
+                        : '추가 등록'}
+                    </div>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      <span style={{ opacity: 0.85 }}>추가 횟수</span>
+                      <span style={{ opacity: 0.85 }}>이번에 추가할 수업 횟수</span>
                       <input
                         type="text"
                         inputMode="numeric"
@@ -807,7 +836,25 @@ export default function StudentPackageModal({
                           {studentPackageFormErrors.totalCount}
                         </span>
                       ) : null}
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        4주 등록이면 4를 입력하세요. 예: 주1회 4주 등록 = 추가 횟수 4회.
+                      </span>
                     </label>
+                    <div
+                      data-testid="private-package-top-up-preview"
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #2e3240',
+                        background: 'rgba(0, 0, 0, 0.18)',
+                        fontSize: 12,
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <div>이번 추가: +{topUpCountPreview}회</div>
+                      <div>저장 후 총 횟수: {topUpTotalCountPreview}회</div>
+                      <div>저장 후 새 배정 가능: {topUpAvailableForAssignmentPreview}회</div>
+                    </div>
                     {canViewPaymentFields ? (
                       <>
                         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
