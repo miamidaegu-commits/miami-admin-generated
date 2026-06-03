@@ -170,11 +170,15 @@ test('duplicate private package warning shows actionable capacity details and re
     const guidance = dialog.getByTestId('student-package-duplicate-guidance');
     await expect(guidance).toBeVisible();
     await expect(guidance).toContainText('이미 사용 중인 개인 수강권이 있습니다.');
-    await expect(guidance).toContainText('기존 수강권의 총 횟수/기간을 늘리거나');
+    await expect(guidance).toContainText('기존 수강권에 추가 등록할 수 있습니다.');
+    await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible();
     await expect(guidance).toContainText(`E2E 현재 수강권 ${unique}`);
-    await expect(guidance).toContainText('총 4회 · 사용 0회 · 잔여 4회');
+    await expect(guidance).toContainText('총 4회 · 사용 0회 · 남은 4회');
     await expect(guidance).toContainText('고정 예정 3회 · 예약 1회 · 새 배정 가능 0회');
 
+    await dialog.getByTestId('private-package-force-new-button').click();
+    await expect(dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true })).toBeVisible();
+    await dialog.getByTestId('private-package-use-top-up-button').click();
     await dialog.getByTestId('student-package-edit-existing-button').click();
     await expect(page.getByRole('dialog', { name: '수강권 수정' })).toBeVisible();
     await page.getByRole('button', { name: '취소', exact: true }).click();

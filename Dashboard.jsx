@@ -2964,6 +2964,11 @@ export default function Dashboard() {
     setActiveSection('privateSlots')
   }
 
+  function goToFixedPrivateAssignmentFromPostPrivateLessonScheduleModal() {
+    closePostPrivateLessonScheduleModal()
+    setActiveSection('privateSlots')
+  }
+
   const {
     postGroupScheduleRebuildModalData,
     postGroupScheduleRebuildFromDate,
@@ -3581,6 +3586,19 @@ export default function Dashboard() {
   async function addCreditTransaction(payload) {
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const extraFields = {}
+      if (payload.registrationRound != null) {
+        extraFields.registrationRound = Number(payload.registrationRound) || null
+      }
+      if (payload.roundNumber != null) {
+        extraFields.roundNumber = Number(payload.roundNumber) || null
+      }
+      if (payload.paymentDate !== undefined) {
+        extraFields.paymentDate = String(payload.paymentDate ?? '').trim()
+      }
+      if (payload.amountPaid !== undefined) {
+        extraFields.amountPaid = Number(payload.amountPaid ?? 0) || 0
+      }
       await addDoc(collection(db, 'creditTransactions'), {
         academyId: scopedAcademyId,
         studentId: String(payload.studentId ?? ''),
@@ -3598,6 +3616,7 @@ export default function Dashboard() {
         actorUid: user?.uid || '',
         actorRole: userProfile?.role || '',
         createdAt: serverTimestamp(),
+        ...extraFields,
       })
     } catch (error) {
       console.error('creditTransactions 기록 실패:', error)
@@ -5213,6 +5232,7 @@ export default function Dashboard() {
     postPrivateLessonScheduleErrors,
     closePostPrivateLessonScheduleModal,
     submitPostPrivateLessonSchedule,
+    goToFixedPrivateAssignmentFromPostPrivateLessonScheduleModal,
     busyPostPrivateLessonSchedule,
   }
 

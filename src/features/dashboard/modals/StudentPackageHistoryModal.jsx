@@ -65,6 +65,21 @@ function formatTeacherScope(pkg) {
   return display || key || '-'
 }
 
+function formatHistoryActionLabel(row) {
+  const actionType = String(row?.actionType || '').trim()
+  if (actionType === 'private_package_top_up' || actionType === 'package_top_up') {
+    const round = Number(row?.registrationRound ?? row?.roundNumber ?? 0)
+    if (Number.isFinite(round) && round > 0) return `${round}회차 등록`
+    return '추가 등록'
+  }
+  return formatCreditTransactionActionTypeLabel(actionType)
+}
+
+function hasHistoryPaymentAmount(row) {
+  if (row?.amountPaid == null) return false
+  return String(row.amountPaid).trim() !== ''
+}
+
 export default function StudentPackageHistoryModal({
   studentPackageHistoryModalPackage,
   studentPackageHistoryLoading,
@@ -202,10 +217,20 @@ export default function StudentPackageHistoryModal({
                     <div style={{ opacity: 0.9, marginBottom: 4 }}>
                       <strong>{formatCreditTransactionCreatedAtDisplay(row.createdAt)}</strong>
                       {' · '}
-                      {formatCreditTransactionActionTypeLabel(row.actionType)}
+                      {formatHistoryActionLabel(row)}
                       {' · '}
                       {formatCreditTransactionDeltaCountDisplay(row.deltaCount)}
                     </div>
+                    {String(row.paymentDate || '').trim() ? (
+                      <div style={{ opacity: 0.82 }}>
+                        결제일 {String(row.paymentDate || '').trim()}
+                      </div>
+                    ) : null}
+                    {hasHistoryPaymentAmount(row) ? (
+                      <div style={{ opacity: 0.82 }}>
+                        결제 금액 {String(row.amountPaid).trim()}
+                      </div>
+                    ) : null}
                     <div style={{ opacity: 0.82, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
                       메모: {String(row.memo ?? '').trim() || '-'}
                     </div>
