@@ -886,27 +886,6 @@ export default function StudentPackageModal({
                         </label>
                       </>
                     ) : null}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setStudentPackageForm((prev) => ({
-                          ...prev,
-                          privateDuplicateAction: 'new',
-                        }))
-                      }
-                      data-testid="private-package-force-new-button"
-                      style={{
-                        alignSelf: 'flex-start',
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #665533',
-                        background: '#2b281b',
-                        color: '#ffe8b8',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      새 수강권으로 발급
-                    </button>
                   </div>
                 ) : null}
                 <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.9 }}>
@@ -961,29 +940,70 @@ export default function StudentPackageModal({
                     )
                   })}
                 </ul>
+                {hasPrivateDuplicatePackage ? (
+                  <div
+                    data-testid="private-package-other-options"
+                    style={{
+                      marginTop: 12,
+                      paddingTop: 10,
+                      borderTop: '1px solid rgba(255, 255, 255, 0.12)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, opacity: 0.86 }}>기타 옵션</div>
+                    <div style={{ fontSize: 12, opacity: 0.78 }}>
+                      일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.
+                    </div>
+                    {isPrivateTopUpFlow ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStudentPackageForm((prev) => ({
+                            ...prev,
+                            privateDuplicateAction: 'new',
+                          }))
+                        }
+                        data-testid="private-package-force-new-button"
+                        style={{
+                          alignSelf: 'flex-start',
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #665533',
+                          background: '#2b281b',
+                          color: '#ffe8b8',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        새 수강권으로 발급
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setStudentPackageForm((prev) => ({
+                            ...prev,
+                            privateDuplicateAction: 'topUp',
+                          }))
+                        }
+                        data-testid="private-package-use-top-up-button"
+                        style={{
+                          alignSelf: 'flex-start',
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #4a6fff55',
+                          background: '#1f2a44',
+                          color: 'white',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        기존 수강권에 추가 등록
+                      </button>
+                    )}
+                  </div>
+                ) : null}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-                  {hasPrivateDuplicatePackage && !isPrivateTopUpFlow ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setStudentPackageForm((prev) => ({
-                          ...prev,
-                          privateDuplicateAction: 'topUp',
-                        }))
-                      }
-                      data-testid="private-package-use-top-up-button"
-                      style={{
-                        padding: '7px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #4a6fff55',
-                        background: '#1f2a44',
-                        color: 'white',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      기존 수강권에 추가 등록
-                    </button>
-                  ) : null}
                   {primaryDuplicatePackage && openExistingStudentPackageFromAddModal ? (
                     <button
                       type="button"
@@ -1062,7 +1082,7 @@ export default function StudentPackageModal({
                 {isStudentPackageModalSubmitting
                   ? '저장 중...'
                   : isPrivateTopUpFlow
-                    ? '기존 수강권에 추가'
+                    ? '기존 수강권에 추가 등록'
                     : hasPrivateDuplicatePackage &&
                         String(studentPackageForm.privateDuplicateAction || 'topUp') === 'new'
                       ? '새 수강권으로 발급'

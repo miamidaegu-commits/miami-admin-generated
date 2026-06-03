@@ -779,10 +779,9 @@ export default function useStudentPackageFlow({
       const confirmMessage =
         result.packageType === 'private'
           ? [
-              '이미 사용 중인 개인 수강권이 있습니다.',
-              '새 고정수업을 더 배정하려면 기존 수강권의 총 횟수/기간을 늘리거나, 기존 예약/수업을 취소하거나, 새 기간의 수강권을 등록하세요.',
-              '',
-              '그래도 새 수강권을 발급할까요?',
+              '같은 선생님 수강권이 이미 있습니다.',
+              '일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.',
+              '정말 별도 수강권으로 발급할까요?',
             ].join('\n')
           : '같은 범위의 사용 중 수강권이 이미 있습니다. 그래도 새 수강권을 발급할까요?'
       const ok = window.confirm(

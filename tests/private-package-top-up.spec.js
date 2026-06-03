@@ -287,7 +287,11 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await dialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
     await dialog.getByTestId('private-package-top-up-amount-input').fill('300000');
     await dialog.getByTestId('private-package-top-up-memo-input').fill(memo);
-    await dialog.getByRole('button', { name: '기존 수강권에 추가', exact: true }).click();
+    await expect(dialog.getByTestId('student-package-top-up-section')).not.toContainText(
+      '새 수강권으로 발급'
+    );
+    await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
+    await dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true }).click();
 
     const postDialog = page.getByRole('dialog', { name: '고정 1:1 수업 배정으로 이동할까요?' });
     await expect(postDialog).toBeVisible();
@@ -422,13 +426,18 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     const dialog = await openPrivatePackageAddDialog(page, student.studentName);
     await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible();
+    await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     await dialog.getByTestId('private-package-force-new-button').click();
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     await dialog.getByLabel('제목').fill(`E2E 강제 새 수강권 ${unique}`);
     await dialog.getByLabel(/총 횟수/).fill('2');
 
     page.once('dialog', async (nativeDialog) => {
-      expect(nativeDialog.message()).toContain('그래도 새 수강권을 발급할까요?');
+      expect(nativeDialog.message()).toContain('같은 선생님 수강권이 이미 있습니다.');
+      expect(nativeDialog.message()).toContain(
+        '일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.'
+      );
+      expect(nativeDialog.message()).toContain('정말 별도 수강권으로 발급할까요?');
       await nativeDialog.accept();
     });
     await dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true }).click();
