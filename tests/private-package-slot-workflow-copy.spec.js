@@ -176,6 +176,10 @@ test('duplicate private package warning shows actionable capacity details and re
     await expect(guidance).toContainText('총 4회 · 사용 0회 · 남은 4회');
     await expect(guidance).toContainText('고정 예정 3회 · 예약 1회 · 새 배정 가능 0회');
 
+    await expect(dialog.getByTestId('student-package-top-up-section')).not.toContainText(
+      '새 수강권으로 발급'
+    );
+    await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     await dialog.getByTestId('private-package-force-new-button').click();
     await expect(dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true })).toBeVisible();
     await dialog.getByTestId('private-package-use-top-up-button').click();
