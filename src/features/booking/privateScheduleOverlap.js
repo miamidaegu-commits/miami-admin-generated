@@ -119,6 +119,8 @@ export function isActivePrivateReservation(data) {
 export function isCancelledScheduleRow(row) {
   const status = normalizeId(row && row.status).toLowerCase()
   const approvalStatus = normalizeId(row && row.approvalStatus).toLowerCase()
+  const cancellationType = normalizeId(row && row.cancellationType).toLowerCase()
+  if (cancellationType === 'lesson_cancelled') return false
   if (status === 'cancelled' || status === 'canceled') return true
   if (row && row.completed === 'cancelled') return true
   if (row && row.isDeductCancelled === true) return true

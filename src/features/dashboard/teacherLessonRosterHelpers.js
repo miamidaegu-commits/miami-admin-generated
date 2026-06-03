@@ -188,6 +188,12 @@ export function formatReservationCancelledAt(reservation) {
   return `${cancelledAt} · ${mapCancelledByLabel(reservation)}`
 }
 
+export function formatLessonCancelledAt(lesson) {
+  const cancelledAt = formatKstAuditDateTime(lesson?.cancelledAt || lesson?.canceledAt)
+  if (!cancelledAt) return ''
+  return `${cancelledAt} · ${mapCancelledByLabel(lesson)}`
+}
+
 function getSortKey(date, time) {
   return `${normalizeId(date)} ${normalizeId(time)}`.trim()
 }
@@ -233,6 +239,9 @@ export function getCancellationHandlingLabel({ sourceKind, lesson, reservation, 
   if (bucket !== 'cancelled') return ''
   if (sourceKind === 'lesson') {
     if (lesson?.isDeductCancelled === true) return '차감취소'
+    const cancellationType = normalizeId(lesson?.cancellationType).toLowerCase()
+    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+    if (cancellationType === 'lesson_cancelled') return '수업 취소'
     return '취소됨'
   }
   if (sourceKind === 'reservation') {
@@ -294,7 +303,9 @@ function buildRosterEntry({
     reservationCreatedAtLabel:
       sourceKind === 'reservation' ? formatReservationCreatedAt(reservation) : '',
     reservationCancelledAtLabel:
-      sourceKind === 'reservation' ? formatReservationCancelledAt(reservation) : '',
+      sourceKind === 'reservation'
+        ? formatReservationCancelledAt(reservation)
+        : formatLessonCancelledAt(lesson),
     directCancelLabel: getStudentCancelLabel(studentId, cancelAllowanceByStudentId, sourceKind),
     cancelAllowanceValue: getStudentCancelAllowanceValue(
       studentId,
@@ -347,7 +358,12 @@ function getTicketContextLabel({ sourceKind, reservation, lesson, packageById })
 }
 
 function getLessonStatusLabel(lesson, bucket) {
-  if (bucket === 'cancelled') return '차감취소'
+  if (bucket === 'cancelled') {
+    const cancellationType = normalizeId(lesson?.cancellationType).toLowerCase()
+    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+    if (cancellationType === 'lesson_cancelled') return '수업 취소'
+    return '차감취소'
+  }
   const startMillis = getKstDateTimeMillis(
     getLessonStorageDateString(lesson),
     lessonTimeInputValue(lesson) || lesson?.time
@@ -384,7 +400,12 @@ function buildApprovedReservationKeys(lessons, academyId, teacherScope) {
 }
 
 function classifyBucket({ sourceKind, lesson, reservation, date, time, nowMillis }) {
-  if (sourceKind === 'lesson' && lesson?.isDeductCancelled === true) return 'cancelled'
+  if (sourceKind === 'lesson') {
+    const status = normalizeId(lesson?.status).toLowerCase()
+    if (lesson?.isDeductCancelled === true || status === 'cancelled' || status === 'canceled') {
+      return 'cancelled'
+    }
+  }
   const status = normalizeId(reservation?.status).toLowerCase()
   if (sourceKind === 'reservation' && CANCELLED_RESERVATION_STATUSES.has(status)) {
     return 'cancelled'

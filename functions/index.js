@@ -1200,6 +1200,94 @@ function buildAdminCancelledPrivateSlotUpdates({now}) {
   };
 }
 
+function getFixedPrivateLessonStartMillis(lesson) {
+  const startAtMillis = getTimestampMillis(lesson && lesson.startAt);
+  if (startAtMillis !== null) return startAtMillis;
+  return getSeoulDateTimeMillis(
+      normalizeId(lesson && lesson.date),
+      normalizeId(lesson && lesson.time),
+  );
+}
+
+function isFixedPrivateLessonOccurrence(lesson) {
+  if (!lesson) return false;
+  const packageType = normalizeId(lesson.packageType).toLowerCase();
+  const sourceType = normalizeId(lesson.sourceType).toLowerCase();
+  return packageType === "private" &&
+    sourceType === "fixed-private-slot-assignment";
+}
+
+function normalizeFixedPrivateCancellationType(value) {
+  const type = normalizeId(value).toLowerCase();
+  if (type === "seat_released" || type === "lesson_cancelled") return type;
+  throw new HttpsError(
+      "invalid-argument",
+      "cancellationType must be seat_released or lesson_cancelled.",
+  );
+}
+
+function getFixedPrivateActorRole(membership) {
+  const role = normalizeId(membership && membership.role).toLowerCase();
+  if (role === "owner" || role === "admin") return "admin";
+  if (role === "teacher") return "teacher";
+  if (role === "student") return "student";
+  throw new HttpsError(
+      "permission-denied",
+      "Admin, teacher, or student membership required.",
+  );
+}
+
+function teacherMembershipMatchesFixedLesson(membership, lesson) {
+  const lessonKeys = getPrivateTeacherScopeKeys(lesson);
+  const membershipKeys = getPrivateTeacherScopeKeys({
+    teacher: membership && membership.teacherName,
+    teacherName: membership && membership.teacherName,
+    teacherKey: membership && membership.teacherKey,
+    teacherUid: membership && membership.teacherUid,
+    teacherUID: membership && membership.teacherUID,
+    teacherId: membership && membership.teacherId,
+    displayName: membership && membership.displayName,
+    name: membership && membership.name,
+  });
+  return lessonKeys.length > 0 &&
+    membershipKeys.some((key) => lessonKeys.includes(key));
+}
+
+function buildFixedPrivateLessonCancellationPatch({
+  now,
+  uid,
+  actorRole,
+  cancellationType,
+  reason,
+  lessonId,
+}) {
+  const isSeatReleased = cancellationType === "seat_released";
+  const cancellationReason =
+    normalizeId(reason) ||
+    (isSeatReleased ?
+      "fixed_private_seat_released" :
+      "fixed_private_lesson_cancelled");
+  return {
+    status: "cancelled",
+    cancelledAt: now,
+    cancelledBy: uid,
+    cancelledByUid: uid,
+    cancelledByRole: actorRole,
+    cancellationReason,
+    cancelledReason: cancellationReason,
+    cancellationType,
+    isSeatReleased,
+    releasedForPrivateBooking: isSeatReleased,
+    releasedFromFixedLessonId: isSeatReleased ? lessonId : "",
+    releasedAt: isSeatReleased ? now : null,
+    releasedBy: isSeatReleased ? uid : "",
+    releasedByUid: isSeatReleased ? uid : "",
+    releasedByRole: isSeatReleased ? actorRole : "",
+    noDeduction: true,
+    updatedAt: now,
+  };
+}
+
 function getTimestampMillis(value) {
   if (!value) return null;
   if (typeof value.toMillis === "function") {
@@ -2569,6 +2657,9 @@ function getPrivateScheduleTeacherKey(row) {
 function isCancelledScheduleRow(row) {
   const status = normalizeId(row && row.status).toLowerCase();
   const approvalStatus = normalizeId(row && row.approvalStatus).toLowerCase();
+  const cancellationType = normalizeId(row && row.cancellationType)
+      .toLowerCase();
+  if (cancellationType === "lesson_cancelled") return false;
   if (status === "cancelled" || status === "canceled") return true;
   if (row && row.completed === "cancelled") return true;
   if (row && row.isDeductCancelled === true) return true;
@@ -5076,6 +5167,167 @@ exports.cancelPrivateLessonReservation = onCall(
             slotId,
             studentId,
             reservationId,
+          };
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.cancelFixedPrivateLessonOccurrence = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const lessonId = requireString(data, "lessonId");
+        const cancellationType = normalizeFixedPrivateCancellationType(
+            data.cancellationType,
+        );
+        const reason = normalizeId(data.reason);
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const membershipRef = db
+            .collection("academyMemberships")
+            .doc(`${academyId}_${uid}`);
+        const lessonRef = db.collection("lessons").doc(lessonId);
+
+        return await db.runTransaction(async (transaction) => {
+          const [membershipSnap, lessonSnap] = await Promise.all([
+            transaction.get(membershipRef),
+            transaction.get(lessonRef),
+          ]);
+          const membership = requireActiveAcademyMembership(membershipSnap);
+          const actorRole = getFixedPrivateActorRole(membership);
+          if (!lessonSnap.exists) {
+            throw new HttpsError(
+                "not-found",
+                "Fixed private lesson not found.",
+            );
+          }
+          const lesson = lessonSnap.data() || {};
+          if (normalizeId(lesson.academyId) !== academyId) {
+            throw new HttpsError(
+                "permission-denied",
+                "Fixed private lesson academy mismatch.",
+            );
+          }
+          if (!isFixedPrivateLessonOccurrence(lesson)) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Only fixed private lesson occurrences can be cancelled here.",
+            );
+          }
+          const lessonStatus = normalizeId(lesson.status).toLowerCase();
+          if (lessonStatus === "cancelled" || lessonStatus === "canceled") {
+            throw new HttpsError(
+                "failed-precondition",
+                "Fixed private lesson is already cancelled.",
+            );
+          }
+          const startMillis = getFixedPrivateLessonStartMillis(lesson);
+          if (startMillis === null || Date.now() >= startMillis) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Only future fixed private lessons can be cancelled.",
+            );
+          }
+
+          const lessonStudentId = normalizeId(
+              lesson.studentId || lesson.studentID,
+          );
+          let statsRef = null;
+          let allowance = null;
+          let statsSnap = null;
+          if (actorRole === "student") {
+            if (
+              !membership.studentId ||
+              membership.studentId !== lessonStudentId
+            ) {
+              throw new HttpsError(
+                  "permission-denied",
+                  "Cannot cancel another student's fixed private lesson.",
+              );
+            }
+            if (Date.now() > startMillis - STUDENT_PRIVATE_CANCEL_CUTOFF_MS) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Fixed private lessons can only be cancelled at least " +
+                  "6 hours " +
+                  "before start time.",
+              );
+            }
+            statsRef = db
+                .collection("studentPrivateBookingStats")
+                .doc(`${academyId}__${lessonStudentId}`);
+            statsSnap = await transaction.get(statsRef);
+            const stats = statsSnap.exists ? statsSnap.data() || {} : {};
+            allowance = resolveStudentPrivateCancelAllowance(stats);
+            if (allowance.studentCancelCount >= allowance.studentCancelLimit) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "1:1 예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.",
+              );
+            }
+          } else if (actorRole === "teacher") {
+            if (!teacherMembershipMatchesFixedLesson(membership, lesson)) {
+              throw new HttpsError(
+                  "permission-denied",
+                  "Cannot cancel another teacher's fixed private lesson.",
+              );
+            }
+          }
+
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          transaction.update(
+              lessonRef,
+              buildFixedPrivateLessonCancellationPatch({
+                now,
+                uid,
+                actorRole,
+                cancellationType,
+                reason,
+                lessonId,
+              }),
+          );
+
+          let nextAllowance = null;
+          if (actorRole === "student" && statsRef && allowance) {
+            const nextStudentCancelCount = allowance.studentCancelCount + 1;
+            transaction.set(statsRef, {
+              academyId,
+              studentId: lessonStudentId,
+              studentCancelCount: nextStudentCancelCount,
+              createdAt:
+                statsSnap && statsSnap.exists && statsSnap.data().createdAt ?
+                  statsSnap.data().createdAt :
+                  now,
+              updatedAt: now,
+            }, {merge: true});
+            nextAllowance = {
+              studentCancelCount: nextStudentCancelCount,
+              studentCancelLimit: allowance.studentCancelLimit,
+              remainingCancelCount: Math.max(
+                  0,
+                  allowance.studentCancelLimit - nextStudentCancelCount,
+              ),
+            };
+          }
+
+          return {
+            ok: true,
+            academyId,
+            lessonId,
+            cancellationType,
+            cancelledByRole: actorRole,
+            isSeatReleased: cancellationType === "seat_released",
+            cancelAllowance: nextAllowance,
           };
         });
       } catch (error) {

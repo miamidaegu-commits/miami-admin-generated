@@ -98,6 +98,30 @@ function isPrivateLessonCancelledWithoutDeduction(lesson) {
   return status === 'cancelled' || status === 'canceled'
 }
 
+function getFixedPrivateLessonCancellationLabel(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  if (status !== 'cancelled' && status !== 'canceled') return ''
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+  if (cancellationType === 'lesson_cancelled') return '수업 취소'
+  return ''
+}
+
+function isFixedPrivateLesson(lesson) {
+  return (
+    String(lesson?.packageType || '').trim() === 'private' &&
+    String(lesson?.sourceType || '').trim() === 'fixed-private-slot-assignment'
+  )
+}
+
+function isFuturePrivateLesson(lesson) {
+  const date = getLessonStorageDateString(lesson)
+  const time = String(lesson?.time || '').trim()
+  const millis = seoulDateTimeToMillis(date, time)
+  if (Number.isFinite(millis)) return millis > Date.now()
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= getTodayStorageDateString()
+}
+
 function getPackageById(studentPackages, packageId) {
   const pid = String(packageId || '').trim()
   if (!pid) return null
@@ -522,10 +546,12 @@ export default function CalendarSection(props) {
     canManagePrivateLessonDeductions,
     busyLessonId,
     busyPrivateLessonCrudId,
+    busyFixedPrivateLessonCancelId,
     busyPrivateLessonAdd,
     busyPrivateReservationOutcomeId,
     openPrivateLessonEditModal,
     handleDeletePrivateLesson,
+    onCancelFixedPrivateLesson,
     onMarkPrivateReservationOutcome,
     onReversePrivateReservationOutcome,
     canEditLesson,
@@ -814,6 +840,18 @@ export default function CalendarSection(props) {
               !isGroupRow &&
               !isPrivateReservationRow &&
               isPrivateLessonCancelledWithoutDeduction(lesson)
+            const fixedPrivateCancellationLabel =
+              !isGroupRow && !isPrivateReservationRow
+                ? getFixedPrivateLessonCancellationLabel(lesson)
+                : ''
+            const canCancelFixedPrivateLesson =
+              activeSection === 'calendar' &&
+              isAdmin &&
+              !isGroupRow &&
+              !isPrivateReservationRow &&
+              isFixedPrivateLesson(lesson) &&
+              isFuturePrivateLesson(lesson) &&
+              !fixedPrivateCancellationLabel
             const isDeductedPrivateLesson =
               !isGroupRow &&
               !isPrivateReservationRow &&
@@ -853,7 +891,7 @@ export default function CalendarSection(props) {
                         ? '노쇼'
                         : '예약됨'
                 : isNoDeductionPrivateLesson
-                  ? '휴강 · 차감 없음'
+                  ? fixedPrivateCancellationLabel || '휴강 · 차감 없음'
                   : lesson.isDeductCancelled
                   ? '차감취소'
                   : isDeductedPrivateLesson
@@ -899,7 +937,10 @@ export default function CalendarSection(props) {
             const reservationOutcomeBusy =
               reservationCompleteBusy || reservationNoShowBusy || reservationReverseBusy
             const rowLessonActionBusy =
-              busyLessonId === lesson.id || rowPrivateCrudBusy || busyPrivateLessonAdd
+              busyLessonId === lesson.id ||
+              rowPrivateCrudBusy ||
+              busyPrivateLessonAdd ||
+              busyFixedPrivateLessonCancelId === lesson.id
             const sessionLabel = formatLessonSessionNumber(lesson)
             const badgeStyle = {
               display: 'inline-block',
@@ -1078,6 +1119,49 @@ export default function CalendarSection(props) {
                     >
                       횟수 수정
                     </button>
+                  ) : null}
+                  {activeSection === 'calendar' &&
+                  canCancelFixedPrivateLesson ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onCancelFixedPrivateLesson?.(lesson, 'seat_released')
+                        }}
+                        disabled={rowLessonActionBusy}
+                        data-testid="calendar-fixed-private-release-button"
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #4a6fff55',
+                          background: '#1f2a44',
+                          color: 'white',
+                          cursor: rowLessonActionBusy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {busyFixedPrivateLessonCancelId === lesson.id ? '처리 중...' : '자리 공개'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onCancelFixedPrivateLesson?.(lesson, 'lesson_cancelled')
+                        }}
+                        disabled={rowLessonActionBusy}
+                        data-testid="calendar-fixed-private-cancel-button"
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #665533',
+                          background: '#3a321f',
+                          color: '#ffe8b8',
+                          cursor: rowLessonActionBusy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {busyFixedPrivateLessonCancelId === lesson.id ? '처리 중...' : '수업 취소'}
+                      </button>
+                    </>
                   ) : null}
                   {activeSection === 'calendar' &&
                   canEditLesson &&
