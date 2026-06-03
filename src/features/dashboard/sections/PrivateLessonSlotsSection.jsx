@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { PRIVATE_WEEKLY_SLOT_WEEKDAYS } from '../../booking/privateWeeklySlotBulk.js'
+import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 
 function slotStatusLabel(status) {
   if (status === 'reserved') return '예약 완료'
@@ -209,6 +210,7 @@ export default function PrivateLessonSlotsSection({
 }) {
   const [editingEligibilitySlotId, setEditingEligibilitySlotId] = useState('')
   const [editingEligibilityStudentIds, setEditingEligibilityStudentIds] = useState([])
+  const [fixedPrivateLessonAction, setFixedPrivateLessonAction] = useState(null)
 
   const privateStudentOptions = useMemo(() => {
     return [...privateStudents]
@@ -1139,40 +1141,22 @@ export default function PrivateLessonSlotsSection({
                       </span>
                       <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         {!isCancelled ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => onCancelFixedPrivateLesson?.(lesson, 'seat_released')}
-                              disabled={busy}
-                              data-testid="private-fixed-lesson-release-button"
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 8,
-                                border: '1px solid #4a6fff55',
-                                background: '#1f2a44',
-                                color: 'white',
-                                cursor: busy ? 'not-allowed' : 'pointer',
-                              }}
-                            >
-                              {busy ? '처리 중...' : '자리 공개'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => onCancelFixedPrivateLesson?.(lesson, 'lesson_cancelled')}
-                              disabled={busy}
-                              data-testid="private-fixed-lesson-cancel-button"
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 8,
-                                border: '1px solid #665533',
-                                background: '#3a321f',
-                                color: '#ffe8b8',
-                                cursor: busy ? 'not-allowed' : 'pointer',
-                              }}
-                            >
-                              {busy ? '처리 중...' : '수업 취소'}
-                            </button>
-                          </>
+                          <button
+                            type="button"
+                            onClick={() => setFixedPrivateLessonAction(lesson)}
+                            disabled={busy}
+                            data-testid="private-fixed-lesson-action-button"
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #4a6fff55',
+                              background: '#1f2a44',
+                              color: 'white',
+                              cursor: busy ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            {busy ? '처리 중...' : '고정수업 처리'}
+                          </button>
                         ) : (
                           <span style={{ opacity: 0.65, fontSize: 12 }}>처리 완료</span>
                         )}
@@ -1571,6 +1555,14 @@ export default function PrivateLessonSlotsSection({
           })}
         </div>
       )}
+      {fixedPrivateLessonAction ? (
+        <FixedPrivateLessonActionModal
+          lesson={fixedPrivateLessonAction}
+          busy={busyFixedPrivateLessonCancelId === fixedPrivateLessonAction.id}
+          onClose={() => setFixedPrivateLessonAction(null)}
+          onAction={onCancelFixedPrivateLesson}
+        />
+      ) : null}
     </section>
   )
 }

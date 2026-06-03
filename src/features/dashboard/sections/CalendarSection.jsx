@@ -16,6 +16,7 @@ import {
   findPrivatePackageForTeacherContext,
   findStudentPrivatePackageContexts,
 } from '../privatePackageHelpers.js'
+import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 
 function calendarTimestampToMillis(value) {
   if (!value) return null
@@ -562,6 +563,7 @@ export default function CalendarSection(props) {
     canEditStudentPackageCountsForPackage = () => false,
   } = props
   const [privateLessonDetail, setPrivateLessonDetail] = useState(null)
+  const [fixedPrivateLessonAction, setFixedPrivateLessonAction] = useState(null)
   const displayedLessonRows =
     activeSection === 'groups'
       ? displayedLessons.filter((lesson) => lesson._calendarRowKind === 'group')
@@ -844,13 +846,15 @@ export default function CalendarSection(props) {
               !isGroupRow && !isPrivateReservationRow
                 ? getFixedPrivateLessonCancellationLabel(lesson)
                 : ''
-            const canCancelFixedPrivateLesson =
-              activeSection === 'calendar' &&
-              isAdmin &&
+            const isFutureFixedPrivateLessonRow =
               !isGroupRow &&
               !isPrivateReservationRow &&
               isFixedPrivateLesson(lesson) &&
-              isFuturePrivateLesson(lesson) &&
+              isFuturePrivateLesson(lesson)
+            const canCancelFixedPrivateLesson =
+              activeSection === 'calendar' &&
+              isAdmin &&
+              isFutureFixedPrivateLessonRow &&
               !fixedPrivateCancellationLabel
             const isDeductedPrivateLesson =
               !isGroupRow &&
@@ -927,6 +931,15 @@ export default function CalendarSection(props) {
               !isPrivateReservationRow &&
               Boolean(contextPackage && contextPackage.__packageStub !== true) &&
               canEditStudentPackageCountsForPackage(contextPackage)
+            const hasPrivateCountAdjustmentState =
+              isDeductedPrivateLesson ||
+              lesson.isDeductCancelled === true ||
+              lesson.completed === true ||
+              lesson.deductionApplied === true ||
+              ['completed', 'no_show'].includes(privateReservationStatus)
+            const showPackageCountEdit =
+              canEditPackageCount &&
+              !(isFutureFixedPrivateLessonRow && !hasPrivateCountAdjustmentState)
             const rowPrivateCrudBusy = busyPrivateLessonCrudId === lesson.id
             const reservationCompleteBusy =
               busyPrivateReservationOutcomeId === `${lesson.id}:completed`
@@ -987,7 +1000,7 @@ export default function CalendarSection(props) {
                   hasLinkedPrivatePackage,
                   contextPackage,
                   packageUsage,
-                  canEditPackageCount,
+                  canEditPackageCount: showPackageCountEdit,
                 }
               : null
             const rowKind = isGroupRow
@@ -1103,7 +1116,7 @@ export default function CalendarSection(props) {
                   {activeSection === 'calendar' &&
                   !isGroupRow &&
                   !isPrivateReservationRow &&
-                  canEditPackageCount ? (
+                  showPackageCountEdit ? (
                     <button
                       type="button"
                       data-testid="calendar-package-count-edit-button"
@@ -1125,46 +1138,25 @@ export default function CalendarSection(props) {
                   ) : null}
                   {activeSection === 'calendar' &&
                   canCancelFixedPrivateLesson ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onCancelFixedPrivateLesson?.(lesson, 'seat_released')
-                        }}
-                        disabled={rowLessonActionBusy}
-                        data-testid="calendar-fixed-private-release-button"
-                        style={{
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          border: '1px solid #4a6fff55',
-                          background: '#1f2a44',
-                          color: 'white',
-                          cursor: rowLessonActionBusy ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        {busyFixedPrivateLessonCancelId === lesson.id ? '처리 중...' : '자리 공개'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          onCancelFixedPrivateLesson?.(lesson, 'lesson_cancelled')
-                        }}
-                        disabled={rowLessonActionBusy}
-                        data-testid="calendar-fixed-private-cancel-button"
-                        style={{
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          border: '1px solid #665533',
-                          background: '#3a321f',
-                          color: '#ffe8b8',
-                          cursor: rowLessonActionBusy ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        {busyFixedPrivateLessonCancelId === lesson.id ? '처리 중...' : '수업 취소'}
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setFixedPrivateLessonAction(lesson)
+                      }}
+                      disabled={rowLessonActionBusy}
+                      data-testid="calendar-fixed-private-action-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #4a6fff55',
+                        background: '#1f2a44',
+                        color: 'white',
+                        cursor: rowLessonActionBusy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {busyFixedPrivateLessonCancelId === lesson.id ? '처리 중...' : '고정수업 처리'}
+                    </button>
                   ) : null}
                   {activeSection === 'calendar' &&
                   canEditLesson &&
@@ -1192,7 +1184,8 @@ export default function CalendarSection(props) {
                   {activeSection === 'calendar' &&
                   canDeleteLesson &&
                   !isGroupRow &&
-                  !isPrivateReservationRow ? (
+                  !isPrivateReservationRow &&
+                  !isFutureFixedPrivateLessonRow ? (
                     <button
                       type="button"
                       onClick={(event) => {
@@ -1332,6 +1325,14 @@ export default function CalendarSection(props) {
             openStudentPackageEditModal?.(pkg)
             setPrivateLessonDetail(null)
           }}
+        />
+      ) : null}
+      {fixedPrivateLessonAction ? (
+        <FixedPrivateLessonActionModal
+          lesson={fixedPrivateLessonAction}
+          busy={busyFixedPrivateLessonCancelId === fixedPrivateLessonAction.id}
+          onClose={() => setFixedPrivateLessonAction(null)}
+          onAction={onCancelFixedPrivateLesson}
         />
       ) : null}
     </section>
