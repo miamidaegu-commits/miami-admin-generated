@@ -39,14 +39,14 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     await expect(packageDialog).toBeVisible();
 
     await packageDialog.getByLabel('수강권 유형').selectOption('private');
-    await expect(packageDialog.getByLabel('수강권 시작일', { exact: true })).toBeVisible();
-    await expect(packageDialog.getByLabel(/결제일 \(선택\)/)).toBeVisible();
+    await expect(packageDialog.getByTestId('student-package-start-date-input')).toBeVisible();
+    await expect(packageDialog.getByTestId('student-package-payment-date-input')).toBeVisible();
     await expect(packageDialog).toContainText('결제일은 실제 결제한 날짜입니다');
     await expect(packageDialog).toContainText('개인 수강권은 선택한 선생님 수업에만 사용할 수 있습니다');
     await packageDialog.getByRole('button', { name: '횟수 수강권' }).click();
     await packageDialog.getByLabel('제목').fill(packageTitle);
     await packageDialog.getByLabel(/총 횟수/).fill('8');
-    await packageDialog.getByLabel(/결제일 \(선택\)/).fill(paymentDate);
+    await packageDialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
 
     await packageDialog.getByRole('button', { name: '저장' }).click();
     await expect(packageDialog).toBeHidden();

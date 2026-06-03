@@ -198,6 +198,8 @@ export default function StudentPackageEditModal({
                   <span style={{ opacity: 0.85 }}>결제일 (선택)</span>
                   <input
                     type="date"
+                    aria-label="결제일 (선택)"
+                    data-testid="student-package-payment-date-input"
                     value={studentPackageEditForm.paymentDate}
                     onChange={(e) =>
                       setStudentPackageEditForm((prev) => ({

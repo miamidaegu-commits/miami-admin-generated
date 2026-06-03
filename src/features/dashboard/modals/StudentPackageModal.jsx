@@ -265,6 +265,8 @@ export default function StudentPackageModal({
                         <span style={{ opacity: 0.85 }}>수강권 시작일</span>
                         <input
                           type="date"
+                          aria-label="수강권 시작일"
+                          data-testid="student-package-start-date-input"
                           value={studentPackageForm.registrationStartDate}
                           onChange={(e) =>
                             setStudentPackageForm((prev) => ({
@@ -510,6 +512,8 @@ export default function StudentPackageModal({
                     <span style={{ opacity: 0.85 }}>수강권 시작일</span>
                     <input
                       type="date"
+                      aria-label="수강권 시작일"
+                      data-testid="student-package-start-date-input"
                       value={studentPackageForm.registrationStartDate}
                       onChange={(e) =>
                         setStudentPackageForm((prev) => ({
@@ -631,6 +635,8 @@ export default function StudentPackageModal({
                   <span style={{ opacity: 0.85 }}>결제일 (선택)</span>
                   <input
                     type="date"
+                    aria-label="결제일 (선택)"
+                    data-testid="student-package-payment-date-input"
                     value={studentPackageForm.paymentDate}
                     onChange={(e) =>
                       setStudentPackageForm((prev) => ({ ...prev, paymentDate: e.target.value }))

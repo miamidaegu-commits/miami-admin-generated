@@ -72,11 +72,11 @@ test('관리자가 학생 수강권 수정 모달에서 값을 저장하고 다�
   try {
     const editDialog = await openStudentPackageEditModal(packageCard);
     await expect(editDialog.getByLabel('결제 금액 (선택)')).toBeVisible();
-    await expect(editDialog.getByLabel(/결제일 \(선택\)/)).toBeVisible();
+    await expect(editDialog.getByTestId('student-package-payment-date-input')).toBeVisible();
     await expect(editDialog).toContainText('수강권 시작일');
     await expect(editDialog).toContainText('결제일은 실제 결제한 날짜입니다');
     const memoInput = editDialog.getByLabel('메모 (선택)');
-    const paymentDateInput = editDialog.getByLabel(/결제일 \(선택\)/);
+    const paymentDateInput = editDialog.getByTestId('student-package-payment-date-input');
     await expect(memoInput).toBeVisible();
 
     originalMemo = await memoInput.inputValue();
@@ -94,9 +94,9 @@ test('관리자가 학생 수강권 수정 모달에서 값을 저장하고 다�
 
     const restoreDialog = await openStudentPackageEditModal(packageCard);
     await expect(restoreDialog.getByLabel('메모 (선택)')).toHaveValue(tempMemo);
-    await expect(restoreDialog.getByLabel(/결제일 \(선택\)/)).toHaveValue(tempPaymentDate);
+    await expect(restoreDialog.getByTestId('student-package-payment-date-input')).toHaveValue(tempPaymentDate);
     await restoreDialog.getByLabel('메모 (선택)').fill(originalMemo);
-    await restoreDialog.getByLabel(/결제일 \(선택\)/).fill(originalPaymentDate);
+    await restoreDialog.getByTestId('student-package-payment-date-input').fill(originalPaymentDate);
     await restoreDialog.getByRole('button', { name: '저장', exact: true }).click();
     await expect(restoreDialog).toBeHidden();
 
@@ -114,7 +114,7 @@ test('관리자가 학생 수강권 수정 모달에서 값을 저장하고 다�
 
     const finalDialog = await openStudentPackageEditModal(packageCard);
     await expect(finalDialog.getByLabel('메모 (선택)')).toHaveValue(originalMemo);
-    await expect(finalDialog.getByLabel(/결제일 \(선택\)/)).toHaveValue(originalPaymentDate);
+    await expect(finalDialog.getByTestId('student-package-payment-date-input')).toHaveValue(originalPaymentDate);
     await finalDialog.getByRole('button', { name: '취소', exact: true }).click();
     await expect(finalDialog).toBeHidden();
   } finally {
@@ -122,7 +122,7 @@ test('관리자가 학생 수강권 수정 모달에서 값을 저장하고 다�
 
     const restoreDialog = await openStudentPackageEditModal(packageCard);
     await restoreDialog.getByLabel('메모 (선택)').fill(originalMemo);
-    await restoreDialog.getByLabel(/결제일 \(선택\)/).fill(originalPaymentDate);
+    await restoreDialog.getByTestId('student-package-payment-date-input').fill(originalPaymentDate);
     await restoreDialog.getByRole('button', { name: '저장', exact: true }).click();
     await expect(restoreDialog).toBeHidden();
   }
