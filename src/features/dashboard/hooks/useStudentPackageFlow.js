@@ -58,6 +58,7 @@ const DEFAULT_STUDENT_PACKAGE_FORM = {
   paymentDate: '',
   amountPaid: '',
   memo: '',
+  registrationLabel: '',
   privateDuplicateAction: 'topUp',
 }
 
@@ -545,6 +546,7 @@ export default function useStudentPackageFlow({
         paymentDate,
         amountPaid,
         amountPaidProvided: amountPaidRaw !== '',
+        registrationLabel: String(form.registrationLabel || '').trim(),
         memo: String(form.memo || '').trim(),
       }
     }
@@ -673,6 +675,7 @@ export default function useStudentPackageFlow({
       paymentDate,
       amountPaid,
       amountPaidProvided: amountPaidRaw !== '',
+      registrationLabel: String(form.registrationLabel || '').trim(),
       memo: String(form.memo || '').trim(),
     }
   }
@@ -734,6 +737,8 @@ export default function useStudentPackageFlow({
             txSnap.docs.map((docItem) => docItem.data() || {})
           )
           const registrationRound = Math.max(2, registrationEventCount + 1)
+          const registrationLabel =
+            String(result.registrationLabel || '').trim() || `${registrationRound}회차 등록`
 
           await updateDoc(doc(db, 'studentPackages', targetPackage.id), {
             totalCount: increment(topUpCount),
@@ -759,10 +764,12 @@ export default function useStudentPackageFlow({
             deltaCount: topUpCount,
             registrationRound,
             roundNumber: registrationRound,
+            registrationLabel,
+            registrationMemo: String(result.memo || '').trim(),
             paymentDate: result.paymentDate,
             ...(result.amountPaidProvided ? { amountPaid: result.amountPaid } : {}),
             memo: [
-              `${registrationRound}회차 등록`,
+              registrationLabel,
               `+${topUpCount}회`,
               String(result.memo || '').trim(),
             ]

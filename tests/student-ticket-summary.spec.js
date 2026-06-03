@@ -54,6 +54,11 @@ test('student ticket summary helpers match admin-style private labels', () => {
     usedCount: 0,
     remainingCount: 4,
     status: 'active',
+    topUpCount: 1,
+    registrationHistory: [
+      { registrationRound: 1, deltaCount: 4 },
+      { registrationLabel: '5개월 할인 등록', deltaCount: 5 },
+    ],
   };
   const lessons = [
     privateLesson('past', {
@@ -92,8 +97,9 @@ test('student ticket summary helpers match admin-style private labels', () => {
   });
   expect(beforeBooking[0]).toMatchObject({
     teacherLabel: 'don1',
-    usageText: '잔여 4회 / 총 4회 · 사용 0회',
+    usageText: '총 4회 · 사용 0회 · 남은 4회',
     scheduleText: '고정 예정 3회 · 보충 가능 1회',
+    registrationSummaryText: '등록 내역: 1회차 +4회, 5개월 할인 등록 +5회',
   });
 
   const afterBooking = buildStudentPrivateTicketSummaries({

@@ -27,7 +27,39 @@ export function formatPrivatePackageUsageSummary(pkg) {
     pkg?.usedCount != null && String(pkg.usedCount).trim() !== ''
       ? toFiniteNumber(pkg.usedCount)
       : usedFallback
-  return `잔여 ${remaining}회 / 총 ${total}회 · 사용 ${used}회`
+  return `총 ${total}회 · 사용 ${used}회 · 남은 ${remaining}회`
+}
+
+function formatRegistrationDelta(row) {
+  const count = Number(row?.deltaCount ?? row?.count ?? row?.lessonCount ?? 0)
+  if (!Number.isFinite(count) || count <= 0) return ''
+  return `+${count}회`
+}
+
+function getRegistrationLabel(row, index) {
+  const explicit = String(row?.registrationLabel || row?.label || row?.title || '').trim()
+  if (explicit) return explicit
+  const round = Number(row?.registrationRound ?? row?.roundNumber ?? index + 1)
+  if (Number.isFinite(round) && round > 0) return `${round}회차`
+  return '추가 등록'
+}
+
+export function formatPrivatePackageRegistrationSummary(pkg) {
+  const rows = Array.isArray(pkg?.registrationHistory)
+    ? pkg.registrationHistory
+    : Array.isArray(pkg?.registrationEntries)
+      ? pkg.registrationEntries
+      : Array.isArray(pkg?.registrationRounds)
+        ? pkg.registrationRounds
+        : []
+  const entries = rows
+    .map((row, index) => [getRegistrationLabel(row, index), formatRegistrationDelta(row)]
+      .filter(Boolean)
+      .join(' '))
+    .filter(Boolean)
+  if (entries.length > 0) return `등록 내역: ${entries.join(', ')}`
+  if (Number(pkg?.topUpCount || 0) > 0 || pkg?.lastTopUpAt) return '등록 내역: 추가 등록 포함'
+  return ''
 }
 
 export function formatPrivateTicketScheduleSummary(balance) {
@@ -116,6 +148,7 @@ export function buildStudentPrivateTicketSummaries({
       teacherLabel: getPrivatePackageTeacherLabel(pkg),
       usageText: formatPrivatePackageUsageSummary(pkg),
       scheduleText: formatPrivateTicketScheduleSummary(balance),
+      registrationSummaryText: formatPrivatePackageRegistrationSummary(pkg),
       muted: !isActive || remaining <= 0,
       statusText: !isActive || remaining <= 0 ? '소진' : '',
     }
@@ -183,8 +216,9 @@ export function buildStudentPrivateTicketSummariesFromCallablePackages(slots = [
     return {
       id: packageId,
       teacherLabel: row.teacherLabel,
-      usageText: `잔여 ${remaining}회 / 총 ${totalCount}회 · 사용 ${used}회`,
+      usageText: `총 ${totalCount}회 · 사용 ${used}회 · 남은 ${remaining}회`,
       scheduleText: formatPrivateTicketScheduleSummary(balanceLike),
+      registrationSummaryText: formatPrivatePackageRegistrationSummary(summary),
       muted: remaining <= 0,
       statusText: remaining <= 0 ? '소진' : '',
     }

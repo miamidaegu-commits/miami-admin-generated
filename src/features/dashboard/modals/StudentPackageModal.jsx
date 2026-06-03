@@ -814,6 +814,35 @@ export default function StudentPackageModal({
                         : '추가 등록'}
                     </div>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ opacity: 0.85 }}>등록명 (선택)</span>
+                      <input
+                        type="text"
+                        data-testid="private-package-top-up-registration-label-input"
+                        value={studentPackageForm.registrationLabel}
+                        onChange={(e) =>
+                          setStudentPackageForm((prev) => ({
+                            ...prev,
+                            registrationLabel: e.target.value,
+                          }))
+                        }
+                        placeholder={
+                          Number.isFinite(topUpRegistrationRound) && topUpRegistrationRound > 0
+                            ? `${topUpRegistrationRound}회차 등록`
+                            : '추가 등록'
+                        }
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          border: '1px solid #444',
+                          background: '#1f1f1f',
+                          color: 'white',
+                        }}
+                      />
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        예: 3회차 등록, 1~5회차 패키지, 5개월 할인 등록
+                      </span>
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <span style={{ opacity: 0.85 }}>이번에 추가할 수업 횟수</span>
                       <input
                         type="text"

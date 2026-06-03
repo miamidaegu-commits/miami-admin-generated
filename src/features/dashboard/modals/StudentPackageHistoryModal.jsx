@@ -68,11 +68,35 @@ function formatTeacherScope(pkg) {
 function formatHistoryActionLabel(row) {
   const actionType = String(row?.actionType || '').trim()
   if (actionType === 'private_package_top_up' || actionType === 'package_top_up') {
+    const label = String(row?.registrationLabel || '').trim()
+    if (label) return label
     const round = Number(row?.registrationRound ?? row?.roundNumber ?? 0)
     if (Number.isFinite(round) && round > 0) return `${round}회차 등록`
     return '추가 등록'
   }
   return formatCreditTransactionActionTypeLabel(actionType)
+}
+
+function formatHistoryMemo(row) {
+  const explicitMemo = String(row?.registrationMemo || '').trim()
+  if (explicitMemo) return explicitMemo
+  const label = formatHistoryActionLabel(row)
+  const delta = formatCreditTransactionDeltaCountDisplay(row?.deltaCount)
+  const deltaWithUnit = delta && !delta.endsWith('회') ? `${delta}회` : delta
+  return (
+    String(row?.memo ?? '')
+      .split(' · ')
+      .map((part) => part.trim())
+      .filter((part) => part && part !== label && part !== delta && part !== deltaWithUnit)
+      .join(' · ')
+      .trim() || '-'
+  )
+}
+
+function formatHistoryDelta(row) {
+  const delta = formatCreditTransactionDeltaCountDisplay(row?.deltaCount)
+  if (!delta || delta === '-') return delta
+  return delta.endsWith('회') ? delta : `${delta}회`
 }
 
 function hasHistoryPaymentAmount(row) {
@@ -219,7 +243,7 @@ export default function StudentPackageHistoryModal({
                       {' · '}
                       {formatHistoryActionLabel(row)}
                       {' · '}
-                      {formatCreditTransactionDeltaCountDisplay(row.deltaCount)}
+                      {formatHistoryDelta(row)}
                     </div>
                     {String(row.paymentDate || '').trim() ? (
                       <div style={{ opacity: 0.82 }}>
@@ -232,7 +256,7 @@ export default function StudentPackageHistoryModal({
                       </div>
                     ) : null}
                     <div style={{ opacity: 0.82, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                      메모: {String(row.memo ?? '').trim() || '-'}
+                      메모: {formatHistoryMemo(row)}
                     </div>
                     <div style={{ opacity: 0.72, fontSize: 12, marginTop: 4 }}>
                       처리 역할: {String(row.actorRole ?? '').trim() || '-'}

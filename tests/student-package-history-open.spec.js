@@ -401,10 +401,10 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
   const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
   await expect(privatePackageCell).toContainText('don1');
   await expect(privatePackageCell).toContainText('don1 수강권');
-  await expect(privatePackageCell).toContainText('잔여 3회 / 총 3회 · 사용 0회');
+  await expect(privatePackageCell).toContainText('총 3회 · 사용 0회 · 남은 3회');
   await expect(privatePackageCell).toContainText('jenny');
   await expect(privatePackageCell).toContainText('jenny 수강권');
-  await expect(privatePackageCell).toContainText('잔여 3회 / 총 4회 · 사용 1회');
+  await expect(privatePackageCell).toContainText('총 4회 · 사용 1회 · 남은 3회');
   await expect(studentRow.getByTestId('student-group-package-cell')).toHaveText(
     '단체 수강권 등록 필요'
   );

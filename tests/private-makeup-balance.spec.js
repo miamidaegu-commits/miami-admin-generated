@@ -508,7 +508,7 @@ test('fixed private package balance creates one makeup booking and prevents over
     const studentRow = getStudentRow(page, fixture.studentName);
     await expect(studentRow).toBeVisible({ timeout: 15000 });
     const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
-    await expect(privatePackageCell).toContainText('잔여 4회 / 총 4회 · 사용 0회');
+    await expect(privatePackageCell).toContainText('총 4회 · 사용 0회 · 남은 4회');
     await expect(privatePackageCell).toContainText('고정 예정 3회');
     await expect(privatePackageCell).toContainText('보충 가능 1회');
     await expect(privatePackageCell).not.toContainText('예정 4회');
