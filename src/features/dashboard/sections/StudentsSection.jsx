@@ -75,7 +75,14 @@ function packageKindLabel(packageType) {
 }
 
 function getPrivatePackageTeacherLabel(pkg) {
-  return cleanText(pkg?.teacher || pkg?.teacherName, '선생님 미지정')
+  return cleanText(pkg?.teacherName || pkg?.teacher, '선생님 미지정')
+}
+
+function formatPrivatePackageTeacherScope(pkg) {
+  const display = String(pkg?.teacherName || '').trim()
+  const key = String(pkg?.teacherKey || pkg?.teacher || '').trim()
+  if (display && key && display !== key) return `${display} · ${key}`
+  return display || key || '-'
 }
 
 function formatPrivatePackageUsageSummary(pkg) {
@@ -124,7 +131,7 @@ function formatPrivatePackageTeacherSummary(packages, balanceByPackageId = new M
     const scheduleText = formatPrivateTicketScheduleSummary(balance)
     return {
       id: String(pkg.id || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}`),
-      text: `${getPrivatePackageTeacherLabel(pkg)} · ${formatPrivatePackageUsageSummary(pkg)}`,
+      text: `${getPrivatePackageTeacherLabel(pkg)} 수강권 · ${formatPrivatePackageUsageSummary(pkg)}`,
       scheduleText,
       statusText: !isActive || remaining <= 0 ? '소진' : '',
       muted: !isActive || remaining <= 0,
@@ -177,6 +184,64 @@ function docDateToMillis(raw) {
     return d ? d.getTime() : 0
   }
   return 0
+}
+
+function docDateToDate(raw) {
+  if (!raw) return null
+  if (raw instanceof Date) return raw
+  if (typeof raw.toDate === 'function') return raw.toDate()
+  if (raw.seconds != null) return new Date(Number(raw.seconds) * 1000)
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const parsed = parseYmdToLocalDate(trimmed)
+      return parsed || null
+    }
+    const ms = Date.parse(trimmed)
+    return Number.isFinite(ms) ? new Date(ms) : null
+  }
+  return null
+}
+
+function formatYmdDate(raw, fallback = '-') {
+  if (!raw) return fallback
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+    return raw.trim()
+  }
+  const date = docDateToDate(raw)
+  if (!date || !Number.isFinite(date.getTime())) return fallback
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function formatYmdDateTime(raw, fallback = '기록 없음') {
+  const date = docDateToDate(raw)
+  if (!date || !Number.isFinite(date.getTime())) return fallback
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
+}
+
+function formatPackagePaymentDate(pkg) {
+  return formatYmdDate(pkg?.paymentDate || pkg?.paidDate || pkg?.paidAt, '기록 없음')
+}
+
+function formatPackageStartDate(pkg) {
+  return formatYmdDate(pkg?.registrationStartDate || pkg?.startDate, '-')
 }
 
 function ymdTimeToMillis(dateValue, timeValue) {
@@ -1878,6 +1943,8 @@ export default function StudentsSection({
                           <span>{pkg.title != null && String(pkg.title).trim() ? String(pkg.title) : '-'}</span>
                           <span style={{ opacity: 0.72 }}>상태</span>
                           <span>{formatStudentPackageDetailStatusLabel(pkg.status)}</span>
+                          <span style={{ opacity: 0.72 }}>등록일</span>
+                          <span>{formatYmdDateTime(pkg.createdAt)}</span>
                           <span style={{ opacity: 0.72 }}>연결 반</span>
                           <span>
                             {pkg.groupClassName != null && String(pkg.groupClassName).trim()
@@ -1886,6 +1953,12 @@ export default function StudentsSection({
                           </span>
                           <span style={{ opacity: 0.72 }}>코스 유형</span>
                           <span>{getGroupCourseTypeLabel(pkg.groupCourseType) || '-'}</span>
+                          {String(pkg.packageType || '').trim() === 'private' ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>사용 가능 선생님</span>
+                              <span>{formatPrivatePackageTeacherScope(pkg)}</span>
+                            </>
+                          ) : null}
                           <span style={{ opacity: 0.72 }}>총 횟수</span>
                           <span>
                             {pkg.totalCount != null && pkg.totalCount !== ''
@@ -1904,10 +1977,14 @@ export default function StudentsSection({
                               ? String(pkg.remainingCount)
                               : '-'}
                           </span>
+                          <span style={{ opacity: 0.72 }}>수강권 시작일</span>
+                          <span>{formatPackageStartDate(pkg)}</span>
                           <span style={{ opacity: 0.72 }}>만료일</span>
                           <span>{formatGroupStudentStartDate(pkg.expiresAt)}</span>
                           {canViewPaymentFields ? (
                             <>
+                              <span style={{ opacity: 0.72 }}>결제일</span>
+                              <span>{formatPackagePaymentDate(pkg)}</span>
                               <span style={{ opacity: 0.72 }}>결제 금액</span>
                               <span>{formatStudentPackageDetailAmountPaid(pkg.amountPaid)}</span>
                               <span style={{ opacity: 0.72 }}>메모</span>
@@ -2187,7 +2264,7 @@ export default function StudentsSection({
                       data-testid="student-history-package-row"
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '1.2fr 0.7fr 0.8fr repeat(3, 0.7fr) 0.8fr 1fr',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))',
                         gap: 10,
                         alignItems: 'center',
                         padding: 10,
@@ -2206,16 +2283,20 @@ export default function StudentsSection({
                           .filter(Boolean)
                           .join(' · ')}
                       </span>
-                      <span>{cleanText(pkg.teacher)}</span>
+                      <span>등록일 {formatYmdDateTime(pkg.createdAt)}</span>
+                      <span>결제일 {formatPackagePaymentDate(pkg)}</span>
+                      <span>수강권 시작일 {formatPackageStartDate(pkg)}</span>
+                      <span>만료일 {formatGroupStudentStartDate(pkg.expiresAt)}</span>
+                      <span>
+                        사용 가능 선생님{' '}
+                        {String(pkg.packageType || '').trim() === 'private'
+                          ? formatPrivatePackageTeacherScope(pkg)
+                          : cleanText(pkg.teacher)}
+                      </span>
                       <span>총 {cleanText(pkg.totalCount ?? pkg.paidLessons)}</span>
                       <span>사용 {cleanText(pkg.usedCount ?? pkg.attendanceCount)}</span>
                       <span>남은 {cleanText(pkg.remainingCount)}</span>
                       <span>{formatStudentPackageDetailStatusLabel(pkg.status)}</span>
-                      <span>
-                        {[formatGroupStudentStartDate(pkg.startDate), formatGroupStudentStartDate(pkg.expiresAt)]
-                          .filter((v) => v && v !== '-')
-                          .join(' ~ ') || '-'}
-                      </span>
                     </div>
                   ))}
                 </div>

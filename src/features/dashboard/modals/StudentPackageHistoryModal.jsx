@@ -2,9 +2,68 @@ import {
   formatCreditTransactionActionTypeLabel,
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
+  formatGroupStudentStartDate,
   formatStudentPackageDetailTypeLabel,
+  parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+
+function docDateToDate(raw) {
+  if (!raw) return null
+  if (raw instanceof Date) return raw
+  if (typeof raw.toDate === 'function') return raw.toDate()
+  if (raw.seconds != null) return new Date(Number(raw.seconds) * 1000)
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return parseYmdToLocalDate(trimmed)
+    const ms = Date.parse(trimmed)
+    return Number.isFinite(ms) ? new Date(ms) : null
+  }
+  return null
+}
+
+function formatYmdDate(raw, fallback = '-') {
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+    return raw.trim()
+  }
+  const date = docDateToDate(raw)
+  if (!date || !Number.isFinite(date.getTime())) return fallback
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function formatYmdDateTime(raw, fallback = '기록 없음') {
+  const date = docDateToDate(raw)
+  if (!date || !Number.isFinite(date.getTime())) return fallback
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
+}
+
+function formatPaymentDate(pkg) {
+  return formatYmdDate(pkg?.paymentDate || pkg?.paidDate || pkg?.paidAt, '기록 없음')
+}
+
+function formatTeacherScope(pkg) {
+  const display = String(pkg?.teacherName || '').trim()
+  const key = String(pkg?.teacherKey || pkg?.teacher || '').trim()
+  if (display && key && display !== key) return `${display} · ${key}`
+  return display || key || '-'
+}
 
 export default function StudentPackageHistoryModal({
   studentPackageHistoryModalPackage,
@@ -75,6 +134,32 @@ export default function StudentPackageHistoryModal({
                 <span style={{ opacity: 0.72 }}>유형</span>{' '}
                 {formatStudentPackageDetailTypeLabel(studentPackageHistoryModalPackage.packageType)}
               </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>등록일</span>{' '}
+                {formatYmdDateTime(studentPackageHistoryModalPackage.createdAt)}
+              </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>결제일</span>{' '}
+                {formatPaymentDate(studentPackageHistoryModalPackage)}
+              </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>수강권 시작일</span>{' '}
+                {formatYmdDate(
+                  studentPackageHistoryModalPackage.registrationStartDate ||
+                    studentPackageHistoryModalPackage.startDate,
+                  '-'
+                )}
+              </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>만료일</span>{' '}
+                {formatGroupStudentStartDate(studentPackageHistoryModalPackage.expiresAt)}
+              </div>
+              {String(studentPackageHistoryModalPackage.packageType || '').trim() === 'private' ? (
+                <div>
+                  <span style={{ opacity: 0.72 }}>사용 가능 선생님</span>{' '}
+                  {formatTeacherScope(studentPackageHistoryModalPackage)}
+                </div>
+              ) : null}
               <div>
                 <span style={{ opacity: 0.72 }}>연결 반</span>{' '}
                 {studentPackageHistoryModalPackage.groupClassName != null &&

@@ -151,6 +151,9 @@ export async function createAdminSeededStudentPackage(params = {}) {
       ? { privatePackageMode: String(params.privatePackageMode || '').trim() }
       : {}),
     expiresAt: String(params.expiresAt || '2099-01-01').trim(),
+    ...(params.paymentDate !== undefined
+      ? { paymentDate: String(params.paymentDate || '').trim() }
+      : {}),
     createdAt: now,
     updatedAt: now,
   });

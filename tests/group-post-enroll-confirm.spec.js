@@ -141,7 +141,7 @@ test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록
     await groupSelect.selectOption(groupValue);
 
     await packageDialog
-      .getByLabel('시작일')
+      .getByTestId('student-package-start-date-input')
       .fill(await getGroupPackageStartDate(page, { groupName: TEST_GROUP_NAME }));
     await packageDialog.getByLabel('등록 주수').fill('4');
     await packageDialog.getByRole('button', { name: '저장' }).click();

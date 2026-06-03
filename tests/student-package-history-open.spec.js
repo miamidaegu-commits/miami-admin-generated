@@ -354,6 +354,20 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
       remainingCount: 3,
       status: 'active',
     }),
+    createAdminSeededPrivateLesson({
+      lessonId: `e2e-private-package-jenny-used-lesson-${suffix}`,
+      studentId,
+      studentID: studentId,
+      studentName,
+      student: studentName,
+      teacher: 'jenny',
+      teacherName: 'jenny',
+      date: formatYmd(addDays(new Date(), -7)),
+      time: '10:00',
+      subject: 'E2E jenny used lesson',
+      packageId: `e2e-private-package-jenny-${suffix}`,
+      sessionNumber: 1,
+    }),
     createAdminSeededStudentPackage({
       packageId: `e2e-private-package-jenny-${suffix}`,
       studentId,
@@ -386,9 +400,11 @@ test('학생 관리 목록에 개인 수강권 선생님과 잔여 횟수가 표
 
   const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
   await expect(privatePackageCell).toContainText('don1');
+  await expect(privatePackageCell).toContainText('don1 수강권');
   await expect(privatePackageCell).toContainText('잔여 3회 / 총 3회 · 사용 0회');
   await expect(privatePackageCell).toContainText('jenny');
-  await expect(privatePackageCell).toContainText('jenny · 잔여 3회 / 총 4회 · 사용 1회');
+  await expect(privatePackageCell).toContainText('jenny 수강권');
+  await expect(privatePackageCell).toContainText('잔여 3회 / 총 4회 · 사용 1회');
   await expect(studentRow.getByTestId('student-group-package-cell')).toHaveText(
     '단체 수강권 등록 필요'
   );
@@ -502,7 +518,7 @@ test('관리자가 프리토킹 그룹 수강권을 만들면 summary에 groupCo
     expect(groupValue).not.toBe('');
     await groupSelect.selectOption(groupValue);
     await packageDialog.getByLabel('코스 유형').selectOption('free_talking');
-    await packageDialog.getByLabel('시작일').fill(
+    await packageDialog.getByTestId('student-package-start-date-input').fill(
       await getGroupPackageStartDate(page, { groupName: TEST_GROUP_NAME })
     );
     await packageDialog.getByLabel('등록 주수').fill('4');

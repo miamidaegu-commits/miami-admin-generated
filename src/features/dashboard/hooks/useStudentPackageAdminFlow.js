@@ -18,6 +18,7 @@ import {
   creditTransactionCreatedAtToMillis,
   getNextStudentPackageStatus,
   normalizeText,
+  parseYmdToLocalDate,
   parseRequiredMinOneIntField,
 } from '../dashboardViewUtils.js'
 import {
@@ -32,6 +33,7 @@ const DEFAULT_STUDENT_PACKAGE_EDIT_FORM = {
   title: '',
   totalCount: '',
   expiresAt: '',
+  paymentDate: '',
   amountPaid: '',
   memo: '',
 }
@@ -148,6 +150,7 @@ export default function useStudentPackageAdminFlow({
             ? String(pkg.totalCount)
             : '1',
         expiresAt: studentDocFieldToYmdString(pkg.expiresAt),
+        paymentDate: String(pkg.paymentDate || '').trim(),
         amountPaid:
           pkg.amountPaid != null && String(pkg.amountPaid).trim() !== ''
             ? String(pkg.amountPaid)
@@ -207,6 +210,16 @@ export default function useStudentPackageAdminFlow({
       }
     }
 
+    const paymentDate = String(form.paymentDate || '').trim()
+    const paymentDateClear = !paymentDate
+    if (paymentDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+        errors.paymentDate = '결제일 형식이 올바르지 않습니다.'
+      } else if (!parseYmdToLocalDate(paymentDate)) {
+        errors.paymentDate = '유효한 결제일을 선택해주세요.'
+      }
+    }
+
     return {
       valid: Object.keys(errors).length === 0,
       errors,
@@ -214,6 +227,8 @@ export default function useStudentPackageAdminFlow({
       totalCount: totalParsed.ok ? totalParsed.value : 0,
       expiresAt: expiresAtTs,
       expiresClear,
+      paymentDate,
+      paymentDateClear,
       amountPaid,
       memo: String(form.memo || '').trim(),
     }
@@ -281,6 +296,11 @@ export default function useStudentPackageAdminFlow({
         memo: result.memo,
         updatedAt: serverTimestamp(),
       }
+      if (result.paymentDateClear) {
+        updates.paymentDate = deleteField()
+      } else {
+        updates.paymentDate = result.paymentDate
+      }
       if (result.expiresClear) {
         updates.expiresAt = deleteField()
       } else {
@@ -308,6 +328,11 @@ export default function useStudentPackageAdminFlow({
         ? ''
         : String(studentPackageEditForm.expiresAt || '').trim()
       const expiresChanged = oldExpYmd !== newExpYmd
+      const oldPaymentDate = String(pkg.paymentDate || '').trim()
+      const newPaymentDate = result.paymentDateClear
+        ? ''
+        : String(studentPackageEditForm.paymentDate || '').trim()
+      const paymentDateChanged = oldPaymentDate !== newPaymentDate
       const oldMemo = String(pkg.memo || '')
       const memoChanged = oldMemo !== result.memo
       const sid = String(pkg.studentId || '').trim()
@@ -334,10 +359,11 @@ export default function useStudentPackageAdminFlow({
             .filter(Boolean)
             .join(' · '),
         })
-      } else if (titleChanged || amountChanged || expiresChanged || memoChanged) {
+      } else if (titleChanged || amountChanged || expiresChanged || paymentDateChanged || memoChanged) {
         const parts = []
         if (titleChanged) parts.push('제목')
         if (amountChanged) parts.push('금액')
+        if (paymentDateChanged) parts.push('결제일')
         if (expiresChanged) parts.push('만료일')
         if (memoChanged) parts.push('메모')
         await addCreditTransaction({

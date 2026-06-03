@@ -89,7 +89,7 @@ test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 �
     expect(groupValue).not.toBe('');
     await groupSelect.selectOption(groupValue);
 
-    const startDateInput = packageDialog.getByLabel('시작일');
+    const startDateInput = packageDialog.getByTestId('student-package-start-date-input');
     await startDateInput.fill(await getGroupPackageStartDate(page, { groupName: TEST_GROUP_NAME }));
     await packageDialog.getByLabel('등록 주수').fill('4');
 

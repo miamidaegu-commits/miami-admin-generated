@@ -844,6 +844,9 @@ export default function PrivateLessonSlotsSection({
 
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
                   개인 수강권
+                  <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                    개인 수강권은 선택한 선생님 수업에만 사용할 수 있습니다.
+                  </span>
                   <select
                     value={privateFixedSlotAssignmentForm.packageId}
                     data-testid="private-fixed-assignment-package-select"

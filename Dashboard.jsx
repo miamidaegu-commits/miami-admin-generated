@@ -387,7 +387,13 @@ function formatPrivatePackageAssignmentOption(pkg, availableCount) {
   const title = String(pkg?.title || '개인 수강권').trim()
   const remaining = Number(pkg?.remainingCount ?? 0)
   const safeAvailable = Math.max(0, Number(availableCount ?? 0) || 0)
-  return `${title} · 잔여 ${remaining}회 · 예약 가능 ${safeAvailable}회`
+  const teacherDisplay = String(pkg?.teacherName || '').trim()
+  const teacherKey = String(pkg?.teacherKey || pkg?.teacher || '').trim()
+  const teacherScope =
+    teacherDisplay && teacherKey && teacherDisplay !== teacherKey
+      ? `${teacherDisplay} · ${teacherKey}`
+      : teacherDisplay || teacherKey || '선생님 미지정'
+  return `${title} · ${teacherScope} 전용 · 잔여 ${remaining}회 · 새 배정 가능 ${safeAvailable}회`
 }
 
 function getPrivateSlotTeacherDisplay(slot) {

@@ -1,5 +1,6 @@
 
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+import { formatGroupStudentStartDate } from '../dashboardViewUtils.js'
 
 export default function StudentPackageEditModal({
   studentPackageEditModalPackage,
@@ -80,6 +81,12 @@ export default function StudentPackageEditModal({
             <p style={{ margin: '0 0 12px 0', fontSize: 13, opacity: 0.85 }}>
               사용 횟수(usedCount): {Number(studentPackageEditModalPackage.usedCount ?? 0)} (수정
               불가)
+              <br />
+              수강권 시작일:{' '}
+              {formatGroupStudentStartDate(
+                studentPackageEditModalPackage.registrationStartDate ||
+                  studentPackageEditModalPackage.startDate
+              )}
             </p>
             {countOnly ? (
               <p
@@ -181,6 +188,39 @@ export default function StudentPackageEditModal({
                   {studentPackageEditFormErrors.expiresAt ? (
                     <span style={{ color: '#f08080', fontSize: 12 }}>
                       {studentPackageEditFormErrors.expiresAt}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
+
+              {showBillingFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>결제일 (선택)</span>
+                  <input
+                    type="date"
+                    aria-label="결제일 (선택)"
+                    data-testid="student-package-payment-date-input"
+                    value={studentPackageEditForm.paymentDate}
+                    onChange={(e) =>
+                      setStudentPackageEditForm((prev) => ({
+                        ...prev,
+                        paymentDate: e.target.value,
+                      }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                    결제일은 실제 결제한 날짜입니다. 수강권 시작일과 다를 수 있습니다.
+                  </span>
+                  {studentPackageEditFormErrors.paymentDate ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageEditFormErrors.paymentDate}
                     </span>
                   ) : null}
                 </label>
