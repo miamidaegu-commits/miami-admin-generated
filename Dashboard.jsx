@@ -3605,6 +3605,12 @@ export default function Dashboard() {
       if (payload.amountPaid !== undefined) {
         extraFields.amountPaid = Number(payload.amountPaid ?? 0) || 0
       }
+      if (payload.registrationLabel !== undefined) {
+        extraFields.registrationLabel = String(payload.registrationLabel ?? '').trim()
+      }
+      if (payload.registrationMemo !== undefined) {
+        extraFields.registrationMemo = String(payload.registrationMemo ?? '').trim()
+      }
       await addDoc(collection(db, 'creditTransactions'), {
         academyId: scopedAcademyId,
         studentId: String(payload.studentId ?? ''),

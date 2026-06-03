@@ -92,7 +92,81 @@ function formatPrivatePackageUsageSummary(pkg) {
   const used = pkg?.usedCount != null && String(pkg.usedCount).trim() !== ''
     ? toFiniteNumber(pkg.usedCount)
     : usedFallback
-  return `잔여 ${remaining}회 / 총 ${total}회 · 사용 ${used}회`
+  return `총 ${total}회 · 사용 ${used}회 · 남은 ${remaining}회`
+}
+
+function isPackageRegistrationTransaction(row) {
+  const actionType = String(row?.actionType || '').trim()
+  const deltaCount = Number(row?.deltaCount || 0)
+  return (
+    deltaCount > 0 &&
+    (actionType === 'package_created' ||
+      actionType === 'private_package_top_up' ||
+      actionType === 'package_top_up')
+  )
+}
+
+function getRegistrationEntryLabel(row, index) {
+  const explicit = String(row?.registrationLabel || '').trim()
+  if (explicit) return explicit
+  const round = Number(row?.registrationRound ?? row?.roundNumber ?? index + 1)
+  if (Number.isFinite(round) && round > 0) return `${round}회차 등록`
+  return '추가 등록'
+}
+
+function formatRegistrationDelta(row) {
+  const count = Number(row?.deltaCount || 0)
+  if (!Number.isFinite(count) || count === 0) return ''
+  return `${count > 0 ? '+' : ''}${count}회`
+}
+
+function formatRegistrationEntryLine(row, index, pkg) {
+  const label = getRegistrationEntryLabel(row, index)
+  const delta = formatRegistrationDelta(row)
+  const legacyDelta = formatCreditTransactionDeltaCountDisplay(row?.deltaCount)
+  const parts = [
+    label,
+    delta,
+  ].filter(Boolean)
+  const paymentDate = String(row?.paymentDate || (index === 0 ? pkg?.paymentDate || '' : '')).trim()
+  if (paymentDate) parts.push(`결제일 ${paymentDate}`)
+  const amount =
+    row?.amountPaid != null && String(row.amountPaid).trim() !== ''
+      ? String(row.amountPaid).trim()
+      : index === 0 && pkg?.amountPaid != null && String(pkg.amountPaid).trim() !== ''
+        ? String(pkg.amountPaid).trim()
+        : ''
+  if (amount) parts.push(`결제 금액 ${amount}`)
+  const memo =
+    String(row?.registrationMemo || '').trim() ||
+    String(row?.memo || '')
+      .split(' · ')
+      .map((part) => part.trim())
+      .filter((part) => part && part !== label && part !== delta && part !== legacyDelta)
+      .join(' · ')
+      .trim()
+  if (memo) parts.push(`메모: ${memo}`)
+  return parts.join(' · ')
+}
+
+function compactRegistrationSummary(rows) {
+  const list = (Array.isArray(rows) ? rows : []).filter(isPackageRegistrationTransaction)
+  if (list.length <= 1) return ''
+  return `등록 내역: ${list
+    .map((row, index) => `${getRegistrationEntryLabel(row, index)} ${formatRegistrationDelta(row)}`)
+    .join(', ')}`
+}
+
+function packageHasTopUps(pkg, rows = []) {
+  return (
+    Number(pkg?.topUpCount || 0) > 0 ||
+    Boolean(pkg?.lastTopUpAt) ||
+    (Array.isArray(rows) &&
+      rows.some((row) => {
+        const actionType = String(row?.actionType || '').trim()
+        return actionType === 'private_package_top_up' || actionType === 'package_top_up'
+      }))
+  )
 }
 
 function formatPrivateTicketScheduleSummary(balance) {
@@ -108,7 +182,11 @@ function formatPrivateTicketScheduleSummary(balance) {
   return parts.join(' · ')
 }
 
-function formatPrivatePackageTeacherSummary(packages, balanceByPackageId = new Map()) {
+function formatPrivatePackageTeacherSummary(
+  packages,
+  balanceByPackageId = new Map(),
+  registrationRowsByPackageId = new Map()
+) {
   const privatePackages = (Array.isArray(packages) ? packages : []).filter(
     (pkg) => String(pkg?.packageType || '').trim() === 'private'
   )
@@ -129,10 +207,13 @@ function formatPrivatePackageTeacherSummary(packages, balanceByPackageId = new M
     const isActive = isStudentPackageRowActive(pkg)
     const balance = balanceByPackageId.get(String(pkg.id || '').trim())
     const scheduleText = formatPrivateTicketScheduleSummary(balance)
+    const registrationRows = registrationRowsByPackageId.get(String(pkg.id || '').trim()) || []
     return {
       id: String(pkg.id || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}`),
       text: `${getPrivatePackageTeacherLabel(pkg)} 수강권 · ${formatPrivatePackageUsageSummary(pkg)}`,
       scheduleText,
+      registrationSummaryText: compactRegistrationSummary(registrationRows),
+      hasTopUps: packageHasTopUps(pkg, registrationRows),
       statusText: !isActive || remaining <= 0 ? '소진' : '',
       muted: !isActive || remaining <= 0,
     }
@@ -424,6 +505,8 @@ export default function StudentsSection({
   const [studentHistoryGroupReservations, setStudentHistoryGroupReservations] = useState([])
   const [studentHistoryPrivateReservations, setStudentHistoryPrivateReservations] = useState([])
   const [studentHistoryCreditTransactions, setStudentHistoryCreditTransactions] = useState([])
+  const [packageRegistrationRowsByPackageId, setPackageRegistrationRowsByPackageId] =
+    useState(new Map())
   const [studentPrivateAccessSummaryByStudentId, setStudentPrivateAccessSummaryByStudentId] =
     useState(new Map())
   const [busyPrivateSlotPilotStudentId, setBusyPrivateSlotPilotStudentId] = useState('')
@@ -474,6 +557,63 @@ export default function StudentsSection({
 
     return () => unsubscribe()
   }, [currentAcademyId, isAdmin])
+
+  useEffect(() => {
+    if (!isAdmin || !currentAcademyId || !expandedStudentPackageStudentId) {
+      setPackageRegistrationRowsByPackageId(new Map())
+      return undefined
+    }
+
+    const studentId = String(expandedStudentPackageStudentId || '').trim()
+    const packageIds = studentPackages
+      .filter(
+        (pkg) =>
+          String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+          String(pkg.studentId || '').trim() === studentId
+      )
+      .map((pkg) => String(pkg.id || '').trim())
+      .filter(Boolean)
+
+    if (packageIds.length === 0) {
+      setPackageRegistrationRowsByPackageId(new Map())
+      return undefined
+    }
+
+    let cancelled = false
+    async function loadRegistrationRows() {
+      try {
+        const snaps = await Promise.all(
+          packageIds.map((packageId) =>
+            getDocs(
+              query(
+                collection(db, 'creditTransactions'),
+                where('academyId', '==', currentAcademyId),
+                where('packageId', '==', packageId)
+              )
+            )
+          )
+        )
+        if (cancelled) return
+        const next = new Map()
+        snaps.forEach((snap, index) => {
+          const packageId = packageIds[index]
+          const rows = snap.docs
+            .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+            .filter(isPackageRegistrationTransaction)
+            .sort((a, b) => docDateToMillis(a.createdAt) - docDateToMillis(b.createdAt))
+          next.set(packageId, rows)
+        })
+        setPackageRegistrationRowsByPackageId(next)
+      } catch (error) {
+        console.error('수강권 등록 내역 조회 실패:', error)
+        if (!cancelled) setPackageRegistrationRowsByPackageId(new Map())
+      }
+    }
+    void loadRegistrationRows()
+    return () => {
+      cancelled = true
+    }
+  }, [currentAcademyId, expandedStudentPackageStudentId, isAdmin, studentPackages])
 
   const groupLessonById = useMemo(() => {
     const map = new Map()
@@ -1208,7 +1348,8 @@ export default function StudentsSection({
                 String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
                 String(pkg.studentId || '').trim() === String(student.id || '').trim()
             ),
-            privateTicketBalanceByPackageId
+            privateTicketBalanceByPackageId,
+            packageRegistrationRowsByPackageId
           )
           const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
           const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
@@ -1300,6 +1441,16 @@ export default function StudentsSection({
                       {summary.scheduleText ? (
                         <span style={{ display: 'block', fontSize: 12, opacity: 0.82 }}>
                           {summary.scheduleText}
+                        </span>
+                      ) : null}
+                      {summary.hasTopUps ? (
+                        <span style={{ display: 'block', fontSize: 12, opacity: 0.82 }}>
+                          추가 등록 포함
+                        </span>
+                      ) : null}
+                      {summary.registrationSummaryText ? (
+                        <span style={{ display: 'block', fontSize: 12, opacity: 0.82 }}>
+                          {summary.registrationSummaryText}
                         </span>
                       ) : null}
                     </span>
@@ -1994,6 +2145,40 @@ export default function StudentsSection({
                             </>
                           ) : null}
                         </div>
+                        {String(pkg.packageType || '').trim() === 'private' ? (() => {
+                          const registrationRows =
+                            packageRegistrationRowsByPackageId.get(String(pkg.id || '').trim()) || []
+                          if (registrationRows.length === 0 && !packageHasTopUps(pkg)) return null
+                          return (
+                            <div
+                              data-testid="student-package-registration-history"
+                              style={{
+                                marginTop: 12,
+                                padding: '10px 12px',
+                                borderRadius: 8,
+                                border: '1px solid var(--border)',
+                                background: 'rgba(255, 255, 255, 0.03)',
+                                fontSize: 13,
+                                lineHeight: 1.55,
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, marginBottom: 6 }}>등록 내역</div>
+                              {registrationRows.length > 0 ? (
+                                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                  {registrationRows.map((row, index) => (
+                                    <li key={row.id || `${pkg.id}-registration-${index}`}>
+                                      {formatRegistrationEntryLine(row, index, pkg)}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <div style={{ opacity: 0.82 }}>
+                                  추가 등록 포함. 이력 보기에서 상세 내역을 확인하세요.
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })() : null}
                         {isAdmin || canEditStudentPackageCountsForPackage(pkg) ? (
                           <div
                             style={{

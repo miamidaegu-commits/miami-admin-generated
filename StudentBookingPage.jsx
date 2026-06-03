@@ -2261,6 +2261,14 @@ export default function StudentBookingPage() {
 	                              {summary.scheduleText}
 	                            </span>
 	                          ) : null}
+	                          {summary.registrationSummaryText ? (
+	                            <span
+	                              data-testid="student-private-ticket-summary-registration"
+	                              style={{ opacity: 0.86, fontSize: 13 }}
+	                            >
+	                              {summary.registrationSummaryText}
+	                            </span>
+	                          ) : null}
 	                          {summary.statusText ? (
 	                            <span style={{ opacity: 0.72, fontSize: 13 }}>{summary.statusText}</span>
 	                          ) : null}
