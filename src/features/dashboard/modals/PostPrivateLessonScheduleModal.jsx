@@ -12,6 +12,7 @@ export default function PostPrivateLessonScheduleModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="post-private-lesson-schedule-title"
+      data-testid="post-private-lesson-schedule-modal"
       style={{
         position: 'fixed',
         inset: 0,

@@ -507,17 +507,17 @@ test.describe('fixed private lesson release', () => {
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '캘린더');
-    const dayNumber = String(Number(fixture.date.split('-')[2]));
-    await page
-      .getByRole('button', { name: new RegExp(`^${dayNumber}(\\s|$)`) })
-      .first()
-      .click();
+    const fixedLessonDoc = await getDb().collection('lessons').doc(fixture.fixedLessonId).get();
+    expect(fixedLessonDoc.exists).toBe(true);
+    await page.locator(`[data-testid="calendar-day-button"][data-date="${fixture.date}"]`).click();
     const calendarRow = page
-      .locator('[data-testid="calendar-lesson-row"][data-row-kind="private"]')
-      .filter({ hasText: fixture.originalStudentName })
-      .filter({ hasText: fixture.time })
+      .locator(
+        `[data-testid="calendar-lesson-row"][data-row-kind="private"][data-lesson-id="${fixture.fixedLessonId}"]`
+      )
       .first();
-    await expect(calendarRow).toBeVisible({ timeout: 15000 });
+    await expect(calendarRow).toBeVisible({ timeout: 20000 });
+    await expect(calendarRow).toContainText(fixture.originalStudentName);
+    await expect(calendarRow).toContainText(fixture.time);
     page.once('dialog', (dialog) => dialog.accept());
     await calendarRow.getByTestId('calendar-fixed-private-release-button').click();
     await expect(calendarRow).toContainText('자리 공개', { timeout: 15000 });

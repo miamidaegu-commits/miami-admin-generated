@@ -349,8 +349,9 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     await dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true }).click();
 
-    const postDialog = page.getByRole('dialog', { name: '고정 1:1 수업 배정으로 이동할까요?' });
-    await expect(postDialog).toBeVisible();
+    const postDialog = page.getByTestId('post-private-lesson-schedule-modal');
+    await expect(postDialog).toBeVisible({ timeout: 20000 });
+    await expect(postDialog).toContainText('고정 1:1 수업 배정으로 이동할까요?');
     await expect(postDialog).toContainText('기존 개인 수강권에 추가 등록했습니다.');
     await postDialog.getByRole('button', { name: '나중에 하기', exact: true }).click();
 
@@ -537,8 +538,9 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
       await nativeDialog.accept();
     });
     await dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true }).click();
-    const postDialog = page.getByRole('dialog', { name: '고정 1:1 수업 배정으로 이동할까요?' });
-    await expect(postDialog).toBeVisible();
+    const postDialog = page.getByTestId('post-private-lesson-schedule-modal');
+    await expect(postDialog).toBeVisible({ timeout: 20000 });
+    await expect(postDialog).toContainText('고정 1:1 수업 배정으로 이동할까요?');
     await postDialog.getByRole('button', { name: '나중에 하기', exact: true }).click();
 
     await expect

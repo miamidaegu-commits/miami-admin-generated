@@ -1006,6 +1006,9 @@ export default function CalendarSection(props) {
                 data-reservation-id={isPrivateReservationRow ? lesson.id : undefined}
                 data-group-name={rowGroupName || undefined}
                 data-student-name={rowStudentName || undefined}
+                data-student-id={!isGroupRow ? matchedStudentId || undefined : undefined}
+                data-date={getLessonStorageDateString(lesson) || undefined}
+                data-time={String(lesson.time || '').trim() || undefined}
                 onClick={
                   canOpenGroupAttendance
                     ? () => onOpenCalendarGroupLessonAttendance?.(lesson)
