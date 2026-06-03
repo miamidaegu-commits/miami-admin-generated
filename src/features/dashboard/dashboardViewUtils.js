@@ -338,6 +338,8 @@ export function formatCreditTransactionActionTypeLabel(actionType) {
   if (!key) return '-'
   const map = {
     package_created: '수강권 발급',
+    private_package_top_up: '추가 등록',
+    package_top_up: '추가 등록',
     package_adjusted: '총 횟수 조정',
     package_updated: '수강권 정보 수정',
     private_deduct_cancel: '개인 차감취소',

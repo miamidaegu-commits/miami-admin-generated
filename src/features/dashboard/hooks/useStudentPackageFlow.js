@@ -5,9 +5,11 @@ import {
   doc,
   getDoc,
   getDocs,
+  increment,
   query,
   serverTimestamp,
   Timestamp,
+  updateDoc,
   where,
   writeBatch,
 } from 'firebase/firestore'
@@ -56,6 +58,7 @@ const DEFAULT_STUDENT_PACKAGE_FORM = {
   paymentDate: '',
   amountPaid: '',
   memo: '',
+  privateDuplicateAction: 'topUp',
 }
 
 const DEFAULT_POST_PRIVATE_LESSON_SCHEDULE_FORM = {
@@ -411,10 +414,11 @@ export default function useStudentPackageFlow({
     setStudentPackageReRegisterSourcePackage(reRegisterSourcePackage || null)
   }
 
-  function validateStudentPackageFormFields(form) {
+  function validateStudentPackageFormFields(form, options = {}) {
     const errors = {}
     const title = String(form.title || '').trim()
     const packageTypeEarly = form.packageType
+    const isPrivateTopUp = options.privateTopUp === true
     const privatePackageMode =
       packageTypeEarly === 'private' &&
       String(form.privatePackageMode || '').trim() === 'countBased'
@@ -424,6 +428,52 @@ export default function useStudentPackageFlow({
           : null
     const isPrivateRegular =
       packageTypeEarly === 'private' && privatePackageMode === 'regular'
+
+    let amountPaid = 0
+    const amountPaidRaw = String(form.amountPaid ?? '').trim()
+    if (amountPaidRaw !== '') {
+      const numeric = Number(amountPaidRaw)
+      if (!Number.isFinite(numeric) || numeric < 0) {
+        errors.amountPaid = '0 이상의 숫자를 입력해주세요.'
+      } else {
+        amountPaid = numeric
+      }
+    }
+
+    const paymentDate = String(form.paymentDate || '').trim()
+    if (paymentDate) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
+        errors.paymentDate = '결제일 형식이 올바르지 않습니다.'
+      } else if (!parseYmdToLocalDate(paymentDate)) {
+        errors.paymentDate = '유효한 결제일을 선택해주세요.'
+      }
+    }
+
+    if (isPrivateTopUp) {
+      const topUpParsed = parseRequiredMinOneIntField(form.totalCount)
+      if (!topUpParsed.ok) {
+        errors.totalCount = '추가 횟수는 1 이상의 정수여야 합니다.'
+      }
+
+      return {
+        valid: Object.keys(errors).length === 0,
+        errors,
+        title: title || '',
+        totalCount: topUpParsed.ok ? topUpParsed.value : 0,
+        packageType: 'private',
+        groupClassId: '',
+        groupCourseType: '',
+        registrationStartDate: '',
+        registrationWeeks: null,
+        weeklyFrequency: '1',
+        privatePackageMode,
+        expiresAt: null,
+        paymentDate,
+        amountPaid,
+        amountPaidProvided: amountPaidRaw !== '',
+        memo: String(form.memo || '').trim(),
+      }
+    }
 
     if (packageTypeEarly === 'private' && privatePackageMode === 'countBased' && !title) {
       errors.title = '수강권 제목을 입력해주세요.'
@@ -533,26 +583,6 @@ export default function useStudentPackageFlow({
       }
     }
 
-    let amountPaid = 0
-    const amountPaidRaw = String(form.amountPaid ?? '').trim()
-    if (amountPaidRaw !== '') {
-      const numeric = Number(amountPaidRaw)
-      if (!Number.isFinite(numeric) || numeric < 0) {
-        errors.amountPaid = '0 이상의 숫자를 입력해주세요.'
-      } else {
-        amountPaid = numeric
-      }
-    }
-
-    const paymentDate = String(form.paymentDate || '').trim()
-    if (paymentDate) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(paymentDate)) {
-        errors.paymentDate = '결제일 형식이 올바르지 않습니다.'
-      } else if (!parseYmdToLocalDate(paymentDate)) {
-        errors.paymentDate = '유효한 결제일을 선택해주세요.'
-      }
-    }
-
     return {
       valid: Object.keys(errors).length === 0,
       errors,
@@ -568,6 +598,7 @@ export default function useStudentPackageFlow({
       expiresAt: expiresAtTs,
       paymentDate,
       amountPaid,
+      amountPaidProvided: amountPaidRaw !== '',
       memo: String(form.memo || '').trim(),
     }
   }
@@ -579,7 +610,18 @@ export default function useStudentPackageFlow({
       return
     }
 
-    const result = validateStudentPackageFormFields(studentPackageForm)
+    const activePrivateSameScopePackages =
+      String(studentPackageForm.packageType || '').trim() === 'private'
+        ? studentPackageModalActiveSameScopeDuplicates.filter(
+            (pkg) => String(pkg.packageType || '').trim() === 'private'
+          )
+        : []
+    const shouldTopUpExistingPrivatePackage =
+      activePrivateSameScopePackages.length > 0 &&
+      String(studentPackageForm.privateDuplicateAction || 'topUp') !== 'new'
+    const result = validateStudentPackageFormFields(studentPackageForm, {
+      privateTopUp: shouldTopUpExistingPrivatePackage,
+    })
     setStudentPackageFormErrors(result.errors)
     if (!result.valid) return
 
@@ -598,6 +640,89 @@ export default function useStudentPackageFlow({
 
     if (result.packageType === 'private') {
       teacher = normalizeText(student.teacher || '')
+      if (shouldTopUpExistingPrivatePackage) {
+        const targetPackage = activePrivateSameScopePackages[0]
+        try {
+          const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+          assertSameAcademy(student, scopedAcademyId, '학생')
+          assertSameAcademy(targetPackage, scopedAcademyId, '수강권')
+          setBusyStudentPackageSubmit(true)
+
+          const topUpCount = Number(result.totalCount || 0)
+          const txSnap = await getDocs(
+            query(
+              collection(db, 'creditTransactions'),
+              where('academyId', '==', scopedAcademyId),
+              where('packageId', '==', targetPackage.id)
+            )
+          )
+          const registrationEventCount = txSnap.docs.filter((docItem) => {
+            const row = docItem.data() || {}
+            const actionType = String(row.actionType || '').trim()
+            const deltaCount = Number(row.deltaCount || 0)
+            return (
+              deltaCount > 0 &&
+              (actionType === 'package_created' ||
+                actionType === 'private_package_top_up' ||
+                actionType === 'package_top_up')
+            )
+          }).length
+          const registrationRound = Math.max(2, registrationEventCount + 1)
+
+          await updateDoc(doc(db, 'studentPackages', targetPackage.id), {
+            totalCount: increment(topUpCount),
+            remainingCount: increment(topUpCount),
+            status: 'active',
+            updatedAt: serverTimestamp(),
+          })
+
+          const packageTitle = String(targetPackage.title || '').trim()
+          await addCreditTransaction({
+            studentId,
+            studentName,
+            teacher,
+            packageId: targetPackage.id,
+            packageType: 'private',
+            packageTitle,
+            groupClassName: '',
+            sourceType: 'studentPackage',
+            sourceId: targetPackage.id,
+            actionType: 'private_package_top_up',
+            deltaCount: topUpCount,
+            registrationRound,
+            roundNumber: registrationRound,
+            paymentDate: result.paymentDate,
+            ...(result.amountPaidProvided ? { amountPaid: result.amountPaid } : {}),
+            memo: [
+              `${registrationRound}회차 등록`,
+              `+${topUpCount}회`,
+              String(result.memo || '').trim(),
+            ]
+              .filter(Boolean)
+              .join(' · '),
+          })
+
+          closeStudentPackageModal()
+          setPostPrivateLessonScheduleModalData({
+            packageId: targetPackage.id,
+            studentId,
+            studentName,
+            teacher,
+            packageTitle,
+            totalCount: Number(targetPackage.totalCount || 0) + topUpCount,
+            remainingCount: Number(targetPackage.remainingCount || 0) + topUpCount,
+            action: 'topUp',
+          })
+          setPostPrivateLessonScheduleErrors({})
+        } catch (error) {
+          console.error('개인 수강권 추가 등록 실패:', error)
+          alert(`개인 수강권 추가 등록 실패: ${error.message}`)
+        } finally {
+          setBusyStudentPackageSubmit(false)
+        }
+        return
+      }
+
       if (result.privatePackageMode === 'regular') {
         registrationStartDateForSave = String(result.registrationStartDate || '').trim()
         registrationWeeksForSave = Number(result.registrationWeeks || 0)
@@ -777,6 +902,7 @@ export default function useStudentPackageFlow({
           totalCount: computedTotalCount,
           remainingCount: computedTotalCount,
           openedFromPrivateRegular: result.privatePackageMode === 'regular',
+          action: 'created',
         })
         if (result.privatePackageMode === 'regular') {
           setPostPrivateLessonScheduleForm(

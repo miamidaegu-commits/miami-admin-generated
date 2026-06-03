@@ -51,10 +51,13 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     await packageDialog.getByRole('button', { name: '저장' }).click();
     await expect(packageDialog).toBeHidden();
 
-    const postScheduleDialog = page.getByRole('dialog', { name: '첫 수업을 바로 예약할까요?' });
+    const postScheduleDialog = page.getByRole('dialog', {
+      name: '고정 1:1 수업 배정으로 이동할까요?',
+    });
     await expect(postScheduleDialog).toBeVisible();
     await expect(postScheduleDialog).toContainText(tempStudentName);
     await expect(postScheduleDialog).toContainText(packageTitle);
+    await expect(postScheduleDialog).toContainText('고정 수업 일정은 1:1 예약 시간 관리');
 
     await postScheduleDialog.getByRole('button', { name: '나중에 하기' }).click();
     await expect(postScheduleDialog).toBeHidden();
