@@ -137,7 +137,7 @@ function getTemplateAssignmentOptionLabel(template) {
   const range =
     template.effectiveStartDate && template.effectiveEndDate
       ? `${template.effectiveStartDate} ~ ${template.effectiveEndDate}`
-      : '전체 기간'
+      : '기간 제한 없음'
   return `${getPrivateSlotTeacherDisplay(template)} · ${weekdayLabel(template.weekday)} ${
     template.time || '-'
   } · ${Number(template.durationMinutes || 0) || '-'}분 · ${range}`
@@ -563,6 +563,11 @@ export default function PrivateLessonSlotsSection({
             }}
           >
             <h3 style={{ margin: 0, fontSize: 16 }}>주간 기본 슬롯 (고정 배정용)</h3>
+            <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+              특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.
+              <br />
+              비워두면 기간 제한 없이 반복됩니다.
+            </p>
             <form
               onSubmit={(event) => {
                 event.preventDefault()
@@ -662,6 +667,44 @@ export default function PrivateLessonSlotsSection({
                 ) : null}
               </label>
               <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                시작일
+                <input
+                  type="date"
+                  value={privateAvailabilityTemplateForm.effectiveStartDate || ''}
+                  data-testid="private-availability-template-start-date-input"
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      effectiveStartDate: event.target.value,
+                    }))
+                  }
+                />
+                {privateAvailabilityTemplateErrors.effectiveStartDate ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.effectiveStartDate}
+                  </span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                종료일
+                <input
+                  type="date"
+                  value={privateAvailabilityTemplateForm.effectiveEndDate || ''}
+                  data-testid="private-availability-template-end-date-input"
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      effectiveEndDate: event.target.value,
+                    }))
+                  }
+                />
+                {privateAvailabilityTemplateErrors.effectiveEndDate ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.effectiveEndDate}
+                  </span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
                 상태
                 <select
                   value={privateAvailabilityTemplateForm.status}
@@ -747,7 +790,7 @@ export default function PrivateLessonSlotsSection({
                       <span>
                         {template.effectiveStartDate && template.effectiveEndDate
                           ? `${template.effectiveStartDate} ~ ${template.effectiveEndDate}`
-                          : '전체 기간'}
+                          : '기간 제한 없음'}
                       </span>
                       <button
                         type="button"

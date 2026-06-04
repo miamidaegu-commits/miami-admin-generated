@@ -212,6 +212,116 @@ test('weekly template availability wiring preserves short window and honors effe
   expect(source).toContain('const rangeEnd = addSeoulDays(currentMonday, 12)');
 });
 
+test('admin creates a single weekly default slot with an effective date range', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 single weekly slot E2E를 실행합니다.');
+  test.setTimeout(120000);
+
+  const db = getDb();
+  const nowTs = admin.firestore.Timestamp.now();
+  const unique = `${Date.now()}-${testInfo.workerIndex}-single`;
+  const teacherId = `e2e-single-weekly-teacher-${unique}`;
+  const teacherKey = `single-weekly-teacher-${unique}`;
+  const teacherName = `Single Weekly Teacher ${unique}`;
+  const dialogMessages = [];
+  page.on('dialog', async (dialog) => {
+    dialogMessages.push(dialog.message());
+    await dialog.accept();
+  });
+
+  try {
+    await Promise.all([
+      deleteTemplatesForTeacher(db, teacherKey),
+      db.collection('teachers').doc(teacherId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: teacherName,
+        teacherName: teacherKey,
+        teacherKey,
+        teacherUid: `uid-${teacherKey}`,
+        teacherEmail: `${teacherKey}@example.com`,
+        status: 'active',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+    ]);
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '1:1 예약 시간 관리');
+
+    const singleSection = page.getByTestId('private-availability-template-section');
+    await expect(singleSection).toContainText('주간 기본 슬롯 (고정 배정용)');
+    await expect(singleSection).toContainText(
+      '특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.'
+    );
+    await selectTeacherOption(
+      singleSection.getByTestId('private-availability-template-teacher-select'),
+      teacherName
+    );
+    await expect(singleSection.getByTestId('private-availability-template-teacher-select')).toHaveValue(
+      `uid-${teacherKey}`
+    );
+    await singleSection.getByTestId('private-availability-template-weekday').selectOption('3');
+    await singleSection.getByTestId('private-availability-template-time').fill('22:45');
+    await singleSection.locator('input[type="number"]').first().fill('60');
+    await singleSection
+      .getByTestId('private-availability-template-start-date-input')
+      .fill('2026-06-10');
+    await singleSection
+      .getByTestId('private-availability-template-end-date-input')
+      .fill('2026-07-01');
+    await singleSection.getByTestId('private-availability-template-add-button').click();
+
+    await expect
+      .poll(
+        async () => {
+          const count = (await queryTemplatesForTeacher(db, teacherKey)).length;
+          return count === 0 && dialogMessages.length
+            ? `dialog: ${dialogMessages.join('\n')}`
+            : String(count);
+        },
+        { timeout: 15000 }
+      )
+      .toBe('1');
+    const [template] = await queryTemplatesForTeacher(db, teacherKey);
+    expect(template).toMatchObject({
+      teacher: teacherKey,
+      teacherKey,
+      teacherName,
+      weekday: 3,
+      time: '22:45',
+      durationMinutes: 60,
+      status: 'active',
+      effectiveStartDate: '2026-06-10',
+      effectiveEndDate: '2026-07-01',
+    });
+
+    const row = page
+      .locator('[data-testid="private-availability-template-row"]')
+      .filter({ hasText: teacherName })
+      .filter({ hasText: '22:45' });
+    await expect(row).toContainText('2026-06-10 ~ 2026-07-01', { timeout: 15000 });
+
+    const fixedSection = page.getByTestId('private-fixed-slot-assignment-section');
+    await selectTeacherOption(
+      fixedSection.getByTestId('private-fixed-assignment-teacher-select'),
+      teacherName
+    );
+    await expect(fixedSection.getByTestId('private-fixed-assignment-teacher-select')).toHaveValue(
+      `uid-${teacherKey}`
+    );
+    await expect(fixedSection.getByTestId('private-fixed-assignment-template-select')).toContainText(
+      `${teacherName} · ${teacherKey} · 수요일 22:45 · 60분 · 2026-06-10 ~ 2026-07-01`,
+      { timeout: 15000 }
+    );
+  } finally {
+    await Promise.all([
+      deleteTemplatesForTeacher(db, teacherKey),
+      db.collection('teachers').doc(teacherId).delete().catch(() => {}),
+    ]);
+  }
+});
+
 test('admin bulk previews weekly private base slots with ranges and skips duplicates and overlaps', async ({
   page,
 }, testInfo) => {
@@ -233,6 +343,8 @@ test('admin bulk previews weekly private base slots with ranges and skips duplic
         name: teacherName,
         teacherName: teacherKey,
         teacherKey,
+        teacherUid: `uid-${teacherKey}`,
+        teacherEmail: `${teacherKey}@example.com`,
         status: 'active',
         createdAt: nowTs,
         updatedAt: nowTs,

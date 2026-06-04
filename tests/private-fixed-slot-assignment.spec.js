@@ -96,7 +96,7 @@ async function queryLessonsByPackage(packageId) {
   return snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
 }
 
-async function createFixture(unique, { totalCount = 4, conflict = false } = {}) {
+async function createFixture(unique, { totalCount = 4, conflict = false, createTemplate = true, time = '22:40' } = {}) {
   const db = getDb();
   const auth = getAuth();
   const nowTs = admin.firestore.Timestamp.now();
@@ -115,8 +115,6 @@ async function createFixture(unique, { totalCount = 4, conflict = false } = {}) 
   const packageId = `pkg-fixed-assign-${unique}`;
   const templateId = `template-fixed-assign-${unique}`;
   const conflictLessonId = conflict ? `lesson-fixed-assign-conflict-${unique}` : '';
-  const time = '22:40';
-
   const user = await auth.createUser({
     email: studentEmail,
     password: TEST_STUDENT_PASSWORD,
@@ -210,7 +208,10 @@ async function createFixture(unique, { totalCount = 4, conflict = false } = {}) 
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
-    db.collection('privateLessonAvailabilityTemplates').doc(templateId).set({
+  ];
+
+  if (createTemplate) {
+    writes.push(db.collection('privateLessonAvailabilityTemplates').doc(templateId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       teacher: teacher.key,
       teacherName: teacher.name,
@@ -225,8 +226,8 @@ async function createFixture(unique, { totalCount = 4, conflict = false } = {}) 
       effectiveEndDate: dates[3],
       createdAt: nowTs,
       updatedAt: nowTs,
-    }),
-  ];
+    }));
+  }
 
   if (conflict) {
     writes.push(
@@ -278,6 +279,12 @@ async function cleanupFixture(fixture) {
     .where('packageId', '==', fixture.packageId)
     .get()
     .catch(() => ({ docs: [] }));
+  const templateSnap = await db
+    .collection('privateLessonAvailabilityTemplates')
+    .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+    .where('teacherKey', '==', fixture.teacher.key)
+    .get()
+    .catch(() => ({ docs: [] }));
   const refs = [
     db.collection('teachers').doc(fixture.teacher.id),
     db.collection('privateStudents').doc(fixture.studentId),
@@ -288,6 +295,7 @@ async function cleanupFixture(fixture) {
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.user.uid}`),
     ...(fixture.conflictLessonId ? [db.collection('lessons').doc(fixture.conflictLessonId)] : []),
     ...lessonSnap.docs.map((docSnap) => docSnap.ref),
+    ...templateSnap.docs.map((docSnap) => docSnap.ref),
   ];
   await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
   await auth.deleteUser(fixture.user.uid).catch(() => {});
@@ -425,6 +433,120 @@ test('admin can assign fixed private lessons from a weekly template', async ({
     ).toHaveCount(0, { timeout: 15000 });
   } finally {
     await studentContext?.close().catch(() => {});
+    await cleanupFixture(fixture);
+  }
+});
+
+test('fixed assignment can use a single weekly default slot with a date range', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 fixed slot assignment E2E를 실행합니다.');
+  test.setTimeout(120000);
+
+  let fixture = null;
+  const dialogMessages = [];
+  page.on('dialog', async (dialog) => {
+    dialogMessages.push(dialog.message());
+    await dialog.accept();
+  });
+  try {
+    fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-single`, {
+      totalCount: 4,
+      createTemplate: false,
+      time: '22:45',
+    });
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '1:1 예약 시간 관리');
+
+    const singleSection = page.getByTestId('private-availability-template-section');
+    await selectTeacherOption(
+      singleSection.getByTestId('private-availability-template-teacher-select'),
+      fixture.teacher.name,
+      { timeout: 30000 }
+    );
+    await singleSection
+      .getByTestId('private-availability-template-weekday')
+      .selectOption(String(getWeekday(fixture.dates[0])));
+    await singleSection.getByTestId('private-availability-template-time').fill(fixture.time);
+    await singleSection.locator('input[type="number"]').first().fill('60');
+    await singleSection
+      .getByTestId('private-availability-template-start-date-input')
+      .fill(fixture.dates[0]);
+    await singleSection
+      .getByTestId('private-availability-template-end-date-input')
+      .fill(fixture.dates[3]);
+    await singleSection.getByTestId('private-availability-template-add-button').click();
+
+    await expect
+      .poll(
+        async () => {
+          const snap = await getDb()
+            .collection('privateLessonAvailabilityTemplates')
+            .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+            .where('teacherKey', '==', fixture.teacher.key)
+            .where('time', '==', fixture.time)
+            .get();
+          return snap.size === 0 && dialogMessages.length
+            ? `dialog: ${dialogMessages.join('\n')}`
+            : String(snap.size);
+        },
+        { timeout: 15000 }
+      )
+      .toBe('1');
+    const templateSnap = await getDb()
+      .collection('privateLessonAvailabilityTemplates')
+      .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+      .where('teacherKey', '==', fixture.teacher.key)
+      .where('time', '==', fixture.time)
+      .get();
+    const createdTemplate = { id: templateSnap.docs[0].id, ...templateSnap.docs[0].data() };
+    fixture.templateId = createdTemplate.id;
+    expect(createdTemplate).toMatchObject({
+      effectiveStartDate: fixture.dates[0],
+      effectiveEndDate: fixture.dates[3],
+      time: fixture.time,
+    });
+
+    const fixedSection = page.getByTestId('private-fixed-slot-assignment-section');
+    await selectTeacherOption(
+      fixedSection.getByTestId('private-fixed-assignment-teacher-select'),
+      fixture.teacher.name,
+      { timeout: 30000 }
+    );
+    await expect(
+      fixedSection.getByTestId('private-fixed-assignment-template-select')
+    ).toContainText(`${fixture.dates[0]} ~ ${fixture.dates[3]}`, { timeout: 15000 });
+    await fixedSection
+      .getByTestId('private-fixed-assignment-template-select')
+      .selectOption(createdTemplate.id);
+    await expect(fixedSection.getByTestId('private-fixed-assignment-start-date-input')).toHaveValue(
+      fixture.dates[0]
+    );
+    await expect(fixedSection.getByTestId('private-fixed-assignment-end-date-input')).toHaveValue(
+      fixture.dates[3]
+    );
+    await fixedSection.getByTestId('private-fixed-assignment-student-select').selectOption(fixture.studentId);
+    await expect
+      .poll(
+        () =>
+          fixedSection
+            .getByTestId('private-fixed-assignment-package-select')
+            .locator('option')
+            .evaluateAll((options) => options.map((option) => option.value)),
+        { timeout: 15000 }
+      )
+      .toContain(fixture.packageId);
+    await fixedSection.getByTestId('private-fixed-assignment-package-select').selectOption(fixture.packageId);
+    await fixedSection.getByTestId('private-fixed-assignment-preview-button').click();
+    const preview = fixedSection.getByTestId('private-fixed-assignment-preview');
+    await expect(preview).toContainText('생성 예정 4회', { timeout: 15000 });
+    for (const date of fixture.dates) {
+      await expect(preview).toContainText(`${date} ${fixture.time}`);
+    }
+  } finally {
     await cleanupFixture(fixture);
   }
 });

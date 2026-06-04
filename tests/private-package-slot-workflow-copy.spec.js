@@ -237,6 +237,12 @@ test('duplicate private package warning shows actionable capacity details and re
     await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
       '날짜별 예약 가능 시간은 학생 직접 예약용입니다.'
     );
+    await expect(page.getByTestId('private-availability-template-section')).toContainText(
+      '특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.'
+    );
+    await expect(page.getByTestId('private-availability-template-section')).toContainText(
+      '비워두면 기간 제한 없이 반복됩니다.'
+    );
     await expect(page.getByTestId('private-dated-availability-helper')).toContainText(
       '날짜별 예약 가능 시간 (학생 직접 예약용)'
     );
