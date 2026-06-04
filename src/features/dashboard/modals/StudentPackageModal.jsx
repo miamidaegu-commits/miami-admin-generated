@@ -12,7 +12,7 @@ import {
 } from '../../group-booking/groupCourseTypes.js'
 
 function formatTeacherScopeLabel(row) {
-  const display = String(row?.teacherName || row?.displayName || row?.name || '').trim()
+  const display = String(row?.teacherName || row?.teacherDisplayName || '').trim()
   const key = String(row?.teacherKey || row?.teacher || '').trim()
   if (display && key && display !== key) return `${display} · ${key}`
   return display || key || '-'

@@ -45,6 +45,10 @@ export async function createTempStudent(page, params) {
   return runFirebaseTask(page, 'createTempStudent', params);
 }
 
+export async function createTempTeacher(page, params) {
+  return runFirebaseTask(page, 'createTempTeacher', params);
+}
+
 export async function cleanupTempStudentData(page, params) {
   if (!params?.studentId && !params?.studentName) return;
   await runFirebaseTask(page, 'cleanupTempStudentData', params);
@@ -123,6 +127,8 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
       switch (taskName) {
         case 'createTempStudent':
           return createTempStudentTask({ db, firestore, params });
+        case 'createTempTeacher':
+          return createTempTeacherTask({ db, firestore, params });
         case 'cleanupTempStudentData':
           return cleanupTempStudentDataTask({ db, firestore, params });
         case 'createTempGroupStudentAddPackage':
@@ -534,6 +540,41 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           studentId: studentRef.id,
           studentName: String(studentName || '').trim(),
         };
+      }
+
+      async function createTempTeacherTask({ db, firestore: firestoreModule, params }) {
+        const { Timestamp, doc, setDoc } = firestoreModule;
+        const academyId = getTaskAcademyId(params);
+        const teacherKey = String(params?.teacherKey || '').trim();
+        const teacherName = String(params?.teacherName || teacherKey || '').trim();
+        const teacherId = String(params?.teacherId || `e2e-teacher-${teacherKey}`).trim();
+        if (!teacherKey) throw new Error('teacherKey is required.');
+        const nowTs = Timestamp.now();
+        await withFirestoreStep(
+          'createTempTeacher.setTeacher',
+          {
+            collection: 'teachers',
+            docId: teacherId,
+            academyId,
+          },
+          () =>
+            setDoc(
+              doc(db, 'teachers', teacherId),
+              {
+                academyId,
+                name: teacherName,
+                teacherName: teacherKey,
+                teacherKey,
+                teacherUid: String(params?.teacherUid || '').trim(),
+                teacherEmail: String(params?.teacherEmail || '').trim(),
+                status: 'active',
+                createdAt: nowTs,
+                updatedAt: nowTs,
+              },
+              { merge: true }
+            )
+        );
+        return { teacherId, teacherName, teacherKey };
       }
 
       async function cleanupTempStudentDataTask({ db, firestore: firestoreModule, params }) {

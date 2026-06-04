@@ -79,8 +79,8 @@ function getPrivatePackageTeacherLabel(pkg) {
 }
 
 function formatPrivatePackageTeacherScope(pkg) {
-  const display = String(pkg?.teacherName || '').trim()
   const key = String(pkg?.teacherKey || pkg?.teacher || '').trim()
+  const display = String(pkg?.teacherDisplayName || pkg?.teacherName || '').trim()
   if (display && key && display !== key) return `${display} · ${key}`
   return display || key || '-'
 }
