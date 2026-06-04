@@ -1002,7 +1002,10 @@ test('weekly private booking templates are wired through UI, rules, and callable
 
   expect(dashboardSource).toContain('createPrivateAvailabilityTemplate');
   expect(sectionSource).toContain('private-availability-template-section');
-  expect(sectionSource).toContain('주간 1:1 가능 시간');
+  expect(sectionSource).toContain('주간 기본 슬롯 (고정 배정용)');
+  expect(sectionSource).toContain('날짜별 예약 가능 시간 (학생 직접 예약용)');
+  expect(sectionSource).toContain('등록된 주간 기본 슬롯이 없습니다.');
+  expect(sectionSource).toContain('위의 주간 기본 슬롯 (고정 배정용)에서 먼저 등록하세요.');
   expect(sectionSource).toContain('private-availability-template-add-button');
 
   expect(rulesSource).toContain('match /privateLessonAvailabilityTemplates/{templateId}');

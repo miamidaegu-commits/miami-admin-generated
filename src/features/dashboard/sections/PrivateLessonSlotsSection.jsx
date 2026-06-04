@@ -562,7 +562,7 @@ export default function PrivateLessonSlotsSection({
               marginBottom: 20,
             }}
           >
-            <h3 style={{ margin: 0, fontSize: 16 }}>주간 1:1 가능 시간</h3>
+            <h3 style={{ margin: 0, fontSize: 16 }}>주간 기본 슬롯 (고정 배정용)</h3>
             <form
               onSubmit={(event) => {
                 event.preventDefault()
@@ -700,7 +700,7 @@ export default function PrivateLessonSlotsSection({
             {privateAvailabilityTemplatesLoading ? (
               <p style={{ margin: 0, opacity: 0.76 }}>불러오는 중...</p>
             ) : privateAvailabilityTemplates.length === 0 ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 가능 시간이 없습니다.</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 기본 슬롯이 없습니다.</p>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
                 <div
@@ -797,6 +797,13 @@ export default function PrivateLessonSlotsSection({
                 수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.
                 <br />
                 수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.
+                <br />
+                고정수업은 주간 기본 슬롯에서만 만들 수 있습니다.
+                <br />
+                원하는 시간이 보이지 않으면 위의 주간 기본 슬롯에 요일/시간/기간을 먼저
+                등록하세요.
+                <br />
+                날짜별 예약 가능 시간은 학생 직접 예약용입니다.
               </p>
             </div>
             <form
@@ -839,7 +846,7 @@ export default function PrivateLessonSlotsSection({
                 </label>
 
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                  기본 슬롯 선택
+                  주간 기본 슬롯 선택
                   <select
                     value={privateFixedSlotAssignmentForm.templateId}
                     data-testid="private-fixed-assignment-template-select"
@@ -867,6 +874,14 @@ export default function PrivateLessonSlotsSection({
                   {privateFixedSlotAssignmentErrors.templateId ? (
                     <span style={{ color: '#f4a7a7' }}>
                       {privateFixedSlotAssignmentErrors.templateId}
+                    </span>
+                  ) : null}
+                  {privateFixedSlotAssignmentForm.teacher &&
+                  privateFixedAssignmentTemplateOptions.length === 0 ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      등록된 주간 기본 슬롯이 없습니다.
+                      <br />
+                      위의 주간 기본 슬롯 (고정 배정용)에서 먼저 등록하세요.
                     </span>
                   ) : null}
                 </label>
@@ -1167,6 +1182,28 @@ export default function PrivateLessonSlotsSection({
               </div>
             )}
           </section>
+
+          <div
+            data-testid="private-dated-availability-helper"
+            style={{
+              display: 'grid',
+              gap: 6,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 8,
+              background: '#151922',
+              marginBottom: 12,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 16 }}>
+              날짜별 예약 가능 시간 (학생 직접 예약용)
+            </h3>
+            <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+              이 목록은 학생이 직접 예약할 수 있는 날짜별 시간입니다.
+              <br />
+              고정 1:1 배정에 사용하려면 주간 기본 슬롯으로 등록하세요.
+            </p>
+          </div>
 
           <form
             onSubmit={(event) => {

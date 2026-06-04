@@ -300,6 +300,12 @@ async function fillAssignmentForm(page, fixture) {
   await expect(section).toBeVisible({ timeout: 15000 });
   await expect(section).toContainText('수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.');
   await expect(section).toContainText('수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.');
+  await expect(section).toContainText('고정수업은 주간 기본 슬롯에서만 만들 수 있습니다.');
+  await expect(section).toContainText(
+    '원하는 시간이 보이지 않으면 위의 주간 기본 슬롯에 요일/시간/기간을 먼저 등록하세요.'
+  );
+  await expect(section).toContainText('날짜별 예약 가능 시간은 학생 직접 예약용입니다.');
+  await expect(section.getByLabel('주간 기본 슬롯 선택')).toBeVisible();
   await selectTeacherOption(
     section.getByTestId('private-fixed-assignment-teacher-select'),
     fixture.teacher.name,
