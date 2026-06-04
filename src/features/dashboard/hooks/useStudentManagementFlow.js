@@ -31,6 +31,7 @@ export default function useStudentManagementFlow({
   currentAcademyId,
   formatLocalYmd,
   studentDocFieldToYmdString,
+  teacherSelectOptions = [],
   openStudentPackageModal,
 }) {
   const [studentModalOpen, setStudentModalOpen] = useState(false)
@@ -206,6 +207,30 @@ export default function useStudentManagementFlow({
     return validateStudentFormFields(form)
   }
 
+  function resolveStudentTeacherFields(selectedTeacher) {
+    const rawTeacher = normalizeText(selectedTeacher)
+    const matchedOption = (Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []).find(
+      (option) =>
+        normalizeText(option?.value || '') === rawTeacher ||
+        normalizeText(option?.teacherKey || '') === rawTeacher ||
+        normalizeText(option?.displayName || '') === rawTeacher ||
+        normalizeText(option?.label || '') === rawTeacher
+    )
+    const teacherKey = normalizeText(matchedOption?.teacherKey || rawTeacher)
+    const teacherName = String(
+      matchedOption?.displayName || matchedOption?.label || teacherKey || rawTeacher
+    ).trim()
+    const teacherUid = String(matchedOption?.teacherUid || '').trim()
+    const teacherEmail = String(matchedOption?.teacherEmail || '').trim()
+    return {
+      teacher: teacherKey || rawTeacher,
+      teacherName: teacherName || teacherKey || rawTeacher,
+      teacherKey: teacherKey || rawTeacher,
+      teacherUid,
+      teacherEmail,
+    }
+  }
+
   async function submitStudentModal() {
     if (studentModalOpen) {
       await submitAddStudentModal()
@@ -221,9 +246,9 @@ export default function useStudentManagementFlow({
     setStudentFormErrors(result.errors)
     if (!result.valid) return
 
-    const teacherStored = isAdmin
-      ? normalizeText(result.teacher)
-      : normalizeText(userProfile?.teacherName)
+    const teacherFields = resolveStudentTeacherFields(
+      isAdmin ? result.teacher : userProfile?.teacherName
+    )
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
@@ -231,7 +256,7 @@ export default function useStudentManagementFlow({
       const docRef = await addDoc(collection(db, 'privateStudents'), {
         academyId: scopedAcademyId,
         name: result.name,
-        teacher: teacherStored,
+        ...teacherFields,
         phone: result.phone,
         carNumber: result.carNumber,
         learningPurpose: result.learningPurpose,
@@ -246,8 +271,9 @@ export default function useStudentManagementFlow({
       if (isAdmin) {
         setPostStudentCreateModalStudent({
           id: docRef.id,
+          academyId: scopedAcademyId,
           name: result.name,
-          teacher: teacherStored,
+          ...teacherFields,
           paidLessons: 0,
           attendanceCount: 0,
         })
@@ -267,9 +293,9 @@ export default function useStudentManagementFlow({
     setEditStudentFormErrors(result.errors)
     if (!result.valid) return
 
-    const teacherStored = isAdmin
-      ? normalizeText(result.teacher)
-      : normalizeText(userProfile?.teacherName)
+    const teacherFields = resolveStudentTeacherFields(
+      isAdmin ? result.teacher : userProfile?.teacherName
+    )
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
@@ -277,7 +303,7 @@ export default function useStudentManagementFlow({
       setBusyEditStudentSubmit(editStudentModalStudent.id)
       await updateDoc(doc(db, 'privateStudents', editStudentModalStudent.id), {
         name: result.name,
-        teacher: teacherStored,
+        ...teacherFields,
         phone: result.phone,
         carNumber: result.carNumber,
         learningPurpose: result.learningPurpose,

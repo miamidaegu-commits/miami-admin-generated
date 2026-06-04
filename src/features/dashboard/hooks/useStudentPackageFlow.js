@@ -386,6 +386,32 @@ export default function useStudentPackageFlow({
     setPostPrivateLessonScheduleErrors({})
   }
 
+  function mergeKnownStudentForPackage(student) {
+    if (!student?.id) return student
+    const knownStudent = (Array.isArray(privateStudents) ? privateStudents : []).find(
+      (row) => String(row.id || '').trim() === String(student.id || '').trim()
+    )
+    return knownStudent ? { ...student, ...knownStudent } : student
+  }
+
+  async function ensureStudentForPackageSubmit(student) {
+    if (!student?.id) return student
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    let nextStudent = mergeKnownStudentForPackage(student)
+    const hasAcademy = String(nextStudent?.academyId || '').trim() === scopedAcademyId
+    const hasTeacherScope =
+      String(nextStudent?.teacher || '').trim() ||
+      String(nextStudent?.teacherKey || '').trim()
+    if (!hasAcademy || !hasTeacherScope) {
+      const studentSnap = await getDoc(doc(db, 'privateStudents', student.id))
+      if (studentSnap.exists()) {
+        nextStudent = { ...nextStudent, id: studentSnap.id, ...studentSnap.data() }
+      }
+    }
+    setStudentPackageModalStudent(nextStudent)
+    return nextStudent
+  }
+
   function openStudentPackageModal(student, initialPackageType, reRegisterSourcePackage) {
     if (userProfile?.role !== 'admin') return
 
@@ -396,7 +422,7 @@ export default function useStudentPackageFlow({
         ? initialPackageType
         : 'private'
 
-    setStudentPackageModalStudent(student)
+    setStudentPackageModalStudent(mergeKnownStudentForPackage(student))
 
     const getDefaultRegistrationStartDate = (groupClassId) => {
       const targetGroupClassId = String(groupClassId || '').trim()
@@ -702,7 +728,14 @@ export default function useStudentPackageFlow({
     setStudentPackageFormErrors(result.errors)
     if (!result.valid) return
 
-    const student = studentPackageModalStudent
+    let student
+    try {
+      student = await ensureStudentForPackageSubmit(studentPackageModalStudent)
+    } catch (error) {
+      console.error('학생 정보 확인 실패:', error)
+      alert(`학생 수강권 추가 실패: ${error.message}`)
+      return
+    }
     const studentId = student.id
     const studentName = String(student.name || '').trim() || '-'
 
@@ -716,7 +749,7 @@ export default function useStudentPackageFlow({
     let registrationWeeksForSave = null
 
     if (result.packageType === 'private') {
-      teacher = normalizeText(student.teacher || '')
+      teacher = normalizeText(student.teacherKey || student.teacher || '')
       if (shouldTopUpExistingPrivatePackage) {
         const targetPackage = activePrivateSameScopePackages[0]
         try {
@@ -841,7 +874,10 @@ export default function useStudentPackageFlow({
 
     const scopeKey = buildStudentPackageScopeKey({
       packageType: result.packageType,
-      teacher: result.packageType === 'private' ? String(student.teacher || '') : '',
+      teacher:
+        result.packageType === 'private'
+          ? String(student.teacherKey || student.teacher || '')
+          : '',
       groupClassId:
         result.packageType === 'private' ? '' : String(groupClassId || '').trim(),
     })
@@ -902,6 +938,15 @@ export default function useStudentPackageFlow({
         studentId,
         studentName,
         teacher,
+        ...(result.packageType === 'private'
+          ? {
+              teacherName: teacher,
+              teacherKey: normalizeText(student.teacherKey || teacher),
+              teacherDisplayName: String(student.teacherDisplayName || student.teacherName || teacher).trim(),
+              teacherUid: String(student.teacherUid || '').trim(),
+              teacherEmail: String(student.teacherEmail || '').trim(),
+            }
+          : {}),
         packageType: result.packageType,
         groupClassId,
         groupClassName,

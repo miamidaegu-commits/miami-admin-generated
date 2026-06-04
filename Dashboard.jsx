@@ -2933,6 +2933,7 @@ export default function Dashboard() {
     currentAcademyId,
     formatLocalYmd,
     studentDocFieldToYmdString,
+    teacherSelectOptions,
     openStudentPackageModal,
   })
 
