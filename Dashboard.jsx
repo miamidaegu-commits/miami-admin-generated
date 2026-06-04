@@ -4662,7 +4662,7 @@ export default function Dashboard() {
 
   async function createPrivateAvailabilityTemplate() {
     if (!isAdmin) {
-      alert('주간 1:1 가능 시간은 관리자만 설정할 수 있습니다.')
+      alert('주간 기본 슬롯은 관리자만 설정할 수 있습니다.')
       return
     }
     const result = validatePrivateAvailabilityTemplateForm()
@@ -4694,8 +4694,8 @@ export default function Dashboard() {
         status: 'active',
       }))
     } catch (error) {
-      console.error('주간 1:1 가능 시간 생성 실패:', error)
-      alert(`주간 1:1 가능 시간 생성 실패: ${error.message}`)
+      console.error('주간 기본 슬롯 생성 실패:', error)
+      alert(`주간 기본 슬롯 생성 실패: ${error.message}`)
     } finally {
       setBusyPrivateAvailabilityTemplateId('')
     }
@@ -4706,15 +4706,15 @@ export default function Dashboard() {
     const nextStatus = status === 'active' ? 'active' : 'inactive'
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
-      assertSameAcademy(template, scopedAcademyId, '주간 1:1 가능 시간')
+      assertSameAcademy(template, scopedAcademyId, '주간 기본 슬롯')
       setBusyPrivateAvailabilityTemplateId(template.id)
       await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
         status: nextStatus,
         updatedAt: serverTimestamp(),
       })
     } catch (error) {
-      console.error('주간 1:1 가능 시간 상태 변경 실패:', error)
-      alert(`주간 1:1 가능 시간 상태 변경 실패: ${error.message}`)
+      console.error('주간 기본 슬롯 상태 변경 실패:', error)
+      alert(`주간 기본 슬롯 상태 변경 실패: ${error.message}`)
     } finally {
       setBusyPrivateAvailabilityTemplateId('')
     }
