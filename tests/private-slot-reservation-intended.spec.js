@@ -1005,6 +1005,9 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(sectionSource).toContain('주간 기본 슬롯 (고정 배정용)');
   expect(sectionSource).toContain('private-availability-template-start-date-input');
   expect(sectionSource).toContain('private-availability-template-end-date-input');
+  expect(sectionSource).toContain('private-availability-template-edit-button');
+  expect(sectionSource).toContain('private-availability-template-edit-start-date-input');
+  expect(sectionSource).toContain('private-availability-template-edit-status-select');
   expect(sectionSource).toContain('특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.');
   expect(sectionSource).toContain('기간 제한 없음');
   expect(sectionSource).toContain('날짜별 예약 가능 시간 (학생 직접 예약용)');
@@ -1015,6 +1018,9 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(rulesSource).toContain('match /privateLessonAvailabilityTemplates/{templateId}');
   expect(rulesSource).toMatch(/data\.weekday >= 1[\s\S]*data\.weekday <= 6/);
   expect(rulesSource).toMatch(/allow create:[\s\S]*isAcademyAdmin/);
+  expect(rulesSource).toContain(
+    'changedOnly(["status", "effectiveStartDate", "effectiveEndDate", "updatedAt"])'
+  );
 });
 
 test('released fixed private slot behavior is wired server-side', async () => {

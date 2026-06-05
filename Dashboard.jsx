@@ -4,6 +4,7 @@ import { httpsCallable } from 'firebase/functions'
 import {
   addDoc,
   collection,
+  deleteField,
   deleteDoc,
   doc,
   documentId,
@@ -4765,6 +4766,70 @@ export default function Dashboard() {
     }
   }
 
+  function validatePrivateAvailabilityTemplateUpdateFields(values) {
+    const errors = {}
+    const status = String(values?.status || 'active').trim()
+    const effectiveStartDate = String(values?.effectiveStartDate || '').trim()
+    const effectiveEndDate = String(values?.effectiveEndDate || '').trim()
+
+    if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
+    if (effectiveStartDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate)) {
+      errors.effectiveStartDate = '시작일 형식이 올바르지 않습니다.'
+    }
+    if (effectiveEndDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate)) {
+      errors.effectiveEndDate = '종료일 형식이 올바르지 않습니다.'
+    }
+    if (effectiveStartDate && !effectiveEndDate) {
+      errors.effectiveEndDate = '종료일을 입력하거나 시작일을 비워주세요.'
+    }
+    if (!effectiveStartDate && effectiveEndDate) {
+      errors.effectiveStartDate = '시작일을 입력하거나 종료일을 비워주세요.'
+    }
+    if (
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate) &&
+      effectiveEndDate < effectiveStartDate
+    ) {
+      errors.effectiveEndDate = '종료일은 시작일 이후여야 합니다.'
+    }
+
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      value: {
+        status,
+        effectiveStartDate,
+        effectiveEndDate,
+      },
+    }
+  }
+
+  async function updatePrivateAvailabilityTemplateDetails(template, values) {
+    if (!isAdmin || !template?.id) return { ok: false }
+    const result = validatePrivateAvailabilityTemplateUpdateFields(values)
+    if (!result.valid) return { ok: false, errors: result.errors }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(template, scopedAcademyId, '주간 기본 슬롯')
+      const { status, effectiveStartDate, effectiveEndDate } = result.value
+      setBusyPrivateAvailabilityTemplateId(template.id)
+      await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
+        status,
+        effectiveStartDate: effectiveStartDate && effectiveEndDate ? effectiveStartDate : deleteField(),
+        effectiveEndDate: effectiveStartDate && effectiveEndDate ? effectiveEndDate : deleteField(),
+        updatedAt: serverTimestamp(),
+      })
+      return { ok: true }
+    } catch (error) {
+      console.error('주간 기본 슬롯 수정 실패:', error)
+      alert(`주간 기본 슬롯 수정 실패: ${error.message}`)
+      return { ok: false, errors: { form: error.message } }
+    } finally {
+      setBusyPrivateAvailabilityTemplateId('')
+    }
+  }
+
   async function updatePrivateSlotEligibility(slot, nextEligibleStudentIds) {
     if (!isAdmin) {
       alert('대상 학생 수정 권한이 없습니다.')
@@ -5231,6 +5296,7 @@ export default function Dashboard() {
     privateAvailabilityTemplateErrors,
     createPrivateAvailabilityTemplate,
     updatePrivateAvailabilityTemplateStatus,
+    updatePrivateAvailabilityTemplateDetails,
     privateAvailabilityTemplates,
     privateAvailabilityTemplatesLoading,
     busyPrivateAvailabilityTemplateId,
