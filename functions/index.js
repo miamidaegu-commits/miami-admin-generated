@@ -4895,6 +4895,7 @@ exports.reservePrivateLessonSlot = onCall(
                 "Private reservation cannot be reused in its current status.",
             );
           }
+          const durationMinutes = getPrivateScheduleDurationMinutes(slot);
           const reservationData = {
             academyId,
             slotId,
@@ -4902,6 +4903,7 @@ exports.reservePrivateLessonSlot = onCall(
             teacher,
             date,
             time,
+            durationMinutes,
             status: "active",
             source: "student",
             sourceType:

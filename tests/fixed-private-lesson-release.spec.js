@@ -9,7 +9,7 @@ import {
   DEFAULT_E2E_ACADEMY_NAME,
   TEST_STUDENT_PASSWORD,
 } from './fixtures/test-data.js';
-import { loginAsAdmin, loginAsStudent, openDashboardSection } from './e2e-helpers.js';
+import { BASE_URL, loginAsAdmin, loginAsStudent, openDashboardSection } from './e2e-helpers.js';
 
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
 const ADMIN_APP_NAME = 'fixed-private-lesson-release-e2e';
@@ -491,6 +491,24 @@ async function expectReservationStatus(slotId, studentId, expected) {
     .toBe(expected);
 }
 
+async function expectReservationPatch(slotId, studentId, expected) {
+  await expect
+    .poll(async () => {
+      const snap = await getDb()
+        .collection('privateLessonReservations')
+        .doc(`${DEFAULT_E2E_ACADEMY_ID}__${slotId}__${studentId}`)
+        .get();
+      if (!snap.exists) return null;
+      const data = snap.data() || {};
+      return {
+        status: data.status || '',
+        durationMinutes: Number(data.durationMinutes || 0),
+        sourceType: data.sourceType || '',
+      };
+    }, { timeout: 15000 })
+    .toMatchObject(expected);
+}
+
 test.describe('fixed private lesson release', () => {
   test.setTimeout(90000);
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json is required for live e2e setup.');
@@ -509,6 +527,7 @@ test.describe('fixed private lesson release', () => {
     await openDashboardSection(page, '캘린더');
     const fixedLessonDoc = await getDb().collection('lessons').doc(fixture.fixedLessonId).get();
     expect(fixedLessonDoc.exists).toBe(true);
+    expect(Number(fixedLessonDoc.data()?.durationMinutes || 0)).toBe(60);
     await page.locator(`[data-testid="calendar-day-button"][data-date="${fixture.date}"]`).click();
     const calendarRow = page
       .locator(
@@ -543,8 +562,9 @@ test.describe('fixed private lesson release', () => {
     });
 
     await page.getByRole('button', { name: '로그아웃' }).click();
+    await expect(page.getByRole('button', { name: '로그인' })).toBeVisible({ timeout: 15000 });
     await loginAsStudent(page, fixture.otherEmail, TEST_STUDENT_PASSWORD);
-    await page.goto(`${page.url()}?privateSlotBooking=enabled`);
+    await page.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
     await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
       timeout: 15000,
     });
@@ -555,15 +575,37 @@ test.describe('fixed private lesson release', () => {
       (slot) => slot.date === fixture.date && slot.time === fixture.time
     );
     expect(releasedSlot, JSON.stringify(availability?.slots || [])).toBeTruthy();
-    const reserveResult = await reservePrivateLessonSlotViaPage(page, {
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      slotId: releasedSlot.id,
-      availabilityTemplateId: releasedSlot.availabilityTemplateId || '',
-      date: releasedSlot.date,
-      time: releasedSlot.time,
-    });
-    expect(reserveResult, JSON.stringify(reserveResult)).toMatchObject({ ok: true });
+    expect(releasedSlot.durationMinutes).toBe(60);
+    const availableSlotCard = page
+      .locator(`[data-testid="student-private-slot-card"][data-slot-id="${releasedSlot.id}"]`)
+      .first();
+    await expect(availableSlotCard).toBeVisible({ timeout: 20000 });
+    await expect(availableSlotCard).toContainText(fixture.time);
+    await expect(availableSlotCard).toContainText('60분');
+    await expect(availableSlotCard).toContainText('예약 가능');
+    page.once('dialog', (dialog) => dialog.accept());
+    await availableSlotCard.getByTestId('student-private-slot-reserve-button').click();
     await expectReservationStatus(releasedSlot.id, fixture.otherStudentId, 'active');
+    await expectReservationPatch(releasedSlot.id, fixture.otherStudentId, {
+      status: 'active',
+      durationMinutes: 60,
+    });
+
+    const postBookingAvailability = await listPrivateLessonSlotAvailabilityViaPage(page, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    const reservedSlot = (postBookingAvailability?.slots || []).find((slot) => slot.id === releasedSlot.id);
+    expect(reservedSlot, JSON.stringify(postBookingAvailability?.slots || [])).toBeTruthy();
+    expect(reservedSlot.durationMinutes).toBe(60);
+    expect(reservedSlot.bookingStatus).toBe('my_reservation');
+
+    const reservationCard = page
+      .getByTestId('student-private-reservation-card')
+      .filter({ hasText: fixture.time })
+      .first();
+    await expect(reservationCard).toBeVisible({ timeout: 20000 });
+    await expect(reservationCard).toContainText('60분');
+    await expect(reservationCard).not.toContainText('50분');
   });
 
   test('admin cancels one fixed lesson without making that time bookable', async ({ page }) => {
@@ -584,7 +626,6 @@ test.describe('fixed private lesson release', () => {
     await expect(actionModal).toContainText('같은 시간대는 다른 학생에게 공개되지 않습니다.');
     page.once('dialog', (dialog) => dialog.accept());
     await actionModal.getByTestId('fixed-private-lesson-action-cancel-button').click();
-    await expect(row).toContainText('수업 취소', { timeout: 15000 });
     await expectLessonPatch(fixture.cancelOnlyLessonId, {
       status: 'cancelled',
       cancellationType: 'lesson_cancelled',

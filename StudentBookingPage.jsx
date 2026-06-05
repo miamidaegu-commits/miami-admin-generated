@@ -153,6 +153,19 @@ function getLessonSubjectLabel(lesson) {
   return String(lesson?.subject || '').trim() || '1:1 수업'
 }
 
+function getPrivateDurationLabel(...sources) {
+  for (const source of sources) {
+    const duration = Number(
+      source?.durationMinutes ||
+        source?.duration ||
+        source?.lessonDurationMinutes ||
+        source?.classDurationMinutes
+    )
+    if (Number.isFinite(duration) && duration > 0) return `${Math.floor(duration)}분`
+  }
+  return ''
+}
+
 function isFixedPrivateLesson(lesson) {
   return (
     String(lesson?.packageType || '').trim() === 'private' &&
@@ -1638,6 +1651,7 @@ export default function StudentBookingPage() {
       teacherLabel: getLessonTeacherLabel(lesson),
       title: getLessonSubjectLabel(lesson),
       sessionLabel: formatLessonSessionNumber(lesson),
+      durationLabel: getPrivateDurationLabel(lesson),
       statusLabel: '수업 예정',
       lesson,
     }))
@@ -1657,6 +1671,7 @@ export default function StudentBookingPage() {
         teacherLabel: String(reservation.teacher || '').trim() || '-',
         title: String(reservation.subject || '').trim() || '1:1 수업',
         sessionLabel: '',
+        durationLabel: getPrivateDurationLabel(reservation),
         statusLabel: '예약 완료',
       }))
 
@@ -2517,6 +2532,14 @@ export default function StudentBookingPage() {
                             </span>
                           </span>
                         ) : null}
+                        {item.durationLabel ? (
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              길이
+                            </span>
+                            {item.durationLabel}
+                          </span>
+                        ) : null}
                         <span>
                           <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
                             상태
@@ -3025,6 +3048,7 @@ export default function StudentBookingPage() {
                     const reservationDateTime = [
                       String(reservation.date || slot?.date || '').trim(),
                       String(reservation.time || slot?.time || '').trim(),
+                      getPrivateDurationLabel(reservation, slot),
                     ].filter(Boolean).join(' · ')
 
                     return (
@@ -3062,9 +3086,7 @@ export default function StudentBookingPage() {
                               <span style={getPrivateSlotBadgeStyle('my_reservation')}>내 예약</span>
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
-                              {[reservation.date || slot?.date, reservation.time || slot?.time]
-                                .filter(Boolean)
-                                .join(' · ') || `slotId: ${reservation.slotId}`}
+                              {reservationDateTime || `slotId: ${reservation.slotId}`}
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               {isActive ? '내 예약' : getReservationStatusLabel(reservation)}
