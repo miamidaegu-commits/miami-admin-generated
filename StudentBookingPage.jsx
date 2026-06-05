@@ -189,6 +189,30 @@ function getDateTimeMs(dateValue, timeValue) {
   return Number.isFinite(value) ? value : null
 }
 
+function getTimestampLikeMs(value) {
+  if (!value) return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value.toMillis === 'function') {
+    const millis = value.toMillis()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof value === 'object' && value.seconds !== undefined) {
+    const seconds = Number(value.seconds)
+    if (Number.isFinite(seconds)) return seconds * 1000
+  }
+  const parsed = Date.parse(String(value))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function getPrivateReservationStartMillis(reservation) {
+  return (
+    getTimestampLikeMs(reservation?.startAt) ??
+    getTimestampLikeMs(reservation?.startsAt) ??
+    getTimestampLikeMs(reservation?.startAtMillis) ??
+    getDateTimeMs(reservation?.date, reservation?.time)
+  )
+}
+
 function normalizePrivateAccessKey(value) {
   return normalizePrivateTeacherKey(value).toLowerCase()
 }
@@ -2057,6 +2081,11 @@ export default function StudentBookingPage() {
     if (!reservation?.slotId) return
 
     const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    const unavailableReason = getPrivateReservationCancelUnavailableReason(reservation)
+    if (unavailableReason) {
+      alert(unavailableReason)
+      return
+    }
     const reservationId = buildPrivateLessonReservationId({
       academyId: scopedAcademyId,
       slotId: reservation.slotId,
@@ -2166,9 +2195,7 @@ export default function StudentBookingPage() {
   }
 
   function getPrivateReservationCancelUnavailableReason(reservation) {
-    const date = String(reservation?.date || '').trim()
-    const time = String(reservation?.time || '').trim()
-    const startMillis = getDateTimeMs(date, time)
+    const startMillis = getPrivateReservationStartMillis(reservation)
     if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
       return '수업 시작 6시간 전까지만 취소할 수 있습니다.'
     }

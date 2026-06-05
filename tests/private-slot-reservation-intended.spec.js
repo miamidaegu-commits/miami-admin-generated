@@ -1827,6 +1827,7 @@ test('student flexible private cancellation cutoff blocks cancel within 6 hours'
         teacherName: fixture.teacherKey,
         date: nearStart.date,
         time: nearStart.time,
+        startAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 5 * 60 * 60 * 1000)),
         status: 'active',
         source: 'student',
         reservedAt: nowTs,
@@ -1845,6 +1846,15 @@ test('student flexible private cancellation cutoff blocks cancel within 6 hours'
       await dialog.accept();
     });
     await loginAsStudentWithPrivateBooking(page, fixture.eligibleStudent.email);
+    const upcomingReservationCard = page
+      .locator('[data-testid="student-upcoming-private-lesson-card"][data-source="privateReservation"]')
+      .filter({ hasText: nearStart.date })
+      .first();
+    await expect(upcomingReservationCard).toBeVisible({ timeout: 15000 });
+    await expect(upcomingReservationCard).toContainText('수업 시작 6시간 전까지만 취소할 수 있습니다.');
+    await expect(
+      upcomingReservationCard.getByTestId('student-upcoming-private-reservation-cancel-button')
+    ).toBeDisabled();
     const reservationCard = privateReservationCard(page, nearStart.date);
     await expect(reservationCard).toBeVisible({ timeout: 15000 });
     await expect(reservationCard).toContainText('수업 시작 6시간 전까지만 취소할 수 있습니다.');
