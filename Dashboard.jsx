@@ -4,6 +4,7 @@ import { httpsCallable } from 'firebase/functions'
 import {
   addDoc,
   collection,
+  deleteField,
   deleteDoc,
   doc,
   documentId,
@@ -798,6 +799,8 @@ export default function Dashboard() {
     time: '',
     durationMinutes: '60',
     status: 'active',
+    effectiveStartDate: '',
+    effectiveEndDate: '',
   })
   const [privateAvailabilityBulkForm, setPrivateAvailabilityBulkForm] = useState({
     teacher: '',
@@ -4217,6 +4220,10 @@ export default function Dashboard() {
       10
     )
     const status = String(privateAvailabilityTemplateForm.status || 'active').trim()
+    const effectiveStartDate = String(
+      privateAvailabilityTemplateForm.effectiveStartDate || ''
+    ).trim()
+    const effectiveEndDate = String(privateAvailabilityTemplateForm.effectiveEndDate || '').trim()
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) {
       errors.weekday = '월요일부터 토요일까지만 선택할 수 있습니다.'
@@ -4226,10 +4233,38 @@ export default function Dashboard() {
       errors.durationMinutes = '10~240분 사이로 입력해주세요.'
     }
     if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
+    if (effectiveStartDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate)) {
+      errors.effectiveStartDate = '시작일 형식이 올바르지 않습니다.'
+    }
+    if (effectiveEndDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate)) {
+      errors.effectiveEndDate = '종료일 형식이 올바르지 않습니다.'
+    }
+    if (effectiveStartDate && !effectiveEndDate) {
+      errors.effectiveEndDate = '종료일을 입력하거나 시작일을 비워주세요.'
+    }
+    if (!effectiveStartDate && effectiveEndDate) {
+      errors.effectiveStartDate = '시작일을 입력하거나 종료일을 비워주세요.'
+    }
+    if (
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate) &&
+      effectiveEndDate < effectiveStartDate
+    ) {
+      errors.effectiveEndDate = '종료일은 시작일 이후여야 합니다.'
+    }
     return {
       valid: Object.keys(errors).length === 0,
       errors,
-      value: { teacher, teacherFields, weekday, time, durationMinutes, status },
+      value: {
+        teacher,
+        teacherFields,
+        weekday,
+        time,
+        durationMinutes,
+        status,
+        effectiveStartDate,
+        effectiveEndDate,
+      },
     }
   }
 
@@ -4671,7 +4706,15 @@ export default function Dashboard() {
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
-      const { teacherFields, weekday, time, durationMinutes, status } = result.value
+      const {
+        teacherFields,
+        weekday,
+        time,
+        durationMinutes,
+        status,
+        effectiveStartDate,
+        effectiveEndDate,
+      } = result.value
       setBusyPrivateAvailabilityTemplateId('__add__')
       await addDoc(collection(db, 'privateLessonAvailabilityTemplates'), {
         academyId: scopedAcademyId,
@@ -4683,6 +4726,9 @@ export default function Dashboard() {
         weekday,
         time,
         durationMinutes,
+        ...(effectiveStartDate && effectiveEndDate
+          ? { effectiveStartDate, effectiveEndDate }
+          : {}),
         status,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -4715,6 +4761,70 @@ export default function Dashboard() {
     } catch (error) {
       console.error('주간 기본 슬롯 상태 변경 실패:', error)
       alert(`주간 기본 슬롯 상태 변경 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateAvailabilityTemplateId('')
+    }
+  }
+
+  function validatePrivateAvailabilityTemplateUpdateFields(values) {
+    const errors = {}
+    const status = String(values?.status || 'active').trim()
+    const effectiveStartDate = String(values?.effectiveStartDate || '').trim()
+    const effectiveEndDate = String(values?.effectiveEndDate || '').trim()
+
+    if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
+    if (effectiveStartDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate)) {
+      errors.effectiveStartDate = '시작일 형식이 올바르지 않습니다.'
+    }
+    if (effectiveEndDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate)) {
+      errors.effectiveEndDate = '종료일 형식이 올바르지 않습니다.'
+    }
+    if (effectiveStartDate && !effectiveEndDate) {
+      errors.effectiveEndDate = '종료일을 입력하거나 시작일을 비워주세요.'
+    }
+    if (!effectiveStartDate && effectiveEndDate) {
+      errors.effectiveStartDate = '시작일을 입력하거나 종료일을 비워주세요.'
+    }
+    if (
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(effectiveEndDate) &&
+      effectiveEndDate < effectiveStartDate
+    ) {
+      errors.effectiveEndDate = '종료일은 시작일 이후여야 합니다.'
+    }
+
+    return {
+      valid: Object.keys(errors).length === 0,
+      errors,
+      value: {
+        status,
+        effectiveStartDate,
+        effectiveEndDate,
+      },
+    }
+  }
+
+  async function updatePrivateAvailabilityTemplateDetails(template, values) {
+    if (!isAdmin || !template?.id) return { ok: false }
+    const result = validatePrivateAvailabilityTemplateUpdateFields(values)
+    if (!result.valid) return { ok: false, errors: result.errors }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(template, scopedAcademyId, '주간 기본 슬롯')
+      const { status, effectiveStartDate, effectiveEndDate } = result.value
+      setBusyPrivateAvailabilityTemplateId(template.id)
+      await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
+        status,
+        effectiveStartDate: effectiveStartDate && effectiveEndDate ? effectiveStartDate : deleteField(),
+        effectiveEndDate: effectiveStartDate && effectiveEndDate ? effectiveEndDate : deleteField(),
+        updatedAt: serverTimestamp(),
+      })
+      return { ok: true }
+    } catch (error) {
+      console.error('주간 기본 슬롯 수정 실패:', error)
+      alert(`주간 기본 슬롯 수정 실패: ${error.message}`)
+      return { ok: false, errors: { form: error.message } }
     } finally {
       setBusyPrivateAvailabilityTemplateId('')
     }
@@ -5186,6 +5296,7 @@ export default function Dashboard() {
     privateAvailabilityTemplateErrors,
     createPrivateAvailabilityTemplate,
     updatePrivateAvailabilityTemplateStatus,
+    updatePrivateAvailabilityTemplateDetails,
     privateAvailabilityTemplates,
     privateAvailabilityTemplatesLoading,
     busyPrivateAvailabilityTemplateId,

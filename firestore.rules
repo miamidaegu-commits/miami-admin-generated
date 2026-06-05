@@ -1939,7 +1939,7 @@ service cloud.firestore {
         request.resource.data.time == resource.data.time &&
         request.resource.data.durationMinutes == resource.data.durationMinutes &&
         request.resource.data.createdAt == resource.data.createdAt &&
-        changedOnly(["status", "updatedAt"]) &&
+        changedOnly(["status", "effectiveStartDate", "effectiveEndDate", "updatedAt"]) &&
         request.resource.data.updatedAt == request.time;
 
       allow delete: if false;

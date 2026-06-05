@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { PRIVATE_WEEKLY_SLOT_WEEKDAYS } from '../../booking/privateWeeklySlotBulk.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 
@@ -137,7 +137,7 @@ function getTemplateAssignmentOptionLabel(template) {
   const range =
     template.effectiveStartDate && template.effectiveEndDate
       ? `${template.effectiveStartDate} ~ ${template.effectiveEndDate}`
-      : '전체 기간'
+      : '기간 제한 없음'
   return `${getPrivateSlotTeacherDisplay(template)} · ${weekdayLabel(template.weekday)} ${
     template.time || '-'
   } · ${Number(template.durationMinutes || 0) || '-'}분 · ${range}`
@@ -182,6 +182,7 @@ export default function PrivateLessonSlotsSection({
   privateAvailabilityTemplateErrors,
   createPrivateAvailabilityTemplate,
   updatePrivateAvailabilityTemplateStatus,
+  updatePrivateAvailabilityTemplateDetails,
   privateAvailabilityTemplates = [],
   privateAvailabilityTemplatesLoading,
   busyPrivateAvailabilityTemplateId,
@@ -211,6 +212,37 @@ export default function PrivateLessonSlotsSection({
   const [editingEligibilitySlotId, setEditingEligibilitySlotId] = useState('')
   const [editingEligibilityStudentIds, setEditingEligibilityStudentIds] = useState([])
   const [fixedPrivateLessonAction, setFixedPrivateLessonAction] = useState(null)
+  const [editingAvailabilityTemplateId, setEditingAvailabilityTemplateId] = useState('')
+  const [editingAvailabilityTemplateForm, setEditingAvailabilityTemplateForm] = useState({
+    effectiveStartDate: '',
+    effectiveEndDate: '',
+    status: 'active',
+  })
+  const [editingAvailabilityTemplateErrors, setEditingAvailabilityTemplateErrors] = useState({})
+
+  function openAvailabilityTemplateEdit(template) {
+    setEditingAvailabilityTemplateId(String(template?.id || ''))
+    setEditingAvailabilityTemplateForm({
+      effectiveStartDate: isYmd(template?.effectiveStartDate) ? String(template.effectiveStartDate) : '',
+      effectiveEndDate: isYmd(template?.effectiveEndDate) ? String(template.effectiveEndDate) : '',
+      status: String(template?.status || 'active') === 'active' ? 'active' : 'inactive',
+    })
+    setEditingAvailabilityTemplateErrors({})
+  }
+
+  async function saveAvailabilityTemplateEdit(template) {
+    if (typeof updatePrivateAvailabilityTemplateDetails !== 'function') return
+    const result = await updatePrivateAvailabilityTemplateDetails(
+      template,
+      editingAvailabilityTemplateForm
+    )
+    if (result?.ok) {
+      setEditingAvailabilityTemplateId('')
+      setEditingAvailabilityTemplateErrors({})
+      return
+    }
+    setEditingAvailabilityTemplateErrors(result?.errors || {})
+  }
 
   const privateStudentOptions = useMemo(() => {
     return [...privateStudents]
@@ -563,6 +595,11 @@ export default function PrivateLessonSlotsSection({
             }}
           >
             <h3 style={{ margin: 0, fontSize: 16 }}>주간 기본 슬롯 (고정 배정용)</h3>
+            <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+              특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.
+              <br />
+              비워두면 기간 제한 없이 반복됩니다.
+            </p>
             <form
               onSubmit={(event) => {
                 event.preventDefault()
@@ -662,6 +699,44 @@ export default function PrivateLessonSlotsSection({
                 ) : null}
               </label>
               <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                시작일
+                <input
+                  type="date"
+                  value={privateAvailabilityTemplateForm.effectiveStartDate || ''}
+                  data-testid="private-availability-template-start-date-input"
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      effectiveStartDate: event.target.value,
+                    }))
+                  }
+                />
+                {privateAvailabilityTemplateErrors.effectiveStartDate ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.effectiveStartDate}
+                  </span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                종료일
+                <input
+                  type="date"
+                  value={privateAvailabilityTemplateForm.effectiveEndDate || ''}
+                  data-testid="private-availability-template-end-date-input"
+                  onChange={(event) =>
+                    setPrivateAvailabilityTemplateForm((prev) => ({
+                      ...prev,
+                      effectiveEndDate: event.target.value,
+                    }))
+                  }
+                />
+                {privateAvailabilityTemplateErrors.effectiveEndDate ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.effectiveEndDate}
+                  </span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
                 상태
                 <select
                   value={privateAvailabilityTemplateForm.status}
@@ -706,7 +781,7 @@ export default function PrivateLessonSlotsSection({
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr auto',
+                    gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr 1.3fr',
                     gap: 8,
                     alignItems: 'center',
                     opacity: 0.72,
@@ -725,51 +800,193 @@ export default function PrivateLessonSlotsSection({
                 {privateAvailabilityTemplates.map((template) => {
                   const busy = busyPrivateAvailabilityTemplateId === template.id
                   const status = String(template.status || 'active') === 'active' ? 'active' : 'inactive'
+                  const editing = editingAvailabilityTemplateId === template.id
                   return (
-                    <div
-                      key={template.id}
-                      data-testid="private-availability-template-row"
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr auto',
-                        gap: 8,
-                        alignItems: 'center',
-                        border: '1px solid #2e3240',
-                        borderRadius: 8,
-                        padding: 10,
-                      }}
-                    >
-                      <span>{getPrivateSlotTeacherDisplay(template)}</span>
-                      <span>{weekdayLabel(template.weekday)}</span>
-                      <span>{template.time || '-'}</span>
-                      <span>{Number(template.durationMinutes || 0) || '-'}분</span>
-                      <span>{status === 'active' ? '사용' : '비활성'}</span>
-                      <span>
-                        {template.effectiveStartDate && template.effectiveEndDate
-                          ? `${template.effectiveStartDate} ~ ${template.effectiveEndDate}`
-                          : '전체 기간'}
-                      </span>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() =>
-                          updatePrivateAvailabilityTemplateStatus(
-                            template,
-                            status === 'active' ? 'inactive' : 'active'
-                          )
-                        }
+                    <Fragment key={template.id}>
+                      <div
+                        data-testid="private-availability-template-row"
                         style={{
-                          padding: '6px 10px',
+                          display: 'grid',
+                          gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr 1.3fr',
+                          gap: 8,
+                          alignItems: 'center',
+                          border: '1px solid #2e3240',
                           borderRadius: 8,
-                          border: '1px solid #444',
-                          background: '#1f2a44',
-                          color: 'white',
-                          cursor: busy ? 'not-allowed' : 'pointer',
+                          padding: 10,
                         }}
                       >
-                        {busy ? '처리 중...' : status === 'active' ? '비활성화' : '사용'}
-                      </button>
-                    </div>
+                        <span>{getPrivateSlotTeacherDisplay(template)}</span>
+                        <span>{weekdayLabel(template.weekday)}</span>
+                        <span>{template.time || '-'}</span>
+                        <span>{Number(template.durationMinutes || 0) || '-'}분</span>
+                        <span data-testid="private-availability-template-status-cell">
+                          {status === 'active' ? '사용' : '비활성'}
+                        </span>
+                        <span data-testid="private-availability-template-period-cell">
+                          {template.effectiveStartDate && template.effectiveEndDate
+                            ? `${template.effectiveStartDate} ~ ${template.effectiveEndDate}`
+                            : '기간 제한 없음'}
+                        </span>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            data-testid="private-availability-template-edit-button"
+                            onClick={() => openAvailabilityTemplateEdit(template)}
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #555',
+                              background: '#242a38',
+                              color: 'white',
+                              cursor: busy ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            수정
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            data-testid="private-availability-template-status-toggle-button"
+                            onClick={() =>
+                              updatePrivateAvailabilityTemplateStatus(
+                                template,
+                                status === 'active' ? 'inactive' : 'active'
+                              )
+                            }
+                            style={{
+                              padding: '6px 10px',
+                              borderRadius: 8,
+                              border: '1px solid #444',
+                              background: '#1f2a44',
+                              color: 'white',
+                              cursor: busy ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            {busy ? '처리 중...' : status === 'active' ? '비활성화' : '사용'}
+                          </button>
+                        </div>
+                      </div>
+                      {editing ? (
+                        <form
+                          data-testid="private-availability-template-edit-form"
+                          onSubmit={(event) => {
+                            event.preventDefault()
+                            saveAvailabilityTemplateEdit(template)
+                          }}
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+                            gap: 12,
+                            border: '1px solid #3c4354',
+                            borderRadius: 8,
+                            padding: 12,
+                            background: '#111722',
+                          }}
+                        >
+                          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                            시작일
+                            <input
+                              type="date"
+                              value={editingAvailabilityTemplateForm.effectiveStartDate}
+                              data-testid="private-availability-template-edit-start-date-input"
+                              onChange={(event) =>
+                                setEditingAvailabilityTemplateForm((prev) => ({
+                                  ...prev,
+                                  effectiveStartDate: event.target.value,
+                                }))
+                              }
+                            />
+                            {editingAvailabilityTemplateErrors.effectiveStartDate ? (
+                              <span style={{ color: '#f4a7a7' }}>
+                                {editingAvailabilityTemplateErrors.effectiveStartDate}
+                              </span>
+                            ) : null}
+                          </label>
+                          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                            종료일
+                            <input
+                              type="date"
+                              value={editingAvailabilityTemplateForm.effectiveEndDate}
+                              data-testid="private-availability-template-edit-end-date-input"
+                              onChange={(event) =>
+                                setEditingAvailabilityTemplateForm((prev) => ({
+                                  ...prev,
+                                  effectiveEndDate: event.target.value,
+                                }))
+                              }
+                            />
+                            {editingAvailabilityTemplateErrors.effectiveEndDate ? (
+                              <span style={{ color: '#f4a7a7' }}>
+                                {editingAvailabilityTemplateErrors.effectiveEndDate}
+                              </span>
+                            ) : null}
+                          </label>
+                          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                            상태
+                            <select
+                              value={editingAvailabilityTemplateForm.status}
+                              data-testid="private-availability-template-edit-status-select"
+                              onChange={(event) =>
+                                setEditingAvailabilityTemplateForm((prev) => ({
+                                  ...prev,
+                                  status: event.target.value,
+                                }))
+                              }
+                            >
+                              <option value="active">사용</option>
+                              <option value="inactive">중지</option>
+                            </select>
+                            {editingAvailabilityTemplateErrors.status ? (
+                              <span style={{ color: '#f4a7a7' }}>
+                                {editingAvailabilityTemplateErrors.status}
+                              </span>
+                            ) : null}
+                          </label>
+                          <div style={{ display: 'flex', alignItems: 'end', gap: 8 }}>
+                            <button
+                              type="submit"
+                              disabled={busy}
+                              data-testid="private-availability-template-edit-save-button"
+                              style={{
+                                padding: '8px 12px',
+                                borderRadius: 8,
+                                border: '1px solid #456034',
+                                background: '#2d4d2d',
+                                color: 'white',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {busy ? '저장 중...' : '저장'}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              data-testid="private-availability-template-edit-cancel-button"
+                              onClick={() => {
+                                setEditingAvailabilityTemplateId('')
+                                setEditingAvailabilityTemplateErrors({})
+                              }}
+                              style={{
+                                padding: '8px 12px',
+                                borderRadius: 8,
+                                border: '1px solid #444',
+                                background: '#242a38',
+                                color: 'white',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              취소
+                            </button>
+                          </div>
+                          {editingAvailabilityTemplateErrors.form ? (
+                            <div style={{ color: '#f4a7a7', fontSize: 13 }}>
+                              {editingAvailabilityTemplateErrors.form}
+                            </div>
+                          ) : null}
+                        </form>
+                      ) : null}
+                    </Fragment>
                   )
                 })}
               </div>

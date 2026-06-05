@@ -11,7 +11,12 @@ import {
 
 const ACADEMY_ID = 'academy_e2e_default';
 const STUDENT_ID = 'e2e-student-ticket-summary';
-const NOW = Date.UTC(2026, 4, 28, 0, 0, 0);
+const DAY_MS = 86400000;
+const NOW = Date.now();
+
+function ymdFromNow(daysFromNow) {
+  return new Date(NOW + daysFromNow * DAY_MS).toISOString().slice(0, 10);
+}
 
 function privateLesson(id, overrides = {}) {
   return {
@@ -21,9 +26,9 @@ function privateLesson(id, overrides = {}) {
     teacher: 'don1',
     teacherName: 'don1',
     packageType: 'private',
-    date: '2026-06-05',
+    date: ymdFromNow(8),
     time: '15:00',
-    startAt: new Date(NOW + Number(id.replace(/\D/g, '') || 1) * 86400000),
+    startAt: new Date(NOW + Number(id.replace(/\D/g, '') || 1) * DAY_MS),
     ...overrides,
   };
 }
@@ -36,9 +41,9 @@ function privateReservation(id, overrides = {}) {
     teacher: 'don1',
     teacherName: 'Don',
     status: 'active',
-    date: '2026-06-10',
+    date: ymdFromNow(20),
     time: '11:00',
-    startAt: new Date(NOW + 20 * 86400000),
+    startAt: new Date(NOW + 20 * DAY_MS),
     ...overrides,
   };
 }
@@ -62,29 +67,29 @@ test('student ticket summary helpers match admin-style private labels', () => {
   };
   const lessons = [
     privateLesson('past', {
-      date: '2026-05-29',
+      date: ymdFromNow(-1),
       time: '15:00',
       isDeductCancelled: true,
       packageId: ticket.id,
-      startAt: new Date(NOW - 86400000),
+      startAt: new Date(NOW - DAY_MS),
     }),
     privateLesson('f1', {
       packageId: ticket.id,
-      date: '2026-06-05',
+      date: ymdFromNow(8),
       time: '15:00',
-      startAt: new Date(NOW + 8 * 86400000),
+      startAt: new Date(NOW + 8 * DAY_MS),
     }),
     privateLesson('f2', {
       packageId: ticket.id,
-      date: '2026-06-12',
+      date: ymdFromNow(15),
       time: '15:00',
-      startAt: new Date(NOW + 15 * 86400000),
+      startAt: new Date(NOW + 15 * DAY_MS),
     }),
     privateLesson('f3', {
       packageId: ticket.id,
-      date: '2026-06-19',
+      date: ymdFromNow(22),
       time: '15:00',
-      startAt: new Date(NOW + 22 * 86400000),
+      startAt: new Date(NOW + 22 * DAY_MS),
     }),
   ];
 
