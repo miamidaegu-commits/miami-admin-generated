@@ -63,6 +63,7 @@ import {
 } from './src/features/booking/studentPrivateCancelAllowance.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
+const PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000
 function isEnabledFlag(value) {
   return ['1', 'true', 'yes', 'on', 'enabled'].includes(
     String(value || '').trim().toLowerCase()
@@ -1673,6 +1674,7 @@ export default function StudentBookingPage() {
         sessionLabel: '',
         durationLabel: getPrivateDurationLabel(reservation),
         statusLabel: '예약 완료',
+        reservation,
       }))
 
     return [...lessonItems, ...reservationItems].sort((a, b) => {
@@ -2118,7 +2120,7 @@ export default function StudentBookingPage() {
     const date = getLessonStorageDateString(lesson)
     const time = getLessonDisplayTime(lesson)
     const startMillis = getDateTimeMs(date, time)
-    if (startMillis !== null && Date.now() > startMillis - 6 * 60 * 60 * 1000) {
+    if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
       alert('수업 시작 6시간 전까지만 취소할 수 있습니다.')
       return
     }
@@ -2161,6 +2163,87 @@ export default function StudentBookingPage() {
     } finally {
       setBusyFixedPrivateLessonId('')
     }
+  }
+
+  function getPrivateReservationCancelUnavailableReason(reservation) {
+    const date = String(reservation?.date || '').trim()
+    const time = String(reservation?.time || '').trim()
+    const startMillis = getDateTimeMs(date, time)
+    if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
+      return '수업 시작 6시간 전까지만 취소할 수 있습니다.'
+    }
+    if (privateCancelAllowanceLoaded && privateCancelAllowance.remaining <= 0) {
+      return '취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+    }
+    return ''
+  }
+
+  function getFixedPrivateLessonCancelUnavailableReason(lesson) {
+    const date = getLessonStorageDateString(lesson)
+    const time = getLessonDisplayTime(lesson)
+    const startMillis = getDateTimeMs(date, time)
+    if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
+      return '수업 시작 6시간 전까지만 취소할 수 있습니다.'
+    }
+    if (privateCancelAllowance.remaining <= 0) {
+      return '취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+    }
+    return ''
+  }
+
+  function renderPrivateReservationCancelAction(reservation, {
+    testId = 'student-private-reservation-cancel-button',
+  } = {}) {
+    if (!reservation || !PRIVATE_SLOT_BOOKING_ENABLED || !privateSlotBookingPilotEnabled) {
+      return null
+    }
+    const reservationId = buildPrivateLessonReservationId({
+      academyId: currentAcademyId,
+      slotId: reservation.slotId,
+      studentId: scopedStudentId,
+    })
+    const isBusy = busyPrivateReservationId === reservationId
+    const unavailableReason = getPrivateReservationCancelUnavailableReason(reservation)
+    const disabled = Boolean(isBusy || unavailableReason)
+
+    return (
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          marginTop: 12,
+        }}
+      >
+        {unavailableReason ? (
+          <span style={{ opacity: 0.72, fontSize: 13 }}>{unavailableReason}</span>
+        ) : (
+          <span style={{ opacity: 0.72, fontSize: 13 }}>
+            취소 가능 {privateCancelAllowance.remaining}회
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => cancelPrivateReservation(reservation)}
+          disabled={disabled}
+          data-testid={testId}
+          style={{
+            padding: '6px 10px',
+            borderRadius: 999,
+            border: '1px solid #9a3f48',
+            background: '#3a1f24',
+            color: '#ffd8dc',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            fontSize: 12,
+            fontWeight: 800,
+          }}
+        >
+          {isBusy ? '취소 중...' : '예약 취소'}
+        </button>
+      </div>
+    )
   }
 
   const pageBlockedReason = useMemo(() => {
@@ -2559,29 +2642,48 @@ export default function StudentBookingPage() {
                             marginTop: 12,
                           }}
                         >
-                          <span style={{ opacity: 0.72, fontSize: 13 }}>
-                            취소 가능 {privateCancelAllowance.remaining}회
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => cancelFixedPrivateLesson(item.lesson)}
-                            disabled={Boolean(busyFixedPrivateLessonId)}
-                            data-testid="student-fixed-private-lesson-cancel-button"
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 999,
-                              border: '1px solid #9a3f48',
-                              background: '#3a1f24',
-                              color: '#ffd8dc',
-                              cursor: busyFixedPrivateLessonId ? 'not-allowed' : 'pointer',
-                              fontSize: 12,
-                              fontWeight: 800,
-                            }}
-                          >
-                            {busyFixedPrivateLessonId === item.sourceId ? '취소 중...' : '고정수업 취소'}
-                          </button>
+                          {(() => {
+                            const unavailableReason = getFixedPrivateLessonCancelUnavailableReason(item.lesson)
+                            const disabled = Boolean(busyFixedPrivateLessonId || unavailableReason)
+                            return (
+                              <>
+                                {unavailableReason ? (
+                                  <span style={{ opacity: 0.72, fontSize: 13 }}>
+                                    {unavailableReason}
+                                  </span>
+                                ) : (
+                                  <span style={{ opacity: 0.72, fontSize: 13 }}>
+                                    취소 가능 {privateCancelAllowance.remaining}회
+                                  </span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => cancelFixedPrivateLesson(item.lesson)}
+                                  disabled={disabled}
+                                  data-testid="student-fixed-private-lesson-cancel-button"
+                                  style={{
+                                    padding: '6px 10px',
+                                    borderRadius: 999,
+                                    border: '1px solid #9a3f48',
+                                    background: '#3a1f24',
+                                    color: '#ffd8dc',
+                                    cursor: disabled ? 'not-allowed' : 'pointer',
+                                    fontSize: 12,
+                                    fontWeight: 800,
+                                  }}
+                                >
+                                  {busyFixedPrivateLessonId === item.sourceId ? '취소 중...' : '고정수업 취소'}
+                                </button>
+                              </>
+                            )
+                          })()}
                         </div>
                       ) : null}
+                      {item.source === 'privateReservation'
+                        ? renderPrivateReservationCancelAction(item.reservation, {
+                            testId: 'student-upcoming-private-reservation-cancel-button',
+                          })
+                        : null}
                     </article>
                   ))}
                 </div>
@@ -3018,9 +3120,9 @@ export default function StudentBookingPage() {
                 padding: 20,
               }}
             >
-              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 1:1 수업 예약</h2>
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내가 직접 예약한 1:1</h2>
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                내 1:1 수업 예약만 표시됩니다.
+                학생이 직접 예약한 1:1 수업만 표시됩니다.
               </p>
 
               {privateReservationsError ? (
@@ -3036,15 +3138,7 @@ export default function StudentBookingPage() {
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {sortedPrivateReservations.map((reservation) => {
                     const slot = privateSlotsById.get(reservation.slotId) || null
-                    const reservationId = buildPrivateLessonReservationId({
-                      academyId: currentAcademyId,
-                      slotId: reservation.slotId,
-                      studentId: scopedStudentId,
-                    })
-                    const isBusy = busyPrivateReservationId === reservationId
                     const isActive = reservation.status === 'active'
-                    const reservationTitle =
-                      String(reservation.subject || slot?.subject || '').trim() || '1:1 수업'
                     const reservationDateTime = [
                       String(reservation.date || slot?.date || '').trim(),
                       String(reservation.time || slot?.time || '').trim(),
@@ -3097,27 +3191,7 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                           </div>
-                          {isActive && PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled ? (
-                            <button
-                              type="button"
-                              onClick={() => cancelPrivateReservation(reservation)}
-                              disabled={Boolean(busyPrivateReservationId)}
-                              data-testid="student-private-reservation-cancel-button"
-                              style={{
-                                alignSelf: 'flex-start',
-                                padding: '6px 10px',
-                                borderRadius: 999,
-                                border: '1px solid #9a3f48',
-                                background: '#3a1f24',
-                                color: '#ffd8dc',
-                                cursor: busyPrivateReservationId ? 'not-allowed' : 'pointer',
-                                fontSize: 12,
-                                fontWeight: 800,
-                              }}
-                            >
-                              {isBusy ? '취소 중...' : '예약 취소'}
-                            </button>
-                          ) : null}
+                          {isActive ? renderPrivateReservationCancelAction(reservation) : null}
                         </div>
                       </article>
                     )
