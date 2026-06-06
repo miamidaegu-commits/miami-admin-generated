@@ -210,7 +210,7 @@ test.describe('hosted miami-e2e smoke', () => {
     await expect(page.getByRole('heading', { name: '단체반 예약', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '1:1 수업 예약', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '내 단체반 예약', exact: true })).toBeVisible();
-    await expect(page.getByRole('heading', { name: '내 1:1 수업 예약', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '내가 직접 예약한 1:1', exact: true })).toBeVisible();
     await expect(page.getByRole('heading', { name: '내 수업 내역', exact: true })).toBeVisible();
 
     await page.goto(`${BASE_URL}/student-booking`);

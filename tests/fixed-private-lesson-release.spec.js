@@ -599,6 +599,18 @@ test.describe('fixed private lesson release', () => {
     expect(reservedSlot.durationMinutes).toBe(60);
     expect(reservedSlot.bookingStatus).toBe('my_reservation');
 
+    const upcomingReservationCard = page
+      .locator('[data-testid="student-upcoming-private-lesson-card"][data-source="privateReservation"]')
+      .filter({ hasText: fixture.time })
+      .first();
+    await expect(upcomingReservationCard).toBeVisible({ timeout: 20000 });
+    await expect(upcomingReservationCard).toContainText('60분');
+    await expect(upcomingReservationCard).toContainText('예약 완료');
+    await expect(upcomingReservationCard.getByTestId('student-upcoming-private-reservation-cancel-button')).toBeVisible();
+    await expect(upcomingReservationCard.getByTestId('student-fixed-private-lesson-cancel-button')).toHaveCount(0);
+
+    await expect(page.getByRole('heading', { name: '내가 직접 예약한 1:1', exact: true })).toBeVisible();
+    await expect(page.getByText('학생이 직접 예약한 1:1 수업만 표시됩니다.')).toBeVisible();
     const reservationCard = page
       .getByTestId('student-private-reservation-card')
       .filter({ hasText: fixture.time })
@@ -606,6 +618,22 @@ test.describe('fixed private lesson release', () => {
     await expect(reservationCard).toBeVisible({ timeout: 20000 });
     await expect(reservationCard).toContainText('60분');
     await expect(reservationCard).not.toContainText('50분');
+    await expect(reservationCard.getByTestId('student-private-reservation-cancel-button')).toBeVisible();
+
+    page.once('dialog', (dialog) => dialog.accept());
+    await upcomingReservationCard.getByTestId('student-upcoming-private-reservation-cancel-button').click();
+    await expectReservationPatch(releasedSlot.id, fixture.otherStudentId, {
+      status: 'cancelled',
+      durationMinutes: 60,
+    });
+    await expect(
+      page
+        .locator('[data-testid="student-upcoming-private-lesson-card"][data-source="privateReservation"]')
+        .filter({ hasText: fixture.time })
+    ).toHaveCount(0, { timeout: 15000 });
+    await expect(
+      page.getByTestId('student-private-reservation-card').filter({ hasText: fixture.time })
+    ).toHaveCount(0, { timeout: 15000 });
   });
 
   test('admin cancels one fixed lesson without making that time bookable', async ({ page }) => {
@@ -644,6 +672,8 @@ test.describe('fixed private lesson release', () => {
       .first();
     await expect(upcomingCard).toBeVisible({ timeout: 15000 });
     await expect(upcomingCard).toContainText('취소 가능 2회', { timeout: 15000 });
+    await expect(upcomingCard.getByTestId('student-fixed-private-lesson-cancel-button')).toBeVisible();
+    await expect(upcomingCard.getByTestId('student-upcoming-private-reservation-cancel-button')).toHaveCount(0);
     page.once('dialog', (dialog) => dialog.accept());
     await upcomingCard.getByTestId('student-fixed-private-lesson-cancel-button').click();
     await expectLessonPatch(fixture.fixedLessonId, {
