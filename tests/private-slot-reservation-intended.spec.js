@@ -1919,6 +1919,138 @@ test('student cancellation reopens normal private slot for another eligible stud
   }
 });
 
+test('stale cancelled normal private slot is bookable for another eligible student', async ({
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private reservation setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  const db = getDb();
+  let fixture = null;
+  const contexts = [];
+
+  try {
+    fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-normal-stale`);
+
+    const studentAContext = await browser.newContext();
+    contexts.push(studentAContext);
+    const studentAPage = await studentAContext.newPage();
+    studentAPage.on('dialog', async (dialog) => {
+      await dialog.accept();
+    });
+    await loginAsStudentWithPrivateBooking(studentAPage, fixture.eligibleStudent.email);
+    const initialSlotCards = await expectPrivateSlotCardCount(
+      studentAPage,
+      fixture.date,
+      1,
+      'student A should see the normal private slot before stale regression setup'
+    );
+    await initialSlotCards.first().getByTestId('student-private-slot-reserve-button').click();
+    await expectReservationStatus(
+      db,
+      fixture.slotId,
+      fixture.eligibleStudent.studentId,
+      'active'
+    );
+    const studentAReservationId = reservationId(fixture.slotId, fixture.eligibleStudent.studentId);
+    await db.collection('privateLessonReservations').doc(studentAReservationId).set(
+      {
+        status: 'cancelled',
+        cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    await expectReservationStatus(
+      db,
+      fixture.slotId,
+      fixture.eligibleStudent.studentId,
+      'cancelled'
+    );
+    await expectSlotStatus(db, fixture.slotId, 'reserved');
+
+    await Promise.all([
+      db.collection('privateLessonSlots').doc(fixture.slotId).set(
+        {
+          eligibleStudentIds: [fixture.ineligibleStudent.studentId],
+          reservedStudentId: fixture.eligibleStudent.studentId,
+          reservationId: studentAReservationId,
+          reservedCount: 1,
+          status: 'reserved',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      ),
+      db.collection('studentPackages').doc(fixture.ineligibleStudent.packageId).set(
+        {
+          teacher: fixture.teacherKey,
+          teacherName: fixture.teacherKey,
+          status: 'active',
+          totalCount: 2,
+          usedCount: 0,
+          remainingCount: 2,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      ),
+      db.collection('studentPrivateAccessSummary').doc(
+        privateSummaryId(fixture.ineligibleStudent.studentId)
+      ).set(
+        {
+          teacherKeys: [fixture.teacherKey],
+          activePackageIds: [fixture.ineligibleStudent.packageId],
+          allowedSlotIds: [fixture.slotId],
+          allowedPrivateLessonSlotIds: [fixture.slotId],
+          privateSlotBookingPilotEnabled: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      ),
+    ]);
+
+    const studentBContext = await browser.newContext();
+    contexts.push(studentBContext);
+    const studentBPage = await studentBContext.newPage();
+    studentBPage.on('dialog', async (dialog) => {
+      await dialog.accept();
+    });
+    await loginAsStudentWithPrivateBooking(studentBPage, fixture.ineligibleStudent.email);
+    const reopenedSlotCards = await expectPrivateSlotCardCount(
+      studentBPage,
+      fixture.date,
+      1,
+      'student B should see stale cancelled normal private slot as available'
+    );
+    const reopenedSlotCard = reopenedSlotCards.first();
+    await expect(reopenedSlotCard).toContainText('예약 가능');
+    await expect(reopenedSlotCard).toContainText('50분');
+    await reopenedSlotCard.getByTestId('student-private-slot-reserve-button').click();
+    await expectReservationStatus(
+      db,
+      fixture.slotId,
+      fixture.ineligibleStudent.studentId,
+      'active'
+    );
+    const studentBReservation = await getReservation(
+      db,
+      fixture.slotId,
+      fixture.ineligibleStudent.studentId
+    );
+    expect(Number(studentBReservation?.durationMinutes || 0)).toBe(50);
+    await expectReservationStatus(
+      db,
+      fixture.slotId,
+      fixture.eligibleStudent.studentId,
+      'cancelled'
+    );
+  } finally {
+    await Promise.all(contexts.map((context) => context.close().catch(() => {})));
+    await cleanupFixture(fixture).catch(() => {});
+  }
+});
+
 test('student flexible private cancellation cutoff blocks cancel within 6 hours', async ({
   browser,
   browserName,
