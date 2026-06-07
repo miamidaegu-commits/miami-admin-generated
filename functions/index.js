@@ -1192,6 +1192,18 @@ function buildReleasedPrivateSlotUpdates({slot, reservation, studentId, now}) {
   };
 }
 
+function privateSlotBelongsToCancelledReservation({
+  slot,
+  reservationId,
+  studentId,
+}) {
+  if (!slot) return false;
+  const slotReservationId = normalizeId(slot.reservationId);
+  if (slotReservationId && slotReservationId === reservationId) return true;
+  const reservedStudentId = normalizeId(slot.reservedStudentId);
+  return Boolean(reservedStudentId && reservedStudentId === studentId);
+}
+
 function buildAdminCancelledPrivateSlotUpdates({now}) {
   return {
     status: "cancelled",
@@ -5129,7 +5141,11 @@ exports.cancelPrivateLessonReservation = onCall(
             updatedAt: now,
           }, {merge: true});
 
-          if (normalizeId(slot.reservationId) === reservationId) {
+          if (privateSlotBelongsToCancelledReservation({
+            slot,
+            reservationId,
+            studentId,
+          })) {
             transaction.update(slotRef, buildReleasedPrivateSlotUpdates({
               slot,
               reservation,
