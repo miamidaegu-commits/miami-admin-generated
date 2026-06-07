@@ -213,6 +213,45 @@ async function expectPrivateSlotReserveButtonEnabled(page, card, message) {
   return button;
 }
 
+async function listPrivateLessonSlotAvailabilityViaPage(page, { academyId }) {
+  return page.evaluate(
+    async ({ firebaseConfig, academyId }) => {
+      const [{ getApp, getApps, initializeApp }, authModule, functionsModule] = await Promise.all([
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js'),
+        import('https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js'),
+      ]);
+      const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+      const auth = authModule.getAuth(app);
+      if (!auth.currentUser) {
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Auth user not ready.')), 15000);
+          const unsubscribe = authModule.onAuthStateChanged(auth, (user) => {
+            if (!user) return;
+            clearTimeout(timeout);
+            unsubscribe();
+            resolve();
+          });
+        });
+      }
+      const functions = functionsModule.getFunctions(app, 'us-central1');
+      const listPrivateLessonSlotAvailability = functionsModule.httpsCallable(
+        functions,
+        'listPrivateLessonSlotAvailability'
+      );
+      const result = await listPrivateLessonSlotAvailability({
+        academyId,
+        privateSlotBooking: 'enabled',
+      });
+      return result.data;
+    },
+    {
+      firebaseConfig: getFirebaseConfigFromEnv(),
+      academyId,
+    }
+  );
+}
+
 async function expectReservationStatus(db, slotId, studentId, expected) {
   await expect
     .poll(async () => {
@@ -525,7 +564,7 @@ async function createFixture(unique) {
       startAt: admin.firestore.Timestamp.fromDate(new Date(`${date}T${time}:00`)),
       bookingOpensAt,
       bookingClosesAt,
-      durationMinutes: 50,
+      durationMinutes: 60,
       status: 'open',
       reservedStudentId: '',
       reservationId: '',
@@ -910,10 +949,10 @@ test('private slot booking callable production gate is wired server-side', async
   expect(source).toMatch(/function requirePrivateSlotBookingPilotEnabled\(summary\)/);
   expect(source).toMatch(/summary\.privateSlotBookingPilotEnabled === true/);
   expect(source).toMatch(
-    /exports\.listPrivateLessonSlotAvailability[\s\S]*isPrivateSlotAvailabilityBookingEnabled\(data\)/
+    /exports\.listPrivateLessonSlotAvailability[\s\S]*isPrivateSlotAvailabilityBookingEnabled\(\s*data,\s*summary,\s*\)/
   );
   expect(source).toMatch(
-    /exports\.reservePrivateLessonSlot[\s\S]*requirePrivateSlotReservationEnabled\(data\)/
+    /exports\.reservePrivateLessonSlot[\s\S]*requirePrivateSlotReservationAllowed\(data, summary\)/
   );
   expect(source).toMatch(
     /exports\.cancelPrivateLessonReservation[\s\S]*requirePrivateSlotReservationEnabled\(data\)/
@@ -929,6 +968,9 @@ test('private slot booking callable production gate is wired server-side', async
   )?.[0] || '';
   expect(sanitizeSource).toContain('isReserved');
   expect(sanitizeSource).toContain('isBookable');
+  expect(source).toMatch(
+    /function getPrivateSlotStudentVisibleStatus[\s\S]*bookingStatus === "blocked"[\s\S]*return "busy"/
+  );
   expect(sanitizeSource).not.toContain('reservedStudentId');
   expect(sanitizeSource).not.toContain('reservationId');
   expect(source).toMatch(/function hasSlotAccess[\s\S]*summary && summary\.teacherKeys/);
@@ -1441,6 +1483,28 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'eligible pilot-enabled student should have an enabled private slot reserve button'
     );
     await expect(eligibleReserveButton).toHaveText('1:1 수업 예약');
+    const eligibleAvailability = await listPrivateLessonSlotAvailabilityViaPage(eligiblePage, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    const eligibleOpenSlot = (eligibleAvailability?.slots || []).find(
+      (slot) => slot.id === fixture.slotId
+    );
+    expect(eligibleOpenSlot, JSON.stringify(eligibleAvailability?.slots || [])).toBeTruthy();
+    expect(eligibleOpenSlot).toMatchObject({
+      status: 'open',
+      isBusy: false,
+      isBookable: true,
+      isReservable: true,
+      bookingStatus: 'available',
+      bookingStatusLabel: '예약 가능',
+      studentVisibleStatus: 'available',
+      studentVisibleStatusLabel: '예약 가능',
+      disabledReason: '',
+      durationMinutes: 60,
+      packageRemainingCount: 1,
+      makeupAvailableCount: 1,
+    });
+    expect(eligibleOpenSlot.packageSummary?.makeupAvailableCount).toBe(1);
     const initialSlotSnap = await db.collection('privateLessonSlots').doc(fixture.slotId).get();
     const initialSlot = initialSlotSnap.data() || {};
     expect(Array.isArray(initialSlot.eligibleStudentIds) ? initialSlot.eligibleStudentIds : []).toEqual([]);
@@ -1582,6 +1646,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       teacher: fixture.teacherKey,
       date: fixture.date,
       time: fixture.time,
+      durationMinutes: 60,
       status: 'active',
       source: 'student',
     });
@@ -1821,7 +1886,7 @@ test('student cancellation reopens normal private slot for another eligible stud
       fixture.slotId,
       fixture.eligibleStudent.studentId
     );
-    expect(Number(studentAReservation?.durationMinutes || 0)).toBe(50);
+    expect(Number(studentAReservation?.durationMinutes || 0)).toBe(60);
 
     const studentAReservationCard = privateReservationCard(studentAPage, fixture.date);
     await expect(studentAReservationCard).toBeVisible({ timeout: 15000 });
@@ -1888,7 +1953,7 @@ test('student cancellation reopens normal private slot for another eligible stud
     );
     const reopenedSlotCard = reopenedSlotCards.first();
     await expect(reopenedSlotCard).toContainText('예약 가능');
-    await expect(reopenedSlotCard).toContainText('50분');
+    await expect(reopenedSlotCard).toContainText('60분');
     const studentBReserveButton = await expectPrivateSlotReserveButtonEnabled(
       studentBPage,
       reopenedSlotCard,
@@ -1906,7 +1971,7 @@ test('student cancellation reopens normal private slot for another eligible stud
       fixture.slotId,
       fixture.ineligibleStudent.studentId
     );
-    expect(Number(studentBReservation?.durationMinutes || 0)).toBe(50);
+    expect(Number(studentBReservation?.durationMinutes || 0)).toBe(60);
     await expectReservationStatus(
       db,
       fixture.slotId,
@@ -2025,7 +2090,7 @@ test('stale cancelled normal private slot is bookable for another eligible stude
     );
     const reopenedSlotCard = reopenedSlotCards.first();
     await expect(reopenedSlotCard).toContainText('예약 가능');
-    await expect(reopenedSlotCard).toContainText('50분');
+    await expect(reopenedSlotCard).toContainText('60분');
     await reopenedSlotCard.getByTestId('student-private-slot-reserve-button').click();
     await expectReservationStatus(
       db,
@@ -2038,7 +2103,7 @@ test('stale cancelled normal private slot is bookable for another eligible stude
       fixture.slotId,
       fixture.ineligibleStudent.studentId
     );
-    expect(Number(studentBReservation?.durationMinutes || 0)).toBe(50);
+    expect(Number(studentBReservation?.durationMinutes || 0)).toBe(60);
     await expectReservationStatus(
       db,
       fixture.slotId,
@@ -2386,7 +2451,7 @@ async function createOverlapFixture(unique) {
   const nowTs = admin.firestore.Timestamp.now();
   const teacherKey = 'don1';
   const teacherUid = `don-uid-${unique}`;
-  const date = '2026-06-01';
+  const date = upcomingMondaySaturdayYmd(1);
   const existingTime = '23:30';
   const overlappingTime = '23:10';
   const openTime = '21:00';

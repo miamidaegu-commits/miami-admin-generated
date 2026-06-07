@@ -660,6 +660,10 @@ test.describe('fixed private lesson release', () => {
     expect(reopenedSlot, JSON.stringify(reopenedAvailability?.slots || [])).toBeTruthy();
     expect(reopenedSlot.durationMinutes).toBe(60);
     expect(reopenedSlot.bookingStatus).toBe('available');
+    expect(reopenedSlot.isBookable).toBe(true);
+    expect(reopenedSlot.isReservable).toBe(true);
+    expect(reopenedSlot.studentVisibleStatus).toBe('available');
+    expect(reopenedSlot.disabledReason).toBe('');
 
     const reopenedSlotCard = page
       .locator(`[data-testid="student-private-slot-card"][data-slot-id="${releasedSlot.id}"]`)
@@ -769,6 +773,10 @@ test.describe('fixed private lesson release', () => {
     expect(staleReopenedSlot, JSON.stringify(staleAvailability?.slots || [])).toBeTruthy();
     expect(staleReopenedSlot.durationMinutes).toBe(60);
     expect(staleReopenedSlot.bookingStatus).toBe('available');
+    expect(staleReopenedSlot.isBookable).toBe(true);
+    expect(staleReopenedSlot.isReservable).toBe(true);
+    expect(staleReopenedSlot.studentVisibleStatus).toBe('available');
+    expect(staleReopenedSlot.disabledReason).toBe('');
     const staleReopenedSlotCard = page
       .locator(`[data-testid="student-private-slot-card"][data-slot-id="${releasedSlot.id}"]`)
       .first();

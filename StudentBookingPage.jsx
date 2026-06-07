@@ -276,7 +276,11 @@ function getPrivateSlotOpenRelativeDisplay(slot) {
 }
 
 function getStudentPrivateSlotStatus(slot, canUsePrivateBooking) {
-  if (slot?.bookingStatus) return slot.bookingStatus
+  if (slot?.bookingStatus) {
+    return slot.bookingStatus === 'available' && !canUsePrivateBooking
+      ? 'blocked'
+      : slot.bookingStatus
+  }
   const status = getPrivateBookingStatus({
     slot,
     hasPackage: Number(slot?.packageRemainingCount ?? 1) > 0,
