@@ -83,12 +83,30 @@ function isPrivateSlotReservationEnabled(data) {
   return isEnabledFlag(process.env.PRIVATE_SLOT_BOOKING_ENABLED);
 }
 
-function isPrivateSlotAvailabilityBookingEnabled(data) {
-  return isPrivateSlotReservationEnabled(data);
+function isPrivateSlotAvailabilityBookingEnabled(data, summary) {
+  return (
+    isPrivateSlotReservationEnabled(data) ||
+    (summary && summary.privateSlotBookingPilotEnabled === true)
+  );
+}
+
+function isPrivateSlotReservationAllowed(data, summary) {
+  return (
+    isPrivateSlotReservationEnabled(data) ||
+    (summary && summary.privateSlotBookingPilotEnabled === true)
+  );
 }
 
 function requirePrivateSlotReservationEnabled(data) {
   if (isPrivateSlotReservationEnabled(data)) return;
+  throw new HttpsError(
+      "failed-precondition",
+      PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE,
+  );
+}
+
+function requirePrivateSlotReservationAllowed(data, summary) {
+  if (isPrivateSlotReservationAllowed(data, summary)) return;
   throw new HttpsError(
       "failed-precondition",
       PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE,
@@ -1527,7 +1545,8 @@ function getPrivateSlotStudentVisibleStatus(bookingStatus) {
     bookingStatus === "no_ticket" ||
     bookingStatus === "no_makeup" ||
     bookingStatus === "busy" ||
-    bookingStatus === "reserved"
+    bookingStatus === "reserved" ||
+    bookingStatus === "blocked"
   ) {
     return "busy";
   }
@@ -4412,7 +4431,10 @@ exports.listPrivateLessonSlotAvailability = onCall(
             summary && summary.allowedPrivateLessonSlotIds,
         );
         const hasTeacherPackageAccess = teacherKeys.length > 0;
-        const bookingEnabled = isPrivateSlotAvailabilityBookingEnabled(data);
+        const bookingEnabled = isPrivateSlotAvailabilityBookingEnabled(
+            data,
+            summary,
+        );
         const pilotBookable =
           summary && summary.privateSlotBookingPilotEnabled === true;
         const today = getSeoulTodayDateString();
@@ -4692,7 +4714,6 @@ exports.reservePrivateLessonSlot = onCall(
           throw new HttpsError("unauthenticated", "Login required.");
         }
         const data = request.data || {};
-        requirePrivateSlotReservationEnabled(data);
         const academyId = requireString(data, "academyId");
         const slotId = requireString(data, "slotId");
         const availabilityTemplateId = optionalString(
@@ -4836,6 +4857,7 @@ exports.reservePrivateLessonSlot = onCall(
             );
           }
           const summary = summarySnap.exists ? summarySnap.data() || {} : null;
+          requirePrivateSlotReservationAllowed(data, summary);
           requirePrivateSlotBookingPilotEnabled(summary);
           const date = requireString(slot, "date");
           const time = requireString(slot, "time");
