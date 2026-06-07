@@ -701,6 +701,11 @@ function isActivePrivateReservation(data) {
   );
 }
 
+function isCancelledPrivateReservation(data) {
+  const status = String((data && data.status) || "").trim().toLowerCase();
+  return status === "cancelled" || status === "canceled";
+}
+
 function getNextStudentPackageStatus(currentStatus, remainingCount) {
   const status = String(currentStatus || "").trim().toLowerCase();
   if (status === "ended" || status === "cancelled" || status === "canceled") {
@@ -1136,6 +1141,14 @@ function isFixedPrivateSlot(slot, reservation) {
   return Boolean(fixedStudentId);
 }
 
+function isReleasedFixedPrivateSlot(slot, reservation) {
+  const slotType = normalizeId(slot && slot.slotType);
+  const sourceType = normalizeId(reservation && reservation.sourceType);
+  return slotType === "released_fixed" ||
+    sourceType === "released_fixed_slot" ||
+    (slot && slot.releasedFromFixed === true);
+}
+
 function buildCancelledPrivateReservationUpdates({
   now,
   uid,
@@ -1189,6 +1202,65 @@ function buildReleasedPrivateSlotUpdates({slot, reservation, studentId, now}) {
     releasedAt: now,
     releaseReason: "fixed_student_cancelled",
     isBookable: true,
+  };
+}
+
+function privateSlotBelongsToCancelledReservation({
+  slot,
+  reservationId,
+  studentId,
+}) {
+  if (!slot) return false;
+  const slotReservationId = normalizeId(slot.reservationId);
+  if (slotReservationId && slotReservationId === reservationId) return true;
+  const reservedStudentId = normalizeId(slot.reservedStudentId);
+  return Boolean(reservedStudentId && reservedStudentId === studentId);
+}
+
+function getPrivateSlotLinkedReservationId({academyId, slotId, slot}) {
+  const reservationId = normalizeId(slot && slot.reservationId);
+  if (reservationId) return reservationId;
+  const reservedStudentId = normalizeId(slot && slot.reservedStudentId);
+  if (!reservedStudentId) return "";
+  return privateReservationDocId({
+    academyId,
+    slotId,
+    studentId: reservedStudentId,
+  });
+}
+
+function privateSlotHasCancelledLinkedReservation({
+  slot,
+  reservation,
+  academyId,
+  slotId,
+}) {
+  if (!slot || !reservation) return false;
+  const status = normalizeId(slot.status).toLowerCase();
+  if (status !== "reserved") return false;
+  if (!normalizeId(slot.reservationId) &&
+      !normalizeId(slot.reservedStudentId)) {
+    return false;
+  }
+  const cancellationType = normalizeId(slot.cancellationType).toLowerCase();
+  if (cancellationType === "lesson_cancelled") return false;
+  if (isFixedPrivateSlot(slot, reservation) &&
+      !isReleasedFixedPrivateSlot(slot, reservation)) {
+    return false;
+  }
+  return normalizeId(reservation.academyId) === academyId &&
+    normalizeId(reservation.slotId) === slotId &&
+    isCancelledPrivateReservation(reservation);
+}
+
+function buildReservablePrivateSlotFromStaleReservation(slot) {
+  return {
+    ...slot,
+    status: "open",
+    reservedStudentId: "",
+    reservationId: "",
+    reservedAt: null,
+    reservedCount: 0,
   };
 }
 
@@ -2766,8 +2838,12 @@ function addBusyRowsFromQuerySnapshot({
   rangeStart,
   rangeEnd,
   source,
+  ignoredSlotIds = new Set(),
 }) {
   snap.docs.forEach((docSnap) => {
+    if (source === "privateLessonSlots" && ignoredSlotIds.has(docSnap.id)) {
+      return;
+    }
     const row = docSnap.data() || {};
     if (normalizeId(row.academyId) !== academyId) return;
     if (source === "privateLessonReservations" &&
@@ -2812,6 +2888,7 @@ async function loadBusyPrivateScheduleRows(db, {
   packageByTeacherKey,
   rangeStart,
   rangeEnd,
+  ignoredSlotIds = new Set(),
 }) {
   const busyRowsByKey = new Map();
   const queryPromises = [];
@@ -2998,6 +3075,7 @@ async function loadBusyPrivateScheduleRows(db, {
       rangeStart,
       rangeEnd,
       source: queryPromises[index].source,
+      ignoredSlotIds,
     });
   });
   return busyRowsByKey;
@@ -4453,10 +4531,15 @@ exports.listPrivateLessonSlotAvailability = onCall(
 
         const visibleSlotEntries = Array.from(byId.entries());
         const activeReservationBySlotId = new Map();
+        const staleCancelledReservationBySlotId = new Map();
         await Promise.all(
             visibleSlotEntries.map(async ([slotId, slot]) => {
               if (String(slot.status || "").trim() !== "reserved") return;
-              const reservationId = normalizeId(slot.reservationId);
+              const reservationId = getPrivateSlotLinkedReservationId({
+                academyId,
+                slotId,
+                slot,
+              });
               if (!reservationId) return;
               const reservationSnap = await db
                   .collection("privateLessonReservations")
@@ -4470,6 +4553,15 @@ exports.listPrivateLessonSlotAvailability = onCall(
                 isActivePrivateReservation(reservation)
               ) {
                 activeReservationBySlotId.set(slotId, reservation);
+                return;
+              }
+              if (privateSlotHasCancelledLinkedReservation({
+                slot,
+                reservation,
+                academyId,
+                slotId,
+              })) {
+                staleCancelledReservationBySlotId.set(slotId, reservation);
               }
             }),
         );
@@ -4480,15 +4572,21 @@ exports.listPrivateLessonSlotAvailability = onCall(
               if (status === "open") {
                 return true;
               }
+              if (staleCancelledReservationBySlotId.has(slotId)) return true;
               if (status !== "reserved") return false;
               const reservation = activeReservationBySlotId.get(slotId);
               return normalizeId(reservation && reservation.studentId) ===
                 studentId;
             })
-            .map(([slotId, slot]) =>
-              sanitizePrivateSlotAvailabilityRow({
+            .map(([slotId, slot]) => {
+              const staleCancelled =
+                staleCancelledReservationBySlotId.has(slotId);
+              const effectiveSlot = staleCancelled ?
+                buildReservablePrivateSlotFromStaleReservation(slot) :
+                slot;
+              return sanitizePrivateSlotAvailabilityRow({
                 slotId,
-                slot,
+                slot: effectiveSlot,
                 bookingEnabled,
                 pilotBookable,
                 activeReservation: activeReservationBySlotId.get(slotId) ||
@@ -4499,8 +4597,8 @@ exports.listPrivateLessonSlotAvailability = onCall(
                 ),
                 studentId,
                 nowMillis,
-              }),
-            );
+              });
+            });
 
         const busyRowsByKey = teacherKeys.length > 0 ?
           await loadBusyPrivateScheduleRows(db, {
@@ -4509,6 +4607,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
             packageByTeacherKey: packageSummary.byTeacherKey,
             rangeStart,
             rangeEnd,
+            ignoredSlotIds: new Set(staleCancelledReservationBySlotId.keys()),
           }) :
           new Map();
         manualSlots = manualSlots.filter((row) => {
@@ -4678,11 +4777,40 @@ exports.reservePrivateLessonSlot = onCall(
                 "Private lesson slot academy mismatch.",
             );
           }
-          if (String(slot.status || "").trim() !== "open") {
-            throw new HttpsError(
-                "failed-precondition",
-                "Private lesson slot is not open.",
-            );
+          const slotStatus = normalizeId(slot.status).toLowerCase();
+          if (slotStatus !== "open") {
+            let canUseStaleCancelledReservation = false;
+            if (slotStatus === "reserved") {
+              const linkedReservationId = getPrivateSlotLinkedReservationId({
+                academyId,
+                slotId,
+                slot,
+              });
+              if (linkedReservationId) {
+                const linkedReservationSnap = await transaction.get(
+                    db
+                        .collection("privateLessonReservations")
+                        .doc(linkedReservationId),
+                );
+                const linkedReservation = linkedReservationSnap.exists ?
+                  linkedReservationSnap.data() || {} :
+                  null;
+                canUseStaleCancelledReservation =
+                  privateSlotHasCancelledLinkedReservation({
+                    slot,
+                    reservation: linkedReservation,
+                    academyId,
+                    slotId,
+                  });
+              }
+            }
+            if (!canUseStaleCancelledReservation) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Private lesson slot is not open.",
+              );
+            }
+            slot = buildReservablePrivateSlotFromStaleReservation(slot);
           }
 
           const studentId = membership.studentId;
@@ -5129,7 +5257,11 @@ exports.cancelPrivateLessonReservation = onCall(
             updatedAt: now,
           }, {merge: true});
 
-          if (normalizeId(slot.reservationId) === reservationId) {
+          if (privateSlotBelongsToCancelledReservation({
+            slot,
+            reservationId,
+            studentId,
+          })) {
             transaction.update(slotRef, buildReleasedPrivateSlotUpdates({
               slot,
               reservation,

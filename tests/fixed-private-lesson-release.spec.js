@@ -115,11 +115,14 @@ async function createFixture(unique) {
   const originalStudentName = `Fixed Release Original ${unique}`;
   const otherStudentId = `fixed-release-other-${unique}`;
   const otherStudentName = `Fixed Release Other ${unique}`;
+  const nextStudentId = `fixed-release-next-${unique}`;
+  const nextStudentName = `Fixed Release Next ${unique}`;
   const templateId = `fixed-release-template-${unique}`;
   const fixedLessonId = `fixed-release-lesson-${unique}`;
   const cancelOnlyLessonId = `fixed-release-cancel-only-${unique}`;
   const originalPackageId = `fixed-release-original-package-${unique}`;
   const otherPackageId = `fixed-release-other-package-${unique}`;
+  const nextPackageId = `fixed-release-next-package-${unique}`;
   const studentUsers = [
     await createStudentUser({
       unique,
@@ -133,6 +136,35 @@ async function createFixture(unique) {
       studentId: otherStudentId,
       studentName: otherStudentName,
     }),
+    await createStudentUser({
+      unique,
+      roleName: 'next',
+      studentId: nextStudentId,
+      studentName: nextStudentName,
+    }),
+  ];
+  const studentRecords = [
+    {
+      ...studentUsers[0],
+      studentId: originalStudentId,
+      studentName: originalStudentName,
+      packageId: originalPackageId,
+      packageTitle: `Fixed release original package ${unique}`,
+    },
+    {
+      ...studentUsers[1],
+      studentId: otherStudentId,
+      studentName: otherStudentName,
+      packageId: otherPackageId,
+      packageTitle: `Fixed release other package ${unique}`,
+    },
+    {
+      ...studentUsers[2],
+      studentId: nextStudentId,
+      studentName: nextStudentName,
+      packageId: nextPackageId,
+      packageTitle: `Fixed release next package ${unique}`,
+    },
   ];
 
   const templateSlot = templateSlotId({ templateId, date, time });
@@ -154,108 +186,80 @@ async function createFixture(unique) {
       },
       { merge: true }
     ),
-    ...studentUsers.map((studentUser, index) => {
-      const studentId = index === 0 ? originalStudentId : otherStudentId;
-      const studentName = index === 0 ? originalStudentName : otherStudentName;
-      return db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${studentUser.uid}`).set({
+    ...studentRecords.map((student) =>
+      db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${student.uid}`).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
-        uid: studentUser.uid,
-        email: studentUser.email,
-        displayName: studentName,
+        uid: student.uid,
+        email: student.email,
+        displayName: student.studentName,
         role: 'student',
-        studentId,
+        studentId: student.studentId,
         status: 'active',
         permissions: {},
         updatedAt: now,
-      });
-    }),
-    ...studentUsers.map((studentUser, index) =>
-      db.collection('users').doc(studentUser.uid).set({
-        uid: studentUser.uid,
-        email: studentUser.email,
-        displayName: index === 0 ? originalStudentName : otherStudentName,
+      })
+    ),
+    ...studentRecords.map((student) =>
+      db.collection('users').doc(student.uid).set({
+        uid: student.uid,
+        email: student.email,
+        displayName: student.studentName,
         role: 'student',
         isActive: true,
         lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
         updatedAt: now,
       })
     ),
-    db.collection('privateStudents').doc(originalStudentId).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      name: originalStudentName,
-      studentName: originalStudentName,
-      ...commonTeacherFields,
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.collection('privateStudents').doc(otherStudentId).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      name: otherStudentName,
-      studentName: otherStudentName,
-      ...commonTeacherFields,
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.collection('studentPackages').doc(originalPackageId).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      studentId: originalStudentId,
-      studentName: originalStudentName,
-      title: `Fixed release original package ${unique}`,
-      packageType: 'private',
-      ...commonTeacherFields,
-      status: 'active',
-      totalCount: 2,
-      usedCount: 0,
-      remainingCount: 2,
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.collection('studentPackages').doc(otherPackageId).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      studentId: otherStudentId,
-      studentName: otherStudentName,
-      title: `Fixed release other package ${unique}`,
-      packageType: 'private',
-      ...commonTeacherFields,
-      status: 'active',
-      totalCount: 2,
-      usedCount: 0,
-      remainingCount: 2,
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(originalStudentId)).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      studentId: originalStudentId,
-      teacherKeys: [teacher],
-      activePackageIds: [originalPackageId],
-      allowedSlotIds: [],
-      allowedPrivateLessonSlotIds: [],
-      privateSlotBookingPilotEnabled: true,
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(otherStudentId)).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      studentId: otherStudentId,
-      teacherKeys: [teacher],
-      activePackageIds: [otherPackageId],
-      allowedSlotIds: [],
-      allowedPrivateLessonSlotIds: [],
-      privateSlotBookingPilotEnabled: true,
-      createdAt: now,
-      updatedAt: now,
-    }),
-    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(originalStudentId)).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      studentId: originalStudentId,
-      studentCancelCount: 0,
-      studentCancelLimit: 2,
-      createdAt: now,
-      updatedAt: now,
-    }),
+    ...studentRecords.map((student) =>
+      db.collection('privateStudents').doc(student.studentId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: student.studentName,
+        studentName: student.studentName,
+        ...commonTeacherFields,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+      })
+    ),
+    ...studentRecords.map((student) =>
+      db.collection('studentPackages').doc(student.packageId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student.studentId,
+        studentName: student.studentName,
+        title: student.packageTitle,
+        packageType: 'private',
+        ...commonTeacherFields,
+        status: 'active',
+        totalCount: 2,
+        usedCount: 0,
+        remainingCount: 2,
+        createdAt: now,
+        updatedAt: now,
+      })
+    ),
+    ...studentRecords.map((student) =>
+      db.collection('studentPrivateAccessSummary').doc(privateSummaryId(student.studentId)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student.studentId,
+        teacherKeys: [teacher],
+        activePackageIds: [student.packageId],
+        allowedSlotIds: [],
+        allowedPrivateLessonSlotIds: [],
+        privateSlotBookingPilotEnabled: true,
+        createdAt: now,
+        updatedAt: now,
+      })
+    ),
+    ...studentRecords.map((student) =>
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student.studentId)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student.studentId,
+        studentCancelCount: 0,
+        studentCancelLimit: 2,
+        createdAt: now,
+        updatedAt: now,
+      })
+    ),
     db.collection('privateLessonAvailabilityTemplates').doc(templateId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       ...commonTeacherFields,
@@ -327,10 +331,13 @@ async function createFixture(unique) {
     originalStudentName,
     otherStudentId,
     otherStudentName,
+    nextStudentId,
+    nextStudentName,
+    nextEmail: studentUsers[2].email,
     otherEmail: studentUsers[1].email,
     originalEmail: studentUsers[0].email,
     studentUids: studentUsers.map((user) => user.uid),
-    packageIds: [originalPackageId, otherPackageId],
+    packageIds: studentRecords.map((student) => student.packageId),
   };
 }
 
@@ -350,10 +357,13 @@ async function cleanupFixture(fixture) {
     db.collection('lessons').doc(fixture.cancelOnlyLessonId),
     db.collection('privateStudents').doc(fixture.originalStudentId),
     db.collection('privateStudents').doc(fixture.otherStudentId),
+    db.collection('privateStudents').doc(fixture.nextStudentId),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(fixture.originalStudentId)),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId(fixture.otherStudentId)),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(fixture.nextStudentId)),
     db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(fixture.originalStudentId)),
     db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(fixture.otherStudentId)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(fixture.nextStudentId)),
     ...fixture.packageIds.map((id) => db.collection('studentPackages').doc(id)),
     ...reservationSnap.docs.map((docSnap) => docSnap.ref),
     ...fixture.studentUids.map((uid) => db.collection('users').doc(uid)),
@@ -634,6 +644,148 @@ test.describe('fixed private lesson release', () => {
     await expect(
       page.getByTestId('student-private-reservation-card').filter({ hasText: fixture.time })
     ).toHaveCount(0, { timeout: 15000 });
+
+    await page.getByRole('button', { name: '로그아웃' }).click();
+    await expect(page.getByRole('button', { name: '로그인' })).toBeVisible({ timeout: 15000 });
+    await loginAsStudent(page, fixture.nextEmail, TEST_STUDENT_PASSWORD);
+    await page.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
+    await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+
+    const reopenedAvailability = await listPrivateLessonSlotAvailabilityViaPage(page, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    const reopenedSlot = (reopenedAvailability?.slots || []).find((slot) => slot.id === releasedSlot.id);
+    expect(reopenedSlot, JSON.stringify(reopenedAvailability?.slots || [])).toBeTruthy();
+    expect(reopenedSlot.durationMinutes).toBe(60);
+    expect(reopenedSlot.bookingStatus).toBe('available');
+
+    const reopenedSlotCard = page
+      .locator(`[data-testid="student-private-slot-card"][data-slot-id="${releasedSlot.id}"]`)
+      .first();
+    await expect(reopenedSlotCard).toBeVisible({ timeout: 20000 });
+    await expect(reopenedSlotCard).toContainText(fixture.time);
+    await expect(reopenedSlotCard).toContainText('60분');
+    await expect(reopenedSlotCard).toContainText('예약 가능');
+    page.once('dialog', (dialog) => dialog.accept());
+    await reopenedSlotCard.getByTestId('student-private-slot-reserve-button').click();
+    await expectReservationPatch(releasedSlot.id, fixture.nextStudentId, {
+      status: 'active',
+      durationMinutes: 60,
+    });
+    await expectLessonPatch(fixture.fixedLessonId, {
+      status: 'cancelled',
+      cancellationType: 'seat_released',
+      isSeatReleased: true,
+      releasedForPrivateBooking: true,
+    });
+  });
+
+  test('stale cancelled released fixed seat is bookable for another student', async ({ page }) => {
+    fixture = await createFixture(`stale-${Date.now()}`);
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '캘린더');
+    await page.locator(`[data-testid="calendar-day-button"][data-date="${fixture.date}"]`).click();
+    const calendarRow = page
+      .locator(
+        `[data-testid="calendar-lesson-row"][data-row-kind="private"][data-lesson-id="${fixture.fixedLessonId}"]`
+      )
+      .first();
+    await expect(calendarRow).toBeVisible({ timeout: 20000 });
+    await calendarRow.getByTestId('calendar-fixed-private-action-button').click();
+    const actionModal = page.getByTestId('fixed-private-lesson-action-modal');
+    await expect(actionModal).toBeVisible();
+    page.once('dialog', (dialog) => dialog.accept());
+    await actionModal.getByTestId('fixed-private-lesson-action-release-button').click();
+    await expectLessonPatch(fixture.fixedLessonId, {
+      status: 'cancelled',
+      cancellationType: 'seat_released',
+      isSeatReleased: true,
+      releasedForPrivateBooking: true,
+    });
+
+    await page.getByRole('button', { name: '로그아웃' }).click();
+    await expect(page.getByRole('button', { name: '로그인' })).toBeVisible({ timeout: 15000 });
+    await loginAsStudent(page, fixture.otherEmail, TEST_STUDENT_PASSWORD);
+    await page.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
+    await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+    const availability = await listPrivateLessonSlotAvailabilityViaPage(page, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    const releasedSlot = (availability?.slots || []).find(
+      (slot) => slot.date === fixture.date && slot.time === fixture.time
+    );
+    expect(releasedSlot, JSON.stringify(availability?.slots || [])).toBeTruthy();
+    expect(releasedSlot.durationMinutes).toBe(60);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page
+      .locator(`[data-testid="student-private-slot-card"][data-slot-id="${releasedSlot.id}"]`)
+      .first()
+      .getByTestId('student-private-slot-reserve-button')
+      .click();
+    await expectReservationPatch(releasedSlot.id, fixture.otherStudentId, {
+      status: 'active',
+      durationMinutes: 60,
+    });
+
+    const staleReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${releasedSlot.id}__${fixture.otherStudentId}`;
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    await Promise.all([
+      getDb().collection('privateLessonReservations').doc(staleReservationId).set(
+        {
+          status: 'cancelled',
+          cancelledAt: now,
+          updatedAt: now,
+        },
+        { merge: true }
+      ),
+      getDb().collection('privateLessonSlots').doc(releasedSlot.id).set(
+        {
+          status: 'reserved',
+          reservedStudentId: fixture.otherStudentId,
+          reservationId: staleReservationId,
+          reservedCount: 1,
+          updatedAt: now,
+        },
+        { merge: true }
+      ),
+    ]);
+
+    await page.getByRole('button', { name: '로그아웃' }).click();
+    await expect(page.getByRole('button', { name: '로그인' })).toBeVisible({ timeout: 15000 });
+    await loginAsStudent(page, fixture.nextEmail, TEST_STUDENT_PASSWORD);
+    await page.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
+    await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+    const staleAvailability = await listPrivateLessonSlotAvailabilityViaPage(page, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    const staleReopenedSlot = (staleAvailability?.slots || []).find((slot) => slot.id === releasedSlot.id);
+    expect(staleReopenedSlot, JSON.stringify(staleAvailability?.slots || [])).toBeTruthy();
+    expect(staleReopenedSlot.durationMinutes).toBe(60);
+    expect(staleReopenedSlot.bookingStatus).toBe('available');
+    const staleReopenedSlotCard = page
+      .locator(`[data-testid="student-private-slot-card"][data-slot-id="${releasedSlot.id}"]`)
+      .first();
+    await expect(staleReopenedSlotCard).toBeVisible({ timeout: 20000 });
+    await expect(staleReopenedSlotCard).toContainText(fixture.time);
+    await expect(staleReopenedSlotCard).toContainText('60분');
+    await expect(staleReopenedSlotCard).toContainText('예약 가능');
+    page.once('dialog', (dialog) => dialog.accept());
+    await staleReopenedSlotCard.getByTestId('student-private-slot-reserve-button').click();
+    await expectReservationPatch(releasedSlot.id, fixture.nextStudentId, {
+      status: 'active',
+      durationMinutes: 60,
+    });
+    await expectReservationPatch(releasedSlot.id, fixture.otherStudentId, {
+      status: 'cancelled',
+      durationMinutes: 60,
+    });
   });
 
   test('admin cancels one fixed lesson without making that time bookable', async ({ page }) => {
