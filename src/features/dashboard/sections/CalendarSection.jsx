@@ -893,7 +893,7 @@ export default function CalendarSection(props) {
                       ? '완료'
                       : privateReservationStatus === 'no_show'
                         ? '노쇼'
-                        : '예약됨'
+                        : '1:1 예약 완료'
                 : isNoDeductionPrivateLesson
                   ? fixedPrivateCancellationLabel || '휴강 · 차감 없음'
                   : lesson.isDeductCancelled
@@ -954,7 +954,10 @@ export default function CalendarSection(props) {
               rowPrivateCrudBusy ||
               busyPrivateLessonAdd ||
               busyFixedPrivateLessonCancelId === lesson.id
-            const sessionLabel = formatLessonSessionNumber(lesson)
+            const reservationDuration = Number(lesson.durationMinutes || 0)
+            const sessionLabel = isPrivateReservationRow
+              ? `${Number.isFinite(reservationDuration) && reservationDuration > 0 ? reservationDuration : 50}분`
+              : formatLessonSessionNumber(lesson)
             const badgeStyle = {
               display: 'inline-block',
               fontSize: 10,

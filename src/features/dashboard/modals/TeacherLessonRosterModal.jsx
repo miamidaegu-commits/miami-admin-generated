@@ -44,6 +44,11 @@ function RosterTable({ rows, emptyLabel, testIdPrefix, showCancellationHandling 
           <div data-testid="teacher-lesson-roster-subject-label">
             수업명: {cleanText(row.subjectLabel || row.subject, '1:1 수업')}
           </div>
+          {row.durationLabel ? (
+            <div data-testid="teacher-lesson-roster-duration-label">
+              시간: {row.durationLabel}
+            </div>
+          ) : null}
           <div data-testid="teacher-lesson-roster-status-label">
             상태: {cleanText(row.statusLabel)}
           </div>
