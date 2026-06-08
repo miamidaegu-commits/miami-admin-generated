@@ -417,9 +417,51 @@ function getLessonHistoryStatusLabel(item) {
   if (item.noDeduction === true) {
     return '휴강 · 차감 없음'
   }
-  if (item.status !== 'active') return '예약 취소'
+  const status = String(item.status || '').trim().toLowerCase()
+  const activeStatuses = new Set(['active', 'reserved', 'confirmed', 'booked'])
+  if (!activeStatuses.has(status)) return '예약 취소'
   if (item.startsAtMs !== null && item.startsAtMs < Date.now()) return '지난 수업'
   return '예약 완료'
+}
+
+function getLessonHistoryCancelActorLabel(item) {
+  const status = String(item?.status || '').trim().toLowerCase()
+  if (status !== 'cancelled' && status !== 'canceled') return ''
+  const actor = String(
+    item?.cancelledByRole ||
+      item?.canceledByRole ||
+      item?.cancelledBy ||
+      item?.canceledBy ||
+      ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+  const reason = String(item?.cancellationReason || item?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  if (actor.includes('student') || reason.includes('student')) return '학생 취소'
+  if (actor.includes('teacher') || reason.includes('teacher')) return '선생님 취소'
+  if (actor.includes('admin') || actor.includes('owner') || reason.includes('admin')) {
+    return '관리자 취소'
+  }
+  return ''
+}
+
+function formatLessonHistoryCancelledAt(item) {
+  const millis = getTimestampLikeMs(item?.cancelledAt || item?.canceledAt)
+  if (millis == null) return ''
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(millis))
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
 }
 
 function validatePrivateSlotBookingState(slot, mode) {
@@ -1427,7 +1469,7 @@ export default function StudentBookingPage() {
       collection(db, 'privateLessonReservations'),
       where('academyId', '==', currentAcademyId),
       where('studentId', '==', scopedStudentId),
-      where('status', 'in', ['active', 'cancelled'])
+      where('status', 'in', ['active', 'reserved', 'confirmed', 'booked', 'cancelled', 'canceled'])
     )
 
     const unsubscribe = onSnapshot(
@@ -1737,13 +1779,24 @@ export default function StudentBookingPage() {
       const date = String(reservation.date || '').trim()
       const time = String(reservation.time || '').trim()
       const startsAtMs = getDateTimeMs(date, time)
+      const duration = Number(reservation.durationMinutes || 0)
       return {
         id: `private-${reservation.id}`,
-        typeLabel: '1:1 수업',
-        title: String(reservation.teacher || '').trim() || '1:1 수업',
+        typeLabel: '1:1 예약',
+        title: String(reservation.subject || '').trim() || '1:1 수업',
         date,
         time,
         status: reservation.status,
+        teacherLabel:
+          String(reservation.teacherName || reservation.teacher || '').trim() || '-',
+        studentName:
+          String(reservation.studentName || reservation.student || '').trim() || '-',
+        durationLabel: Number.isFinite(duration) && duration > 0 ? `${duration}분` : '',
+        cancellationType: String(reservation.cancellationType || '').trim(),
+        cancelledByRole: reservation.cancelledByRole || reservation.canceledByRole || '',
+        cancelledBy: reservation.cancelledBy || reservation.canceledBy || '',
+        cancellationReason: reservation.cancellationReason || reservation.cancelledReason || '',
+        cancelledAt: reservation.cancelledAt || reservation.canceledAt || null,
         startsAtMs,
         fallbackId: reservation.slotId,
       }
@@ -3359,10 +3412,18 @@ export default function StudentBookingPage() {
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {lessonHistoryItems.map((item) => {
                     const dateTimeLabel = [item.date, item.time].filter(Boolean).join(' · ')
+                    const detailLabels = [
+                      item.teacherLabel ? `선생님 ${item.teacherLabel}` : '',
+                      item.studentName ? `학생 ${item.studentName}` : '',
+                      item.durationLabel || '',
+                      getLessonHistoryCancelActorLabel(item),
+                      formatLessonHistoryCancelledAt(item),
+                    ].filter(Boolean)
                     return (
                       <article
                         key={item.id}
                         data-testid="student-lesson-history-card"
+                        data-source={item.typeLabel === '1:1 예약' ? 'privateReservation' : undefined}
                         style={{
                           border: '1px solid #283042',
                           borderRadius: 14,
@@ -3384,6 +3445,14 @@ export default function StudentBookingPage() {
                               {item.typeLabel}
                               {dateTimeLabel ? ` · ${dateTimeLabel}` : ''}
                             </div>
+                            {detailLabels.length > 0 ? (
+                              <div
+                                data-testid="student-lesson-history-detail"
+                                style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}
+                              >
+                                {detailLabels.join(' · ')}
+                              </div>
+                            ) : null}
                             {!dateTimeLabel ? (
                               <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                                 예약 정보 확인 중

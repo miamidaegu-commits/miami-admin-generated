@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   formatLessonDateLabel,
   formatLessonSessionNumber,
@@ -62,6 +62,68 @@ function getPrivateReservationEndMillis(row) {
   const duration = Number(row?.durationMinutes)
   const durationMinutes = Number.isFinite(duration) && duration > 0 ? duration : 50
   return startMillis + durationMinutes * 60 * 1000
+}
+
+const PRIVATE_RESERVATION_HISTORY_STATUSES = new Set([
+  'active',
+  'reserved',
+  'confirmed',
+  'booked',
+  'cancelled',
+  'canceled',
+])
+
+function getPrivateReservationHistoryStatusLabel(row) {
+  const status = String(row?.status || '').trim().toLowerCase()
+  if (status === 'cancelled' || status === 'canceled') return '예약 취소'
+  return '예약 완료'
+}
+
+function getPrivateReservationCancelActorLabel(row) {
+  const status = String(row?.status || '').trim().toLowerCase()
+  if (status !== 'cancelled' && status !== 'canceled') return ''
+  const actor = String(
+    row?.cancelledByRole ||
+      row?.canceledByRole ||
+      row?.cancelledBy ||
+      row?.canceledBy ||
+      row?.source ||
+      ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+  const reason = String(row?.cancellationReason || row?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  if (actor.includes('student') || reason.includes('student')) return '학생 취소'
+  if (actor.includes('teacher') || reason.includes('teacher')) return '선생님 취소'
+  if (
+    actor.includes('admin') ||
+    actor.includes('owner') ||
+    actor.includes('staff') ||
+    actor.includes('dashboard') ||
+    reason.includes('admin')
+  ) {
+    return '관리자 취소'
+  }
+  return ''
+}
+
+function formatPrivateReservationCancelledAt(row) {
+  const millis = calendarTimestampToMillis(row?.cancelledAt || row?.canceledAt)
+  if (millis == null) return ''
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(millis))
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
 }
 
 function parseStorageDateToLocalDate(value) {
@@ -542,6 +604,7 @@ export default function CalendarSection(props) {
     studentPackages,
     allPrivateLessons = [],
     privateLessonReservations = [],
+    privateLessonSlots = [],
     handleDeductionToggle,
     canManageAttendance,
     canManagePrivateLessonDeductions,
@@ -572,6 +635,60 @@ export default function CalendarSection(props) {
     activeSection === 'groups' && showOnlySelectedDate
       ? '선택한 날짜의 단체반 수업이 없습니다.'
       : '등록된 수업이 없습니다.'
+  const privateSlotById = useMemo(() => {
+    return new Map(
+      (Array.isArray(privateLessonSlots) ? privateLessonSlots : []).map((slot) => [
+        String(slot.id || '').trim(),
+        slot,
+      ])
+    )
+  }, [privateLessonSlots])
+  const privateReservationHistoryRows = useMemo(() => {
+    if (activeSection !== 'calendar' || !showOnlySelectedDate || !selectedDateString) return []
+    return (Array.isArray(privateLessonReservations) ? privateLessonReservations : [])
+      .map((reservation) => {
+        const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+        const status = String(reservation.status || '').trim().toLowerCase()
+        const date = String(reservation.date || slot?.date || '').trim()
+        if (date !== selectedDateString || !PRIVATE_RESERVATION_HISTORY_STATUSES.has(status)) {
+          return null
+        }
+        const duration = Number(reservation.durationMinutes || slot?.durationMinutes || 0)
+        return {
+          id: String(reservation.id || reservation.reservationId || reservation.slotId || ''),
+          date,
+          time: String(reservation.time || slot?.time || '').trim(),
+          studentName:
+            String(reservation.studentName || reservation.student || '').trim() ||
+            String(reservation.studentId || '').trim() ||
+            '-',
+          teacherName:
+            String(reservation.teacherName || reservation.teacher || '').trim() ||
+            String(slot?.teacherName || slot?.teacher || '').trim() ||
+            '-',
+          subject:
+            String(reservation.subject || '').trim() ||
+            String(slot?.subject || '').trim() ||
+            '1:1 수업',
+          durationLabel: Number.isFinite(duration) && duration > 0 ? `${duration}분` : '-',
+          statusLabel: getPrivateReservationHistoryStatusLabel(reservation),
+          cancelActorLabel: getPrivateReservationCancelActorLabel(reservation),
+          cancelledAtLabel: formatPrivateReservationCancelledAt(reservation),
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        const aKey = `${a.time || ''} ${a.studentName || ''} ${a.id || ''}`
+        const bKey = `${b.time || ''} ${b.studentName || ''} ${b.id || ''}`
+        return aKey.localeCompare(bKey, 'ko')
+      })
+  }, [
+    activeSection,
+    privateLessonReservations,
+    privateSlotById,
+    selectedDateString,
+    showOnlySelectedDate,
+  ])
   const showGroupSelectedDateControl = activeSection === 'groups'
   const selectedDateControlLabel = formatSelectedDateControlLabel(
     selectedDateString,
@@ -1320,6 +1437,63 @@ export default function CalendarSection(props) {
           })}
         </div>
       )}
+      {activeSection === 'calendar' && showOnlySelectedDate ? (
+        <section
+          data-testid="private-reservation-history-section"
+          style={{
+            marginTop: 18,
+            border: '1px solid #333b4f',
+            borderRadius: 12,
+            background: '#141a26',
+            padding: 16,
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 15 }}>1:1 예약 변경 내역</h3>
+          {privateReservationHistoryRows.length === 0 ? (
+            <p
+              data-testid="private-reservation-history-empty"
+              style={{ margin: '10px 0 0 0', opacity: 0.72, fontSize: 13 }}
+            >
+              선택한 날짜의 1:1 예약 변경 내역이 없습니다.
+            </p>
+          ) : (
+            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+              {privateReservationHistoryRows.map((row) => (
+                <article
+                  key={row.id}
+                  data-testid="private-reservation-history-row"
+                  data-reservation-id={row.id || undefined}
+                  data-student-name={row.studentName || undefined}
+                  data-status-label={row.statusLabel || undefined}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns:
+                      'minmax(84px, 0.85fr) minmax(64px, 0.65fr) minmax(110px, 1fr) minmax(90px, 0.9fr) minmax(100px, 1fr) minmax(62px, 0.55fr) minmax(86px, 0.75fr) minmax(112px, 1fr)',
+                    gap: 10,
+                    alignItems: 'center',
+                    border: '1px solid #283042',
+                    borderRadius: 10,
+                    background: '#101521',
+                    padding: '10px 12px',
+                    fontSize: 13,
+                  }}
+                >
+                  <span>{row.date || '-'}</span>
+                  <span>{row.time || '-'}</span>
+                  <span>{row.studentName || '-'}</span>
+                  <span>{row.teacherName || '-'}</span>
+                  <span>{row.subject || '-'}</span>
+                  <span>{row.durationLabel || '-'}</span>
+                  <span>{row.statusLabel || '-'}</span>
+                  <span style={{ opacity: row.cancelActorLabel || row.cancelledAtLabel ? 1 : 0.62 }}>
+                    {[row.cancelActorLabel, row.cancelledAtLabel].filter(Boolean).join(' · ') || '-'}
+                  </span>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
       {privateLessonDetail ? (
         <CalendarPrivateLessonDetailModal
           detail={privateLessonDetail}
