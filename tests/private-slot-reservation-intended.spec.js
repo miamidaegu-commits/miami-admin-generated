@@ -3,8 +3,10 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
-import { BASE_URL, loginAsStudent } from './e2e-helpers.js';
+import { BASE_URL, loginAsAdmin, loginAsStudent, openDashboardSection } from './e2e-helpers.js';
 import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
   DEFAULT_E2E_ACADEMY_ID,
   DEFAULT_E2E_ACADEMY_NAME,
   TEST_STUDENT_PASSWORD,
@@ -447,6 +449,7 @@ async function createFixture(unique) {
   const auth = getAuth();
   const nowTs = admin.firestore.Timestamp.now();
   const teacherKey = `teacher-${unique}`;
+  const teacherDocId = `e2e-flex-private-teacher-${unique}`;
   const ineligibleTeacherKey = `other-private-teacher-${unique}`;
   const minute = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
   const date = upcomingMondaySaturdayYmd(1);
@@ -552,6 +555,15 @@ async function createFixture(unique) {
   const bookingClosesAt = admin.firestore.Timestamp.fromMillis(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
   await Promise.all([
+    db.collection('teachers').doc(teacherDocId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      name: teacherKey,
+      teacherName: teacherKey,
+      teacherKey,
+      status: 'active',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
     db.collection('privateLessonSlots').doc(slotId).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       teacher: teacherKey,
@@ -769,6 +781,7 @@ async function createFixture(unique) {
 
   return {
     teacherKey,
+    teacherDocId,
     ineligibleTeacherKey,
     slotId,
     date,
@@ -819,6 +832,7 @@ async function cleanupFixture(fixture) {
   } =
     fixture;
   const refs = [
+    db.collection('teachers').doc(fixture.teacherDocId),
     db.collection('privateLessonSlots').doc(slotId),
     db.collection('privateLessonSlots').doc(fixture.noRemainingExistingSlotId),
     db.collection('privateLessonSlots').doc(fixture.noRemainingOpenSlotId),
@@ -909,6 +923,46 @@ async function cleanupFixture(fixture) {
     auth.deleteUser(noTicketStudent.uid).catch(() => {}),
     auth.deleteUser(pilotDisabledStudent.uid).catch(() => {}),
   ]);
+}
+
+async function expectAdminDirectReservationCalendarRow(page, fixture) {
+  await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+  await openDashboardSection(page, '캘린더');
+  await page.locator(`[data-testid="calendar-day-button"][data-date="${fixture.date}"]`).click();
+  const reservationRow = page
+    .locator(
+      `[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"][data-time="${fixture.time}"]`
+    )
+    .filter({ hasText: fixture.eligibleStudent.displayName })
+    .first();
+  await expect(reservationRow).toBeVisible({ timeout: 20000 });
+  await expect(reservationRow).toContainText(fixture.eligibleStudent.displayName);
+  await expect(reservationRow).toContainText(fixture.time);
+  await expect(reservationRow).toContainText('60분');
+  await expect(reservationRow).toContainText('1:1 예약 완료');
+}
+
+async function expectTeacherRosterDirectReservationRow(page, fixture) {
+  await openDashboardSection(page, '선생님 관리');
+  const teacherRow = page
+    .getByTestId('teacher-management-row')
+    .filter({ hasText: fixture.teacherKey })
+    .first();
+  await expect(teacherRow).toBeVisible({ timeout: 20000 });
+  await teacherRow.getByTestId('teacher-lesson-roster-open-button').click();
+  const rosterModal = page.getByTestId('teacher-lesson-roster-modal');
+  await expect(rosterModal).toBeVisible({ timeout: 20000 });
+  const reservationRow = rosterModal
+    .getByTestId('teacher-lesson-roster-upcoming-section')
+    .locator('[data-testid="teacher-lesson-roster-row"]')
+    .filter({ hasText: fixture.eligibleStudent.displayName })
+    .first();
+  await expect(reservationRow).toBeVisible({ timeout: 20000 });
+  await expect(reservationRow).toContainText(fixture.time);
+  await expect(reservationRow).toContainText('60분');
+  await expect(reservationRow).toContainText('예약 완료');
+  await rosterModal.getByTestId('teacher-lesson-roster-close-button').click();
+  await expect(rosterModal).toHaveCount(0);
 }
 
 async function getReservation(db, slotId, studentId) {
@@ -1682,6 +1736,12 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'reserved private slot should remain visible in lesson history'
     ).toHaveCount(1, { timeout: 15000 });
     await expect(privateHistoryCard.first()).toContainText('예약 완료');
+
+    const adminContext = await browser.newContext();
+    contexts.push(adminContext);
+    const adminPage = await adminContext.newPage();
+    await expectAdminDirectReservationCalendarRow(adminPage, fixture);
+    await expectTeacherRosterDirectReservationRow(adminPage, fixture);
 
     const secondContext = await browser.newContext();
     contexts.push(secondContext);

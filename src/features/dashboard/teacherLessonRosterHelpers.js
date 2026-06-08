@@ -283,6 +283,7 @@ function buildRosterEntry({
   studentName,
   lessonTypeLabel,
   subject,
+  durationMinutes,
   statusLabel,
   bucket,
   lesson = null,
@@ -299,6 +300,10 @@ function buildRosterEntry({
     studentDisplayName: resolveStudentDisplayName(studentName, studentId),
     lessonTypeLabel,
     subjectLabel: resolveSubjectLabel(subject),
+    durationLabel:
+      Number.isFinite(Number(durationMinutes)) && Number(durationMinutes) > 0
+        ? `${Number(durationMinutes)}분`
+        : '',
     statusLabel,
     reservationCreatedAtLabel:
       sourceKind === 'reservation' ? formatReservationCreatedAt(reservation) : '',
@@ -391,6 +396,16 @@ function buildApprovedReservationKeys(lessons, academyId, teacherScope) {
   lessons.forEach((lesson) => {
     if (normalizeId(lesson.academyId) !== normalizeId(academyId)) return
     if (!rowMatchesTeacherScope(lesson, teacherScope)) return
+    const status = normalizeId(lesson.status).toLowerCase()
+    const cancellationType = normalizeId(lesson.cancellationType).toLowerCase()
+    if (
+      status === 'cancelled' ||
+      status === 'canceled' ||
+      cancellationType === 'seat_released' ||
+      lesson.isSeatReleased === true
+    ) {
+      return
+    }
     const reservationId = normalizeId(lesson.reservationId)
     const slotId = normalizeId(lesson.slotId)
     if (reservationId) keys.add(`reservationId:${reservationId}`)
@@ -496,6 +511,7 @@ export function buildTeacherLessonRoster({
         studentName: resolveStudentName(lesson, studentById),
         lessonTypeLabel: getLessonTypeLabel({ sourceKind: 'lesson', lesson }),
         subject: normalizeId(lesson.subject) || '1:1 수업',
+        durationMinutes: lesson.durationMinutes,
         statusLabel: getLessonStatusLabel(lesson, bucket),
         bucket,
         lesson,
@@ -539,6 +555,7 @@ export function buildTeacherLessonRoster({
             slot,
           }),
           subject: normalizeId(reservation.subject || slot?.subject) || '1:1 수업',
+          durationMinutes: reservation.durationMinutes || slot?.durationMinutes,
           statusLabel: getReservationStatusLabel(reservation, bucket),
           bucket,
           reservation,

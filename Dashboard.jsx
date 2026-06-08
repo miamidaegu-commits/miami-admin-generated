@@ -2049,13 +2049,19 @@ export default function Dashboard() {
       return () => unsubscribe()
     } else if (isDashboardTeacherProfile(userProfile) && teacherName) {
       setPrivateLessonReservationsLoading(true)
-      let teacherSnapshot = null
-      let teacherNameSnapshot = null
+      const teacherUid = String(user?.uid || '').trim()
+      const teacherQuerySpecs = [
+        ['teacher', teacherName],
+        ['teacherName', teacherName],
+        ['teacherKey', teacherName],
+        ['teacherUid', teacherUid],
+        ['teacherUID', teacherUid],
+      ].filter(([, value]) => value)
+      const teacherSnapshotsByKey = new Map()
       const mergeTeacherRows = () => {
-        if (!teacherSnapshot || !teacherNameSnapshot) return
+        if (teacherSnapshotsByKey.size < teacherQuerySpecs.length) return
         const byId = new Map()
-        const snapshots = [teacherSnapshot, teacherNameSnapshot]
-        snapshots.forEach((snapshot) => {
+        Array.from(teacherSnapshotsByKey.values()).forEach((snapshot) => {
           snapshot.docs.forEach((docItem) => {
             byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
           })
@@ -2067,41 +2073,26 @@ export default function Dashboard() {
         where('academyId', '==', currentAcademyId),
         where('status', '==', 'active'),
       ]
-      const unsubscribeTeacher = onSnapshot(
-        query(
-          collection(db, 'privateLessonReservations'),
-          ...queryBase,
-          where('teacher', '==', teacherName)
-        ),
-        (snapshot) => {
-          teacherSnapshot = snapshot
-          mergeTeacherRows()
-        },
-        (error) => {
-          console.error('privateLessonReservations(teacher) 불러오기 실패:', error)
-          teacherSnapshot = { docs: [] }
-          mergeTeacherRows()
-        }
-      )
-      const unsubscribeTeacherName = onSnapshot(
-        query(
-          collection(db, 'privateLessonReservations'),
-          ...queryBase,
-          where('teacherName', '==', teacherName)
-        ),
-        (snapshot) => {
-          teacherNameSnapshot = snapshot
-          mergeTeacherRows()
-        },
-        (error) => {
-          console.error('privateLessonReservations(teacherName) 불러오기 실패:', error)
-          teacherNameSnapshot = { docs: [] }
-          mergeTeacherRows()
-        }
+      const unsubscribers = teacherQuerySpecs.map(([field, value]) =>
+        onSnapshot(
+          query(
+            collection(db, 'privateLessonReservations'),
+            ...queryBase,
+            where(field, '==', value)
+          ),
+          (snapshot) => {
+            teacherSnapshotsByKey.set(`${field}:${value}`, snapshot)
+            mergeTeacherRows()
+          },
+          (error) => {
+            console.error(`privateLessonReservations(${field}) 불러오기 실패:`, error)
+            teacherSnapshotsByKey.set(`${field}:${value}`, { docs: [] })
+            mergeTeacherRows()
+          }
+        )
       )
       return () => {
-        unsubscribeTeacher()
-        unsubscribeTeacherName()
+        unsubscribers.forEach((unsubscribe) => unsubscribe())
       }
     } else {
       setPrivateLessonReservations([])

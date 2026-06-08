@@ -133,6 +133,14 @@ export default function useCalendarSectionViewModel({
   const approvedPrivateLessonKeys = useMemo(() => {
     const byKey = new Set()
     visibleLessons.forEach((lesson) => {
+      const status = String(lesson?.status || '').trim().toLowerCase()
+      const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+      const isReleasedOrCancelled =
+        status === 'cancelled' ||
+        status === 'canceled' ||
+        cancellationType === 'seat_released' ||
+        lesson?.isSeatReleased === true
+      if (isReleasedOrCancelled) return
       const directReservationId = String(lesson.reservationId || '').trim()
       const directSlotId = String(lesson.slotId || '').trim()
       if (directReservationId) byKey.add(`reservationId:${directReservationId}`)
