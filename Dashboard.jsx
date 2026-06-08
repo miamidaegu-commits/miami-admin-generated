@@ -2071,7 +2071,6 @@ export default function Dashboard() {
       }
       const queryBase = [
         where('academyId', '==', currentAcademyId),
-        where('status', '==', 'active'),
       ]
       const unsubscribers = teacherQuerySpecs.map(([field, value]) =>
         onSnapshot(
@@ -5108,6 +5107,7 @@ export default function Dashboard() {
       displayedLessons,
       allPrivateLessons: lessons,
       privateLessonReservations,
+      privateLessonSlots,
       getMatchedStudent,
       getMatchedStudentId,
       studentPackages,

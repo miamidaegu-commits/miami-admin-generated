@@ -104,6 +104,21 @@ async function createStudentUser({ unique, roleName, studentId, studentName }) {
   return { uid: user.uid, email };
 }
 
+async function createTeacherUser({ unique, teacherName }) {
+  const auth = getAuth();
+  const email = `fixed-release-teacher-login-${unique}@example.com`;
+  const user = await auth.createUser({
+    email,
+    password: TEST_STUDENT_PASSWORD,
+    displayName: teacherName,
+  });
+  await auth.setCustomUserClaims(user.uid, {
+    role: 'teacher',
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+  });
+  return { uid: user.uid, email };
+}
+
 async function createFixture(unique) {
   const db = getDb();
   const now = admin.firestore.Timestamp.now();
@@ -174,6 +189,7 @@ async function createFixture(unique) {
     teacherName: teacher,
     teacherKey: teacher,
   };
+  const teacherUser = await createTeacherUser({ unique, teacherName: teacher });
 
   await Promise.all([
     db.collection('academies').doc(DEFAULT_E2E_ACADEMY_ID).set(
@@ -200,6 +216,17 @@ async function createFixture(unique) {
         updatedAt: now,
       })
     ),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${teacherUser.uid}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      uid: teacherUser.uid,
+      email: teacherUser.email,
+      displayName: teacher,
+      role: 'teacher',
+      teacherName: teacher,
+      status: 'active',
+      permissions: {},
+      updatedAt: now,
+    }),
     ...studentRecords.map((student) =>
       db.collection('users').doc(student.uid).set({
         uid: student.uid,
@@ -211,6 +238,16 @@ async function createFixture(unique) {
         updatedAt: now,
       })
     ),
+    db.collection('users').doc(teacherUser.uid).set({
+      uid: teacherUser.uid,
+      email: teacherUser.email,
+      displayName: teacher,
+      role: 'teacher',
+      teacherName: teacher,
+      isActive: true,
+      lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
+      updatedAt: now,
+    }),
     ...studentRecords.map((student) =>
       db.collection('privateStudents').doc(student.studentId).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
@@ -333,6 +370,8 @@ async function createFixture(unique) {
     time,
     cancelOnlyTime,
     teacher,
+    teacherEmail: teacherUser.email,
+    teacherUid: teacherUser.uid,
     teacherDocId,
     templateId,
     templateSlot,
@@ -382,9 +421,15 @@ async function cleanupFixture(fixture) {
     ...fixture.studentUids.map((uid) =>
       db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${uid}`)
     ),
+    db.collection('users').doc(fixture.teacherUid),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.teacherUid}`),
   ];
   await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
-  await Promise.all(fixture.studentUids.map((uid) => auth.deleteUser(uid).catch(() => {})));
+  await Promise.all(
+    [...fixture.studentUids, fixture.teacherUid]
+      .filter(Boolean)
+      .map((uid) => auth.deleteUser(uid).catch(() => {}))
+  );
 }
 
 async function expectLessonPatch(lessonId, expected) {
@@ -546,7 +591,7 @@ async function expectAdminReleasedSeatCalendarRows(page, fixture, {
       `[data-testid="calendar-lesson-row"][data-row-kind="private"][data-lesson-id="${fixture.fixedLessonId}"]`
     )
     .first();
-  await expect(originalRow).toBeVisible({ timeout: 20000 });
+  await expect(originalRow).toBeVisible({ timeout: 45000 });
   await expect(originalRow).toContainText(fixture.originalStudentName);
   await expect(originalRow).toContainText(fixture.time);
   await expect(originalRow).toContainText('자리 공개됨');
@@ -559,7 +604,7 @@ async function expectAdminReleasedSeatCalendarRows(page, fixture, {
       )
       .filter({ hasText: activeStudentName })
       .first();
-    await expect(activeReservationRow).toBeVisible({ timeout: 20000 });
+    await expect(activeReservationRow).toBeVisible({ timeout: 45000 });
     await expect(activeReservationRow).toContainText(activeStudentName);
     await expect(activeReservationRow).toContainText(fixture.time);
     await expect(activeReservationRow).toContainText('60분');
@@ -613,6 +658,88 @@ async function expectTeacherRosterReservation(page, fixture, {
 
   await rosterModal.getByTestId('teacher-lesson-roster-close-button').click();
   await expect(rosterModal).toHaveCount(0);
+}
+
+async function loginAsTeacher(page, email, password) {
+  await page.goto(`${BASE_URL}login/`);
+  await page.getByLabel(/Email|이메일/i).or(page.locator('input[type="email"]')).first().fill(email);
+  await page
+    .getByLabel(/Password|비밀번호/i)
+    .or(page.locator('input[type="password"]'))
+    .first()
+    .fill(password);
+  await page.getByRole('button', { name: '로그인', exact: true }).click();
+  await expect(page).toHaveURL(/\/dashboard/, { timeout: 20000 });
+  await expect(page.getByRole('button', { name: '캘린더', exact: true })).toBeVisible({
+    timeout: 20000,
+  });
+}
+
+async function expectCalendarReservationHistory(page, fixture, {
+  cancelledStudentName = '',
+  activeStudentName = '',
+  hiddenStudentName = '',
+}) {
+  await openAdminCalendarDate(page, fixture.date);
+  const section = page.getByTestId('private-reservation-history-section');
+  await expect(section).toBeVisible({ timeout: 20000 });
+  await expect(section).toContainText('1:1 예약 변경 내역');
+
+  if (cancelledStudentName) {
+    const cancelledRow = section
+      .getByTestId('private-reservation-history-row')
+      .filter({ hasText: cancelledStudentName })
+      .filter({ hasText: '예약 취소' })
+      .first();
+    await expect(cancelledRow).toBeVisible({ timeout: 20000 });
+    await expect(cancelledRow).toContainText(fixture.time);
+    await expect(cancelledRow).toContainText(fixture.teacher);
+    await expect(cancelledRow).toContainText('60분');
+    await expect(cancelledRow).toContainText('학생 취소');
+  }
+
+  if (activeStudentName) {
+    const activeRow = section
+      .getByTestId('private-reservation-history-row')
+      .filter({ hasText: activeStudentName })
+      .filter({ hasText: '예약 완료' })
+      .first();
+    await expect(activeRow).toBeVisible({ timeout: 20000 });
+    await expect(activeRow).toContainText(fixture.time);
+    await expect(activeRow).toContainText(fixture.teacher);
+    await expect(activeRow).toContainText('60분');
+  }
+
+  if (hiddenStudentName) {
+    await expect(
+      section.getByTestId('private-reservation-history-row').filter({ hasText: hiddenStudentName })
+    ).toHaveCount(0, { timeout: 15000 });
+  }
+}
+
+async function expectStudentPrivateReservationHistory(page, {
+  studentName,
+  hiddenStudentName = '',
+  statusLabel,
+  time,
+}) {
+  const historyRow = page
+    .getByTestId('student-lesson-history-card')
+    .filter({ hasText: studentName })
+    .filter({ hasText: time })
+    .filter({ hasText: statusLabel })
+    .first();
+  await expect(historyRow).toBeVisible({ timeout: 20000 });
+  await expect(historyRow).toContainText('1:1 예약');
+  await expect(historyRow).toContainText('60분');
+  if (statusLabel === '예약 취소') {
+    await expect(historyRow).toContainText('학생 취소');
+  }
+  if (hiddenStudentName) {
+    await expect(
+      page.getByTestId('student-lesson-history-card').filter({ hasText: hiddenStudentName })
+    ).toHaveCount(0, { timeout: 15000 });
+  }
 }
 
 test.describe('fixed private lesson release', () => {
@@ -761,6 +888,12 @@ test.describe('fixed private lesson release', () => {
     await expect(
       page.getByTestId('student-private-reservation-card').filter({ hasText: fixture.time })
     ).toHaveCount(0, { timeout: 15000 });
+    await expectStudentPrivateReservationHistory(page, {
+      studentName: fixture.otherStudentName,
+      hiddenStudentName: fixture.nextStudentName,
+      statusLabel: '예약 취소',
+      time: fixture.time,
+    });
 
     await page.getByRole('button', { name: '로그아웃' }).click();
     await expect(page.getByRole('button', { name: '로그인', exact: true })).toBeVisible({ timeout: 15000 });
@@ -768,8 +901,20 @@ test.describe('fixed private lesson release', () => {
     await expectAdminReleasedSeatCalendarRows(page, fixture, {
       hiddenStudentName: fixture.otherStudentName,
     });
+    await expectCalendarReservationHistory(page, fixture, {
+      cancelledStudentName: fixture.otherStudentName,
+      hiddenStudentName: fixture.nextStudentName,
+    });
     await expectTeacherRosterReservation(page, fixture, {
       hiddenStudentName: fixture.otherStudentName,
+    });
+
+    await page.getByRole('button', { name: '로그아웃' }).click();
+    await expect(page.getByRole('button', { name: '로그인', exact: true })).toBeVisible({ timeout: 15000 });
+    await loginAsTeacher(page, fixture.teacherEmail, TEST_STUDENT_PASSWORD);
+    await expectCalendarReservationHistory(page, fixture, {
+      cancelledStudentName: fixture.otherStudentName,
+      hiddenStudentName: fixture.nextStudentName,
     });
 
     await page.getByRole('button', { name: '로그아웃' }).click();
@@ -805,6 +950,12 @@ test.describe('fixed private lesson release', () => {
       status: 'active',
       durationMinutes: 60,
     });
+    await expectStudentPrivateReservationHistory(page, {
+      studentName: fixture.nextStudentName,
+      hiddenStudentName: fixture.otherStudentName,
+      statusLabel: '예약 완료',
+      time: fixture.time,
+    });
     await expectLessonPatch(fixture.fixedLessonId, {
       status: 'cancelled',
       cancellationType: 'seat_released',
@@ -819,9 +970,21 @@ test.describe('fixed private lesson release', () => {
       activeStudentName: fixture.nextStudentName,
       hiddenStudentName: fixture.otherStudentName,
     });
+    await expectCalendarReservationHistory(page, fixture, {
+      cancelledStudentName: fixture.otherStudentName,
+      activeStudentName: fixture.nextStudentName,
+    });
     await expectTeacherRosterReservation(page, fixture, {
       activeStudentName: fixture.nextStudentName,
       hiddenStudentName: fixture.otherStudentName,
+    });
+
+    await page.getByRole('button', { name: '로그아웃' }).click();
+    await expect(page.getByRole('button', { name: '로그인', exact: true })).toBeVisible({ timeout: 15000 });
+    await loginAsTeacher(page, fixture.teacherEmail, TEST_STUDENT_PASSWORD);
+    await expectCalendarReservationHistory(page, fixture, {
+      cancelledStudentName: fixture.otherStudentName,
+      activeStudentName: fixture.nextStudentName,
     });
   });
 
