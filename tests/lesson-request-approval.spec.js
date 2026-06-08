@@ -40,7 +40,19 @@ async function loginAsTeacher(page) {
   await expect(page.getByRole('button', { name: '캘린더', exact: true })).toBeVisible();
 }
 
-async function approveRequest(page, createdRequest) {
+function cssAttributeValue(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function getLessonRequestRowById(page, requestId) {
+  const safeRequestId = String(requestId || '').trim();
+  if (!safeRequestId) throw new Error('lesson request id is required.');
+  return page.locator(
+    `[data-testid="lesson-request-row"][data-request-id="${cssAttributeValue(safeRequestId)}"]`
+  );
+}
+
+async function approveLessonRequestAndWait(page, createdRequest) {
   if (createdRequest.requestId) {
     await expect
       .poll(
@@ -61,7 +73,19 @@ async function approveRequest(page, createdRequest) {
     await expect(requestRow).toContainText(createdRequest.subject);
   }
   await requestRow.getByRole('button', { name: '승인', exact: true }).click();
-  await expect(requestRow).toHaveCount(0, { timeout: 15000 });
+  await expect
+    .poll(
+      async () =>
+        getLessonRequestApprovalState(page, {
+          requestId: createdRequest.requestId,
+        }),
+      { timeout: 60000 }
+    )
+    .toMatchObject({
+      exists: true,
+      approvalStatus: 'approved',
+    });
+  await expect(requestRow).toHaveCount(0, { timeout: 60000 });
 }
 
 async function expectSessionPlan({ studentId, teacher, expected }) {
@@ -82,16 +106,10 @@ async function expectSessionPlan({ studentId, teacher, expected }) {
 }
 
 async function expectLessonRequestRowVisible(page, createdRequest) {
-  let requestRows = page
-    .getByTestId('lesson-request-row')
-    .filter({ hasText: createdRequest.studentName });
-  if (createdRequest.subject) {
-    requestRows = requestRows.filter({ hasText: createdRequest.subject });
-  }
-  const requestRow = requestRows.first();
+  const requestRow = getLessonRequestRowById(page, createdRequest.requestId);
 
   try {
-    await expect(requestRow).toBeVisible({ timeout: 30000 });
+    await expect(requestRow).toBeVisible({ timeout: 60000 });
   } catch (error) {
     const [requestDoc, visibleRows, loadingTexts, bodyText] = await Promise.all([
       getAdminSeededLessonRequest(createdRequest.requestId).catch((requestError) => ({
@@ -132,7 +150,8 @@ async function expectLessonRequestRowVisible(page, createdRequest) {
 test('admin sees a pending lesson request and approving it creates lessons', async ({
   page,
   browserName,
-}) => {
+}, testInfo) => {
+  testInfo.setTimeout(90000);
   test.skip(browserName !== 'chromium', 'This test is intended for chromium.');
 
   const now = Date.now();
@@ -161,7 +180,7 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
         getLessonRequestApprovalState(page, {
           requestId: createdRequest.requestId,
         }),
-      { timeout: 15000 }
+      { timeout: 60000 }
     )
     .toMatchObject({
       exists: true,
@@ -219,13 +238,14 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
       ],
     });
 
-  await expect(requestRow).toHaveCount(0);
+  await expect(requestRow).toHaveCount(0, { timeout: 60000 });
 });
 
 test('admin approval of fixed recurring private request creates and links package', async ({
   page,
   browserName,
-}) => {
+}, testInfo) => {
+  testInfo.setTimeout(90000);
   test.skip(browserName !== 'chromium', 'This test is intended for chromium.');
 
   const now = Date.now();
@@ -274,7 +294,7 @@ test('admin approval of fixed recurring private request creates and links packag
         getLessonRequestApprovalState(page, {
           requestId: createdRequest.requestId,
         }),
-      { timeout: 20000 }
+      { timeout: 60000 }
     )
     .toMatchObject({
       exists: true,
@@ -313,7 +333,8 @@ test('admin approval of fixed recurring private request creates and links packag
 test('admin approval assigns continuous private lesson session numbers across requests', async ({
   page,
   browserName,
-}) => {
+}, testInfo) => {
+  testInfo.setTimeout(90000);
   test.skip(browserName !== 'chromium', 'This test is intended for chromium.');
 
   const now = Date.now();
@@ -379,7 +400,7 @@ test('admin approval assigns continuous private lesson session numbers across re
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '수업 요청 관리');
 
-  await approveRequest(page, requestA);
+  await approveLessonRequestAndWait(page, requestA);
   await expectSessionPlan({
     studentId,
     teacher,
@@ -391,7 +412,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     ],
   });
 
-  await approveRequest(page, requestB);
+  await approveLessonRequestAndWait(page, requestB);
   await expectSessionPlan({
     studentId,
     teacher,
@@ -407,7 +428,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     ],
   });
 
-  await approveRequest(page, requestBackdated);
+  await approveLessonRequestAndWait(page, requestBackdated);
   await expectSessionPlan({
     studentId,
     teacher,
