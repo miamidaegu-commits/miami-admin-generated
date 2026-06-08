@@ -320,7 +320,7 @@ test.describe('private reservation admin outcome deduction', () => {
     const reversalReason = `E2E reversal reason ${unique}`;
     page.once('dialog', (dialog) => dialog.accept(reversalReason));
     await row.getByRole('button', { name: '완료취소' }).click();
-    await expect(row).toContainText('예약됨', { timeout: 20000 });
+    await expect(row).toContainText('예약 완료', { timeout: 20000 });
     await expectPackageCounts(db, completeFixture.packageId, 0, 2);
     const reversedSnap = await db
       .collection('privateLessonReservations')

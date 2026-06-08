@@ -33,7 +33,7 @@ function fixedLessonStatusLabel(lesson) {
   const status = String(lesson?.status || '').trim().toLowerCase()
   const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
   if (status === 'cancelled' || status === 'canceled') {
-    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개됨'
     return '수업 취소'
   }
   return '배정됨'

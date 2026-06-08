@@ -2800,7 +2800,7 @@ export default function Dashboard() {
           studentLabel: getPrivateReservationStudentLabel(reservation, student),
           teacherLabel: getPrivateReservationTeacherLabel(reservation, slot),
           title: getPrivateReservationSubjectLabel(reservation, slot),
-          statusLabel: '예약됨',
+          statusLabel: '예약 완료',
         }
       })
 

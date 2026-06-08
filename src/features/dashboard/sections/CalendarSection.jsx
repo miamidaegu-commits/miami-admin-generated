@@ -103,7 +103,7 @@ function getFixedPrivateLessonCancellationLabel(lesson) {
   const status = String(lesson?.status || '').trim().toLowerCase()
   if (status !== 'cancelled' && status !== 'canceled') return ''
   const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
-  if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+  if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개됨'
   if (cancellationType === 'lesson_cancelled') return '수업 취소'
   return ''
 }
@@ -893,9 +893,9 @@ export default function CalendarSection(props) {
                       ? '완료'
                       : privateReservationStatus === 'no_show'
                         ? '노쇼'
-                        : '1:1 예약 완료'
+                        : '예약 완료'
                 : isNoDeductionPrivateLesson
-                  ? fixedPrivateCancellationLabel || '휴강 · 차감 없음'
+                  ? fixedPrivateCancellationLabel || '원 수업 휴강 · 차감 없음'
                   : lesson.isDeductCancelled
                   ? '차감취소'
                   : isDeductedPrivateLesson
@@ -914,7 +914,9 @@ export default function CalendarSection(props) {
               : !canManagePrivateLessonDeductions
                 ? '권한이 없습니다'
                 : isNoDeductionPrivateLesson
-                  ? '휴강 · 차감 없음'
+                  ? fixedPrivateCancellationLabel
+                    ? '원 수업 휴강 · 차감 없음'
+                    : '휴강 · 차감 없음'
                   : !hasAnyPrivatePackage
                     ? '수강권 등록 필요'
                     : !hasTeacherScopedPackage
@@ -1047,7 +1049,7 @@ export default function CalendarSection(props) {
                 <span>{formatLessonTimeLabel(lesson)}</span>
                 <span style={{ lineHeight: 1.45 }}>
                   <span style={badgeStyle}>
-                    {isGroupRow ? '그룹' : isPrivateReservationRow ? '예약 1:1' : '개인'}
+                    {isGroupRow ? '그룹' : isPrivateReservationRow ? '1:1 예약' : '개인'}
                   </span>
                   {nameLabel}
                 </span>
