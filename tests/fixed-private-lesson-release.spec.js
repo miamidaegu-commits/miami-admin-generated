@@ -549,8 +549,8 @@ async function expectAdminReleasedSeatCalendarRows(page, fixture, {
   await expect(originalRow).toBeVisible({ timeout: 20000 });
   await expect(originalRow).toContainText(fixture.originalStudentName);
   await expect(originalRow).toContainText(fixture.time);
-  await expect(originalRow).toContainText('자리 공개');
-  await expect(originalRow).toContainText('휴강 · 차감 없음');
+  await expect(originalRow).toContainText('자리 공개됨');
+  await expect(originalRow).toContainText('원 수업 휴강 · 차감 없음');
 
   if (activeStudentName) {
     const activeReservationRow = page
@@ -563,7 +563,7 @@ async function expectAdminReleasedSeatCalendarRows(page, fixture, {
     await expect(activeReservationRow).toContainText(activeStudentName);
     await expect(activeReservationRow).toContainText(fixture.time);
     await expect(activeReservationRow).toContainText('60분');
-    await expect(activeReservationRow).toContainText('1:1 예약 완료');
+    await expect(activeReservationRow).toContainText('예약 완료');
   }
 
   if (hiddenStudentName) {
@@ -659,7 +659,7 @@ test.describe('fixed private lesson release', () => {
     await expect(actionModal).toContainText('선생님/학원 사정으로 수업 자체가 없는 경우 사용합니다.');
     page.once('dialog', (dialog) => dialog.accept());
     await actionModal.getByTestId('fixed-private-lesson-action-release-button').click();
-    await expect(calendarRow).toContainText('자리 공개', { timeout: 15000 });
+    await expect(calendarRow).toContainText('자리 공개됨', { timeout: 15000 });
     await expectLessonPatch(fixture.fixedLessonId, {
       status: 'cancelled',
       cancellationType: 'seat_released',

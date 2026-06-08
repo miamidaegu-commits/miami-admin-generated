@@ -240,7 +240,7 @@ export function getCancellationHandlingLabel({ sourceKind, lesson, reservation, 
   if (sourceKind === 'lesson') {
     if (lesson?.isDeductCancelled === true) return '차감취소'
     const cancellationType = normalizeId(lesson?.cancellationType).toLowerCase()
-    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개됨'
     if (cancellationType === 'lesson_cancelled') return '수업 취소'
     return '취소됨'
   }
@@ -365,7 +365,7 @@ function getTicketContextLabel({ sourceKind, reservation, lesson, packageById })
 function getLessonStatusLabel(lesson, bucket) {
   if (bucket === 'cancelled') {
     const cancellationType = normalizeId(lesson?.cancellationType).toLowerCase()
-    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개'
+    if (cancellationType === 'seat_released' || lesson?.isSeatReleased === true) return '자리 공개됨'
     if (cancellationType === 'lesson_cancelled') return '수업 취소'
     return '차감취소'
   }
