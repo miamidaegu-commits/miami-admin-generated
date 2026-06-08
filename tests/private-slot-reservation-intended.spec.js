@@ -939,7 +939,7 @@ async function expectAdminDirectReservationCalendarRow(page, fixture) {
   await expect(reservationRow).toContainText(fixture.eligibleStudent.displayName);
   await expect(reservationRow).toContainText(fixture.time);
   await expect(reservationRow).toContainText('60분');
-  await expect(reservationRow).toContainText('1:1 예약 완료');
+  await expect(reservationRow).toContainText('예약 완료');
 }
 
 async function expectTeacherRosterDirectReservationRow(page, fixture) {

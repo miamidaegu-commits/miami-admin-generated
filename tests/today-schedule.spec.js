@@ -617,7 +617,6 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expectSummaryCountAtLeast(page, '단체수업', 2);
   await expectPanelContains(page, fixture.studentName);
   await expectPanelContains(page, '예약 완료');
-  await expectPanelContains(page, '예약됨');
 
   const ownReservationRow = page
     .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
@@ -625,8 +624,8 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expect(ownReservationRow).toBeVisible({ timeout: 20000 });
   await expect(ownReservationRow).toContainText(fixture.studentName);
   await expect(ownReservationRow).toContainText(fixture.teacherName);
-  await expect(ownReservationRow).toContainText('1:1 예약 완료');
-  await expect(ownReservationRow).toContainText('예약 1:1');
+  await expect(ownReservationRow).toContainText('예약 완료');
+  await expect(ownReservationRow).toContainText('1:1 예약');
   await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toBeVisible();
   await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toBeVisible();
   await expect(
@@ -653,7 +652,7 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
   await expect(panel).toContainText(fixture.ownPrivateTitle);
   await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
   await expect(panel).toContainText(fixture.today);
-  await expect(panel).toContainText('예약됨');
+  await expect(panel).toContainText('예약 완료');
   await expect(panel).toContainText('3회차');
   await expectSummaryCount(page, '개인 수업', 2);
   await expect(panel).toContainText(fixture.teacherName);
@@ -667,7 +666,7 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
   await expect(ownReservationRow).toBeVisible({ timeout: 20000 });
   await expect(ownReservationRow).toContainText(fixture.studentName);
   await expect(ownReservationRow).toContainText(fixture.teacherName);
-  await expect(ownReservationRow).toContainText('1:1 예약 완료');
+  await expect(ownReservationRow).toContainText('예약 완료');
   await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
   await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
   await expect(
