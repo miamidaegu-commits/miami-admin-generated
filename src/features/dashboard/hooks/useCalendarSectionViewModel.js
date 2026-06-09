@@ -260,6 +260,12 @@ export default function useCalendarSectionViewModel({
       const current = map.get(dateKey) || []
       const isGroupRow = lesson._calendarRowKind === 'group'
       const isPrivateReservationRow = lesson._calendarRowKind === 'privateReservation'
+      const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+      const isReleasedFixedPrivateRow =
+        !isGroupRow &&
+        !isPrivateReservationRow &&
+        (cancellationType === 'seat_released' || lesson?.isSeatReleased === true)
+      const studentName = getStudentName(lesson)
       current.push({
         id: lesson.id,
         kind: lesson._calendarRowKind || 'private',
@@ -268,11 +274,15 @@ export default function useCalendarSectionViewModel({
           isGroupRow
             ? lesson.groupClassDisplayName || '단체수업'
             : isPrivateReservationRow
-              ? '1:1 예약'
-              : getStudentName(lesson),
-          isPrivateReservationRow ? getStudentName(lesson) : '',
+              ? '학생예약'
+              : isReleasedFixedPrivateRow
+                ? '자리공개'
+                : studentName,
+          isPrivateReservationRow || isReleasedFixedPrivateRow ? studentName : '',
           lesson.time || '',
-          formatLessonSessionNumber(lesson),
+          isPrivateReservationRow || isReleasedFixedPrivateRow
+            ? ''
+            : formatLessonSessionNumber(lesson),
         ]
           .filter(Boolean)
           .join(' · '),

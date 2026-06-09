@@ -199,7 +199,7 @@ test('teacher lesson roster helper groups upcoming, past, and cancelled rows', a
   expect(
     roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
       ?.lessonTypeLabel
-  ).toBe('1:1 예약');
+  ).toBe('학생 예약 1:1');
   expect(
     roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
       ?.subjectLabel

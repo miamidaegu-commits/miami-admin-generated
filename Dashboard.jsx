@@ -2794,7 +2794,7 @@ export default function Dashboard() {
           id: `private-reservation-${reservation.id}`,
           date: String(reservation.date || slot?.date || '').trim() || todayYmd,
           time: String(reservation.time || slot?.time || '').trim() || '-',
-          typeLabel: '1:1 예약',
+          typeLabel: '학생 예약 1:1',
           sourceKind: 'privateReservation',
           studentLabel: getPrivateReservationStudentLabel(reservation, student),
           teacherLabel: getPrivateReservationTeacherLabel(reservation, slot),

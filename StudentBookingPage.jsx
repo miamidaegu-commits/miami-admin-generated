@@ -412,7 +412,7 @@ function getPrivateSlotViewModeButtonStyle(isSelected) {
 
 function getLessonHistoryStatusLabel(item) {
   const cancellationType = String(item?.cancellationType || '').trim()
-  if (cancellationType === 'seat_released') return '자리 공개'
+  if (cancellationType === 'seat_released') return '고정수업 자리 공개됨'
   if (cancellationType === 'lesson_cancelled') return '수업 취소'
   if (item.noDeduction === true) {
     return '휴강 · 차감 없음'
@@ -1761,9 +1761,12 @@ export default function StudentBookingPage() {
       const startsAtMs = getDateTimeMs(date, time)
       const cancellationType = String(lesson.cancellationType || '').trim()
       const status = isCancelledLesson(lesson) ? 'cancelled' : 'active'
+      const isReleasedFixedSeat =
+        cancellationType === 'seat_released' || lesson?.isSeatReleased === true
       return {
         id: `private-lesson-${lesson.id}`,
-        typeLabel: '1:1 수업',
+        source: 'privateLesson',
+        typeLabel: isReleasedFixedSeat ? '내 고정수업' : '1:1 수업',
         title: getLessonSubjectLabel(lesson),
         date,
         time,
@@ -1782,7 +1785,8 @@ export default function StudentBookingPage() {
       const duration = Number(reservation.durationMinutes || 0)
       return {
         id: `private-${reservation.id}`,
-        typeLabel: '1:1 예약',
+        source: 'privateReservation',
+        typeLabel: '학생 직접예약 1:1',
         title: String(reservation.subject || '').trim() || '1:1 수업',
         date,
         time,
@@ -1864,7 +1868,7 @@ export default function StudentBookingPage() {
         return {
           id: `private-reservation-${reservation.id}`,
           time: String(reservation.time || slot?.time || '').trim() || '-',
-          typeLabel: '1:1 예약',
+          typeLabel: '학생 직접예약 1:1',
           teacherLabel: String(reservation.teacher || slot?.teacher || '').trim() || '-',
           title:
             String(reservation.subject || '').trim() ||
@@ -3423,7 +3427,7 @@ export default function StudentBookingPage() {
                       <article
                         key={item.id}
                         data-testid="student-lesson-history-card"
-                        data-source={item.typeLabel === '1:1 예약' ? 'privateReservation' : undefined}
+                        data-source={item.source || undefined}
                         style={{
                           border: '1px solid #283042',
                           borderRadius: 14,
