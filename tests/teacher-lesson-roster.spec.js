@@ -535,11 +535,17 @@ test('admin opens teacher lesson roster modal with scoped private lessons', asyn
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '선생님 관리');
 
-    const teacherRow = page
-      .getByTestId('teacher-management-row')
-      .filter({ hasText: teacherAName })
-      .first();
-    await expect(teacherRow).toBeVisible({ timeout: 15000 });
+    const teacherRows = page.getByTestId('teacher-management-row');
+    await expect
+      .poll(async () => await teacherRows.filter({ hasText: teacherAName }).count(), {
+        message: 'teacher management rows should load the created teacher',
+        timeout: 60000,
+        intervals: [500, 1000, 2000],
+      })
+      .toBeGreaterThan(0);
+
+    const teacherRow = teacherRows.filter({ hasText: teacherAName }).first();
+    await expect(teacherRow).toBeVisible({ timeout: 30000 });
     await teacherRow.getByTestId('teacher-lesson-roster-open-button').click();
 
     const modal = page.getByTestId('teacher-lesson-roster-modal');

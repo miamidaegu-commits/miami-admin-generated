@@ -160,6 +160,15 @@ const RESERVATION_NOTIFICATION_EVENT_TYPES = [
 const PRIVATE_SLOT_MANAGEMENT_LABEL = '1:1 예약 시간 관리'
 const ADMIN_GROUP_MANAGEMENT_LABEL = '단체반 관리'
 const TEACHER_GROUP_MANAGEMENT_LABEL = '내 단체반 관리'
+
+function isReleasedFixedPrivateSeatLesson(lesson) {
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  return (
+    cancellationType === 'seat_released' ||
+    lesson?.isSeatReleased === true ||
+    lesson?.releasedForPrivateBooking === true
+  )
+}
 const TEACHER_PRIVATE_LESSON_REQUESTS_LABEL = '내 1:1 관리'
 
 function isDashboardAdminProfile(profile) {
@@ -2660,7 +2669,8 @@ export default function Dashboard() {
       .filter(
         (lesson) =>
           String(lesson.academyId || '').trim() === scopedAcademyId &&
-          getLessonStorageDateString(lesson) === todayYmd
+          getLessonStorageDateString(lesson) === todayYmd &&
+          !isReleasedFixedPrivateSeatLesson(lesson)
       )
       .map((lesson) => ({
         id: `private-lesson-${lesson.id}`,
@@ -2738,6 +2748,7 @@ export default function Dashboard() {
           getLessonStorageDateString(lesson) === todayYmd
       )
       .forEach((lesson) => {
+        if (isReleasedFixedPrivateSeatLesson(lesson)) return
         const reservationId = String(lesson.reservationId || '').trim()
         const slotId = String(lesson.slotId || '').trim()
         if (reservationId) approvedPrivateLessonReservationKeys.add(`reservationId:${reservationId}`)
