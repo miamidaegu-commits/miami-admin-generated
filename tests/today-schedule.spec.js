@@ -290,14 +290,18 @@ test.beforeAll(async () => {
   fixture.otherGroupLessonId = `today-other-group-lesson-${unique}`;
   fixture.ownPrivateLessonId = `today-private-lesson-${unique}`;
   fixture.otherPrivateLessonId = `today-other-private-lesson-${unique}`;
+  fixture.releasedFixedLessonId = `today-released-fixed-lesson-${unique}`;
   fixture.ownPrivateSlotId = `today-private-slot-${unique}`;
   fixture.otherPrivateSlotId = `today-other-private-slot-${unique}`;
+  fixture.releasedPrivateSlotId = `today-released-private-slot-${unique}`;
   fixture.ownGroupTitle = `오늘단체수업 ${unique}`;
   fixture.otherGroupTitle = `다른선생단체 ${unique}`;
   fixture.ownPrivateTitle = `오늘개인수업 ${unique}`;
   fixture.otherPrivateTitle = `다른선생개인 ${unique}`;
+  fixture.releasedFixedTitle = `오늘자리공개고정 ${unique}`;
   fixture.ownPrivateReservationTitle = `오늘1대1예약 ${unique}`;
   fixture.otherPrivateReservationTitle = `다른학생1대1 ${unique}`;
+  fixture.cancelledReleasedReservationTitle = `취소된직접예약 ${unique}`;
 
   await cleanupStaleTodayScheduleDocs({ db, today });
   await ensureAdminFixture({ auth, db });
@@ -398,6 +402,15 @@ test.beforeAll(async () => {
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${teacherUser.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${studentUser.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${emptyStudentUser.uid}`),
+    db.collection('lessons').doc(fixture.releasedFixedLessonId),
+    db.collection('privateLessonSlots').doc(fixture.releasedPrivateSlotId),
+    db.collection('privateLessonReservations').doc(
+      privateReservationId({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: fixture.releasedPrivateSlotId,
+        studentId: fixture.otherStudentId,
+      })
+    ),
   ];
   fixture.docRefs = refs;
 
@@ -586,6 +599,58 @@ test.beforeAll(async () => {
       activePackageIds: [],
       updatedAt: now,
     }),
+    refs[19].set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      student: fixture.studentName,
+      studentName: fixture.studentName,
+      studentId: fixture.studentId,
+      studentID: fixture.studentId,
+      teacher: fixture.teacherName,
+      teacherName: fixture.teacherName,
+      date: today,
+      time: '22:45',
+      packageType: 'private',
+      sourceType: 'fixed-private-slot-assignment',
+      subject: fixture.releasedFixedTitle,
+      status: 'cancelled',
+      cancellationType: 'seat_released',
+      isSeatReleased: true,
+      releasedForPrivateBooking: true,
+      noDeduction: true,
+      updatedAt: now,
+    }),
+    refs[20].set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: fixture.teacherName,
+      teacherName: fixture.teacherName,
+      date: today,
+      time: '22:45',
+      durationMinutes: 60,
+      subject: fixture.cancelledReleasedReservationTitle,
+      status: 'open',
+      sourceType: 'released_fixed_slot',
+      releasedLessonId: fixture.releasedFixedLessonId,
+      updatedAt: now,
+    }),
+    refs[21].set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      slotId: fixture.releasedPrivateSlotId,
+      studentId: fixture.otherStudentId,
+      studentName: fixture.otherStudentName,
+      teacher: fixture.teacherName,
+      teacherName: fixture.teacherName,
+      date: today,
+      time: '22:45',
+      durationMinutes: 60,
+      subject: fixture.cancelledReleasedReservationTitle,
+      status: 'cancelled',
+      source: 'student',
+      sourceType: 'released_fixed_slot',
+      cancellationReason: 'student_cancelled',
+      cancelledBy: 'student',
+      cancelledAt: now,
+      updatedAt: now,
+    }),
   ]);
 });
 
@@ -613,6 +678,10 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expectPanelContains(page, fixture.ownPrivateReservationTitle);
   await expectPanelContains(page, fixture.today);
   await expectPanelContains(page, '3회차');
+  await expect(page.getByTestId('today-schedule-panel')).not.toContainText(fixture.releasedFixedTitle);
+  await expect(page.getByTestId('today-schedule-panel')).not.toContainText(
+    fixture.cancelledReleasedReservationTitle
+  );
   await expectSummaryCountAtLeast(page, '개인 수업', 4);
   await expectSummaryCountAtLeast(page, '단체수업', 2);
   await expectPanelContains(page, fixture.studentName);
@@ -625,7 +694,8 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expect(ownReservationRow).toContainText(fixture.studentName);
   await expect(ownReservationRow).toContainText(fixture.teacherName);
   await expect(ownReservationRow).toContainText('예약 완료');
-  await expect(ownReservationRow).toContainText('1:1 예약');
+  await expect(ownReservationRow).toContainText('학생 예약 1:1');
+  await expect(ownReservationRow).toContainText('학생이 예약 화면에서 직접 예약한 1:1 수업입니다.');
   await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toBeVisible();
   await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toBeVisible();
   await expect(
@@ -639,7 +709,7 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expect(notEndedReservationRow.getByRole('button', { name: '수업 종료 후 처리' })).toBeVisible();
   await expect(notEndedReservationRow.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
   await expect(notEndedReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
-  await expect(page.locator('main section button').filter({ hasText: '1:1 예약' }).first()).toBeVisible();
+  await expect(page.locator('main section button').filter({ hasText: '학생예약' }).first()).toBeVisible();
 
 });
 
@@ -656,6 +726,9 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
   await expect(panel).toContainText('3회차');
   await expectSummaryCount(page, '개인 수업', 2);
   await expect(panel).toContainText(fixture.teacherName);
+  await expect(panel).not.toContainText(fixture.releasedFixedTitle);
+  await expect(panel).not.toContainText(fixture.cancelledReleasedReservationTitle);
+  await expect(panel).not.toContainText('자리 공개됨');
   await expect(panel).not.toContainText(fixture.otherGroupTitle);
   await expect(panel).not.toContainText(fixture.otherPrivateTitle);
   await expect(panel).not.toContainText(fixture.otherStudentName);
@@ -667,6 +740,7 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
   await expect(ownReservationRow).toContainText(fixture.studentName);
   await expect(ownReservationRow).toContainText(fixture.teacherName);
   await expect(ownReservationRow).toContainText('예약 완료');
+  await expect(ownReservationRow).toContainText('학생 예약 1:1');
   await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
   await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
   await expect(
@@ -674,7 +748,7 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
       .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
       .filter({ hasText: fixture.otherPrivateReservationTitle })
   ).toHaveCount(0);
-  await expect(page.locator('main section button').filter({ hasText: '1:1 예약' }).first()).toBeVisible();
+  await expect(page.locator('main section button').filter({ hasText: '학생예약' }).first()).toBeVisible();
 });
 
 test('student sees only own active today reservations on student booking page', async ({ page }) => {
@@ -684,11 +758,11 @@ test('student sees only own active today reservations on student booking page', 
   await expect(panel).toBeVisible({ timeout: 20000 });
   await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
   await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
+  await expect(panel).toContainText('학생 직접예약 1:1');
   await expect(panel).toContainText('예약 완료');
   await expect(panel).not.toContainText(fixture.otherStudentName);
   await expect(panel).not.toContainText(fixture.otherGroupTitle);
   await expect(panel).not.toContainText(fixture.otherPrivateReservationTitle);
-  await expect(panel).not.toContainText('학생');
 
 });
 

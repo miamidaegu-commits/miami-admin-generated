@@ -342,9 +342,9 @@ function getLessonTypeLabel({ sourceKind, reservation, slot, lesson }) {
   if (sourceKind === 'reservation') {
     const sourceType = normalizeId(reservation?.sourceType).toLowerCase()
     if (sourceType === 'released_fixed_slot') return '보충 예약'
-    return '1:1 예약'
+    return '학생 예약 1:1'
   }
-  if (normalizeId(lesson?.slotId || lesson?.reservationId)) return '1:1 예약'
+  if (normalizeId(lesson?.slotId || lesson?.reservationId)) return '학생 예약 1:1'
   return '고정 1:1'
 }
 

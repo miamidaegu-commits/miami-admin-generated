@@ -594,8 +594,10 @@ async function expectAdminReleasedSeatCalendarRows(page, fixture, {
   await expect(originalRow).toBeVisible({ timeout: 45000 });
   await expect(originalRow).toContainText(fixture.originalStudentName);
   await expect(originalRow).toContainText(fixture.time);
+  await expect(originalRow).toContainText('고정수업 자리');
   await expect(originalRow).toContainText('자리 공개됨');
   await expect(originalRow).toContainText('원 수업 휴강 · 차감 없음');
+  await expect(originalRow).toContainText('다른 학생이 예약할 수 있도록 공개된 원래 고정수업 자리입니다.');
 
   if (activeStudentName) {
     const activeReservationRow = page
@@ -607,8 +609,10 @@ async function expectAdminReleasedSeatCalendarRows(page, fixture, {
     await expect(activeReservationRow).toBeVisible({ timeout: 45000 });
     await expect(activeReservationRow).toContainText(activeStudentName);
     await expect(activeReservationRow).toContainText(fixture.time);
+    await expect(activeReservationRow).toContainText('학생 예약 1:1');
     await expect(activeReservationRow).toContainText('60분');
     await expect(activeReservationRow).toContainText('예약 완료');
+    await expect(activeReservationRow).toContainText('학생이 예약 화면에서 직접 예약한 1:1 수업입니다.');
   }
 
   if (hiddenStudentName) {
@@ -683,7 +687,10 @@ async function expectCalendarReservationHistory(page, fixture, {
   await openAdminCalendarDate(page, fixture.date);
   const section = page.getByTestId('private-reservation-history-section');
   await expect(section).toBeVisible({ timeout: 20000 });
-  await expect(section).toContainText('1:1 예약 변경 내역');
+  await expect(section).toContainText('1:1 예약 기록');
+  await expect(section).toContainText(
+    '선택한 날짜의 학생 직접예약/취소 기록입니다. 현재 수업 목록과 별도로 보관됩니다.'
+  );
 
   if (cancelledStudentName) {
     const cancelledRow = section
@@ -730,7 +737,7 @@ async function expectStudentPrivateReservationHistory(page, {
     .filter({ hasText: statusLabel })
     .first();
   await expect(historyRow).toBeVisible({ timeout: 20000 });
-  await expect(historyRow).toContainText('1:1 예약');
+  await expect(historyRow).toContainText('학생 직접예약 1:1');
   await expect(historyRow).toContainText('60분');
   if (statusLabel === '예약 취소') {
     await expect(historyRow).toContainText('학생 취소');
@@ -787,6 +794,7 @@ test.describe('fixed private lesson release', () => {
     page.once('dialog', (dialog) => dialog.accept());
     await actionModal.getByTestId('fixed-private-lesson-action-release-button').click();
     await expect(calendarRow).toContainText('자리 공개됨', { timeout: 15000 });
+    await expect(calendarRow).toContainText('고정수업 자리', { timeout: 15000 });
     await expectLessonPatch(fixture.fixedLessonId, {
       status: 'cancelled',
       cancellationType: 'seat_released',

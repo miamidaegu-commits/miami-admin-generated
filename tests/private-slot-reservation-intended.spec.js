@@ -938,8 +938,10 @@ async function expectAdminDirectReservationCalendarRow(page, fixture) {
   await expect(reservationRow).toBeVisible({ timeout: 20000 });
   await expect(reservationRow).toContainText(fixture.eligibleStudent.displayName);
   await expect(reservationRow).toContainText(fixture.time);
+  await expect(reservationRow).toContainText('학생 예약 1:1');
   await expect(reservationRow).toContainText('60분');
   await expect(reservationRow).toContainText('예약 완료');
+  await expect(reservationRow).toContainText('학생이 예약 화면에서 직접 예약한 1:1 수업입니다.');
 }
 
 async function expectTeacherRosterDirectReservationRow(page, fixture) {
@@ -959,6 +961,7 @@ async function expectTeacherRosterDirectReservationRow(page, fixture) {
     .first();
   await expect(reservationRow).toBeVisible({ timeout: 20000 });
   await expect(reservationRow).toContainText(fixture.time);
+  await expect(reservationRow).toContainText('학생 예약 1:1');
   await expect(reservationRow).toContainText('60분');
   await expect(reservationRow).toContainText('예약 완료');
   await rosterModal.getByTestId('teacher-lesson-roster-close-button').click();

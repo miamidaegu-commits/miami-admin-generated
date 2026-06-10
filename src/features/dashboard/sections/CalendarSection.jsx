@@ -170,6 +170,13 @@ function getFixedPrivateLessonCancellationLabel(lesson) {
   return ''
 }
 
+function getCalendarLessonBadgeLabel({ isGroupRow, isPrivateReservationRow, fixedPrivateCancellationLabel }) {
+  if (isGroupRow) return '그룹'
+  if (isPrivateReservationRow) return '학생 예약 1:1'
+  if (fixedPrivateCancellationLabel === '자리 공개됨') return '고정수업 자리'
+  return '개인'
+}
+
 function isFixedPrivateLesson(lesson) {
   return (
     String(lesson?.packageType || '').trim() === 'private' &&
@@ -1098,6 +1105,11 @@ export default function CalendarSection(props) {
             const nameLabel = isGroupRow
               ? lesson.groupClassDisplayName || '-'
               : getStudentName(lesson)
+            const meaningHelperText = isPrivateReservationRow
+              ? '학생이 예약 화면에서 직접 예약한 1:1 수업입니다.'
+              : fixedPrivateCancellationLabel === '자리 공개됨'
+                ? '다른 학생이 예약할 수 있도록 공개된 원래 고정수업 자리입니다.'
+                : ''
             const rowGroupName = isGroupRow
               ? String(lesson.groupClassDisplayName || '').trim()
               : undefined
@@ -1166,9 +1178,21 @@ export default function CalendarSection(props) {
                 <span>{formatLessonTimeLabel(lesson)}</span>
                 <span style={{ lineHeight: 1.45 }}>
                   <span style={badgeStyle}>
-                    {isGroupRow ? '그룹' : isPrivateReservationRow ? '1:1 예약' : '개인'}
+                    {getCalendarLessonBadgeLabel({
+                      isGroupRow,
+                      isPrivateReservationRow,
+                      fixedPrivateCancellationLabel,
+                    })}
                   </span>
                   {nameLabel}
+                  {meaningHelperText ? (
+                    <span
+                      data-testid="calendar-row-meaning-helper"
+                      style={{ display: 'block', marginTop: 4, fontSize: 12, opacity: 0.7 }}
+                    >
+                      {meaningHelperText}
+                    </span>
+                  ) : null}
                 </span>
                 <span>{sessionLabel || '-'}</span>
                 <span>{getTeacherName(lesson)}</span>
@@ -1448,13 +1472,16 @@ export default function CalendarSection(props) {
             padding: 16,
           }}
         >
-          <h3 style={{ margin: 0, fontSize: 15 }}>1:1 예약 변경 내역</h3>
+          <h3 style={{ margin: 0, fontSize: 15 }}>1:1 예약 기록</h3>
+          <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 13 }}>
+            선택한 날짜의 학생 직접예약/취소 기록입니다. 현재 수업 목록과 별도로 보관됩니다.
+          </p>
           {privateReservationHistoryRows.length === 0 ? (
             <p
               data-testid="private-reservation-history-empty"
               style={{ margin: '10px 0 0 0', opacity: 0.72, fontSize: 13 }}
             >
-              선택한 날짜의 1:1 예약 변경 내역이 없습니다.
+              선택한 날짜의 1:1 예약 기록이 없습니다.
             </p>
           ) : (
             <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
