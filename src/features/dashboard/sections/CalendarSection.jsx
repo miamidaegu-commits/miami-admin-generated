@@ -16,6 +16,7 @@ import {
   findPrivatePackageForTeacherContext,
   findStudentPrivatePackageContexts,
 } from '../privatePackageHelpers.js'
+import { rowMatchesTeacherScope } from '../teacherLessonRosterHelpers.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 
 function calendarTimestampToMillis(value) {
@@ -440,7 +441,12 @@ export default function CalendarSection(props) {
       selectedDate,
       setSelectedDate,
       setShowOnlySelectedDate,
+      isAdmin,
+      calendarTeacherFilterOptions = [],
+      calendarTeacherFilterValue = '',
+      setCalendarTeacherFilterValue,
     } = props
+    const showTeacherFilter = isAdmin && calendarTeacherFilterOptions.length > 0
 
     return (
       <section className="activity-section" style={{ marginBottom: 24 }}>
@@ -451,6 +457,7 @@ export default function CalendarSection(props) {
             alignItems: 'center',
             marginBottom: 12,
             gap: 12,
+            flexWrap: 'wrap',
           }}
         >
           <button
@@ -471,9 +478,45 @@ export default function CalendarSection(props) {
             ←
           </button>
 
-          <h2 className="section-title" style={{ margin: 0 }}>
-            {calendarMonthLabel}
-          </h2>
+          <div style={{ display: 'grid', gap: 8, justifyItems: 'center' }}>
+            <h2 className="section-title" style={{ margin: 0 }}>
+              {calendarMonthLabel}
+            </h2>
+            {showTeacherFilter ? (
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: 13,
+                  opacity: 0.9,
+                }}
+              >
+                <span>표시할 선생님</span>
+                <select
+                  data-testid="calendar-teacher-filter-select"
+                  aria-label="표시할 선생님"
+                  value={calendarTeacherFilterValue}
+                  onChange={(event) => setCalendarTeacherFilterValue?.(event.target.value)}
+                  style={{
+                    colorScheme: 'dark',
+                    border: '1px solid #444',
+                    borderRadius: 8,
+                    background: '#111722',
+                    color: 'white',
+                    padding: '7px 9px',
+                  }}
+                >
+                  <option value="">전체 선생님</option>
+                  {calendarTeacherFilterOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+          </div>
 
           <button
             onClick={() =>
@@ -560,6 +603,9 @@ export default function CalendarSection(props) {
                 {previews.slice(0, 2).map((preview) => (
                   <div
                     key={preview.id}
+                    data-testid="calendar-day-preview-row"
+                    data-row-kind={preview.kind || undefined}
+                    data-teacher-name={preview.teacherName || undefined}
                     style={{
                       marginTop: 4,
                       fontSize: 11,
@@ -612,6 +658,7 @@ export default function CalendarSection(props) {
     allPrivateLessons = [],
     privateLessonReservations = [],
     privateLessonSlots = [],
+    selectedCalendarTeacher = null,
     handleDeductionToggle,
     canManageAttendance,
     canManagePrivateLessonDeductions,
@@ -660,6 +707,13 @@ export default function CalendarSection(props) {
         if (date !== selectedDateString || !PRIVATE_RESERVATION_HISTORY_STATUSES.has(status)) {
           return null
         }
+        if (
+          selectedCalendarTeacher &&
+          !rowMatchesTeacherScope(reservation, selectedCalendarTeacher) &&
+          !rowMatchesTeacherScope(slot, selectedCalendarTeacher)
+        ) {
+          return null
+        }
         const duration = Number(reservation.durationMinutes || slot?.durationMinutes || 0)
         return {
           id: String(reservation.id || reservation.reservationId || reservation.slotId || ''),
@@ -694,6 +748,7 @@ export default function CalendarSection(props) {
     privateLessonReservations,
     privateSlotById,
     selectedDateString,
+    selectedCalendarTeacher,
     showOnlySelectedDate,
   ])
   const showGroupSelectedDateControl = activeSection === 'groups'
