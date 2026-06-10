@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
-import { BASE_URL } from './e2e-helpers.js';
+import { BASE_URL, selectTeacherOption } from './e2e-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -711,6 +711,43 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expect(notEndedReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
   await expect(page.locator('main section button').filter({ hasText: '학생예약' }).first()).toBeVisible();
 
+});
+
+test('admin calendar teacher filter scopes 오늘의 일정 summary and rows', async ({ page }) => {
+  await login(page, ADMIN_EMAIL, ADMIN_PASSWORD, /\/dashboard/);
+
+  const panel = page.getByTestId('today-schedule-panel');
+  await expect(panel).toBeVisible({ timeout: 20000 });
+  const teacherFilter = page.getByTestId('calendar-teacher-filter-select');
+  await expect(teacherFilter).toBeVisible({ timeout: 20000 });
+  await expect(teacherFilter).toHaveValue('');
+
+  await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
+  await expect(panel).toContainText(fixture.otherGroupTitle);
+  await expect(panel).toContainText(fixture.ownPrivateTitle);
+  await expect(panel).toContainText(fixture.otherPrivateTitle);
+  await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
+  await expect(panel).toContainText(fixture.otherPrivateReservationTitle);
+  await expectSummaryCountAtLeast(page, '개인 수업', 4);
+  await expectSummaryCountAtLeast(page, '단체수업', 2);
+
+  await selectTeacherOption(teacherFilter, fixture.teacherName);
+
+  await expect(page.getByRole('heading', { name: new RegExp(`${fixture.teacherName} 선생님 일정`) })).toBeVisible();
+  await expectSummaryCount(page, '개인 수업', 2);
+  await expectSummaryCount(page, '단체수업', 1);
+  await expectSummaryCount(page, '차감취소', 0);
+  await expectSummaryCount(page, '마지막 수업', 0);
+  await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
+  await expect(panel).toContainText(fixture.ownPrivateTitle);
+  await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
+  await expect(panel).toContainText(fixture.teacherName);
+  await expect(panel).not.toContainText(fixture.otherGroupTitle);
+  await expect(panel).not.toContainText(fixture.otherPrivateTitle);
+  await expect(panel).not.toContainText(fixture.otherPrivateReservationTitle);
+  await expect(panel).not.toContainText(fixture.otherStudentName);
+  await expect(panel).not.toContainText(fixture.releasedFixedTitle);
+  await expect(panel).not.toContainText(fixture.cancelledReleasedReservationTitle);
 });
 
 test('teacher sees only teacher-owned today schedule rows', async ({ page }) => {

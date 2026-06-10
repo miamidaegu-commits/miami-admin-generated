@@ -144,6 +144,10 @@ import {
   canViewBillingFields,
   stripBillingFieldsForRestrictedViewer,
 } from './src/features/dashboard/billingPermissions.js'
+import {
+  getTeacherScopeFromRecord,
+  rowMatchesTeacherScope,
+} from './src/features/dashboard/teacherLessonRosterHelpers.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -2739,6 +2743,11 @@ export default function Dashboard() {
     )
   }, [calendarTeacherFilterOptions, calendarTeacherFilterValue, isAdmin])
 
+  const selectedCalendarTeacherScope = useMemo(() => {
+    if (!selectedCalendarTeacher) return null
+    return getTeacherScopeFromRecord(selectedCalendarTeacher)
+  }, [selectedCalendarTeacher])
+
   const todayGroupLessonById = useMemo(() => {
     return new Map(todayGroupLessons.map((lesson) => [lesson.id, lesson]))
   }, [todayGroupLessons])
@@ -2753,12 +2762,17 @@ export default function Dashboard() {
 
   const todayScheduleItems = useMemo(() => {
     const scopedAcademyId = String(currentAcademyId || '').trim()
+    const matchesSelectedTeacher = (...rows) => {
+      if (!selectedCalendarTeacherScope) return true
+      return rows.some((row) => rowMatchesTeacherScope(row, selectedCalendarTeacherScope))
+    }
     const privateLessonItems = lessons
       .filter(
         (lesson) =>
           String(lesson.academyId || '').trim() === scopedAcademyId &&
           getLessonStorageDateString(lesson) === todayYmd &&
-          !isReleasedFixedPrivateSeatLesson(lesson)
+          !isReleasedFixedPrivateSeatLesson(lesson) &&
+          matchesSelectedTeacher(lesson)
       )
       .map((lesson) => ({
         id: `private-lesson-${lesson.id}`,
@@ -2786,27 +2800,30 @@ export default function Dashboard() {
         statusLabel: lesson.isDeductCancelled === true ? '차감취소' : '수업 예정',
       }))
 
-    const groupLessonItems = todayGroupLessons.map((lesson) => {
-      const className = String(lesson.groupClassName || '').trim()
-      const subject = String(lesson.subject || '').trim()
-      return {
-        id: `group-lesson-${lesson.id}`,
-        date: String(lesson.date || '').trim() || todayYmd,
-        time: String(lesson.time || '').trim() || '-',
-        typeLabel: '단체반 수업',
-        sourceKind: 'groupLesson',
-        studentLabel: '-',
-        teacherLabel: String(lesson.teacher || lesson.teacherName || '').trim() || '-',
-        title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
-        statusLabel: isNoDeductionCancelledGroupLesson(lesson) ? '휴강 · 차감 없음' : '수업 예정',
-      }
-    })
+    const groupLessonItems = todayGroupLessons
+      .filter((lesson) => matchesSelectedTeacher(lesson))
+      .map((lesson) => {
+        const className = String(lesson.groupClassName || '').trim()
+        const subject = String(lesson.subject || '').trim()
+        return {
+          id: `group-lesson-${lesson.id}`,
+          date: String(lesson.date || '').trim() || todayYmd,
+          time: String(lesson.time || '').trim() || '-',
+          typeLabel: '단체반 수업',
+          sourceKind: 'groupLesson',
+          studentLabel: '-',
+          teacherLabel: String(lesson.teacher || lesson.teacherName || '').trim() || '-',
+          title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
+          statusLabel: isNoDeductionCancelledGroupLesson(lesson) ? '휴강 · 차감 없음' : '수업 예정',
+        }
+      })
 
     const groupReservationItems = todayGroupLessonReservations
       .filter((reservation) => reservation.status === 'active')
       .map((reservation) => {
         const lesson = todayGroupLessonById.get(reservation.lessonId) || null
         if (!lesson) return null
+        if (!matchesSelectedTeacher(reservation, lesson)) return null
         const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
         const className = String(lesson.groupClassName || '').trim()
         const subject = String(lesson.subject || '').trim()
@@ -2859,6 +2876,7 @@ export default function Dashboard() {
       .filter((reservation) => {
         if (reservation.status !== 'active') return false
         const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+        if (!matchesSelectedTeacher(reservation, slot)) return false
         const reservationDate = String(reservation.date || slot?.date || '').trim()
         if (reservationDate !== todayYmd) return false
         const reservationId = String(reservation.id || reservation.reservationId || '').trim()
@@ -2918,6 +2936,7 @@ export default function Dashboard() {
     privateLessonReservations,
     privateSlotById,
     privateStudentById,
+    selectedCalendarTeacherScope,
     studentPackages,
     todayGroupLessonById,
     todayGroupLessonReservations,
