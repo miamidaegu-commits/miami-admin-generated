@@ -748,6 +748,7 @@ export default function Dashboard() {
   const [calendarMonth, setCalendarMonth] = useState(
   () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
 )
+  const [calendarTeacherFilterValue, setCalendarTeacherFilterValue] = useState('')
   const [activeSection, setActiveSection] = useState('calendar')
   const [groupClasses, setGroupClasses] = useState([])
   const [groupClassesLoading, setGroupClassesLoading] = useState(true)
@@ -2651,6 +2652,93 @@ export default function Dashboard() {
   const showPrivateLessonAddInCalendar = isAdmin
   const busyGroupStudentId = busyRemovingGroupStudentId || busyAddingGroupStudentId
 
+  const calendarTeacherFilterOptions = useMemo(() => {
+    const optionByValue = new Map()
+    const valueByIdentityKey = new Map()
+
+    const addTeacherCandidate = (row, preferredDisplayName = '') => {
+      if (!row) return
+      const identityKeys = getPrivateTeacherIdentityKeys(row)
+      if (identityKeys.length === 0) return
+      const existingValue = identityKeys
+        .map((key) => valueByIdentityKey.get(key))
+        .find(Boolean)
+      const value = existingValue || identityKeys[0]
+      const displayName = String(
+        preferredDisplayName ||
+          row.name ||
+          row.displayName ||
+          row.teacherName ||
+          row.teacher ||
+          row.teacherKey ||
+          row.teacherEmail ||
+          value
+      ).trim()
+      if (!displayName) return
+      if (!optionByValue.has(value)) {
+        const teacherUid = String(
+          row.teacherUid ||
+            row.teacherUID ||
+            row.teacherMembershipUid ||
+            row.uid ||
+            ''
+        ).trim()
+        const teacherKey = normalizeText(row.teacherKey || row.teacher || row.teacherName || '')
+        optionByValue.set(value, {
+          value,
+          label: displayName,
+          displayName,
+          name: displayName,
+          teacher: String(row.teacher || teacherKey || displayName).trim(),
+          teacherName: String(row.teacherName || row.teacher || displayName).trim(),
+          teacherKey,
+          teacherUid,
+          teacherUID: teacherUid,
+          teacherId: String(row.teacherId || row.teacherID || row.id || '').trim(),
+          teacherEmail: String(row.teacherEmail || row.email || '').trim(),
+        })
+      }
+      identityKeys.forEach((key) => valueByIdentityKey.set(key, value))
+    }
+
+    teacherManagementTeachers.forEach((teacher) => {
+      if (String(teacher?.status || 'active') === 'inactive') return
+      addTeacherCandidate(teacher, getTeacherDisplayName(teacher))
+    })
+    lessons.forEach((lesson) => addTeacherCandidate(lesson))
+    groupClasses.forEach((groupClass) => addTeacherCandidate(groupClass))
+    studentSummaryGroupLessons.forEach((groupLesson) => addTeacherCandidate(groupLesson))
+    privateLessonSlots.forEach((slot) => addTeacherCandidate(slot))
+    privateLessonReservations.forEach((reservation) => addTeacherCandidate(reservation))
+
+    return [...optionByValue.values()].sort((a, b) =>
+      String(a.label || '').localeCompare(String(b.label || ''), 'ko')
+    )
+  }, [
+    groupClasses,
+    lessons,
+    privateLessonReservations,
+    privateLessonSlots,
+    studentSummaryGroupLessons,
+    teacherManagementTeachers,
+  ])
+
+  useEffect(() => {
+    if (!calendarTeacherFilterValue) return
+    const hasSelectedTeacher = calendarTeacherFilterOptions.some(
+      (option) => option.value === calendarTeacherFilterValue
+    )
+    if (!hasSelectedTeacher) setCalendarTeacherFilterValue('')
+  }, [calendarTeacherFilterOptions, calendarTeacherFilterValue])
+
+  const selectedCalendarTeacher = useMemo(() => {
+    if (!isAdmin || !calendarTeacherFilterValue) return null
+    return (
+      calendarTeacherFilterOptions.find((option) => option.value === calendarTeacherFilterValue) ||
+      null
+    )
+  }, [calendarTeacherFilterOptions, calendarTeacherFilterValue, isAdmin])
+
   const todayGroupLessonById = useMemo(() => {
     return new Map(todayGroupLessons.map((lesson) => [lesson.id, lesson]))
   }, [todayGroupLessons])
@@ -3084,6 +3172,7 @@ export default function Dashboard() {
       selectedDateString,
       showOnlySelectedDate,
       userProfile,
+      selectedCalendarTeacher,
     })
 
   const calendarDays = useMemo(
@@ -3101,6 +3190,17 @@ export default function Dashboard() {
       }).format(calendarMonth),
     [calendarMonth]
   )
+
+  const calendarMonthScheduleLabel = useMemo(() => {
+    if (!isAdmin) return calendarMonthLabel
+    const selectedTeacherLabel = String(
+      selectedCalendarTeacher?.displayName || selectedCalendarTeacher?.label || ''
+    ).trim()
+    const teacherScheduleLabel = selectedTeacherLabel
+      ? `${selectedTeacherLabel}${selectedTeacherLabel.endsWith('선생님') ? '' : ' 선생님'} 일정`
+      : '전체 선생님 일정'
+    return `${calendarMonthLabel} · ${teacherScheduleLabel}`
+  }, [calendarMonthLabel, isAdmin, selectedCalendarTeacher])
 
   function getMatchedStudentId(lesson) {
   if (lesson.studentId) return lesson.studentId
@@ -5086,7 +5186,7 @@ export default function Dashboard() {
     month: {
       view: 'month',
       setCalendarMonth,
-      calendarMonthLabel,
+      calendarMonthLabel: calendarMonthScheduleLabel,
       calendarDays,
       lessonsCountByDate,
       lessonsPreviewByDate,
@@ -5094,6 +5194,10 @@ export default function Dashboard() {
       selectedDate,
       setSelectedDate,
       setShowOnlySelectedDate,
+      isAdmin,
+      calendarTeacherFilterOptions,
+      calendarTeacherFilterValue,
+      setCalendarTeacherFilterValue,
     },
     lessons: {
       view: 'lessons',
@@ -5119,6 +5223,7 @@ export default function Dashboard() {
       allPrivateLessons: lessons,
       privateLessonReservations,
       privateLessonSlots,
+      selectedCalendarTeacher,
       getMatchedStudent,
       getMatchedStudentId,
       studentPackages,

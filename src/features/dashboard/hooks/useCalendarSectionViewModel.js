@@ -12,6 +12,10 @@ import {
   isNoDeductionCancelledGroupLesson,
   normalizeText,
 } from '../dashboardViewUtils.js'
+import {
+  getTeacherScopeFromRecord,
+  rowMatchesTeacherScope,
+} from '../teacherLessonRosterHelpers.js'
 
 /**
  * 캘린더 탭 전용: 개인/그룹 수업 통합·필터·일자별 집계 등 읽기 전용 파생 상태.
@@ -41,8 +45,13 @@ export default function useCalendarSectionViewModel({
   selectedDateString,
   showOnlySelectedDate,
   userProfile,
+  selectedCalendarTeacher = null,
 }) {
   const todayYmd = getTodayStorageDateString()
+  const selectedCalendarTeacherScope = useMemo(() => {
+    if (userProfile?.role !== 'admin' || !selectedCalendarTeacher) return null
+    return getTeacherScopeFromRecord(selectedCalendarTeacher)
+  }, [selectedCalendarTeacher, userProfile?.role])
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aDate = getLessonDate(a)
@@ -64,8 +73,14 @@ export default function useCalendarSectionViewModel({
       )
     }
 
+    if (selectedCalendarTeacherScope) {
+      return sortedLessons.filter((lesson) =>
+        rowMatchesTeacherScope(lesson, selectedCalendarTeacherScope)
+      )
+    }
+
     return sortedLessons
-  }, [sortedLessons, userProfile])
+  }, [selectedCalendarTeacherScope, sortedLessons, userProfile])
 
   const visibleGroupLessons = useMemo(() => {
     const rows = Array.isArray(studentSummaryGroupLessons)
@@ -90,8 +105,18 @@ export default function useCalendarSectionViewModel({
         return gc && normalizeText(gc.teacher || '') === myTeacherName
       })
     }
+    if (selectedCalendarTeacherScope) {
+      return activeRows.filter((gl) => {
+        const gcid = getGroupLessonGroupId(gl)
+        const gc = activeGroupClassById.get(String(gcid))
+        return (
+          rowMatchesTeacherScope(gl, selectedCalendarTeacherScope) ||
+          rowMatchesTeacherScope(gc, selectedCalendarTeacherScope)
+        )
+      })
+    }
     return activeRows
-  }, [studentSummaryGroupLessons, groupClasses, userProfile])
+  }, [groupClasses, selectedCalendarTeacherScope, studentSummaryGroupLessons, userProfile])
 
   const calendarGroupLessonRows = useMemo(() => {
     return visibleGroupLessons.map((gl) => {
@@ -167,6 +192,14 @@ export default function useCalendarSectionViewModel({
       .filter((reservation) =>
         ['active', 'completed', 'no_show'].includes(String(reservation.status || '').trim())
       )
+      .filter((reservation) => {
+        if (!selectedCalendarTeacherScope) return true
+        const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+        return (
+          rowMatchesTeacherScope(reservation, selectedCalendarTeacherScope) ||
+          rowMatchesTeacherScope(slot, selectedCalendarTeacherScope)
+        )
+      })
       .map((reservation) => {
         const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
         const date = String(reservation.date || slot?.date || '').trim()
@@ -213,7 +246,12 @@ export default function useCalendarSectionViewModel({
         ].join('__')
         return !approvedPrivateLessonKeys.has(fallbackKey)
       })
-  }, [approvedPrivateLessonKeys, privateLessonReservations, privateSlotById])
+  }, [
+    approvedPrivateLessonKeys,
+    privateLessonReservations,
+    privateSlotById,
+    selectedCalendarTeacherScope,
+  ])
 
   const calendarCombinedLessons = useMemo(() => {
     const priv = visibleLessons.map((l) => ({ ...l, _calendarRowKind: 'private' }))
@@ -269,6 +307,7 @@ export default function useCalendarSectionViewModel({
       current.push({
         id: lesson.id,
         kind: lesson._calendarRowKind || 'private',
+        teacherName: getTeacherName(lesson),
         time: lesson.time || '',
         label: [
           isGroupRow
