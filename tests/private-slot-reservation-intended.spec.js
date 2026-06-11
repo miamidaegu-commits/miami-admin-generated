@@ -2458,6 +2458,19 @@ test('private slot overlap guard is wired through availability and reservation c
   const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   expect(source).toContain('function privateSchedulesOverlap(');
   expect(source).toContain('function hasTeacherScheduleConflict(');
+  expect(source).toContain('function isBlockingPrivateLessonForAvailability(lesson)');
+  expect(source).toMatch(
+    /function isReleasedFixedPrivateSeatLesson[\s\S]*cancellationType === "seat_released"/
+  );
+  expect(source).toMatch(
+    /function isCancelledLessonStatus[\s\S]*normalized === "cancelled"[\s\S]*normalized === "canceled"/
+  );
+  expect(source).toMatch(
+    /addBusyRowsFromQuerySnapshot[\s\S]*source === "lessons"[\s\S]*!isBlockingPrivateLessonForAvailability\(row\)/
+  );
+  expect(source).toMatch(
+    /hasTeacherScheduleConflict[\s\S]*docSnap\.ref\.parent\.id === "lessons"[\s\S]*!isBlockingPrivateLessonForAvailability\(row\)/
+  );
   expect(source).not.toContain('function hasTeacherExactConflict(');
   expect(source).toMatch(
     /listPrivateLessonSlotAvailability[\s\S]*markOverlappingPrivateSlotBusy/

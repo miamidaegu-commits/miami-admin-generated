@@ -2749,13 +2749,30 @@ function getPrivateScheduleTeacherKey(row) {
   return getPrivateTeacherScopeKeys(row)[0] || "";
 }
 
+function isCancelledLessonStatus(status) {
+  const normalized = normalizeId(status).toLowerCase();
+  return normalized === "cancelled" || normalized === "canceled";
+}
+
+function isReleasedFixedPrivateSeatLesson(lesson) {
+  const cancellationType = normalizeId(
+      lesson && lesson.cancellationType,
+  ).toLowerCase();
+  return cancellationType === "seat_released" ||
+    (lesson && lesson.isSeatReleased === true) ||
+    (lesson && lesson.releasedForPrivateBooking === true);
+}
+
+function isBlockingPrivateLessonForAvailability(lesson) {
+  if (isReleasedFixedPrivateSeatLesson(lesson)) return false;
+  if (isCancelledLessonStatus(lesson && lesson.status)) return false;
+  return true;
+}
+
 function isCancelledScheduleRow(row) {
   const status = normalizeId(row && row.status).toLowerCase();
   const approvalStatus = normalizeId(row && row.approvalStatus).toLowerCase();
-  const cancellationType = normalizeId(row && row.cancellationType)
-      .toLowerCase();
-  if (cancellationType === "lesson_cancelled") return false;
-  if (status === "cancelled" || status === "canceled") return true;
+  if (isCancelledLessonStatus(status)) return true;
   if (row && row.completed === "cancelled") return true;
   if (row && row.isDeductCancelled === true) return true;
   if (approvalStatus && approvalStatus !== "approved") return true;
@@ -2871,6 +2888,10 @@ function addBusyRowsFromQuerySnapshot({
     if (normalizeId(row.academyId) !== academyId) return;
     if (source === "privateLessonReservations" &&
         !isActivePrivateReservation(row)) {
+      return;
+    }
+    if (source === "lessons" &&
+        !isBlockingPrivateLessonForAvailability(row)) {
       return;
     }
     if (isCancelledScheduleRow(row)) return;
@@ -3525,6 +3546,10 @@ async function hasTeacherScheduleConflict(transaction, db, {
     for (const docSnap of snap.docs) {
       if (ignoredSlotId && docSnap.id === ignoredSlotId) continue;
       const row = {id: docSnap.id, ...docSnap.data()};
+      if (docSnap.ref.parent.id === "lessons" &&
+          !isBlockingPrivateLessonForAvailability(row)) {
+        continue;
+      }
       if (!isTeacherBlockingScheduleRow(row)) continue;
       if (privateSchedulesOverlap(candidate, row)) return true;
     }
