@@ -250,9 +250,9 @@ test('admin creates a single weekly default slot with an effective date range', 
     await openDashboardSection(page, '1:1 예약 시간 관리');
 
     const singleSection = page.getByTestId('private-availability-template-section');
-    await expect(singleSection).toContainText('주간 기본 슬롯 (고정 배정용)');
+    await expect(singleSection).toContainText('선생님 주간 가능 시간');
     await expect(singleSection).toContainText(
-      '특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.'
+      '기존 주간 기본 슬롯은 고정 배정용으로 유지되며, 학생 직접예약 공개는 선택한 슬롯만 적용됩니다.'
     );
     await selectTeacherOption(
       singleSection.getByTestId('private-availability-template-teacher-select'),
@@ -270,6 +270,9 @@ test('admin creates a single weekly default slot with an effective date range', 
     await singleSection
       .getByTestId('private-availability-template-end-date-input')
       .fill('2026-07-01');
+    await expect(singleSection.getByTestId('private-availability-template-use-fixed-checkbox')).toBeChecked();
+    await expect(singleSection.getByTestId('private-availability-template-open-booking-checkbox')).not.toBeChecked();
+    await singleSection.getByTestId('private-availability-template-open-booking-checkbox').check();
     await singleSection.getByTestId('private-availability-template-add-button').click();
 
     await expect
@@ -294,6 +297,8 @@ test('admin creates a single weekly default slot with an effective date range', 
       status: 'active',
       effectiveStartDate: '2026-06-10',
       effectiveEndDate: '2026-07-01',
+      useForFixedAssignment: true,
+      openForStudentBooking: true,
     });
 
     const row = page
@@ -301,6 +306,10 @@ test('admin creates a single weekly default slot with an effective date range', 
       .filter({ hasText: teacherName })
       .filter({ hasText: '22:45' });
     await expect(row).toContainText('2026-06-10 ~ 2026-07-01', { timeout: 15000 });
+    await expect(row.getByTestId('private-availability-template-usage-cell')).toContainText(
+      '고정 배정 · 학생 직접예약',
+      { timeout: 15000 }
+    );
 
     const fixedSection = page.getByTestId('private-fixed-slot-assignment-section');
     await selectTeacherOption(

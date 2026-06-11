@@ -427,6 +427,36 @@ function getPrivateSlotTeacherDisplay(slot) {
   return `${displayName} · ${identity}`
 }
 
+function isPrivateAvailabilityTemplateForFixedAssignment(template) {
+  return template?.useForFixedAssignment !== false
+}
+
+function getPrivateAvailabilityTemplateUsagePatch({
+  useForFixedAssignment,
+  openForStudentBooking,
+  currentTemplate = null,
+}) {
+  const nextUseForFixedAssignment = useForFixedAssignment !== false
+  const nextOpenForStudentBooking = openForStudentBooking === true
+  const isDefaultUsage = nextUseForFixedAssignment && !nextOpenForStudentBooking
+  const currentUseForFixedAssignment = currentTemplate?.useForFixedAssignment !== false
+  const currentOpenForStudentBooking = currentTemplate?.openForStudentBooking === true
+
+  if (!currentTemplate && isDefaultUsage) return {}
+  if (
+    currentTemplate &&
+    currentUseForFixedAssignment === nextUseForFixedAssignment &&
+    currentOpenForStudentBooking === nextOpenForStudentBooking
+  ) {
+    return {}
+  }
+
+  return {
+    useForFixedAssignment: nextUseForFixedAssignment,
+    openForStudentBooking: nextOpenForStudentBooking,
+  }
+}
+
 function getPrivateTeacherIdentityKeys(row) {
   const seen = new Set()
   const out = []
@@ -815,6 +845,8 @@ export default function Dashboard() {
     status: 'active',
     effectiveStartDate: '',
     effectiveEndDate: '',
+    useForFixedAssignment: true,
+    openForStudentBooking: false,
   })
   const [privateAvailabilityBulkForm, setPrivateAvailabilityBulkForm] = useState({
     teacher: '',
@@ -824,6 +856,8 @@ export default function Dashboard() {
     status: 'active',
     effectiveStartDate: '',
     effectiveEndDate: '',
+    useForFixedAssignment: true,
+    openForStudentBooking: false,
   })
   const [privateAvailabilityTemplateErrors, setPrivateAvailabilityTemplateErrors] = useState({})
   const [privateAvailabilityBulkErrors, setPrivateAvailabilityBulkErrors] = useState({})
@@ -4344,6 +4378,8 @@ export default function Dashboard() {
       privateAvailabilityTemplateForm.effectiveStartDate || ''
     ).trim()
     const effectiveEndDate = String(privateAvailabilityTemplateForm.effectiveEndDate || '').trim()
+    const useForFixedAssignment = privateAvailabilityTemplateForm.useForFixedAssignment !== false
+    const openForStudentBooking = privateAvailabilityTemplateForm.openForStudentBooking === true
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) {
       errors.weekday = '월요일부터 토요일까지만 선택할 수 있습니다.'
@@ -4372,6 +4408,9 @@ export default function Dashboard() {
     ) {
       errors.effectiveEndDate = '종료일은 시작일 이후여야 합니다.'
     }
+    if (!useForFixedAssignment && !openForStudentBooking) {
+      errors.usage = '용도를 하나 이상 선택해주세요.'
+    }
     return {
       valid: Object.keys(errors).length === 0,
       errors,
@@ -4384,6 +4423,8 @@ export default function Dashboard() {
         status,
         effectiveStartDate,
         effectiveEndDate,
+        useForFixedAssignment,
+        openForStudentBooking,
       },
     }
   }
@@ -4404,6 +4445,8 @@ export default function Dashboard() {
     const status = String(privateAvailabilityBulkForm.status || 'active').trim()
     const effectiveStartDate = String(privateAvailabilityBulkForm.effectiveStartDate || '').trim()
     const effectiveEndDate = String(privateAvailabilityBulkForm.effectiveEndDate || '').trim()
+    const useForFixedAssignment = privateAvailabilityBulkForm.useForFixedAssignment !== false
+    const openForStudentBooking = privateAvailabilityBulkForm.openForStudentBooking === true
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (weekdays.length === 0) errors.weekdays = '요일을 하나 이상 선택해주세요.'
     if (times.length === 0) errors.timesText = '시작 시간을 하나 이상 입력해주세요.'
@@ -4427,6 +4470,9 @@ export default function Dashboard() {
     ) {
       errors.effectiveEndDate = '종료일은 시작일 이후여야 합니다.'
     }
+    if (!useForFixedAssignment && !openForStudentBooking) {
+      errors.usage = '용도를 하나 이상 선택해주세요.'
+    }
 
     const value = {
       teacher,
@@ -4437,6 +4483,8 @@ export default function Dashboard() {
       status,
       effectiveStartDate,
       effectiveEndDate,
+      useForFixedAssignment,
+      openForStudentBooking,
     }
     return {
       valid: Object.keys(errors).length === 0,
@@ -4456,6 +4504,8 @@ export default function Dashboard() {
       status: value.status,
       effectiveStartDate: value.effectiveStartDate,
       effectiveEndDate: value.effectiveEndDate,
+      useForFixedAssignment: value.useForFixedAssignment,
+      openForStudentBooking: value.openForStudentBooking,
       existingTemplates: privateAvailabilityTemplates,
     })
   }
@@ -4513,6 +4563,10 @@ export default function Dashboard() {
             status: row.status,
             effectiveStartDate: row.effectiveStartDate,
             effectiveEndDate: row.effectiveEndDate,
+            ...getPrivateAvailabilityTemplateUsagePatch({
+              useForFixedAssignment: row.useForFixedAssignment,
+              openForStudentBooking: row.openForStudentBooking,
+            }),
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           })
@@ -4558,6 +4612,9 @@ export default function Dashboard() {
     const template =
       privateAvailabilityTemplates.find((row) => String(row.id || '').trim() === templateId) || null
     if (!template) errors.templateId = '선택한 기본 슬롯이 없습니다'
+    if (template && !isPrivateAvailabilityTemplateForFixedAssignment(template)) {
+      errors.templateId = '고정 배정에 사용하는 주간 가능 시간을 선택해 주세요'
+    }
     if (!studentId) errors.studentId = '학생을 선택해 주세요'
     if (!packageId) errors.packageId = '개인 수강권을 선택해 주세요'
     if (!isYmd(startDate) || !isYmd(endDate) || endDate < startDate) {
@@ -4834,6 +4891,8 @@ export default function Dashboard() {
         status,
         effectiveStartDate,
         effectiveEndDate,
+        useForFixedAssignment,
+        openForStudentBooking,
       } = result.value
       setBusyPrivateAvailabilityTemplateId('__add__')
       await addDoc(collection(db, 'privateLessonAvailabilityTemplates'), {
@@ -4849,6 +4908,10 @@ export default function Dashboard() {
         ...(effectiveStartDate && effectiveEndDate
           ? { effectiveStartDate, effectiveEndDate }
           : {}),
+        ...getPrivateAvailabilityTemplateUsagePatch({
+          useForFixedAssignment,
+          openForStudentBooking,
+        }),
         status,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -4891,6 +4954,8 @@ export default function Dashboard() {
     const status = String(values?.status || 'active').trim()
     const effectiveStartDate = String(values?.effectiveStartDate || '').trim()
     const effectiveEndDate = String(values?.effectiveEndDate || '').trim()
+    const useForFixedAssignment = values?.useForFixedAssignment !== false
+    const openForStudentBooking = values?.openForStudentBooking === true
 
     if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
     if (effectiveStartDate && !/^\d{4}-\d{2}-\d{2}$/.test(effectiveStartDate)) {
@@ -4912,6 +4977,9 @@ export default function Dashboard() {
     ) {
       errors.effectiveEndDate = '종료일은 시작일 이후여야 합니다.'
     }
+    if (!useForFixedAssignment && !openForStudentBooking) {
+      errors.usage = '용도를 하나 이상 선택해주세요.'
+    }
 
     return {
       valid: Object.keys(errors).length === 0,
@@ -4920,6 +4988,8 @@ export default function Dashboard() {
         status,
         effectiveStartDate,
         effectiveEndDate,
+        useForFixedAssignment,
+        openForStudentBooking,
       },
     }
   }
@@ -4932,12 +5002,23 @@ export default function Dashboard() {
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(template, scopedAcademyId, '주간 기본 슬롯')
-      const { status, effectiveStartDate, effectiveEndDate } = result.value
+      const {
+        status,
+        effectiveStartDate,
+        effectiveEndDate,
+        useForFixedAssignment,
+        openForStudentBooking,
+      } = result.value
       setBusyPrivateAvailabilityTemplateId(template.id)
       await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
         status,
         effectiveStartDate: effectiveStartDate && effectiveEndDate ? effectiveStartDate : deleteField(),
         effectiveEndDate: effectiveStartDate && effectiveEndDate ? effectiveEndDate : deleteField(),
+        ...getPrivateAvailabilityTemplateUsagePatch({
+          useForFixedAssignment,
+          openForStudentBooking,
+          currentTemplate: template,
+        }),
         updatedAt: serverTimestamp(),
       })
       return { ok: true }

@@ -1592,6 +1592,10 @@ function privateAvailabilityTemplateAppliesToDate(template, date) {
   return true;
 }
 
+function privateAvailabilityTemplateOpenForStudentBooking(template) {
+  return template && template.openForStudentBooking === true;
+}
+
 function getPrivateSlotStartMillis(slot) {
   const startAtMillis = getTimestampMillis(slot && slot.startAt);
   if (startAtMillis !== null) return startAtMillis;
@@ -3566,6 +3570,8 @@ function buildSlotFromAvailabilityTemplate({templateId, template, date, time}) {
     slotType: "template",
     availabilityTemplateId: templateId,
     isGeneratedFromTemplate: true,
+    openForStudentBooking: true,
+    useForFixedAssignment: template.useForFixedAssignment !== false,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     reservedAt: null,
@@ -3589,6 +3595,7 @@ function buildTemplateSlots({
   templates.forEach(({id, data}) => {
     const status = normalizeId(data.status || "active").toLowerCase();
     if (status !== "active") return;
+    if (!privateAvailabilityTemplateOpenForStudentBooking(data)) return;
     const teacher = normalizeTeacherKey(
         data.teacherKey || data.teacher || data.teacherUid,
     );
@@ -3619,6 +3626,8 @@ function buildTemplateSlots({
         slotType: "template",
         availabilityTemplateId: id,
         isGeneratedFromTemplate: true,
+        openForStudentBooking: true,
+        useForFixedAssignment: data.useForFixedAssignment !== false,
       };
       const conflictKey = getPrivateSlotConflictKey(slot);
       if (conflictKeys.has(conflictKey)) return;
@@ -4758,6 +4767,9 @@ exports.reservePrivateLessonSlot = onCall(
               normalizeId(template.academyId) !== academyId ||
               normalizeId(template.status || "active") !== "active"
             ) {
+              throw new HttpsError("failed-precondition", "slot-not-available");
+            }
+            if (!privateAvailabilityTemplateOpenForStudentBooking(template)) {
               throw new HttpsError("failed-precondition", "slot-not-available");
             }
             const weekday = getSeoulWeekday(requestedDate);
