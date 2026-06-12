@@ -1378,6 +1378,92 @@ function buildFixedPrivateLessonCancellationPatch({
   };
 }
 
+function buildReleasedFixedPrivateLessonSlot({
+  academyId,
+  lessonId,
+  lesson,
+  now,
+  uid,
+  actorRole,
+}) {
+  const date = normalizeId(lesson && lesson.date);
+  const time = normalizeId(lesson && lesson.time);
+  const startMillis = getSeoulDateTimeMillis(date, time);
+  const durationMinutes = getPrivateScheduleDurationMinutes(lesson);
+  const teacher =
+    normalizeId(lesson && lesson.teacher) ||
+    normalizeId(lesson && lesson.teacherKey) ||
+    normalizeId(lesson && lesson.teacherName);
+  const teacherName = normalizeId(lesson && lesson.teacherName) || teacher;
+  const teacherKey = normalizeTeacherKey(lesson && lesson.teacherKey) ||
+    normalizeTeacherKey(teacher);
+  const teacherUid = normalizeId(
+      lesson && (lesson.teacherUid || lesson.teacherUID || lesson.teacherId),
+  );
+  const studentId = normalizeId(lesson && (lesson.studentId ||
+    lesson.studentID));
+  const studentName = normalizeId(lesson && (lesson.studentName ||
+    lesson.student));
+  const payload = {
+    academyId,
+    teacher,
+    teacherName,
+    teacherKey,
+    teacherUid,
+    teacherEmail: normalizeId(lesson && lesson.teacherEmail),
+    date,
+    time,
+    subject: normalizeId(lesson && lesson.subject) || "1:1 수업",
+    capacity: 1,
+    reservedCount: 0,
+    durationMinutes,
+    status: "open",
+    reservedStudentId: "",
+    reservationId: "",
+    slotType: "released_fixed",
+    releasedFromFixed: true,
+    releasedFromFixedLessonId: lessonId,
+    fixedStudentId: studentId,
+    fixedStudentName: studentName,
+    fixedPrivateAssignmentBatchId:
+      normalizeId(lesson && lesson.fixedPrivateAssignmentBatchId),
+    privateLessonAvailabilityTemplateId:
+      normalizeId(lesson && lesson.privateLessonAvailabilityTemplateId),
+    packageId: normalizeId(lesson && lesson.packageId),
+    packageType: "private",
+    releaseReason: "fixed_private_seat_released",
+    releasedAt: now,
+    releasedBy: uid,
+    releasedByUid: uid,
+    releasedByRole: actorRole,
+    isBookable: true,
+    createdByUid: uid,
+    updatedAt: now,
+    reservedAt: null,
+    cancelledAt: null,
+  };
+  if (now) payload.createdAt = now;
+  if (startMillis !== null) {
+    payload.startAt = timestampFromMillis(startMillis);
+  }
+  return payload;
+}
+
+function buildSlotFromReleasedFixedPrivateLesson({
+  academyId,
+  lessonId,
+  lesson,
+}) {
+  return buildReleasedFixedPrivateLessonSlot({
+    academyId,
+    lessonId,
+    lesson,
+    now: null,
+    uid: normalizeId(lesson && lesson.releasedByUid),
+    actorRole: normalizeId(lesson && lesson.releasedByRole),
+  });
+}
+
 function getTimestampMillis(value) {
   if (!value) return null;
   if (typeof value.toMillis === "function") {
@@ -1572,6 +1658,16 @@ function buildPrivateTemplateSlotId({templateId, date, time}) {
     `${safeDate}__${safeTime}`;
 }
 
+function buildReleasedFixedPrivateSlotId(lessonId) {
+  return `released_fixed__${normalizeId(lessonId)}`;
+}
+
+function parseReleasedFixedPrivateSlotId(slotId) {
+  const value = normalizeId(slotId);
+  const prefix = "released_fixed__";
+  return value.startsWith(prefix) ? value.slice(prefix.length) : "";
+}
+
 function privateAvailabilityTemplateAppliesToDate(template, date) {
   const safeDate = normalizeId(date);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) return false;
@@ -1590,6 +1686,10 @@ function privateAvailabilityTemplateAppliesToDate(template, date) {
     return false;
   }
   return true;
+}
+
+function privateAvailabilityTemplateOpenForStudentBooking(template) {
+  return template && template.openForStudentBooking === true;
 }
 
 function getPrivateSlotStartMillis(slot) {
@@ -2745,13 +2845,34 @@ function getPrivateScheduleTeacherKey(row) {
   return getPrivateTeacherScopeKeys(row)[0] || "";
 }
 
+function isCancelledLessonStatus(status) {
+  const normalized = normalizeId(status).toLowerCase();
+  return normalized === "cancelled" || normalized === "canceled";
+}
+
+function isReleasedFixedPrivateSeatLesson(lesson) {
+  const cancellationType = normalizeId(
+      lesson && lesson.cancellationType,
+  ).toLowerCase();
+  return cancellationType === "seat_released" ||
+    (lesson && lesson.isSeatReleased === true) ||
+    (lesson && lesson.releasedForPrivateBooking === true);
+}
+
+function isBlockingPrivateLessonForAvailability(lesson) {
+  const cancellationType = normalizeId(
+      lesson && lesson.cancellationType,
+  ).toLowerCase();
+  if (cancellationType === "lesson_cancelled") return false;
+  if (isReleasedFixedPrivateSeatLesson(lesson)) return false;
+  if (isCancelledLessonStatus(lesson && lesson.status)) return false;
+  return true;
+}
+
 function isCancelledScheduleRow(row) {
   const status = normalizeId(row && row.status).toLowerCase();
   const approvalStatus = normalizeId(row && row.approvalStatus).toLowerCase();
-  const cancellationType = normalizeId(row && row.cancellationType)
-      .toLowerCase();
-  if (cancellationType === "lesson_cancelled") return false;
-  if (status === "cancelled" || status === "canceled") return true;
+  if (isCancelledLessonStatus(status)) return true;
   if (row && row.completed === "cancelled") return true;
   if (row && row.isDeductCancelled === true) return true;
   if (approvalStatus && approvalStatus !== "approved") return true;
@@ -2867,6 +2988,10 @@ function addBusyRowsFromQuerySnapshot({
     if (normalizeId(row.academyId) !== academyId) return;
     if (source === "privateLessonReservations" &&
         !isActivePrivateReservation(row)) {
+      return;
+    }
+    if (source === "lessons" &&
+        !isBlockingPrivateLessonForAvailability(row)) {
       return;
     }
     if (isCancelledScheduleRow(row)) return;
@@ -3098,6 +3223,70 @@ async function loadBusyPrivateScheduleRows(db, {
     });
   });
   return busyRowsByKey;
+}
+
+async function loadReleasedFixedPrivateLessonSlots(db, {
+  academyId,
+  teacherKeys,
+  packageByTeacherKey,
+  rangeStart,
+  rangeEnd,
+  bookingEnabled,
+  pilotBookable,
+  studentId,
+  nowMillis,
+}) {
+  const releasedRowsByKey = new Map();
+  const queryPromises = [];
+  for (const chunk of chunkValues(teacherKeys, PRIVATE_SLOT_QUERY_CHUNK_SIZE)) {
+    [
+      "teacherKey",
+      "teacherUid",
+      "teacherUID",
+      "teacherId",
+      "teacher",
+      "teacherName",
+    ].forEach((field) => {
+      queryPromises.push(db
+          .collection("lessons")
+          .where("academyId", "==", academyId)
+          .where(field, "in", chunk)
+          .get());
+    });
+  }
+  const snaps = await Promise.all(queryPromises);
+  snaps.forEach((snap) => {
+    snap.docs.forEach((docSnap) => {
+      const lesson = {id: docSnap.id, ...(docSnap.data() || {})};
+      if (normalizeId(lesson.academyId) !== academyId) return;
+      if (!isReleasedFixedPrivateSeatLesson(lesson)) return;
+      const date = normalizeId(lesson.date || lesson.scheduleDate);
+      const time = normalizeId(lesson.time || lesson.startTime);
+      if (!isPrivateScheduleDateInRange(date, rangeStart, rangeEnd)) return;
+      if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) return;
+      const slot = buildSlotFromReleasedFixedPrivateLesson({
+        academyId,
+        lessonId: docSnap.id,
+        lesson,
+      });
+      const slotId = buildReleasedFixedPrivateSlotId(docSnap.id);
+      const conflictKey = getPrivateSlotConflictKey(slot);
+      if (!conflictKey || releasedRowsByKey.has(conflictKey)) return;
+      releasedRowsByKey.set(conflictKey, sanitizePrivateSlotAvailabilityRow({
+        slotId,
+        slot,
+        bookingEnabled,
+        pilotBookable,
+        packageSummary: getSlotTeacherPackageSummary(
+            slot,
+            packageByTeacherKey,
+        ),
+        studentId,
+        nowMillis,
+      }));
+    });
+  });
+  return releasedRowsByKey;
 }
 
 function getPackageSummaryByTeacherKey(packageSnap, {
@@ -3521,6 +3710,10 @@ async function hasTeacherScheduleConflict(transaction, db, {
     for (const docSnap of snap.docs) {
       if (ignoredSlotId && docSnap.id === ignoredSlotId) continue;
       const row = {id: docSnap.id, ...docSnap.data()};
+      if (docSnap.ref.parent.id === "lessons" &&
+          !isBlockingPrivateLessonForAvailability(row)) {
+        continue;
+      }
       if (!isTeacherBlockingScheduleRow(row)) continue;
       if (privateSchedulesOverlap(candidate, row)) return true;
     }
@@ -3566,6 +3759,8 @@ function buildSlotFromAvailabilityTemplate({templateId, template, date, time}) {
     slotType: "template",
     availabilityTemplateId: templateId,
     isGeneratedFromTemplate: true,
+    openForStudentBooking: true,
+    useForFixedAssignment: template.useForFixedAssignment !== false,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     reservedAt: null,
@@ -3589,6 +3784,7 @@ function buildTemplateSlots({
   templates.forEach(({id, data}) => {
     const status = normalizeId(data.status || "active").toLowerCase();
     if (status !== "active") return;
+    if (!privateAvailabilityTemplateOpenForStudentBooking(data)) return;
     const teacher = normalizeTeacherKey(
         data.teacherKey || data.teacher || data.teacherUid,
     );
@@ -3619,6 +3815,8 @@ function buildTemplateSlots({
         slotType: "template",
         availabilityTemplateId: id,
         isGeneratedFromTemplate: true,
+        openForStudentBooking: true,
+        useForFixedAssignment: data.useForFixedAssignment !== false,
       };
       const conflictKey = getPrivateSlotConflictKey(slot);
       if (conflictKeys.has(conflictKey)) return;
@@ -4632,6 +4830,22 @@ exports.listPrivateLessonSlotAvailability = onCall(
             ignoredSlotIds: new Set(staleCancelledReservationBySlotId.keys()),
           }) :
           new Map();
+        const releasedRowsByKey = teacherKeys.length > 0 ?
+          await loadReleasedFixedPrivateLessonSlots(db, {
+            academyId,
+            teacherKeys,
+            packageByTeacherKey: packageSummary.byTeacherKey,
+            rangeStart,
+            rangeEnd,
+            bookingEnabled,
+            pilotBookable,
+            studentId,
+            nowMillis,
+          }) :
+          new Map();
+        releasedRowsByKey.forEach((row, key) => {
+          busyRowsByKey.delete(key);
+        });
         manualSlots = manualSlots.filter((row) => {
           const key = getPrivateSlotConflictKey(row || {});
           if (!key) return true;
@@ -4685,6 +4899,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
 
         const slots = [
           ...manualSlots,
+          ...Array.from(releasedRowsByKey.values()),
           ...templateRows,
           ...Array.from(busyRowsByKey.values()),
         ]
@@ -4760,6 +4975,9 @@ exports.reservePrivateLessonSlot = onCall(
             ) {
               throw new HttpsError("failed-precondition", "slot-not-available");
             }
+            if (!privateAvailabilityTemplateOpenForStudentBooking(template)) {
+              throw new HttpsError("failed-precondition", "slot-not-available");
+            }
             const weekday = getSeoulWeekday(requestedDate);
             if (weekday !== Number(template.weekday)) {
               throw new HttpsError("failed-precondition", "slot-not-available");
@@ -4788,6 +5006,32 @@ exports.reservePrivateLessonSlot = onCall(
               time: requestedTime,
             });
             shouldCreateGeneratedSlot = true;
+          }
+          if (!slot) {
+            const releasedLessonId = parseReleasedFixedPrivateSlotId(slotId);
+            if (releasedLessonId) {
+              const lessonRef = db.collection("lessons").doc(releasedLessonId);
+              const lessonSnap = await transaction.get(lessonRef);
+              if (!lessonSnap.exists) {
+                throw new HttpsError("not-found", "slot-not-available");
+              }
+              const lesson = lessonSnap.data() || {};
+              if (
+                normalizeId(lesson.academyId) !== academyId ||
+                !isReleasedFixedPrivateSeatLesson(lesson)
+              ) {
+                throw new HttpsError(
+                    "failed-precondition",
+                    "slot-not-available",
+                );
+              }
+              slot = buildSlotFromReleasedFixedPrivateLesson({
+                academyId,
+                lessonId: releasedLessonId,
+                lesson,
+              });
+              shouldCreateGeneratedSlot = true;
+            }
           }
           if (!slot) {
             throw new HttpsError("not-found", "slot-not-available");
@@ -5452,6 +5696,22 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
                 lessonId,
               }),
           );
+          if (cancellationType === "seat_released") {
+            const releasedSlotRef = db
+                .collection("privateLessonSlots")
+                .doc(buildReleasedFixedPrivateSlotId(lessonId));
+            transaction.set(
+                releasedSlotRef,
+                buildReleasedFixedPrivateLessonSlot({
+                  academyId,
+                  lessonId,
+                  lesson,
+                  now,
+                  uid,
+                  actorRole,
+                }),
+            );
+          }
 
           let nextAllowance = null;
           if (actorRole === "student" && statsRef && allowance) {

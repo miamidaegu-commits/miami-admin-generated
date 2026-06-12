@@ -175,8 +175,8 @@ export default function StudentPackageModal({
                 <div style={{ fontWeight: 600, marginBottom: 6 }}>운영 순서</div>
                 <div>1) 수강권 등록/추가 등록: 학생에게 수업 가능 횟수를 부여합니다.</div>
                 <div>
-                  2) 주간 기본 슬롯 등록: 고정 배정에 사용할 선생님의 반복 요일/시간을
-                  만듭니다.
+                  2) 선생님 주간 가능 시간 등록: 고정 배정 또는 학생 직접예약에 사용할 반복
+                  요일/시간을 만듭니다.
                 </div>
                 <div>
                   3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 실제 수업 날짜를

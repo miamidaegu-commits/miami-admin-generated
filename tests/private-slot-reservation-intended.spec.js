@@ -84,6 +84,14 @@ function upcomingMondaySaturdayYmd(daysFromNow) {
   );
 }
 
+function getSeoulWeekdayNumber(ymd) {
+  return new Date(`${ymd}T00:00:00Z`).getUTCDay();
+}
+
+function templateSlotId(templateId, date, time) {
+  return `template__${String(templateId).replace(/[^A-Za-z0-9_-]/g, '_')}__${date.replace(/-/g, '')}__${time.replace(/:/g, '')}`;
+}
+
 function studentSlotCard(page, date) {
   return page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: date }).first();
 }
@@ -1087,6 +1095,13 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(functionSource).toContain('booking-closed');
   expect(functionSource).toContain('no-remaining-package');
   expect(functionSource).toContain('buildPrivateTemplateSlotId');
+  expect(functionSource).toContain('function privateAvailabilityTemplateOpenForStudentBooking');
+  expect(functionSource).toMatch(
+    /buildTemplateSlots[\s\S]*privateAvailabilityTemplateOpenForStudentBooking\(data\)/
+  );
+  expect(functionSource).toMatch(
+    /reservePrivateLessonSlot[\s\S]*privateAvailabilityTemplateOpenForStudentBooking\(template\)/
+  );
   expect(functionSource).toMatch(/reservePrivateLessonSlot[\s\S]*computePrivateBookingWindow/);
   expect(functionSource).toMatch(/reservePrivateLessonSlot[\s\S]*window\.weekday < 1/);
   expect(functionSource).toMatch(/reservePrivateLessonSlot[\s\S]*window\.weekday > 6/);
@@ -1100,25 +1115,33 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(helperSource).toContain("not_open: '예약 오픈 대기'");
 
   expect(dashboardSource).toContain('createPrivateAvailabilityTemplate');
+  expect(dashboardSource).toContain('getPrivateAvailabilityTemplateUsagePatch');
+  expect(dashboardSource).toContain('isPrivateAvailabilityTemplateForFixedAssignment');
   expect(sectionSource).toContain('private-availability-template-section');
-  expect(sectionSource).toContain('주간 기본 슬롯 (고정 배정용)');
+  expect(sectionSource).toContain('선생님 주간 가능 시간');
   expect(sectionSource).toContain('private-availability-template-start-date-input');
   expect(sectionSource).toContain('private-availability-template-end-date-input');
+  expect(sectionSource).toContain('private-availability-template-use-fixed-checkbox');
+  expect(sectionSource).toContain('private-availability-template-open-booking-checkbox');
+  expect(sectionSource).toContain('private-weekly-bulk-use-fixed-checkbox');
+  expect(sectionSource).toContain('private-weekly-bulk-open-booking-checkbox');
   expect(sectionSource).toContain('private-availability-template-edit-button');
   expect(sectionSource).toContain('private-availability-template-edit-start-date-input');
   expect(sectionSource).toContain('private-availability-template-edit-status-select');
-  expect(sectionSource).toContain('특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.');
+  expect(sectionSource).toContain('학생 직접 예약에 공개');
   expect(sectionSource).toContain('기간 제한 없음');
   expect(sectionSource).toContain('날짜별 예약 가능 시간 (학생 직접 예약용)');
-  expect(sectionSource).toContain('등록된 주간 기본 슬롯이 없습니다.');
-  expect(sectionSource).toContain('위의 주간 기본 슬롯 (고정 배정용)에서 먼저 등록하세요.');
+  expect(sectionSource).toContain('등록된 주간 가능 시간이 없습니다.');
+  expect(sectionSource).toContain('등록된 고정 배정용 주간 가능 시간이 없습니다.');
   expect(sectionSource).toContain('private-availability-template-add-button');
 
   expect(rulesSource).toContain('match /privateLessonAvailabilityTemplates/{templateId}');
+  expect(rulesSource).toContain('"useForFixedAssignment"');
+  expect(rulesSource).toContain('"openForStudentBooking"');
   expect(rulesSource).toMatch(/data\.weekday >= 1[\s\S]*data\.weekday <= 6/);
   expect(rulesSource).toMatch(/allow create:[\s\S]*isAcademyAdmin/);
   expect(rulesSource).toContain(
-    'changedOnly(["status", "effectiveStartDate", "effectiveEndDate", "updatedAt"])'
+    'changedOnly([\n          "status",\n          "effectiveStartDate",\n          "effectiveEndDate",\n          "useForFixedAssignment",\n          "openForStudentBooking",\n          "updatedAt"\n        ])'
   );
 });
 
@@ -2435,6 +2458,22 @@ test('private slot overlap guard is wired through availability and reservation c
   const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   expect(source).toContain('function privateSchedulesOverlap(');
   expect(source).toContain('function hasTeacherScheduleConflict(');
+  expect(source).toContain('function isBlockingPrivateLessonForAvailability(lesson)');
+  expect(source).toMatch(
+    /function isReleasedFixedPrivateSeatLesson[\s\S]*cancellationType === "seat_released"/
+  );
+  expect(source).toMatch(
+    /function isCancelledLessonStatus[\s\S]*normalized === "cancelled"[\s\S]*normalized === "canceled"/
+  );
+  expect(source).toMatch(
+    /function isBlockingPrivateLessonForAvailability[\s\S]*cancellationType === "lesson_cancelled"[\s\S]*return false/
+  );
+  expect(source).toMatch(
+    /addBusyRowsFromQuerySnapshot[\s\S]*source === "lessons"[\s\S]*!isBlockingPrivateLessonForAvailability\(row\)/
+  );
+  expect(source).toMatch(
+    /hasTeacherScheduleConflict[\s\S]*docSnap\.ref\.parent\.id === "lessons"[\s\S]*!isBlockingPrivateLessonForAvailability\(row\)/
+  );
   expect(source).not.toContain('function hasTeacherExactConflict(');
   expect(source).toMatch(
     /listPrivateLessonSlotAvailability[\s\S]*markOverlappingPrivateSlotBusy/
@@ -2444,6 +2483,18 @@ test('private slot overlap guard is wired through availability and reservation c
   );
   expect(source).toMatch(
     /reservePrivateLessonSlot[\s\S]*durationMinutes: getPrivateScheduleDurationMinutes\(slot\)/
+  );
+  expect(source).toContain('function buildReleasedFixedPrivateSlotId(lessonId)');
+  expect(source).toContain('function loadReleasedFixedPrivateLessonSlots(db,');
+  expect(source).toContain('function parseReleasedFixedPrivateSlotId(slotId)');
+  expect(source).toMatch(
+    /listPrivateLessonSlotAvailability[\s\S]*releasedRowsByKey[\s\S]*busyRowsByKey\.delete\(key\)/
+  );
+  expect(source).toMatch(
+    /reservePrivateLessonSlot[\s\S]*parseReleasedFixedPrivateSlotId\(slotId\)[\s\S]*buildSlotFromReleasedFixedPrivateLesson/
+  );
+  expect(source).toMatch(
+    /cancelFixedPrivateLessonOccurrence[\s\S]*cancellationType === "seat_released"[\s\S]*transaction\.set\([\s\S]*releasedSlotRef/
   );
   expect(source).toMatch(
     /function privateSlotBelongsToCancelledReservation[\s\S]*slotReservationId[\s\S]*reservedStudentId/
@@ -2674,6 +2725,301 @@ async function cleanupOverlapFixture(fixture) {
   await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
   await auth.deleteUser(fixture.student.uid).catch(() => {});
 }
+
+async function createWeeklyTemplateFixture(unique) {
+  const db = getDb();
+  const auth = getAuth();
+  const nowTs = admin.firestore.Timestamp.now();
+  const teacherKey = `weekly-template-teacher-${unique}`;
+  const teacherName = `Weekly Template Teacher ${unique}`;
+  const teacherUid = `uid-weekly-template-${unique}`;
+  const publicDate = upcomingMondaySaturdayYmd(1);
+  const fixedConflictDate = upcomingMondaySaturdayYmd(2);
+  const hiddenDate = upcomingMondaySaturdayYmd(3);
+  const publicTime = '21:10';
+  const fixedConflictTime = '21:20';
+  const hiddenTime = '21:30';
+  const publicTemplateId = `template-public-direct-${unique}`;
+  const fixedConflictTemplateId = `template-fixed-conflict-${unique}`;
+  const hiddenTemplateId = `template-fixed-only-${unique}`;
+  const publicSlotId = templateSlotId(publicTemplateId, publicDate, publicTime);
+  const fixedConflictSlotId = templateSlotId(
+    fixedConflictTemplateId,
+    fixedConflictDate,
+    fixedConflictTime
+  );
+  const hiddenSlotId = templateSlotId(hiddenTemplateId, hiddenDate, hiddenTime);
+  const fixedLessonId = `lesson-template-fixed-conflict-${unique}`;
+  const studentA = await createStudentFixture(db, auth, {
+    unique,
+    roleName: 'template-a',
+    studentId: `e2e-template-student-a-${unique}`,
+    teacherAccess: true,
+    teacherKey,
+    allowedSlotIds: [],
+    paidLessons: 2,
+    privateSlotBookingPilotEnabled: true,
+  });
+  const studentB = await createStudentFixture(db, auth, {
+    unique,
+    roleName: 'template-b',
+    studentId: `e2e-template-student-b-${unique}`,
+    teacherAccess: true,
+    teacherKey,
+    allowedSlotIds: [],
+    paidLessons: 2,
+    privateSlotBookingPilotEnabled: true,
+  });
+
+  const baseTemplate = {
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    teacher: teacherKey,
+    teacherName,
+    teacherKey,
+    teacherUid,
+    teacherEmail: `${teacherKey}@example.com`,
+    durationMinutes: 60,
+    status: 'active',
+    createdAt: nowTs,
+    updatedAt: nowTs,
+  };
+
+  await Promise.all([
+    db.collection('teachers').doc(`teacher-${teacherKey}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      name: teacherName,
+      teacherName: teacherKey,
+      teacherKey,
+      teacherUid,
+      teacherEmail: `${teacherKey}@example.com`,
+      status: 'active',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPackages').doc(studentA.packageId).set(
+      {
+        teacher: teacherKey,
+        teacherName,
+        teacherKey,
+        teacherUid,
+        totalCount: 2,
+        usedCount: 0,
+        remainingCount: 2,
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    ),
+    db.collection('studentPackages').doc(studentB.packageId).set(
+      {
+        teacher: teacherKey,
+        teacherName,
+        teacherKey,
+        teacherUid,
+        totalCount: 2,
+        usedCount: 0,
+        remainingCount: 2,
+        updatedAt: nowTs,
+      },
+      { merge: true }
+    ),
+    db.collection('privateLessonAvailabilityTemplates').doc(publicTemplateId).set({
+      ...baseTemplate,
+      weekday: getSeoulWeekdayNumber(publicDate),
+      time: publicTime,
+      effectiveStartDate: publicDate,
+      effectiveEndDate: publicDate,
+      useForFixedAssignment: true,
+      openForStudentBooking: true,
+    }),
+    db.collection('privateLessonAvailabilityTemplates').doc(fixedConflictTemplateId).set({
+      ...baseTemplate,
+      weekday: getSeoulWeekdayNumber(fixedConflictDate),
+      time: fixedConflictTime,
+      effectiveStartDate: fixedConflictDate,
+      effectiveEndDate: fixedConflictDate,
+      useForFixedAssignment: true,
+      openForStudentBooking: true,
+    }),
+    db.collection('privateLessonAvailabilityTemplates').doc(hiddenTemplateId).set({
+      ...baseTemplate,
+      weekday: getSeoulWeekdayNumber(hiddenDate),
+      time: hiddenTime,
+      effectiveStartDate: hiddenDate,
+      effectiveEndDate: hiddenDate,
+      // Legacy fixed-assignment-only behavior: omitted openForStudentBooking means not public.
+    }),
+    db.collection('lessons').doc(fixedLessonId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherName,
+      teacherKey,
+      teacherUid,
+      studentId: `fixed-student-${unique}`,
+      studentName: `Fixed Student ${unique}`,
+      date: fixedConflictDate,
+      time: fixedConflictTime,
+      durationMinutes: 60,
+      subject: `Fixed conflict ${unique}`,
+      packageType: 'private',
+      sourceType: 'fixed-private-slot-assignment',
+      status: 'approved',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+  ]);
+
+  return {
+    teacherKey,
+    teacherName,
+    teacherUid,
+    studentA,
+    studentB,
+    publicDate,
+    publicTime,
+    publicTemplateId,
+    publicSlotId,
+    fixedConflictDate,
+    fixedConflictTime,
+    fixedConflictTemplateId,
+    fixedConflictSlotId,
+    hiddenDate,
+    hiddenTime,
+    hiddenTemplateId,
+    hiddenSlotId,
+    fixedLessonId,
+  };
+}
+
+async function cleanupWeeklyTemplateFixture(fixture) {
+  if (!fixture) return;
+  const db = getDb();
+  const auth = getAuth();
+  const refs = [
+    db.collection('teachers').doc(`teacher-${fixture.teacherKey}`),
+    db.collection('privateLessonAvailabilityTemplates').doc(fixture.publicTemplateId),
+    db.collection('privateLessonAvailabilityTemplates').doc(fixture.fixedConflictTemplateId),
+    db.collection('privateLessonAvailabilityTemplates').doc(fixture.hiddenTemplateId),
+    db.collection('privateLessonSlots').doc(fixture.publicSlotId),
+    db.collection('privateLessonSlots').doc(fixture.fixedConflictSlotId),
+    db.collection('privateLessonSlots').doc(fixture.hiddenSlotId),
+    db.collection('lessons').doc(fixture.fixedLessonId),
+    db.collection('privateLessonReservations').doc(
+      reservationId(fixture.publicSlotId, fixture.studentA.studentId)
+    ),
+    db.collection('privateLessonReservations').doc(
+      reservationId(fixture.publicSlotId, fixture.studentB.studentId)
+    ),
+    db.collection('privateStudents').doc(fixture.studentA.studentId),
+    db.collection('privateStudents').doc(fixture.studentB.studentId),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(fixture.studentA.studentId)),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId(fixture.studentB.studentId)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(fixture.studentA.studentId)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(fixture.studentB.studentId)),
+    db.collection('studentPackages').doc(fixture.studentA.packageId),
+    db.collection('studentPackages').doc(fixture.studentB.packageId),
+    db.collection('users').doc(fixture.studentA.uid),
+    db.collection('users').doc(fixture.studentB.uid),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.studentA.uid}`),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.studentB.uid}`),
+  ];
+  const notificationSnap = await db
+    .collection('notificationEvents')
+    .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+    .where('slotId', '==', fixture.publicSlotId)
+    .get()
+    .catch(() => null);
+  notificationSnap?.docs.forEach((docSnap) => refs.push(docSnap.ref));
+  await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
+  await Promise.all([
+    auth.deleteUser(fixture.studentA.uid).catch(() => {}),
+    auth.deleteUser(fixture.studentB.uid).catch(() => {}),
+  ]);
+}
+
+test('public weekly availability templates are bookable and blocked after reservation', async ({
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 weekly template setup을 실행합니다.');
+  test.setTimeout(180000);
+
+  const db = getDb();
+  let fixture = null;
+  const contexts = [];
+
+  try {
+    fixture = await createWeeklyTemplateFixture(`${Date.now()}-${testInfo.workerIndex}-template`);
+
+    const studentAContext = await browser.newContext();
+    contexts.push(studentAContext);
+    const studentAPage = await studentAContext.newPage();
+    studentAPage.on('dialog', async (dialog) => {
+      await dialog.accept();
+    });
+    await loginAsStudentWithPrivateBooking(studentAPage, fixture.studentA.email);
+
+    const availability = await listPrivateLessonSlotAvailabilityViaPage(studentAPage, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    const availabilitySlots = availability?.slots || [];
+    const publicSlot = availabilitySlots.find((slot) => slot.id === fixture.publicSlotId);
+    expect(publicSlot).toMatchObject({
+      id: fixture.publicSlotId,
+      availabilityTemplateId: fixture.publicTemplateId,
+      isGeneratedFromTemplate: true,
+      isBookable: true,
+      date: fixture.publicDate,
+      time: fixture.publicTime,
+    });
+    expect(availabilitySlots.some((slot) => slot.id === fixture.hiddenSlotId)).toBe(false);
+    expect(availabilitySlots.some((slot) => slot.id === fixture.fixedConflictSlotId)).toBe(false);
+
+    await studentAPage.getByRole('button', { name: '예약 가능한 시간만' }).click();
+    const publicCards = studentAPage
+      .locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.publicSlotId}"]`);
+    await expect(publicCards, 'public weekly template should be shown as bookable').toHaveCount(1, {
+      timeout: 15000,
+    });
+    await expect(publicCards.first()).toContainText(fixture.publicTime);
+    await expect(
+      studentAPage.locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.hiddenSlotId}"]`)
+    ).toHaveCount(0);
+    await expect(
+      studentAPage.locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.fixedConflictSlotId}"]`)
+    ).toHaveCount(0);
+
+    await publicCards.first().getByTestId('student-private-slot-reserve-button').click();
+    await expectReservationStatus(db, fixture.publicSlotId, fixture.studentA.studentId, 'active');
+    await expectSlotStatus(db, fixture.publicSlotId, 'reserved');
+    const materializedSlotSnap = await db.collection('privateLessonSlots').doc(fixture.publicSlotId).get();
+    expect(materializedSlotSnap.exists).toBe(true);
+    expect(materializedSlotSnap.data()).toMatchObject({
+      availabilityTemplateId: fixture.publicTemplateId,
+      isGeneratedFromTemplate: true,
+      openForStudentBooking: true,
+      status: 'reserved',
+      reservedStudentId: fixture.studentA.studentId,
+    });
+
+    const studentBContext = await browser.newContext();
+    contexts.push(studentBContext);
+    const studentBPage = await studentBContext.newPage();
+    await loginAsStudentWithPrivateBooking(studentBPage, fixture.studentB.email);
+    await studentBPage.getByRole('button', { name: '예약 가능한 시간만' }).click();
+    await expect(
+      studentBPage.locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.publicSlotId}"]`)
+    ).toHaveCount(0, { timeout: 15000 });
+    const studentBAvailability = await listPrivateLessonSlotAvailabilityViaPage(studentBPage, {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+    });
+    expect((studentBAvailability?.slots || []).some((slot) => slot.id === fixture.publicSlotId)).toBe(false);
+    expect(await getReservation(db, fixture.publicSlotId, fixture.studentB.studentId)).toBeNull();
+  } finally {
+    await Promise.all(contexts.map((context) => context.close().catch(() => {})));
+    await cleanupWeeklyTemplateFixture(fixture).catch(() => {});
+  }
+});
 
 test('overlapping private slots are hidden from available view and rejected on reserve', async ({
   browser,

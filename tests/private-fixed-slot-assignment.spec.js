@@ -324,12 +324,14 @@ async function fillAssignmentForm(page, fixture) {
   await expect(section).toBeVisible({ timeout: 15000 });
   await expect(section).toContainText('수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.');
   await expect(section).toContainText('수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.');
-  await expect(section).toContainText('고정수업은 주간 기본 슬롯에서만 만들 수 있습니다.');
   await expect(section).toContainText(
-    '원하는 시간이 보이지 않으면 위의 주간 기본 슬롯에 요일/시간/기간을 먼저 등록하세요.'
+    '고정수업은 "고정 배정에 사용"이 켜진 주간 가능 시간에서만 만들 수 있습니다.'
+  );
+  await expect(section).toContainText(
+    '원하는 시간이 보이지 않으면 위의 선생님 주간 가능 시간에 요일/시간/기간을 먼저 등록하세요.'
   );
   await expect(section).toContainText('날짜별 예약 가능 시간은 학생 직접 예약용입니다.');
-  await expect(section.getByLabel('주간 기본 슬롯 선택')).toBeVisible();
+  await expect(section.getByLabel('주간 가능 시간 선택')).toBeVisible();
   await selectTeacherOption(
     section.getByTestId('private-fixed-assignment-teacher-select'),
     fixture.teacher.name,
@@ -677,6 +679,65 @@ test('admin edits inactive whole-period weekly default slot for fixed assignment
     for (const date of fixture.dates) {
       await expect(preview).toContainText(`${date} ${fixture.time}`);
     }
+  } finally {
+    await cleanupFixture(fixture);
+  }
+});
+
+test('fixed assignment excludes student-direct-only weekly availability', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 fixed slot assignment E2E를 실행합니다.');
+  test.setTimeout(120000);
+
+  let fixture = null;
+  try {
+    fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-direct-only`, {
+      totalCount: 4,
+      time: '22:45',
+    });
+    const directOnlyTemplateId = `template-direct-only-${Date.now()}-${testInfo.workerIndex}`;
+    await getDb().collection('privateLessonAvailabilityTemplates').doc(directOnlyTemplateId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: fixture.teacher.key,
+      teacherName: fixture.teacher.name,
+      teacherKey: fixture.teacher.key,
+      teacherUid: fixture.teacher.uid,
+      teacherEmail: fixture.teacher.email,
+      weekday: getWeekday(fixture.dates[0]),
+      time: '22:55',
+      durationMinutes: 60,
+      status: 'active',
+      effectiveStartDate: fixture.dates[0],
+      effectiveEndDate: fixture.dates[3],
+      useForFixedAssignment: false,
+      openForStudentBooking: true,
+      createdAt: admin.firestore.Timestamp.now(),
+      updatedAt: admin.firestore.Timestamp.now(),
+    });
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '1:1 예약 시간 관리');
+    const fixedSection = page.getByTestId('private-fixed-slot-assignment-section');
+    await selectTeacherOption(
+      fixedSection.getByTestId('private-fixed-assignment-teacher-select'),
+      fixture.teacher.name,
+      { timeout: 30000 }
+    );
+    const templateOptionValues = await fixedSection
+      .getByTestId('private-fixed-assignment-template-select')
+      .locator('option')
+      .evaluateAll((options) => options.map((option) => option.value));
+    expect(templateOptionValues).toContain(fixture.templateId);
+    expect(templateOptionValues).not.toContain(directOnlyTemplateId);
+    await expect(
+      fixedSection.getByTestId('private-fixed-assignment-template-select')
+    ).toContainText(fixture.time, { timeout: 15000 });
+    await expect(
+      fixedSection.getByTestId('private-fixed-assignment-template-select')
+    ).not.toContainText('22:55');
   } finally {
     await cleanupFixture(fixture);
   }

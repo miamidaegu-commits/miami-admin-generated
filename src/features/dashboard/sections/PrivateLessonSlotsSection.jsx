@@ -143,6 +143,21 @@ function getTemplateAssignmentOptionLabel(template) {
   } · ${Number(template.durationMinutes || 0) || '-'}분 · ${range}`
 }
 
+function isTemplateForFixedAssignment(template) {
+  return template?.useForFixedAssignment !== false
+}
+
+function isTemplateOpenForStudentBooking(template) {
+  return template?.openForStudentBooking === true
+}
+
+function getTemplateUsageLabel(template) {
+  const labels = []
+  if (isTemplateForFixedAssignment(template)) labels.push('고정 배정')
+  if (isTemplateOpenForStudentBooking(template)) labels.push('학생 직접예약')
+  return labels.join(' · ') || '용도 없음'
+}
+
 function normalizeEligibleStudentIds(values) {
   const out = []
   const seen = new Set()
@@ -217,6 +232,8 @@ export default function PrivateLessonSlotsSection({
     effectiveStartDate: '',
     effectiveEndDate: '',
     status: 'active',
+    useForFixedAssignment: true,
+    openForStudentBooking: false,
   })
   const [editingAvailabilityTemplateErrors, setEditingAvailabilityTemplateErrors] = useState({})
 
@@ -226,6 +243,8 @@ export default function PrivateLessonSlotsSection({
       effectiveStartDate: isYmd(template?.effectiveStartDate) ? String(template.effectiveStartDate) : '',
       effectiveEndDate: isYmd(template?.effectiveEndDate) ? String(template.effectiveEndDate) : '',
       status: String(template?.status || 'active') === 'active' ? 'active' : 'inactive',
+      useForFixedAssignment: isTemplateForFixedAssignment(template),
+      openForStudentBooking: isTemplateOpenForStudentBooking(template),
     })
     setEditingAvailabilityTemplateErrors({})
   }
@@ -268,6 +287,7 @@ export default function PrivateLessonSlotsSection({
   const privateFixedAssignmentTemplateOptions = useMemo(() => {
     return [...privateAvailabilityTemplates]
       .filter((template) => String(template.status || 'active') === 'active')
+      .filter(isTemplateForFixedAssignment)
       .filter((template) =>
         privateTemplateMatchesTeacherOption(template, selectedAssignmentTeacherOption)
       )
@@ -425,6 +445,43 @@ export default function PrivateLessonSlotsSection({
                     <option value="inactive">비활성</option>
                   </select>
                 </label>
+
+                <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  <span>용도</span>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={privateAvailabilityBulkForm.useForFixedAssignment !== false}
+                      data-testid="private-weekly-bulk-use-fixed-checkbox"
+                      onChange={(event) =>
+                        setPrivateAvailabilityBulkForm((prev) => ({
+                          ...prev,
+                          useForFixedAssignment: event.target.checked,
+                        }))
+                      }
+                    />
+                    고정 배정에 사용
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={privateAvailabilityBulkForm.openForStudentBooking === true}
+                      data-testid="private-weekly-bulk-open-booking-checkbox"
+                      onChange={(event) =>
+                        setPrivateAvailabilityBulkForm((prev) => ({
+                          ...prev,
+                          openForStudentBooking: event.target.checked,
+                        }))
+                      }
+                    />
+                    학생 직접 예약에 공개
+                  </label>
+                  {privateAvailabilityBulkErrors.usage ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      {privateAvailabilityBulkErrors.usage}
+                    </span>
+                  ) : null}
+                </div>
 
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
                   시작일
@@ -594,11 +651,11 @@ export default function PrivateLessonSlotsSection({
               marginBottom: 20,
             }}
           >
-            <h3 style={{ margin: 0, fontSize: 16 }}>주간 기본 슬롯 (고정 배정용)</h3>
+            <h3 style={{ margin: 0, fontSize: 16 }}>선생님 주간 가능 시간</h3>
             <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
-              특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.
+              선생님의 반복 가능한 시간을 고정 1:1 배정이나 학생 직접예약 공개에 사용합니다.
               <br />
-              비워두면 기간 제한 없이 반복됩니다.
+              기존 주간 기본 슬롯은 고정 배정용으로 유지되며, 학생 직접예약 공개는 선택한 슬롯만 적용됩니다.
             </p>
             <form
               onSubmit={(event) => {
@@ -752,6 +809,42 @@ export default function PrivateLessonSlotsSection({
                   <option value="inactive">중지</option>
                 </select>
               </label>
+              <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                <span>용도</span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={privateAvailabilityTemplateForm.useForFixedAssignment !== false}
+                    data-testid="private-availability-template-use-fixed-checkbox"
+                    onChange={(event) =>
+                      setPrivateAvailabilityTemplateForm((prev) => ({
+                        ...prev,
+                        useForFixedAssignment: event.target.checked,
+                      }))
+                    }
+                  />
+                  고정 배정에 사용
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={privateAvailabilityTemplateForm.openForStudentBooking === true}
+                    data-testid="private-availability-template-open-booking-checkbox"
+                    onChange={(event) =>
+                      setPrivateAvailabilityTemplateForm((prev) => ({
+                        ...prev,
+                        openForStudentBooking: event.target.checked,
+                      }))
+                    }
+                  />
+                  학생 직접 예약에 공개
+                </label>
+                {privateAvailabilityTemplateErrors.usage ? (
+                  <span style={{ color: '#f4a7a7' }}>
+                    {privateAvailabilityTemplateErrors.usage}
+                  </span>
+                ) : null}
+              </div>
               <div style={{ display: 'flex', alignItems: 'end' }}>
                 <button
                   type="submit"
@@ -775,13 +868,13 @@ export default function PrivateLessonSlotsSection({
             {privateAvailabilityTemplatesLoading ? (
               <p style={{ margin: 0, opacity: 0.76 }}>불러오는 중...</p>
             ) : privateAvailabilityTemplates.length === 0 ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 기본 슬롯이 없습니다.</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 가능 시간이 없습니다.</p>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr 1.3fr',
+                    gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.9fr 1.1fr 1fr 1.3fr',
                     gap: 8,
                     alignItems: 'center',
                     opacity: 0.72,
@@ -794,6 +887,7 @@ export default function PrivateLessonSlotsSection({
                   <span>시간</span>
                   <span>분</span>
                   <span>상태</span>
+                  <span>용도</span>
                   <span>기간</span>
                   <span>작업</span>
                 </div>
@@ -807,7 +901,7 @@ export default function PrivateLessonSlotsSection({
                         data-testid="private-availability-template-row"
                         style={{
                           display: 'grid',
-                          gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.7fr 1fr 1.3fr',
+                          gridTemplateColumns: '1fr 0.7fr 0.7fr 0.7fr 0.9fr 1.1fr 1fr 1.3fr',
                           gap: 8,
                           alignItems: 'center',
                           border: '1px solid #2e3240',
@@ -821,6 +915,9 @@ export default function PrivateLessonSlotsSection({
                         <span>{Number(template.durationMinutes || 0) || '-'}분</span>
                         <span data-testid="private-availability-template-status-cell">
                           {status === 'active' ? '사용' : '비활성'}
+                        </span>
+                        <span data-testid="private-availability-template-usage-cell">
+                          {getTemplateUsageLabel(template)}
                         </span>
                         <span data-testid="private-availability-template-period-cell">
                           {template.effectiveStartDate && template.effectiveEndDate
@@ -943,6 +1040,42 @@ export default function PrivateLessonSlotsSection({
                               </span>
                             ) : null}
                           </label>
+                          <div style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                            <span>용도</span>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="checkbox"
+                                checked={editingAvailabilityTemplateForm.useForFixedAssignment !== false}
+                                data-testid="private-availability-template-edit-use-fixed-checkbox"
+                                onChange={(event) =>
+                                  setEditingAvailabilityTemplateForm((prev) => ({
+                                    ...prev,
+                                    useForFixedAssignment: event.target.checked,
+                                  }))
+                                }
+                              />
+                              고정 배정에 사용
+                            </label>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                              <input
+                                type="checkbox"
+                                checked={editingAvailabilityTemplateForm.openForStudentBooking === true}
+                                data-testid="private-availability-template-edit-open-booking-checkbox"
+                                onChange={(event) =>
+                                  setEditingAvailabilityTemplateForm((prev) => ({
+                                    ...prev,
+                                    openForStudentBooking: event.target.checked,
+                                  }))
+                                }
+                              />
+                              학생 직접 예약에 공개
+                            </label>
+                            {editingAvailabilityTemplateErrors.usage ? (
+                              <span style={{ color: '#f4a7a7' }}>
+                                {editingAvailabilityTemplateErrors.usage}
+                              </span>
+                            ) : null}
+                          </div>
                           <div style={{ display: 'flex', alignItems: 'end', gap: 8 }}>
                             <button
                               type="submit"
@@ -1008,16 +1141,16 @@ export default function PrivateLessonSlotsSection({
             <div>
               <h3 style={{ margin: 0, fontSize: 16 }}>고정 1:1 수업 배정</h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
-                주간 기본 슬롯은 선생님 가능 시간으로 유지하고, 선택한 기간의 실제 고정 1:1
+                선생님 주간 가능 시간은 반복 가능한 시간으로 유지하고, 선택한 기간의 실제 고정 1:1
                 수업만 생성합니다.
                 <br />
                 수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.
                 <br />
                 수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.
                 <br />
-                고정수업은 주간 기본 슬롯에서만 만들 수 있습니다.
+                고정수업은 "고정 배정에 사용"이 켜진 주간 가능 시간에서만 만들 수 있습니다.
                 <br />
-                원하는 시간이 보이지 않으면 위의 주간 기본 슬롯에 요일/시간/기간을 먼저
+                원하는 시간이 보이지 않으면 위의 선생님 주간 가능 시간에 요일/시간/기간을 먼저
                 등록하세요.
                 <br />
                 날짜별 예약 가능 시간은 학생 직접 예약용입니다.
@@ -1063,7 +1196,7 @@ export default function PrivateLessonSlotsSection({
                 </label>
 
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                  주간 기본 슬롯 선택
+                  주간 가능 시간 선택
                   <select
                     value={privateFixedSlotAssignmentForm.templateId}
                     data-testid="private-fixed-assignment-template-select"
@@ -1096,9 +1229,9 @@ export default function PrivateLessonSlotsSection({
                   {privateFixedSlotAssignmentForm.teacher &&
                   privateFixedAssignmentTemplateOptions.length === 0 ? (
                     <span style={{ color: '#f4a7a7' }}>
-                      등록된 주간 기본 슬롯이 없습니다.
+                      등록된 고정 배정용 주간 가능 시간이 없습니다.
                       <br />
-                      위의 주간 기본 슬롯 (고정 배정용)에서 먼저 등록하세요.
+                      위의 선생님 주간 가능 시간에서 고정 배정 용도를 켜서 등록하세요.
                     </span>
                   ) : null}
                 </label>
@@ -1418,7 +1551,7 @@ export default function PrivateLessonSlotsSection({
             <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
               이 목록은 학생이 직접 예약할 수 있는 날짜별 시간입니다.
               <br />
-              고정 1:1 배정에 사용하려면 주간 기본 슬롯으로 등록하세요.
+              고정 1:1 배정에 사용하려면 선생님 주간 가능 시간으로 등록하세요.
             </p>
           </div>
 
