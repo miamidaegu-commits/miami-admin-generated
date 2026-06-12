@@ -812,11 +812,20 @@ test.describe('fixed private lesson release', () => {
     const availability = await listPrivateLessonSlotAvailabilityViaPage(page, {
       academyId: DEFAULT_E2E_ACADEMY_ID,
     });
+    const availabilitySlots = availability?.slots || [];
+    expect(
+      availabilitySlots.some((slot) =>
+        String(slot.id || '').includes(`busy__lessons__${fixture.fixedLessonId}`)
+      ),
+      JSON.stringify(availabilitySlots)
+    ).toBe(false);
     const releasedSlot = (availability?.slots || []).find(
       (slot) => slot.date === fixture.date && slot.time === fixture.time
     );
     expect(releasedSlot, JSON.stringify(availability?.slots || [])).toBeTruthy();
     expect(releasedSlot.durationMinutes).toBe(60);
+    expect(releasedSlot.bookingStatus).toBe('available');
+    expect(releasedSlot.isBookable).toBe(true);
     const availableSlotCard = page
       .locator(`[data-testid="student-private-slot-card"][data-slot-id="${releasedSlot.id}"]`)
       .first();
@@ -1079,6 +1088,13 @@ test.describe('fixed private lesson release', () => {
     const staleAvailability = await listPrivateLessonSlotAvailabilityViaPage(page, {
       academyId: DEFAULT_E2E_ACADEMY_ID,
     });
+    const staleAvailabilitySlots = staleAvailability?.slots || [];
+    expect(
+      staleAvailabilitySlots.some((slot) =>
+        String(slot.id || '').includes(`busy__lessons__${fixture.fixedLessonId}`)
+      ),
+      JSON.stringify(staleAvailabilitySlots)
+    ).toBe(false);
     const staleReopenedSlot = (staleAvailability?.slots || []).find((slot) => slot.id === releasedSlot.id);
     expect(staleReopenedSlot, JSON.stringify(staleAvailability?.slots || [])).toBeTruthy();
     expect(staleReopenedSlot.durationMinutes).toBe(60);

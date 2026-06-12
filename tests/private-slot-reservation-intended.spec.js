@@ -2466,6 +2466,9 @@ test('private slot overlap guard is wired through availability and reservation c
     /function isCancelledLessonStatus[\s\S]*normalized === "cancelled"[\s\S]*normalized === "canceled"/
   );
   expect(source).toMatch(
+    /function isBlockingPrivateLessonForAvailability[\s\S]*cancellationType === "lesson_cancelled"[\s\S]*return false/
+  );
+  expect(source).toMatch(
     /addBusyRowsFromQuerySnapshot[\s\S]*source === "lessons"[\s\S]*!isBlockingPrivateLessonForAvailability\(row\)/
   );
   expect(source).toMatch(
@@ -2480,6 +2483,18 @@ test('private slot overlap guard is wired through availability and reservation c
   );
   expect(source).toMatch(
     /reservePrivateLessonSlot[\s\S]*durationMinutes: getPrivateScheduleDurationMinutes\(slot\)/
+  );
+  expect(source).toContain('function buildReleasedFixedPrivateSlotId(lessonId)');
+  expect(source).toContain('function loadReleasedFixedPrivateLessonSlots(db,');
+  expect(source).toContain('function parseReleasedFixedPrivateSlotId(slotId)');
+  expect(source).toMatch(
+    /listPrivateLessonSlotAvailability[\s\S]*releasedRowsByKey[\s\S]*busyRowsByKey\.delete\(key\)/
+  );
+  expect(source).toMatch(
+    /reservePrivateLessonSlot[\s\S]*parseReleasedFixedPrivateSlotId\(slotId\)[\s\S]*buildSlotFromReleasedFixedPrivateLesson/
+  );
+  expect(source).toMatch(
+    /cancelFixedPrivateLessonOccurrence[\s\S]*cancellationType === "seat_released"[\s\S]*transaction\.set\([\s\S]*releasedSlotRef/
   );
   expect(source).toMatch(
     /function privateSlotBelongsToCancelledReservation[\s\S]*slotReservationId[\s\S]*reservedStudentId/
