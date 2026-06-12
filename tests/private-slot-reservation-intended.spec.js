@@ -2730,13 +2730,13 @@ async function createWeeklyTemplateFixture(unique) {
   const db = getDb();
   const auth = getAuth();
   const nowTs = admin.firestore.Timestamp.now();
-  const teacherKey = `weekly-template-teacher-${unique}`;
-  const teacherName = `Weekly Template Teacher ${unique}`;
+  const teacherKey = `miketest-${unique}`;
+  const teacherName = 'miketest';
   const teacherUid = `uid-weekly-template-${unique}`;
-  const publicDate = upcomingMondaySaturdayYmd(1);
+  const publicDate = '2026-06-15';
   const fixedConflictDate = upcomingMondaySaturdayYmd(2);
   const hiddenDate = upcomingMondaySaturdayYmd(3);
-  const publicTime = '21:10';
+  const publicTime = '13:00';
   const fixedConflictTime = '21:20';
   const hiddenTime = '21:30';
   const publicTemplateId = `template-public-direct-${unique}`;
@@ -3002,6 +3002,15 @@ test('public weekly availability templates are bookable and blocked after reserv
       reservedStudentId: fixture.studentA.studentId,
     });
 
+    await studentAPage.getByRole('button', { name: '전체 시간 보기' }).click();
+    const studentAMyReservationCard = studentAPage
+      .locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.publicSlotId}"]`)
+      .filter({ hasText: fixture.publicTime });
+    await expect(studentAMyReservationCard, 'student A should still see the booked template slot').toHaveCount(1, {
+      timeout: 15000,
+    });
+    await expect(studentAMyReservationCard.first()).toContainText('내 예약');
+
     const studentBContext = await browser.newContext();
     contexts.push(studentBContext);
     const studentBPage = await studentBContext.newPage();
@@ -3010,10 +3019,34 @@ test('public weekly availability templates are bookable and blocked after reserv
     await expect(
       studentBPage.locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.publicSlotId}"]`)
     ).toHaveCount(0, { timeout: 15000 });
+    await expect(
+      studentBPage.locator('[data-testid="student-private-busy-slot-card"]').filter({ hasText: fixture.publicTime })
+    ).toHaveCount(0, { timeout: 15000 });
     const studentBAvailability = await listPrivateLessonSlotAvailabilityViaPage(studentBPage, {
       academyId: DEFAULT_E2E_ACADEMY_ID,
     });
-    expect((studentBAvailability?.slots || []).some((slot) => slot.id === fixture.publicSlotId)).toBe(false);
+    const studentBBusySlot = (studentBAvailability?.slots || []).find(
+      (slot) =>
+        slot.date === fixture.publicDate &&
+        slot.time === fixture.publicTime &&
+        slot.isBusy === true
+    );
+    expect(studentBBusySlot, JSON.stringify(studentBAvailability?.slots || [])).toBeTruthy();
+    expect(studentBBusySlot.bookingStatus).toMatch(/busy|reserved/);
+    expect(JSON.stringify(studentBBusySlot)).not.toContain(fixture.studentA.displayName);
+    expect(JSON.stringify(studentBBusySlot)).not.toContain(fixture.studentA.studentId);
+    await studentBPage.getByRole('button', { name: '전체 시간 보기' }).click();
+    const studentBBusyCards = studentBPage
+      .locator('[data-testid="student-private-busy-slot-card"]')
+      .filter({ hasText: fixture.publicDate })
+      .filter({ hasText: fixture.publicTime });
+    await expect(studentBBusyCards, 'student B should see the reserved template slot as busy in all view').toHaveCount(
+      1,
+      { timeout: 15000 }
+    );
+    await expect(studentBBusyCards.first()).toContainText(/수업 있음|예약 마감/);
+    await expect(studentBBusyCards.first()).not.toContainText(fixture.studentA.displayName);
+    await expect(studentBBusyCards.first().locator('button')).toHaveCount(0);
     expect(await getReservation(db, fixture.publicSlotId, fixture.studentB.studentId)).toBeNull();
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));

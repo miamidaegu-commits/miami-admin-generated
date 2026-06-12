@@ -1611,16 +1611,6 @@ export default function StudentBookingPage() {
     return bySlotId
   }, [privateReservations])
 
-  const activePrivateReservationSlotIds = useMemo(() => {
-    const slotIds = new Set()
-    privateReservations.forEach((reservation) => {
-      if (reservation.status !== 'active') return
-      const slotId = String(reservation.slotId || '').trim()
-      if (slotId) slotIds.add(slotId)
-    })
-    return slotIds
-  }, [privateReservations])
-
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
@@ -1641,7 +1631,6 @@ export default function StudentBookingPage() {
 
   const sortedPrivateSlots = useMemo(() => {
     return privateSlots
-      .filter((slot) => !activePrivateReservationSlotIds.has(String(slot.id || '').trim()))
       .filter((slot) => {
         if (privateSlotViewMode !== 'available') return true
         const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
@@ -1657,7 +1646,7 @@ export default function StudentBookingPage() {
         const bKey = `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`
         return aKey.localeCompare(bKey, 'ko')
       })
-  }, [activePrivateReservationSlotIds, canUsePrivateBooking, privateSlotViewMode, privateSlots])
+  }, [canUsePrivateBooking, privateSlotViewMode, privateSlots])
 
   const privateCalendarWeeks = useMemo(() => {
     const weekStarts = []
