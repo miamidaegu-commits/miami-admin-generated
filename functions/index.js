@@ -1658,6 +1658,27 @@ function buildPrivateTemplateSlotId({templateId, date, time}) {
     `${safeDate}__${safeTime}`;
 }
 
+function buildBusyPrivateScheduleRowId({
+  source,
+  docId,
+  academyId,
+  teacherKey,
+  teacherUid,
+  date,
+  time,
+}) {
+  if (source !== "privateLessonReservations") {
+    return `busy__${source}__${docId}`;
+  }
+  const safeAcademyId = normalizeId(academyId).replace(/[^A-Za-z0-9_-]/g, "_");
+  const safeTeacher = normalizeId(teacherUid || teacherKey)
+      .replace(/[^A-Za-z0-9_-]/g, "_");
+  const safeDate = normalizeId(date).replace(/-/g, "");
+  const safeTime = normalizeId(time).replace(/:/g, "");
+  return `busy__${source}__${safeAcademyId}__${safeTeacher}__` +
+    `${safeDate}__${safeTime}`;
+}
+
 function buildReleasedFixedPrivateSlotId(lessonId) {
   return `released_fixed__${normalizeId(lessonId)}`;
 }
@@ -3012,7 +3033,15 @@ function addBusyRowsFromQuerySnapshot({
     });
     if (busyRowsByKey.has(key)) return;
     busyRowsByKey.set(key, buildBusyPrivateScheduleRow({
-      id: `busy__${source}__${docSnap.id}`,
+      id: buildBusyPrivateScheduleRowId({
+        source,
+        docId: docSnap.id,
+        academyId,
+        teacherKey,
+        teacherUid,
+        date,
+        time,
+      }),
       academyId,
       teacherKey,
       teacherUid,

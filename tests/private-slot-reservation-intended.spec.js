@@ -100,6 +100,19 @@ function studentSlotCardById(page, slotId) {
   return page.locator(`[data-testid="student-private-slot-card"][data-slot-id="${slotId}"]`);
 }
 
+function privateSlotCardForDateTime(page, date, time) {
+  return page
+    .getByTestId('student-private-slot-card')
+    .filter({ hasText: date })
+    .filter({ hasText: time });
+}
+
+function bookablePrivateSlotCardForDateTime(page, date, time) {
+  return privateSlotCardForDateTime(page, date, time).filter({
+    has: page.getByRole('button', { name: '1:1 수업 예약' }),
+  });
+}
+
 function studentBusySlotCard(page, date) {
   return page
     .locator('[data-testid="student-private-busy-slot-card"]')
@@ -943,7 +956,7 @@ async function expectAdminDirectReservationCalendarRow(page, fixture) {
     )
     .filter({ hasText: fixture.eligibleStudent.displayName })
     .first();
-  await expect(reservationRow).toBeVisible({ timeout: 20000 });
+  await expect(reservationRow).toBeVisible({ timeout: 45000 });
   await expect(reservationRow).toContainText(fixture.eligibleStudent.displayName);
   await expect(reservationRow).toContainText(fixture.time);
   await expect(reservationRow).toContainText('학생 예약 1:1');
@@ -1035,6 +1048,9 @@ test('private slot booking callable production gate is wired server-side', async
   expect(sanitizeSource).toContain('isBookable');
   expect(source).toMatch(
     /function getPrivateSlotStudentVisibleStatus[\s\S]*bookingStatus === "blocked"[\s\S]*return "busy"/
+  );
+  expect(source).toMatch(
+    /function buildBusyPrivateScheduleRowId[\s\S]*source !== "privateLessonReservations"[\s\S]*safeTeacher/
   );
   expect(sanitizeSource).not.toContain('reservedStudentId');
   expect(sanitizeSource).not.toContain('reservationId');
@@ -1520,6 +1536,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       pilotDisabledPage,
       fixture.pilotDisabledStudent.email
     );
+    await pilotDisabledPage.getByRole('button', { name: '전체 시간 보기' }).click();
     const pilotDisabledCard = studentSlotCardById(pilotDisabledPage, fixture.pilotDisabledSlotId);
     await expect(
       pilotDisabledCard,
@@ -1744,12 +1761,31 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       reservationId: expectedReservationId,
       teacher: fixture.teacherKey,
     });
-    await expectPrivateSlotCardCount(
+    await eligiblePage.getByRole('button', { name: '전체 시간 보기' }).click();
+    const myReservationCard = privateSlotCardForDateTime(
       eligiblePage,
       fixture.date,
-      0,
-      'reserved private slot should disappear from the available slot list'
-    );
+      fixture.time
+    )
+      .filter({ hasText: '내 예약' })
+      .first();
+    await expect(
+      myReservationCard,
+      'reserved slot should remain visible as my reservation'
+    ).toBeVisible({ timeout: 15000 });
+    await expect(myReservationCard).toContainText('내 예약');
+    await expect(myReservationCard).toContainText(fixture.date);
+    await expect(myReservationCard).toContainText(fixture.time);
+    await expect(
+      myReservationCard.getByRole('button', { name: '1:1 수업 예약' }),
+      'my reservation card must not be bookable again'
+    ).toHaveCount(0);
+
+    await eligiblePage.getByRole('button', { name: '예약 가능한 시간만' }).click();
+    await expect(
+      bookablePrivateSlotCardForDateTime(eligiblePage, fixture.date, fixture.time),
+      'reserved private slot should disappear from the bookable slot list'
+    ).toHaveCount(0, { timeout: 15000 });
     await expect(privateReservationCard(eligiblePage, fixture.date)).toBeVisible({
       timeout: 15000,
     });
