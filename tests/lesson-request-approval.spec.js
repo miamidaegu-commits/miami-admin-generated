@@ -73,6 +73,11 @@ async function approveLessonRequestAndWait(page, createdRequest) {
     await expect(requestRow).toContainText(createdRequest.subject);
   }
   await requestRow.getByRole('button', { name: '승인', exact: true }).click();
+  await expectLessonRequestApprovedInFirestore(page, createdRequest);
+  await expectApprovedLessonRequestRemovedFromUi(page, createdRequest);
+}
+
+async function expectLessonRequestApprovedInFirestore(page, createdRequest) {
   await expect
     .poll(
       async () =>
@@ -84,8 +89,16 @@ async function approveLessonRequestAndWait(page, createdRequest) {
     .toMatchObject({
       exists: true,
       approvalStatus: 'approved',
+      status: 'approved',
     });
-  await expect(requestRow).toHaveCount(0, { timeout: 60000 });
+}
+
+async function expectApprovedLessonRequestRemovedFromUi(page, createdRequest) {
+  await openDashboardSection(page, '캘린더');
+  await openDashboardSection(page, '수업 요청 관리');
+  await expect(getLessonRequestRowById(page, createdRequest.requestId)).toHaveCount(0, {
+    timeout: 60000,
+  });
 }
 
 async function expectSessionPlan({ studentId, teacher, expected }) {
@@ -208,6 +221,7 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
     .toMatchObject({
       exists: true,
       approvalStatus: 'approved',
+      status: 'approved',
       lessons: [
         {
           date: lessonDate,
@@ -238,7 +252,7 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
       ],
     });
 
-  await expect(requestRow).toHaveCount(0, { timeout: 60000 });
+  await expectApprovedLessonRequestRemovedFromUi(page, createdRequest);
 });
 
 test('admin approval of fixed recurring private request creates and links package', async ({

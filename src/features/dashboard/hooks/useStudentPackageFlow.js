@@ -46,6 +46,7 @@ import { computePrivateTeacherPackageUsage } from '../privatePackageHelpers.js'
 
 const DEFAULT_STUDENT_PACKAGE_FORM = {
   packageType: 'private',
+  privateTeacher: '',
   title: '',
   totalCount: '1',
   groupClassId: '',
@@ -91,6 +92,64 @@ function createDefaultPostPrivateLessonScheduleForm(overrides = {}) {
   }
 }
 
+function getPrivateTeacherOptionKeys(option) {
+  return [
+    option?.value,
+    option?.teacherKey,
+    option?.displayName,
+    option?.label,
+    option?.teacherUid,
+    option?.teacherEmail,
+  ]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+}
+
+function findPrivateTeacherOption(teacherSelectOptions, value) {
+  const key = normalizeText(value || '')
+  if (!key) return null
+  return (
+    (Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []).find((option) =>
+      getPrivateTeacherOptionKeys(option).includes(key)
+    ) || null
+  )
+}
+
+function resolvePrivateTeacherSelection(teacherSelectOptions, value, fallback = {}) {
+  const option = findPrivateTeacherOption(teacherSelectOptions, value) || null
+  const rawValue = String(value || '').trim()
+  const teacherKey = normalizeText(
+    option?.teacherKey ||
+      fallback.teacherKey ||
+      fallback.teacher ||
+      fallback.teacherName ||
+      option?.displayName ||
+      option?.label ||
+      rawValue
+  )
+  const teacherName = String(
+    option?.displayName ||
+      fallback.teacherDisplayName ||
+      fallback.teacherName ||
+      fallback.name ||
+      teacherKey
+  ).trim()
+  const teacherUid = String(option?.teacherUid || fallback.teacherUid || '').trim()
+  const teacherEmail = String(option?.teacherEmail || fallback.teacherEmail || '').trim()
+  const selectValue = String(option?.value || rawValue || teacherKey || teacherUid).trim()
+
+  return {
+    option,
+    selectValue,
+    teacher: teacherKey,
+    teacherKey,
+    teacherName: teacherName || teacherKey,
+    teacherDisplayName: teacherName || teacherKey,
+    teacherUid,
+    teacherEmail,
+  }
+}
+
 function countPrivatePackageRegistrationEvents(rows) {
   return (Array.isArray(rows) ? rows : []).filter((row) => {
     const actionType = String(row?.actionType || '').trim()
@@ -118,6 +177,7 @@ export default function useStudentPackageFlow({
   addCreditTransaction,
   recomputePrivatePackageUsage,
   validatePrivateLessonFormFields,
+  teacherSelectOptions = [],
 }) {
   const [studentPackageModalStudent, setStudentPackageModalStudent] = useState(null)
   const [studentPackageForm, setStudentPackageForm] = useState(
@@ -241,6 +301,12 @@ export default function useStudentPackageFlow({
       groupClassId = String(studentPackageForm.groupClassId || '').trim()
       if (!groupClassId) return []
       teacherForScope = ''
+    } else {
+      teacherForScope = resolvePrivateTeacherSelection(
+        teacherSelectOptions,
+        studentPackageForm.privateTeacher,
+        student
+      ).teacher
     }
 
     const scopeKey = buildStudentPackageScopeKey({
@@ -282,7 +348,9 @@ export default function useStudentPackageFlow({
     studentPackageModalStudent,
     studentPackageForm.packageType,
     studentPackageForm.groupClassId,
+    studentPackageForm.privateTeacher,
     studentPackages,
+    teacherSelectOptions,
   ])
 
   useEffect(() => {
@@ -422,7 +490,8 @@ export default function useStudentPackageFlow({
         ? initialPackageType
         : 'private'
 
-    setStudentPackageModalStudent(mergeKnownStudentForPackage(student))
+    const knownStudent = mergeKnownStudentForPackage(student)
+    setStudentPackageModalStudent(knownStudent)
 
     const getDefaultRegistrationStartDate = (groupClassId) => {
       const targetGroupClassId = String(groupClassId || '').trim()
@@ -482,10 +551,29 @@ export default function useStudentPackageFlow({
           : packageType === 'private'
             ? 'regular'
             : 'regular'
+      const privateTeacher = resolvePrivateTeacherSelection(
+        teacherSelectOptions,
+        sourcePackage.teacherKey ||
+          sourcePackage.teacher ||
+          sourcePackage.teacherName ||
+          knownStudent?.teacherKey ||
+          knownStudent?.teacher ||
+          '',
+        {
+          ...knownStudent,
+          teacherKey: sourcePackage.teacherKey,
+          teacher: sourcePackage.teacher,
+          teacherName: sourcePackage.teacherName,
+          teacherDisplayName: sourcePackage.teacherDisplayName,
+          teacherUid: sourcePackage.teacherUid,
+          teacherEmail: sourcePackage.teacherEmail,
+        }
+      ).selectValue
 
       setStudentPackageForm(
         createDefaultStudentPackageForm({
           packageType,
+          privateTeacher,
           title: String(sourcePackage.title || '').trim(),
           totalCount,
           groupClassId,
@@ -506,6 +594,11 @@ export default function useStudentPackageFlow({
       setStudentPackageForm(
         createDefaultStudentPackageForm({
           packageType,
+          privateTeacher: resolvePrivateTeacherSelection(
+            teacherSelectOptions,
+            knownStudent?.teacherKey || knownStudent?.teacher || '',
+            knownStudent || {}
+          ).selectValue,
           registrationStartDate,
         })
       )
@@ -551,6 +644,14 @@ export default function useStudentPackageFlow({
     }
 
     if (isPrivateTopUp) {
+      const privateTeacher = resolvePrivateTeacherSelection(
+        teacherSelectOptions,
+        form.privateTeacher,
+        studentPackageModalStudent || {}
+      )
+      if (!privateTeacher.teacher) {
+        errors.privateTeacher = '수강권 선생님을 선택해 주세요.'
+      }
       const topUpParsed = parseRequiredMinOneIntField(form.totalCount)
       if (!topUpParsed.ok) {
         errors.totalCount = '이번에 추가할 수업 횟수는 1 이상의 정수여야 합니다.'
@@ -574,7 +675,20 @@ export default function useStudentPackageFlow({
         amountPaidProvided: amountPaidRaw !== '',
         registrationLabel: String(form.registrationLabel || '').trim(),
         memo: String(form.memo || '').trim(),
+        privateTeacher,
       }
+    }
+
+    const privateTeacher =
+      packageTypeEarly === 'private'
+        ? resolvePrivateTeacherSelection(
+            teacherSelectOptions,
+            form.privateTeacher,
+            studentPackageModalStudent || {}
+          )
+        : null
+    if (packageTypeEarly === 'private' && !privateTeacher?.teacher) {
+      errors.privateTeacher = '수강권 선생님을 선택해 주세요.'
     }
 
     if (packageTypeEarly === 'private' && privatePackageMode === 'countBased' && !title) {
@@ -703,6 +817,7 @@ export default function useStudentPackageFlow({
       amountPaidProvided: amountPaidRaw !== '',
       registrationLabel: String(form.registrationLabel || '').trim(),
       memo: String(form.memo || '').trim(),
+      privateTeacher,
     }
   }
 
@@ -749,7 +864,7 @@ export default function useStudentPackageFlow({
     let registrationWeeksForSave = null
 
     if (result.packageType === 'private') {
-      teacher = normalizeText(student.teacherKey || student.teacher || '')
+      teacher = result.privateTeacher.teacher
       if (shouldTopUpExistingPrivatePackage) {
         const targetPackage = activePrivateSameScopePackages[0]
         try {
@@ -876,7 +991,7 @@ export default function useStudentPackageFlow({
       packageType: result.packageType,
       teacher:
         result.packageType === 'private'
-          ? String(student.teacherKey || student.teacher || '')
+          ? result.privateTeacher.teacher
           : '',
       groupClassId:
         result.packageType === 'private' ? '' : String(groupClassId || '').trim(),
@@ -940,11 +1055,11 @@ export default function useStudentPackageFlow({
         teacher,
         ...(result.packageType === 'private'
           ? {
-              teacherName: teacher,
-              teacherKey: normalizeText(student.teacherKey || teacher),
-              teacherDisplayName: String(student.teacherDisplayName || student.teacherName || teacher).trim(),
-              teacherUid: String(student.teacherUid || '').trim(),
-              teacherEmail: String(student.teacherEmail || '').trim(),
+              teacherName: result.privateTeacher.teacherName,
+              teacherKey: result.privateTeacher.teacherKey,
+              teacherDisplayName: result.privateTeacher.teacherDisplayName,
+              teacherUid: result.privateTeacher.teacherUid,
+              teacherEmail: result.privateTeacher.teacherEmail,
             }
           : {}),
         packageType: result.packageType,

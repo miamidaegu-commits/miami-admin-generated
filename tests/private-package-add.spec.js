@@ -166,7 +166,7 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
     const studentRow = getStudentRow(page, studentName);
     await expect(studentRow).toBeVisible();
     const privatePackageCell = studentRow.getByTestId('student-private-package-cell');
-    await expect(privatePackageCell).toContainText('don1 수강권', { timeout: 15000 });
+    await expect(privatePackageCell).toContainText('Don 수강권', { timeout: 15000 });
   } finally {
     await cleanupTempStudentData(page, { studentName });
   }
