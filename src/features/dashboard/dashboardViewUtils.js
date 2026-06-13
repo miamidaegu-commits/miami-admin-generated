@@ -308,6 +308,7 @@ export function formatStudentPackageDetailStatusLabel(status) {
   if (raw === 'active') return '사용 중'
   if (raw === 'exhausted') return '소진'
   if (raw === 'ended' || raw === 'inactive') return '종료'
+  if (raw === 'revoked') return '회수됨'
   return String(status)
 }
 
@@ -383,6 +384,7 @@ export function formatCreditTransactionActionTypeLabel(actionType) {
     auto_group_deduct: '자동 그룹 차감',
     group_deduct_restore: '그룹 차감복구',
     package_ended: '수강권 종료',
+    package_revoked: '수강권 회수',
     group_reenroll: '그룹 재등록',
   }
   return map[key] ?? key

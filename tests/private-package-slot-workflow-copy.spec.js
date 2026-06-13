@@ -1,23 +1,30 @@
 import { test, expect } from '@playwright/test';
 import {
+  BASE_URL,
   getStudentRow,
   getStudentSearchInput,
   loginAsAdmin,
+  loginAsStudent,
   openDashboardSection,
 } from './e2e-helpers.js';
 import { createTempStudent, createTempTeacher, cleanupTempStudentData } from './e2e-firebase-helpers.js';
 import {
   createAdminSeededPrivateLesson,
   createAdminSeededPrivateReservation,
+  createAdminSeededPrivateAvailabilityTemplate,
+  createAdminSeededStudentUser,
   cleanupAdminSeededPrivatePackageWorkflowCopyFixture,
+  cleanupAdminSeededPrivateAvailabilityTemplate,
+  cleanupAdminSeededStudentUser,
   createAdminSeededStudentPackage,
+  cleanupAdminSeededCreditTransactionsForStudent,
   cleanupAdminSeededStudentPrivateAccessSummary,
   cleanupAdminSeededTeacher,
   getAdminSeededPrivatePackagesForStudent,
   getAdminSeededStudentPrivateAccessSummary,
   setAdminSeededStudentPrivateAccessSummary,
 } from './e2e-admin-helpers.js';
-import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
+import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_STUDENT_PASSWORD } from './fixtures/test-data.js';
 
 const ACADEMY_ID = 'academy_e2e_default';
 const TEACHER = 'don1';
@@ -29,6 +36,32 @@ function futureYmd(daysFromNow) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function upcomingWeekdayYmd(targetWeekday) {
+  const date = new Date();
+  const current = date.getDay();
+  const daysUntil = (targetWeekday - current + 7) % 7 || 7;
+  date.setDate(date.getDate() + daysUntil);
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+async function openStudentPrivateBooking(page, email) {
+  await loginAsStudent(page, email, TEST_STUDENT_PASSWORD);
+  await page.goto(new URL('/student-booking?privateSlotBooking=enabled', BASE_URL).toString());
+  await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
+    timeout: 15000,
+  });
+}
+
+function privateSlotCardForDateTime(page, date, time) {
+  return page
+    .getByTestId('student-private-slot-card')
+    .filter({ hasText: date })
+    .filter({ hasText: time });
 }
 
 async function openPackageAddDialog(page, studentName) {
@@ -89,7 +122,7 @@ test('private package add modal explains package counts and fixed assignment wor
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     await expect(dialog).toContainText('총 횟수를 직접 입력합니다.');
   } finally {
-    if (tempStudent) await cleanupTempStudentData(page, tempStudent);
+    if (tempStudent) await cleanupTempStudentData(page, { ...tempStudent, firebaseTaskTimeoutMs: 60000 });
   }
 });
 
@@ -256,7 +289,7 @@ test('duplicate private package warning shows actionable capacity details and re
     );
   } finally {
     await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
-    if (tempStudent) await cleanupTempStudentData(page, tempStudent);
+    if (tempStudent) await cleanupTempStudentData(page, { ...tempStudent, firebaseTaskTimeoutMs: 60000 });
   }
 });
 
@@ -381,7 +414,257 @@ test('admin can create a separate private package for a different teacher', asyn
         studentId: tempStudent.studentId,
       }).catch(() => {});
     }
-    if (tempStudent) await cleanupTempStudentData(page, tempStudent).catch(() => {});
+    if (tempStudent) {
+      await cleanupTempStudentData(page, { ...tempStudent, firebaseTaskTimeoutMs: 60000 }).catch(() => {});
+    }
+    await cleanupAdminSeededTeacher({
+      academyId: ACADEMY_ID,
+      teacherId: secondTeacherId,
+    }).catch(() => {});
+  }
+});
+
+test('admin can revoke one private teacher package without touching another teacher', async ({
+  page,
+  browser,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(180000);
+
+  const unique = Date.now();
+  const studentName = `E2E 수강권회수 ${unique}`;
+  const studentId = `e2e-revoke-student-${unique}`;
+  const studentEmail = `e2e-revoke-${unique}@example.com`;
+  const secondTeacherKey = `miketest-revoke-${unique}`;
+  const secondTeacherId = `e2e-revoke-teacher-${unique}`;
+  const slotDate = upcomingWeekdayYmd(1);
+  const slotTime = '13:00';
+  let tempStudent = null;
+  let studentUser = null;
+  let secondPackageId = '';
+  let template = null;
+  const cleanupFixture = { academyId: ACADEMY_ID, reservationIds: [] };
+
+  try {
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await createTempTeacher(page, {
+      teacherId: secondTeacherId,
+      teacherKey: secondTeacherKey,
+      teacherName: 'miketest',
+    });
+    tempStudent = await createTempStudent(page, {
+      studentId,
+      studentName,
+      teacherName: TEACHER,
+      note: 'E2E private package revoke test',
+    });
+    studentUser = await createAdminSeededStudentUser({
+      academyId: ACADEMY_ID,
+      studentId,
+      email: studentEmail,
+      password: TEST_STUDENT_PASSWORD,
+      displayName: studentName,
+    });
+
+    const donPackage = await createAdminSeededStudentPackage({
+      academyId: ACADEMY_ID,
+      studentId,
+      studentName,
+      title: `E2E don1 유지 수강권 ${unique}`,
+      packageType: 'private',
+      teacher: TEACHER,
+      teacherKey: TEACHER,
+      teacherName: TEACHER,
+      totalCount: 4,
+      remainingCount: 3,
+      usedCount: 1,
+      privatePackageMode: 'countBased',
+      expiresAt: '2099-01-01',
+    });
+    const secondPackage = await createAdminSeededStudentPackage({
+      academyId: ACADEMY_ID,
+      studentId,
+      studentName,
+      title: `E2E miketest 회수 수강권 ${unique}`,
+      packageType: 'private',
+      teacher: secondTeacherKey,
+      teacherKey: secondTeacherKey,
+      teacherName: 'miketest',
+      totalCount: 3,
+      remainingCount: 3,
+      usedCount: 0,
+      privatePackageMode: 'countBased',
+      expiresAt: '2099-01-01',
+    });
+    secondPackageId = secondPackage.packageId;
+    const blockingReservation = await createAdminSeededPrivateReservation({
+      academyId: ACADEMY_ID,
+      studentId,
+      studentName,
+      packageId: donPackage.packageId,
+      teacher: TEACHER,
+      teacherName: TEACHER,
+      date: futureYmd(8),
+      time: '14:00',
+      status: 'active',
+    });
+    cleanupFixture.reservationIds.push(blockingReservation.reservationId);
+    template = await createAdminSeededPrivateAvailabilityTemplate({
+      academyId: ACADEMY_ID,
+      teacherKey: secondTeacherKey,
+      teacherName: 'miketest',
+      weekday: 1,
+      time: slotTime,
+      durationMinutes: 60,
+      openForStudentBooking: true,
+      useForFixedAssignment: false,
+    });
+    await setAdminSeededStudentPrivateAccessSummary({
+      academyId: ACADEMY_ID,
+      studentId,
+      teacherKeys: [TEACHER, secondTeacherKey],
+      activePackageIds: [donPackage.packageId, secondPackage.packageId],
+      privateSlotBookingPilotEnabled: true,
+    });
+
+    const studentContext = await browser.newContext();
+    const studentPage = await studentContext.newPage();
+    try {
+      await openStudentPrivateBooking(studentPage, studentEmail);
+      await expect(
+        privateSlotCardForDateTime(studentPage, slotDate, slotTime),
+        'miketest package should expose the public weekly slot before revoke'
+      ).toBeVisible({ timeout: 30000 });
+    } finally {
+      await studentContext.close().catch(() => {});
+    }
+
+    await openDashboardSection(page, '학생 관리');
+    await getStudentSearchInput(page).fill(studentName);
+    const studentRow = getStudentRow(page, studentName);
+    await expect(studentRow).toBeVisible();
+    await expect(studentRow.getByTestId('student-private-package-cell')).toContainText(TEACHER);
+    await expect(studentRow.getByTestId('student-private-package-cell')).toContainText('miketest');
+    await studentRow.getByRole('button', { name: '수강권 보기', exact: true }).click();
+
+    const donCard = page.getByTestId('student-package-card').filter({ hasText: `E2E don1 유지 수강권 ${unique}` });
+    await expect(donCard).toBeVisible();
+    await expect(donCard.getByTestId('student-package-revoke-button')).toBeDisabled();
+    await expect(donCard.getByTestId('student-package-revoke-disabled-reason')).toContainText(
+      /사용된 회차|활성 1:1 예약/
+    );
+
+    const secondCard = page
+      .getByTestId('student-package-card')
+      .filter({ hasText: `E2E miketest 회수 수강권 ${unique}` });
+    await expect(secondCard).toBeVisible();
+    await expect(secondCard.getByTestId('student-package-revoke-button')).toBeEnabled();
+    page.once('dialog', async (dialog) => {
+      expect(dialog.type()).toBe('prompt');
+      await dialog.accept('E2E 오발급 회수');
+    });
+    await secondCard.getByTestId('student-package-revoke-button').click();
+
+    await expect
+      .poll(async () => {
+        const packages = await getAdminSeededPrivatePackagesForStudent({
+          academyId: ACADEMY_ID,
+          studentId,
+        });
+        return packages.map((pkg) => ({
+          id: pkg.id,
+          teacher: String(pkg.teacherKey || pkg.teacher || '').trim(),
+          status: String(pkg.status || '').trim(),
+          revokeReason: String(pkg.revokeReason || '').trim(),
+        }));
+      }, { timeout: 30000 })
+      .toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: donPackage.packageId, teacher: TEACHER, status: 'active' }),
+          expect.objectContaining({
+            id: secondPackage.packageId,
+            teacher: secondTeacherKey,
+            status: 'revoked',
+            revokeReason: 'E2E 오발급 회수',
+          }),
+        ])
+      );
+
+    const accessSummary = await getAdminSeededStudentPrivateAccessSummary({
+      academyId: ACADEMY_ID,
+      studentId,
+    });
+    expect(accessSummary?.teacherKeys || []).toContain(TEACHER);
+    expect(accessSummary?.teacherKeys || []).not.toContain(secondTeacherKey);
+    expect(accessSummary?.activePackageIds || []).toContain(donPackage.packageId);
+    expect(accessSummary?.activePackageIds || []).not.toContain(secondPackage.packageId);
+
+    await expect(studentRow.getByTestId('student-private-package-cell')).toContainText(TEACHER);
+    await expect(studentRow.getByTestId('student-private-package-cell')).not.toContainText('miketest');
+
+    await page.getByTestId('student-package-show-all-button').click();
+    const revokedCard = page
+      .getByTestId('student-package-card')
+      .filter({ hasText: `E2E miketest 회수 수강권 ${unique}` });
+    await expect(revokedCard).toContainText('회수됨');
+    await expect(revokedCard).toContainText('E2E 오발급 회수');
+    await revokedCard.getByTestId('student-package-history-button').click();
+    const packageHistoryDialog = page.getByRole('dialog', { name: '수강권 이력' });
+    await expect(packageHistoryDialog).toBeVisible();
+    await expect(packageHistoryDialog).toContainText('회수됨');
+    await expect(packageHistoryDialog).toContainText('수강권 회수');
+    await packageHistoryDialog.getByRole('button', { name: '닫기' }).click();
+
+    await studentRow.getByTestId('student-history-open-button').click();
+    const studentHistoryDialog = page.getByRole('dialog', { name: '학생 수업 내역' });
+    await expect(studentHistoryDialog).toBeVisible();
+    await expect(
+      studentHistoryDialog.getByTestId('student-history-package-row').filter({ hasText: `E2E miketest 회수 수강권 ${unique}` })
+    ).toContainText('회수됨');
+    await expect(
+      studentHistoryDialog.getByTestId('student-history-lesson-row').filter({ hasText: '수강권 회수' })
+    ).toContainText('회수됨');
+    await studentHistoryDialog.getByRole('button', { name: '닫기' }).click();
+
+    const studentContextAfterRevoke = await browser.newContext();
+    const studentPageAfterRevoke = await studentContextAfterRevoke.newPage();
+    try {
+      await openStudentPrivateBooking(studentPageAfterRevoke, studentEmail);
+      await expect(
+        privateSlotCardForDateTime(studentPageAfterRevoke, slotDate, slotTime),
+        'miketest slot should disappear after revoking the only miketest package'
+      ).toHaveCount(0, { timeout: 30000 });
+    } finally {
+      await studentContextAfterRevoke.close().catch(() => {});
+    }
+  } finally {
+    await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
+    if (studentId) {
+      await cleanupAdminSeededCreditTransactionsForStudent({
+        academyId: ACADEMY_ID,
+        studentId,
+      }).catch(() => {});
+      await cleanupAdminSeededStudentPrivateAccessSummary({
+        academyId: ACADEMY_ID,
+        studentId,
+      }).catch(() => {});
+    }
+    if (tempStudent) {
+      await cleanupTempStudentData(page, { ...tempStudent, firebaseTaskTimeoutMs: 60000 }).catch(() => {});
+    }
+    if (studentUser) {
+      await cleanupAdminSeededStudentUser({
+        academyId: ACADEMY_ID,
+        uid: studentUser.uid,
+      }).catch(() => {});
+    }
+    if (template) {
+      await cleanupAdminSeededPrivateAvailabilityTemplate({
+        academyId: ACADEMY_ID,
+        templateId: template.templateId,
+      }).catch(() => {});
+    }
     await cleanupAdminSeededTeacher({
       academyId: ACADEMY_ID,
       teacherId: secondTeacherId,

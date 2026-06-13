@@ -3,6 +3,7 @@ import {
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
   formatGroupStudentStartDate,
+  formatStudentPackageDetailStatusLabel,
   formatStudentPackageDetailTypeLabel,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
@@ -173,6 +174,23 @@ export default function StudentPackageHistoryModal({
                 <span style={{ opacity: 0.72 }}>유형</span>{' '}
                 {formatStudentPackageDetailTypeLabel(studentPackageHistoryModalPackage.packageType)}
               </div>
+              <div>
+                <span style={{ opacity: 0.72 }}>상태</span>{' '}
+                {formatStudentPackageDetailStatusLabel(studentPackageHistoryModalPackage.status)}
+              </div>
+              {String(studentPackageHistoryModalPackage.status || '').trim().toLowerCase() ===
+              'revoked' ? (
+                <>
+                  <div>
+                    <span style={{ opacity: 0.72 }}>회수 사유</span>{' '}
+                    {String(studentPackageHistoryModalPackage.revokeReason || '').trim() || '-'}
+                  </div>
+                  <div>
+                    <span style={{ opacity: 0.72 }}>회수일</span>{' '}
+                    {formatYmdDateTime(studentPackageHistoryModalPackage.revokedAt)}
+                  </div>
+                </>
+              ) : null}
               <div>
                 <span style={{ opacity: 0.72 }}>등록일</span>{' '}
                 {formatYmdDateTime(studentPackageHistoryModalPackage.createdAt)}
