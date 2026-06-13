@@ -165,6 +165,81 @@ export async function createAdminSeededStudentPackage(params = {}) {
   };
 }
 
+export async function getAdminSeededPrivatePackagesForStudent({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const db = getDb();
+  const snap = await db
+    .collection('studentPackages')
+    .where('academyId', '==', String(academyId || '').trim())
+    .where('studentId', '==', String(studentId || '').trim())
+    .where('packageType', '==', 'private')
+    .get();
+  return snap.docs.map((docSnap) => ({
+    id: docSnap.id,
+    ...docSnap.data(),
+  }));
+}
+
+export async function getAdminSeededStudentPrivateAccessSummary({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const db = getDb();
+  const id = `${String(academyId || '').trim()}__${String(studentId || '').trim()}`;
+  const snap = await db.collection('studentPrivateAccessSummary').doc(id).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+export async function setAdminSeededStudentPrivateAccessSummary({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  teacherKeys = [],
+  activePackageIds = [],
+}) {
+  const db = getDb();
+  const id = `${String(academyId || '').trim()}__${String(studentId || '').trim()}`;
+  const now = timestampNow();
+  await db.collection('studentPrivateAccessSummary').doc(id).set(
+    {
+      academyId: String(academyId || '').trim(),
+      studentId: String(studentId || '').trim(),
+      teacherKeys,
+      activePackageIds,
+      createdAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+  return { summaryId: id };
+}
+
+export async function cleanupAdminSeededTeacher({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  teacherId,
+}) {
+  await deleteKnownAcademyDoc(
+    getDb(),
+    'teachers',
+    String(teacherId || '').trim(),
+    String(academyId || '').trim()
+  );
+}
+
+export async function cleanupAdminSeededStudentPrivateAccessSummary({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const id = `${String(academyId || '').trim()}__${String(studentId || '').trim()}`;
+  await deleteKnownAcademyDoc(
+    getDb(),
+    'studentPrivateAccessSummary',
+    id,
+    String(academyId || '').trim()
+  );
+}
+
 export async function createAdminSeededLessonRequest(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();

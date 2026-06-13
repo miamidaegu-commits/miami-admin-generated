@@ -3055,6 +3055,7 @@ export default function Dashboard() {
     recomputePrivatePackageUsage,
     validatePrivateLessonFormFields: (form) =>
       validatePrivateLessonFormFieldsShared(form, { isAdmin }),
+    teacherSelectOptions,
   })
 
   const {
@@ -5557,6 +5558,7 @@ export default function Dashboard() {
     studentPackageFormErrors,
     canViewPaymentFields,
     sortedGroupClasses,
+    teacherSelectOptions,
     nextGroupLessonDateByGroupId,
     studentPackageGroupAutoSummary,
     studentPackageModalActiveSameScopeDuplicates,

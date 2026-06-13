@@ -25,6 +25,7 @@ export default function StudentPackageModal({
   studentPackageFormErrors,
   canViewPaymentFields = false,
   sortedGroupClasses,
+  teacherSelectOptions = [],
   nextGroupLessonDateByGroupId,
   studentPackageGroupAutoSummary,
   studentPackageModalActiveSameScopeDuplicates,
@@ -73,7 +74,41 @@ export default function StudentPackageModal({
           weeklyFrequency: studentPackageForm.weeklyFrequency,
         })
       : ''
-  const privateTeacherScopeLabel = formatTeacherScopeLabel(studentPackageModalStudent)
+  const selectedPrivateTeacherValue = String(studentPackageForm.privateTeacher || '').trim()
+  const selectedPrivateTeacherOption =
+    teacherSelectOptions.find((option) => {
+      const keys = [
+        option?.value,
+        option?.teacherKey,
+        option?.displayName,
+        option?.label,
+        option?.teacherUid,
+      ]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean)
+      return keys.includes(selectedPrivateTeacherValue.toLowerCase())
+    }) || null
+  const mergedPrivateTeacherOptions =
+    selectedPrivateTeacherValue && !selectedPrivateTeacherOption
+      ? [
+          {
+            value: selectedPrivateTeacherValue,
+            label: `기존 값: ${selectedPrivateTeacherValue}`,
+            teacherKey: selectedPrivateTeacherValue,
+          },
+          ...teacherSelectOptions,
+        ]
+      : teacherSelectOptions
+  const selectedPrivateTeacherScope = selectedPrivateTeacherOption
+    ? {
+        teacherName: selectedPrivateTeacherOption.displayName || selectedPrivateTeacherOption.label,
+        teacherKey: selectedPrivateTeacherOption.teacherKey || selectedPrivateTeacherOption.value,
+      }
+    : {
+        teacherName: selectedPrivateTeacherValue,
+        teacherKey: selectedPrivateTeacherValue,
+      }
+  const privateTeacherScopeLabel = formatTeacherScopeLabel(selectedPrivateTeacherScope)
   const autoTotalCount = isGroupPackage
     ? String(studentPackageGroupAutoSummary?.computedTotalCount ?? 0)
     : isPrivateRegular
@@ -227,6 +262,43 @@ export default function StudentPackageModal({
                   <option value="openGroup">오픈 그룹 (openGroup)</option>
                 </select>
               </label>
+
+              {isPrivatePackage ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>수강권 선생님</span>
+                  <select
+                    aria-label="수강권 선생님"
+                    data-testid="student-package-private-teacher-select"
+                    value={selectedPrivateTeacherValue}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({
+                        ...prev,
+                        privateTeacher: e.target.value,
+                        privateDuplicateAction: 'topUp',
+                      }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="">선택</option>
+                    {mergedPrivateTeacherOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {studentPackageFormErrors.privateTeacher ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageFormErrors.privateTeacher}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
 
               {isPrivatePackage && !isPrivateTopUpFlow ? (
                 <div
