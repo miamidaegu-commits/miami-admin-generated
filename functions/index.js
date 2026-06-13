@@ -3406,12 +3406,13 @@ function getPrivateSlotConflictKey({
   date,
   time,
 }) {
-  const conflictTeacherKey =
-    normalizeTeacherKey(teacherKey) ||
-    normalizeTeacherKey(teacherUid) ||
-    normalizeTeacherKey(teacherUID) ||
-    normalizeTeacherKey(teacher) ||
-    normalizeTeacherKey(teacherName);
+  const conflictTeacherKey = getPrivateTeacherScopeKeys({
+    teacher,
+    teacherName,
+    teacherKey,
+    teacherUid,
+    teacherUID,
+  })[0] || "";
   return `${conflictTeacherKey}__${normalizeId(date)}__${normalizeId(time)}`;
 }
 
@@ -4849,6 +4850,15 @@ exports.listPrivateLessonSlotAvailability = onCall(
               });
             });
 
+        const reservedSlotIds = new Set(
+            staleCancelledReservationBySlotId.keys(),
+        );
+        visibleSlotEntries.forEach(([slotId, slot]) => {
+          if (String(slot.status || "").trim() !== "reserved") return;
+          if (activeReservationBySlotId.has(slotId)) {
+            reservedSlotIds.add(slotId);
+          }
+        });
         const busyRowsByKey = teacherKeys.length > 0 ?
           await loadBusyPrivateScheduleRows(db, {
             academyId,
@@ -4856,7 +4866,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
             packageByTeacherKey: packageSummary.byTeacherKey,
             rangeStart,
             rangeEnd,
-            ignoredSlotIds: new Set(staleCancelledReservationBySlotId.keys()),
+            ignoredSlotIds: reservedSlotIds,
           }) :
           new Map();
         visibleSlotEntries.forEach(([slotId, slot]) => {
@@ -4867,7 +4877,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
             return;
           }
           const key = getPrivateSlotConflictKey(slot || {});
-          if (!key || busyRowsByKey.has(key)) return;
+          if (!key) return;
           const teacherKey = getPrivateScheduleTeacherKey(slot);
           if (!teacherKey) return;
           busyRowsByKey.set(key, buildBusyPrivateScheduleRow({

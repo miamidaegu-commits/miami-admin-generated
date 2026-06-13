@@ -100,6 +100,17 @@ function studentSlotCardById(page, slotId) {
   return page.locator(`[data-testid="student-private-slot-card"][data-slot-id="${slotId}"]`);
 }
 
+function studentPrivateAvailabilityCardById(page, slotId) {
+  return page
+    .locator(
+      [
+        `[data-testid="student-private-slot-card"][data-slot-id="${slotId}"]`,
+        `[data-testid="student-private-busy-slot-card"][data-slot-id="${slotId}"]`,
+      ].join(', ')
+    )
+    .first();
+}
+
 function privateSlotCardForDateTime(page, date, time) {
   return page
     .getByTestId('student-private-slot-card')
@@ -1537,19 +1548,24 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       fixture.pilotDisabledStudent.email
     );
     await pilotDisabledPage.getByRole('button', { name: '전체 시간 보기' }).click();
-    const pilotDisabledCard = studentSlotCardById(pilotDisabledPage, fixture.pilotDisabledSlotId);
+    const pilotDisabledCard = studentPrivateAvailabilityCardById(
+      pilotDisabledPage,
+      fixture.pilotDisabledSlotId
+    );
     await expect(
       pilotDisabledCard,
       'pilot disabled student should see the intended disabled private slot card'
     ).toBeVisible({ timeout: 15000 });
     await expect(pilotDisabledCard).toContainText(fixture.pilotDisabledDate);
     await expect(pilotDisabledCard).toContainText(fixture.pilotDisabledTime);
-    await expect(
-      pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
-    ).toBeDisabled();
-    await expect(
-      pilotDisabledCard.getByTestId('student-private-slot-reserve-button')
-    ).toHaveText('수업 있음');
+    await expect(pilotDisabledCard).toContainText('수업 있음');
+    const pilotDisabledReserveButton = pilotDisabledCard.getByTestId(
+      'student-private-slot-reserve-button'
+    );
+    if (await pilotDisabledReserveButton.count()) {
+      await expect(pilotDisabledReserveButton).toBeDisabled();
+      await expect(pilotDisabledReserveButton).toHaveText('수업 있음');
+    }
     expect(
       await getReservation(
         db,
