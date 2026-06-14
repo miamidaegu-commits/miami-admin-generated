@@ -458,6 +458,114 @@ export async function cleanupAdminSeededCreditTransactionsForStudent({
   await Promise.all(snap.docs.map((docSnap) => docSnap.ref.delete().catch(() => {})));
 }
 
+export async function cleanupAdminTempStudentData({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  studentName,
+  packageId,
+  packageIds = [],
+  createdPackageIds = [],
+  groupStudentId,
+  groupStudentIds = [],
+  allowStudentNameLookup = false,
+  cleanupPackagesByStudent = false,
+  cleanupGroupStudentsByStudent = false,
+} = {}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const studentIds = new Set(
+    [studentId]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+
+  if (allowStudentNameLookup === true && studentName) {
+    const snap = await db
+      .collection('privateStudents')
+      .where('academyId', '==', scopedAcademyId)
+      .where('name', '==', String(studentName || '').trim())
+      .get();
+    snap.docs.forEach((docSnap) => studentIds.add(docSnap.id));
+  }
+
+  const exactPackageIds = new Set(
+    [packageId, ...(Array.isArray(packageIds) ? packageIds : []), ...(Array.isArray(createdPackageIds) ? createdPackageIds : [])]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+  const exactGroupStudentIds = new Set(
+    [groupStudentId, ...(Array.isArray(groupStudentIds) ? groupStudentIds : [])]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+
+  if (cleanupPackagesByStudent === true) {
+    for (const currentStudentId of studentIds) {
+      const snap = await db
+        .collection('studentPackages')
+        .where('academyId', '==', scopedAcademyId)
+        .where('studentId', '==', currentStudentId)
+        .get();
+      snap.docs.forEach((docSnap) => exactPackageIds.add(docSnap.id));
+    }
+  }
+
+  if (cleanupGroupStudentsByStudent === true) {
+    for (const currentStudentId of studentIds) {
+      const snap = await db
+        .collection('groupStudents')
+        .where('academyId', '==', scopedAcademyId)
+        .where('studentId', '==', currentStudentId)
+        .get();
+      snap.docs.forEach((docSnap) => exactGroupStudentIds.add(docSnap.id));
+    }
+  }
+
+  const summaryIds = Array.from(studentIds).flatMap((currentStudentId) => [
+    currentStudentId,
+    `${scopedAcademyId}__${currentStudentId}`,
+  ]);
+
+  const results = await Promise.allSettled([
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.privateStudents',
+      db,
+      'privateStudents',
+      Array.from(studentIds),
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.studentPackages',
+      db,
+      'studentPackages',
+      Array.from(exactPackageIds),
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.groupStudents',
+      db,
+      'groupStudents',
+      Array.from(exactGroupStudentIds),
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.studentGroupAccessSummary',
+      db,
+      'studentGroupAccessSummary',
+      summaryIds,
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.studentPrivateAccessSummary',
+      db,
+      'studentPrivateAccessSummary',
+      summaryIds,
+      scopedAcademyId
+    ),
+  ]);
+  logAdminCleanupWarnings('cleanupTempStudentData', results);
+}
+
 export async function cleanupAdminSeededTempGroupAttendanceSetup({
   academyId = DEFAULT_E2E_ACADEMY_ID,
   packageId,
@@ -1303,6 +1411,29 @@ export async function getAdminGroupLessonByFields(params = {}) {
     id: docSnap.id,
     ...(docSnap.data() || {}),
   };
+}
+
+export async function getAdminGroupLessonIdsInRange(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const startDate = String(params.startDate || '').trim();
+  const endDate = String(params.endDate || '').trim();
+  if (!groupClassId || !startDate || !endDate) return [];
+
+  const snap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', academyId)
+    .where('groupClassId', '==', groupClassId)
+    .get();
+
+  return snap.docs
+    .filter((docSnap) => {
+      const date = String((docSnap.data() || {}).date || '').trim();
+      return date >= startDate && date <= endDate;
+    })
+    .map((docSnap) => docSnap.id)
+    .sort();
 }
 
 export async function cleanupAdminGroupLessonById(params = {}) {

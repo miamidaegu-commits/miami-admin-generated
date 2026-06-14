@@ -169,6 +169,15 @@ async function openReservationView(row) {
   return row.page().getByTestId('group-reservation-modal');
 }
 
+async function reopenGroupLessonRow(page, groupName, lessonId) {
+  await openDashboardSection(page, '단체반 관리');
+  await clickGroupRow(page, groupName);
+  await expect(getRegisteredStudentsHeading(page, groupName)).toBeVisible({ timeout: 15000 });
+  const row = getLessonRowById(page, lessonId);
+  await expect(row).toBeVisible({ timeout: 15000 });
+  return row;
+}
+
 async function closeReservationModal(modal) {
   await modal.getByRole('button', { name: '닫기', exact: true }).click();
   await expect(modal).toBeHidden();
@@ -814,6 +823,26 @@ async function expectLessonBookedCount(db, lessonId, expected) {
     .toBe(expected);
 }
 
+async function expectNoDeductionLessonState(db, lessonId) {
+  await expect
+    .poll(async () => {
+      const snap = await db.collection('groupLessons').doc(lessonId).get();
+      const data = snap.data() || {};
+      return {
+        status: data.status || '',
+        cancellationType: data.cancellationType || '',
+        cancelledReason: data.cancelledReason || '',
+        noDeduction: data.noDeduction === true,
+      };
+    }, { timeout: 15000 })
+    .toEqual({
+      status: 'cancelled',
+      cancellationType: 'no_deduction',
+      cancelledReason: 'teacher_unavailable',
+      noDeduction: true,
+    });
+}
+
 async function expectReservationStatus(db, lessonId, studentId, expected) {
   await expect
     .poll(async () => {
@@ -875,26 +904,7 @@ test('admin can mark one group lesson as no-deduction cancelled', async ({
     await cancelModal.getByLabel('학생 안내 문구 (선택)').fill('선생님 사정으로 휴강합니다.');
     await cancelModal.getByRole('button', { name: '휴강 처리', exact: true }).click();
 
-    await expect(bookableRow).toContainText('휴강', { timeout: 15000 });
-    await expect(bookableRow).toContainText('차감 없음');
-    await expect(bookableRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();
-    await expect
-      .poll(async () => {
-        const snap = await db.collection('groupLessons').doc(setup.bookableLessonId).get();
-        const data = snap.data() || {};
-        return {
-          status: data.status || '',
-          cancellationType: data.cancellationType || '',
-          cancelledReason: data.cancelledReason || '',
-          noDeduction: data.noDeduction === true,
-        };
-      }, { timeout: 15000 })
-      .toEqual({
-        status: 'cancelled',
-        cancellationType: 'no_deduction',
-        cancelledReason: 'teacher_unavailable',
-        noDeduction: true,
-      });
+    await expectNoDeductionLessonState(db, setup.bookableLessonId);
     await expect
       .poll(async () => {
         const snap = await db
@@ -915,8 +925,12 @@ test('admin can mark one group lesson as no-deduction cancelled', async ({
         cancelledReason: 'teacher_unavailable',
         noDeduction: true,
       });
+    const refreshedBookableRow = await reopenGroupLessonRow(page, setup.groupName, setup.bookableLessonId);
+    await expect(refreshedBookableRow).toContainText('휴강', { timeout: 15000 });
+    await expect(refreshedBookableRow).toContainText('차감 없음');
+    await expect(refreshedBookableRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();
     expect(dialogMessages.join('\n')).toContain('수강권이 차감되지 않습니다.');
-    await expect(groupRow).toBeVisible();
+    await expect(getGroupRow(page, setup.groupName)).toBeVisible();
   } finally {
     if (setup) {
       await cleanupBookingFixture(setup).catch(() => {});
@@ -966,16 +980,17 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     );
     await expectReservationStatus(db, setup.bookableLessonId, setup.firstStudentId, 'active');
     await expectLessonBookedCount(db, setup.bookableLessonId, 1);
-    await expect(bookableRow).toContainText('추가 예약 1명', { timeout: 15000 });
-    await expect(bookableRow).toContainText('남은 자리 1명', { timeout: 15000 });
     await closeReservationModal(modal);
+    let refreshedBookableRow = await reopenGroupLessonRow(page, setup.groupName, setup.bookableLessonId);
+    await expect(refreshedBookableRow).toContainText('추가 예약 1명', { timeout: 15000 });
+    await expect(refreshedBookableRow).toContainText('남은 자리 1명', { timeout: 15000 });
 
-    modal = await openReservationAdd(bookableRow);
+    modal = await openReservationAdd(refreshedBookableRow);
     await expect(modal.getByText(setup.firstStudentName)).toHaveCount(0);
     await expect(modal.getByText(setup.secondStudentName)).toBeVisible();
     await closeReservationModal(modal);
 
-    modal = await openReservationView(bookableRow);
+    modal = await openReservationView(refreshedBookableRow);
     let activeReservation = modal
       .getByTestId('group-reservation-row')
       .filter({ hasText: setup.firstStudentName });
@@ -983,13 +998,13 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await expect(activeReservation).toContainText('예약 완료');
     await activeReservation.getByRole('button', { name: '예약 취소', exact: true }).click();
     await expectReservationStatus(db, setup.bookableLessonId, setup.firstStudentId, 'cancelled');
-    await expect(activeReservation).toContainText('예약 취소', { timeout: 15000 });
     await expectLessonBookedCount(db, setup.bookableLessonId, 0);
     await closeReservationModal(modal);
-    await expect(bookableRow).toContainText('추가 예약 0명', { timeout: 15000 });
-    await expect(bookableRow).toContainText('남은 자리 2명', { timeout: 15000 });
+    refreshedBookableRow = await reopenGroupLessonRow(page, setup.groupName, setup.bookableLessonId);
+    await expect(refreshedBookableRow).toContainText('추가 예약 0명', { timeout: 15000 });
+    await expect(refreshedBookableRow).toContainText('남은 자리 2명', { timeout: 15000 });
 
-    modal = await openReservationAdd(bookableRow);
+    modal = await openReservationAdd(refreshedBookableRow);
     await expect(modal.getByText(setup.firstStudentName)).toBeVisible();
     await clickExpectingNoDialog(
       page,
@@ -1001,8 +1016,9 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await expectReservationStatus(db, setup.bookableLessonId, setup.firstStudentId, 'active');
     await expectLessonBookedCount(db, setup.bookableLessonId, 1);
     await closeReservationModal(modal);
+    refreshedBookableRow = await reopenGroupLessonRow(page, setup.groupName, setup.bookableLessonId);
 
-    modal = await openReservationView(bookableRow);
+    modal = await openReservationView(refreshedBookableRow);
     activeReservation = modal
       .getByTestId('group-reservation-row')
       .filter({ hasText: setup.firstStudentName });

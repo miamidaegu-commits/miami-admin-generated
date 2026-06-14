@@ -140,8 +140,11 @@ test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 
 
     await expect(createdLessonRow.first()).toBeVisible();
 
+    const deleteButton = createdLessonRow.first().getByRole('button', { name: '삭제', exact: true });
+    await expect(deleteButton).toBeVisible({ timeout: 10000 });
+    await expect(deleteButton).toBeEnabled({ timeout: 10000 });
     const deleteDialogHandled = acceptOptionalDialog(page, 2000);
-    await createdLessonRow.first().getByRole('button', { name: '삭제', exact: true }).click();
+    await deleteButton.click({ timeout: 10000 });
     await deleteDialogHandled;
 
     await expect
@@ -164,12 +167,14 @@ test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 
       .count();
     if (remainingCount === 0) return;
 
-    const cleanupDialogHandled = acceptOptionalDialog(page, 2000);
-    await page
+    const cleanupRow = page
       .locator(`[data-testid="group-lesson-row"][data-lesson-id="${createdLessonId}"]`)
-      .first()
-      .getByRole('button', { name: '삭제', exact: true })
-      .click();
+      .first();
+    const cleanupButton = cleanupRow.getByRole('button', { name: '삭제', exact: true });
+    await expect(cleanupRow).toBeVisible({ timeout: 5000 });
+    await expect(cleanupButton).toBeEnabled({ timeout: 5000 });
+    const cleanupDialogHandled = acceptOptionalDialog(page, 2000);
+    await cleanupButton.click({ timeout: 10000 });
     await cleanupDialogHandled;
 
     await expect

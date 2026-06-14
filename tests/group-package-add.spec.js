@@ -103,7 +103,11 @@ test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 �
     await expect(postEnrollDialog).toBeHidden();
   } finally {
     if (tempStudent) {
-      await cleanupTempStudentData(page, tempStudent);
+      await cleanupTempStudentData(page, {
+        ...tempStudent,
+        cleanupPackagesByStudent: true,
+        cleanupGroupStudentsByStudent: true,
+      });
     }
   }
 });

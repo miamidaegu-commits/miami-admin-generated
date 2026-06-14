@@ -1,4 +1,5 @@
 import {
+  cleanupAdminTempStudentData,
   cleanupAdminSeededTempCalendarGroupLessonSetup,
   cleanupAdminSeededTempGroupAttendanceSetup,
   getAdminSeededGroupAttendanceState,
@@ -57,8 +58,13 @@ export async function createTempTeacher(page, params) {
 }
 
 export async function cleanupTempStudentData(page, params) {
+  void page;
   if (!params?.studentId && !params?.studentName) return;
-  await runFirebaseTask(page, 'cleanupTempStudentData', params);
+  try {
+    await cleanupAdminTempStudentData(params);
+  } catch (error) {
+    console.warn(`cleanupTempStudentData warning: ${error?.message || String(error)}`);
+  }
 }
 
 export async function cleanupTempGroupStudentAddSetup(page, params) {
