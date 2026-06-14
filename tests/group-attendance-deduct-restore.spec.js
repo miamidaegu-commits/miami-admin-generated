@@ -141,6 +141,7 @@ async function collectAttendanceDiagnostics({
   lessonDate,
   lessonTime,
   lessonSubject,
+  groupClassId,
   groupLessonId,
   studentId,
   packageId,
@@ -161,10 +162,12 @@ async function collectAttendanceDiagnostics({
       .evaluateAll((rows) => rows.slice(0, 40).map((row) => (row.textContent || '').trim()))
       .catch((error) => ({ error: error?.message || String(error) })),
     getTempGroupAttendanceState(page, {
+      groupClassId,
       groupLessonId,
       studentId,
       packageId,
       groupStudentId,
+      strictLessonIdsOnly: true,
       firebaseTaskTimeoutMs: 10000,
     }).catch((error) => ({ error: error?.message || String(error) })),
   ]);
@@ -229,6 +232,34 @@ async function setAttendanceStateAndWait({
     expectedState,
     { timeout: 20000, diagnostics }
   );
+}
+
+async function expectAttendanceFixtureReady(page, ids) {
+  await expect
+    .poll(
+      async () => {
+        const state = await getTempGroupAttendanceState(page, {
+          ...ids,
+          strictLessonIdsOnly: true,
+          firebaseTaskTimeoutMs: 10000,
+        });
+        return {
+          groupClass: state?.groupClass?.exists === true,
+          groupLesson: state?.groupLesson?.exists === true,
+          studentPackage: state?.studentPackage?.exists === true,
+          groupStudent: state?.groupStudent?.exists === true,
+          privateStudent: state?.privateStudent?.exists === true,
+        };
+      },
+      { timeout: 20000 }
+    )
+    .toEqual({
+      groupClass: true,
+      groupLesson: true,
+      studentPackage: true,
+      groupStudent: true,
+      privateStudent: true,
+    });
 }
 
 async function openAttendanceDialogForLesson(targetLessonRow, page) {
@@ -304,7 +335,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
   const lessonDate = formatYmd(addDays(new Date(`${todayYmd}T00:00:00`), -2));
   const lessonTime = '22:35';
   const uniqueToken = `run${Date.now()}-w${testInfo.workerIndex}-r${testInfo.repeatEachIndex}`;
-  const groupName = `E2E 그룹출결반 ${uniqueToken}`;
+  const groupName = `000 E2E 그룹출결반 ${uniqueToken}`;
   const lessonSubject = `E2E 그룹출결 ${uniqueToken}`;
   const tempStudentName = `E2E 출결학생 ${uniqueToken}`;
   const tempPackageTitle = `E2E 그룹출결 수강권 ${uniqueToken}`;
@@ -321,6 +352,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
   try {
     releaseFirebaseAttendanceLock = await acquireFirebaseAttendanceLock();
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
     await createTempStudent(page, {
       studentId: tempStudentId,
       studentName: tempStudentName,
@@ -348,7 +380,13 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       groupStudentId: tempGroupStudentId,
       totalCount: 8,
     });
-    await openDashboardSection(page, '단체반 관리');
+    await expectAttendanceFixtureReady(page, {
+      groupClassId: tempGroupClassId,
+      groupLessonId: tempTargetLessonId,
+      studentId: tempStudentId,
+      packageId: tempPackageId,
+      groupStudentId: tempGroupStudentId,
+    });
     const groupRow = await clickGroupRow(page, groupName);
     await expect(getRegisteredStudentsHeading(page, groupName)).toBeVisible();
 
@@ -371,6 +409,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
         lessonDate,
         lessonTime,
         lessonSubject,
+        groupClassId: tempGroupClassId,
         groupLessonId: tempTargetLessonId,
         studentId: tempStudentId,
         packageId: tempPackageId,
@@ -434,7 +473,9 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
           packageId: tempPackageId,
           groupStudentId: tempGroupStudentId,
           studentId: tempStudentId,
+          groupClassId: tempGroupClassId,
           groupLessonId: tempTargetLessonId,
+          strictLessonIdsOnly: true,
           skipCreditTransactionCleanup: true,
           firebaseTaskTimeoutMs: 7000,
         })

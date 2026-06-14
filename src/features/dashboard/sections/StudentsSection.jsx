@@ -1403,6 +1403,7 @@ export default function StudentsSection({
             <div
               className="table-row"
               data-testid="student-row"
+              data-student-id={student.id || ''}
               data-student-name={student.name || ''}
               style={{
                 gridTemplateColumns:
@@ -2124,6 +2125,8 @@ export default function StudentsSection({
                       <div
                         key={pkg.id}
                         data-testid="student-package-card"
+                        data-package-id={pkg.id || ''}
+                        data-teacher-key={cleanText(pkg.teacherKey || pkg.teacher || pkg.teacherName, '')}
                         style={{
                           padding: 12,
                           borderRadius: 10,

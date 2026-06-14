@@ -103,6 +103,24 @@ export async function createAdminSeededPrivateStudent(params = {}) {
   };
 }
 
+export async function getAdminSeededPrivateStudent({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const db = getDb();
+  const id = String(studentId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('privateStudents').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
 export async function createAdminSeededStudentUser(params = {}) {
   const auth = admin.auth(getAdminApp());
   const db = getDb();
@@ -293,6 +311,24 @@ export async function getAdminSeededPrivatePackagesForStudent({
   }));
 }
 
+export async function getAdminSeededStudentPackage({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+}) {
+  const db = getDb();
+  const id = String(packageId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('studentPackages').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
 export async function getAdminSeededStudentPrivateAccessSummary({
   academyId = DEFAULT_E2E_ACADEMY_ID,
   studentId,
@@ -331,6 +367,32 @@ export async function setAdminSeededStudentPrivateAccessSummary({
   return { summaryId: id };
 }
 
+export async function createAdminSeededTeacher({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  teacherId,
+  teacherKey,
+  teacherName,
+  teacherUid = '',
+  teacherEmail = '',
+}) {
+  const db = getDb();
+  const now = timestampNow();
+  const key = String(teacherKey || '').trim();
+  const id = String(teacherId || `e2e-teacher-${key}`).trim();
+  await db.collection('teachers').doc(id).set({
+    academyId: String(academyId || '').trim(),
+    name: String(teacherName || key).trim(),
+    teacherName: key,
+    teacherKey: key,
+    teacherUid: String(teacherUid || '').trim(),
+    teacherEmail: String(teacherEmail || '').trim(),
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { teacherId: id, teacherKey: key, teacherName: String(teacherName || key).trim() };
+}
+
 export async function cleanupAdminSeededTeacher({
   academyId = DEFAULT_E2E_ACADEMY_ID,
   teacherId,
@@ -367,6 +429,75 @@ export async function cleanupAdminSeededCreditTransactionsForStudent({
     .where('studentId', '==', String(studentId || '').trim())
     .get();
   await Promise.all(snap.docs.map((docSnap) => docSnap.ref.delete().catch(() => {})));
+}
+
+export async function getAdminSeededGroupAttendanceState({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  groupClassId,
+  groupLessonId,
+  groupStudentId,
+  packageId,
+  studentId,
+}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+
+  async function readDoc(collectionName, docId) {
+    const normalizedDocId = String(docId || '').trim();
+    if (!normalizedDocId) {
+      return { exists: false };
+    }
+
+    const snap = await db.collection(collectionName).doc(normalizedDocId).get();
+    const data = snap.exists ? snap.data() || {} : {};
+    return {
+      exists: snap.exists,
+      academyId: data.academyId || '',
+      studentId: data.studentId || '',
+      packageId: data.packageId || '',
+      groupClassId: data.groupClassId || data.groupClassID || data.classID || '',
+      countedStudentIDs: Array.isArray(data.countedStudentIDs) ? data.countedStudentIDs : [],
+      usedCount: data.usedCount ?? null,
+      remainingCount: data.remainingCount ?? null,
+      attendanceCount: data.attendanceCount ?? null,
+      status: data.status || '',
+      studentStatus: data.studentStatus || '',
+      updatedAtType: data.updatedAt?.toDate ? 'timestamp' : typeof data.updatedAt,
+    };
+  }
+
+  const [groupClass, groupLesson, studentPackage, groupStudent, privateStudent] = await Promise.all([
+    readDoc('groupClasses', groupClassId),
+    readDoc('groupLessons', groupLessonId),
+    readDoc('studentPackages', packageId),
+    readDoc('groupStudents', groupStudentId),
+    readDoc('privateStudents', studentId),
+  ]);
+
+  return {
+    academyId: scopedAcademyId,
+    groupClass,
+    groupLesson,
+    studentPackage,
+    groupStudent,
+    privateStudent,
+  };
+}
+
+export async function getAdminSeededCreditTransactionsForPackage({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+}) {
+  const db = getDb();
+  const snap = await db
+    .collection('creditTransactions')
+    .where('academyId', '==', String(academyId || '').trim())
+    .where('packageId', '==', String(packageId || '').trim())
+    .get();
+  return snap.docs.map((docSnap) => ({
+    id: docSnap.id,
+    ...docSnap.data(),
+  }));
 }
 
 export async function createAdminSeededLessonRequest(params = {}) {
@@ -564,6 +695,11 @@ export async function createAdminSeededPrivateReservation(params = {}) {
 export async function cleanupAdminSeededPrivatePackageWorkflowCopyFixture(fixture = {}) {
   const academyId = String(fixture.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
   await Promise.all(
+    (Array.isArray(fixture.packageIds) ? fixture.packageIds : []).map((id) =>
+      deleteKnownAcademyDoc(getDb(), 'studentPackages', id, academyId)
+    )
+  );
+  await Promise.all(
     (Array.isArray(fixture.lessonIds) ? fixture.lessonIds : []).map((id) =>
       deleteKnownAcademyDoc(getDb(), 'lessons', id, academyId)
     )
@@ -573,6 +709,9 @@ export async function cleanupAdminSeededPrivatePackageWorkflowCopyFixture(fixtur
       deleteKnownAcademyDoc(getDb(), 'privateLessonReservations', id, academyId)
     )
   );
+  if (fixture.studentId) {
+    await deleteKnownAcademyDoc(getDb(), 'privateStudents', fixture.studentId, academyId);
+  }
 }
 
 export async function createAdminSeededPrivateLessonEditFixture(params = {}) {
