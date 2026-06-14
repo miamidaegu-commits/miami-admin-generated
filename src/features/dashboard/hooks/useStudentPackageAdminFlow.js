@@ -3,6 +3,7 @@ import {
   collection,
   deleteField,
   doc,
+  getDoc,
   getDocs,
   query,
   serverTimestamp,
@@ -16,6 +17,7 @@ import { db, functions as firebaseFunctions } from '../../../../firebase'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   creditTransactionCreatedAtToMillis,
+  getTodayStorageDateString,
   getNextStudentPackageStatus,
   normalizeText,
   parseYmdToLocalDate,
@@ -45,7 +47,58 @@ function createDefaultStudentPackageEditForm(overrides = {}) {
   }
 }
 
+function getPrivatePackageTeacher(pkg) {
+  return normalizeText(pkg?.teacherKey || pkg?.teacher || pkg?.teacherName || '')
+}
+
+function getPackageLinkedIds(row) {
+  return [
+    row?.packageId,
+    row?.deductionPackageId,
+    row?.studentPackageId,
+    row?.privatePackageId,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+}
+
+function isActivePrivateReservationStatus(status) {
+  return ['active', 'reserved', 'confirmed', 'booked'].includes(
+    String(status || '').trim().toLowerCase()
+  )
+}
+
+function isBlockingPrivateLessonForRevoke(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  if (
+    lesson?.cancelled === true ||
+    lesson?.canceled === true ||
+    lesson?.isDeductCancelled === true ||
+    lesson?.noDeduction === true ||
+    status === 'cancelled' ||
+    status === 'canceled'
+  ) {
+    return false
+  }
+  const sourceType = String(lesson?.sourceType || '').trim()
+  if (
+    String(lesson?.packageType || '').trim() === 'private' &&
+    sourceType === 'fixed-private-slot-assignment'
+  ) {
+    return true
+  }
+  const date = String(lesson?.date || lesson?.lessonDate || lesson?.scheduleDate || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return date >= getTodayStorageDateString()
+  }
+  const startAt = lesson?.startAt || lesson?.startsAt
+  if (startAt && typeof startAt.toMillis === 'function') return startAt.toMillis() >= Date.now()
+  if (startAt && typeof startAt.toDate === 'function') return startAt.toDate().getTime() >= Date.now()
+  return false
+}
+
 export default function useStudentPackageAdminFlow({
+  user,
   userProfile,
   currentAcademyId,
   addCreditTransaction,
@@ -500,6 +553,162 @@ export default function useStudentPackageAdminFlow({
     }
   }
 
+  async function revokeStudentPackage(pkg, revokeInfo = null) {
+    if (!isAdminPackageEditor()) {
+      alert('관리자만 수강권을 회수할 수 있습니다.')
+      return
+    }
+    if (!pkg?.id) return
+    if (String(pkg.packageType || '').trim() !== 'private') {
+      alert('개인 수강권만 회수할 수 있습니다.')
+      return
+    }
+    const normalizedStatus = String(pkg.status || 'active').trim().toLowerCase()
+    if (normalizedStatus === 'revoked') {
+      alert('이미 회수된 수강권입니다.')
+      return
+    }
+    if (revokeInfo && revokeInfo.canRevoke === false) {
+      alert(revokeInfo.reason || '이 수강권은 회수할 수 없습니다.')
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(pkg, scopedAcademyId, '수강권')
+      setBusyStudentPackageActionId(pkg.id)
+
+      const studentId = String(pkg.studentId || '').trim()
+      const teacher = getPrivatePackageTeacher(pkg)
+      const pkgRef = doc(db, 'studentPackages', pkg.id)
+      const latestPackageSnap = await getDoc(pkgRef)
+      if (!latestPackageSnap.exists()) {
+        throw new Error('수강권을 찾을 수 없습니다.')
+      }
+      const latestPackage = { id: latestPackageSnap.id, ...latestPackageSnap.data() }
+      assertSameAcademy(latestPackage, scopedAcademyId, '수강권')
+      const latestStatus = String(latestPackage.status || 'active').trim().toLowerCase()
+      const latestUsedCount = Number(latestPackage.usedCount ?? 0) || 0
+      const latestTotalCount = Number(latestPackage.totalCount ?? 0) || 0
+      const latestRemainingCount = Number(latestPackage.remainingCount ?? 0) || 0
+      if (String(latestPackage.packageType || '').trim() !== 'private') {
+        alert('개인 수강권만 회수할 수 있습니다.')
+        return
+      }
+      if (latestStatus !== 'active') {
+        alert(latestStatus === 'revoked' ? '이미 회수된 수강권입니다.' : '사용 중인 수강권만 회수할 수 있습니다.')
+        return
+      }
+      if (latestUsedCount !== 0 || latestRemainingCount < latestTotalCount) {
+        alert('사용된 회차가 있어 회수할 수 없습니다.')
+        return
+      }
+
+      const [reservationSnap, lessonSnap] = await Promise.all([
+        getDocs(
+          query(
+            collection(db, 'privateLessonReservations'),
+            where('academyId', '==', scopedAcademyId),
+            where('studentId', '==', studentId)
+          )
+        ),
+        getDocs(
+          query(
+            collection(db, 'lessons'),
+            where('academyId', '==', scopedAcademyId),
+            where('studentId', '==', studentId)
+          )
+        ),
+      ])
+      const hasBlockingReservation = reservationSnap.docs.some((docItem) => {
+        const row = docItem.data() || {}
+        return (
+          isActivePrivateReservationStatus(row.status) &&
+          getPackageLinkedIds(row).includes(pkg.id)
+        )
+      })
+      if (hasBlockingReservation) {
+        alert('활성 1:1 예약이 있어 회수할 수 없습니다.')
+        return
+      }
+      const hasBlockingLesson = lessonSnap.docs.some((docItem) => {
+        const row = docItem.data() || {}
+        return getPackageLinkedIds(row).includes(pkg.id) && isBlockingPrivateLessonForRevoke(row)
+      })
+      if (hasBlockingLesson) {
+        alert('고정 배정 또는 예정된 1:1 수업이 있어 회수할 수 없습니다.')
+        return
+      }
+
+      const title = String(latestPackage.title || pkg.title || '').trim() || pkg.id
+      const reasonInput = window.prompt(
+        `이 개인 수강권을 회수할까요?\n${title}\n\n회수 사유를 입력해 주세요.`,
+        '오발급 회수'
+      )
+      if (reasonInput === null) return
+      const revokeReason = String(reasonInput || '').trim()
+      if (!revokeReason) {
+        alert('회수 사유를 입력해 주세요.')
+        return
+      }
+      const activePrivatePackageSnap = studentId
+        ? await getDocs(
+            query(
+              collection(db, 'studentPackages'),
+              where('academyId', '==', scopedAcademyId),
+              where('studentId', '==', studentId),
+              where('packageType', '==', 'private'),
+              where('status', '==', 'active')
+            )
+          )
+        : null
+      const hasOtherActiveSameTeacher = activePrivatePackageSnap
+        ? activePrivatePackageSnap.docs.some((docItem) => {
+            if (docItem.id === pkg.id) return false
+            return getPrivatePackageTeacher(docItem.data() || {}) === teacher
+          })
+        : false
+      const batch = writeBatch(db)
+      batch.update(pkgRef, {
+        status: 'revoked',
+        revokedAt: serverTimestamp(),
+        revokedBy: String(userProfile?.displayName || userProfile?.email || '관리자').trim(),
+        revokedByUid: String(user?.uid || userProfile?.uid || userProfile?.userId || '').trim(),
+        revokeReason,
+        updatedAt: serverTimestamp(),
+      })
+      if (studentId && teacher) {
+        removeStudentPrivateTeacherAccessBatch(batch, db, {
+          academyId: scopedAcademyId,
+          studentId,
+          teacher,
+          packageId: pkg.id,
+          removeTeacher: !hasOtherActiveSameTeacher,
+        })
+      }
+      await batch.commit()
+
+      await addCreditTransaction({
+        studentId,
+        studentName: String(pkg.studentName || '').trim() || '-',
+        teacher,
+        packageId: pkg.id,
+        packageType: 'private',
+        packageTitle: String(pkg.title || '').trim(),
+        sourceType: 'studentPackage',
+        sourceId: pkg.id,
+        actionType: 'package_revoked',
+        deltaCount: 0,
+        memo: ['수강권 회수', revokeReason].filter(Boolean).join(' · '),
+      })
+    } catch (error) {
+      console.error('수강권 회수 실패:', error)
+      alert(`수강권 회수 실패: ${error.message}`)
+    } finally {
+      setBusyStudentPackageActionId(null)
+    }
+  }
+
   return {
     studentPackageEditModalPackage,
     studentPackageEditForm,
@@ -516,6 +725,7 @@ export default function useStudentPackageAdminFlow({
     submitStudentPackageEditModal,
     validateStudentPackageEditFormFields,
     endStudentPackage,
+    revokeStudentPackage,
     openStudentPackageHistoryModal,
     closeStudentPackageHistoryModal,
   }

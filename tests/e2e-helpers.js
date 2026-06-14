@@ -173,6 +173,10 @@ export function getStudentRow(page, studentName) {
   return page.locator(`[data-testid="student-row"][data-student-name="${studentName}"]`).first();
 }
 
+export function getStudentRowById(page, studentId) {
+  return page.locator(`[data-testid="student-row"][data-student-id="${studentId}"]`).first();
+}
+
 export function getGroupRow(page, groupName) {
   return page.locator(`[data-testid="group-row"][data-group-name="${groupName}"]`).first();
 }

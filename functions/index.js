@@ -804,6 +804,7 @@ function isPackageActiveForDeduction(pkg) {
     "inactive",
     "expired",
     "ended",
+    "revoked",
     "cancelled",
     "canceled",
   ].includes(status);
@@ -996,7 +997,7 @@ function getPrivatePackageRejectReason({
 
   const status = normalizeId(pkg.status || "active").toLowerCase();
   if (
-    ["inactive", "expired", "ended", "cancelled", "canceled"]
+    ["inactive", "expired", "ended", "revoked", "cancelled", "canceled"]
         .includes(status)
   ) {
     return "package_not_active";
@@ -3335,7 +3336,7 @@ function getPackageSummaryByTeacherKey(packageSnap, {
     const status = normalizeId(packageData.status || "active").toLowerCase();
     if (packageType && packageType !== "private") return;
     if (
-      ["inactive", "expired", "ended", "cancelled", "canceled"]
+      ["inactive", "expired", "ended", "revoked", "cancelled", "canceled"]
           .includes(status)
     ) {
       return;

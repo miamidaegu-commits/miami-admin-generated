@@ -68,6 +68,35 @@ function toPositiveInteger(value) {
   return Math.floor(n)
 }
 
+function normalizePackageStatus(status) {
+  return String(status == null || String(status).trim() === '' ? 'active' : status)
+    .trim()
+    .toLowerCase()
+}
+
+function mergeInlinePackageRevokeInfo(pkg, revokeInfo) {
+  const status = normalizePackageStatus(pkg?.status)
+  const usedCount = Number(pkg?.usedCount ?? 0) || 0
+  const totalCount = Number(pkg?.totalCount ?? 0) || 0
+  const remainingCount = Number(pkg?.remainingCount ?? 0) || 0
+  const inlineReasons = []
+  if (String(pkg?.packageType || '').trim() !== 'private') {
+    inlineReasons.push('개인 수강권만 회수할 수 있습니다.')
+  }
+  if (status === 'revoked') inlineReasons.push('이미 회수된 수강권입니다.')
+  else if (status !== 'active') inlineReasons.push('사용 중인 수강권만 회수할 수 있습니다.')
+  if (usedCount !== 0 || remainingCount < totalCount) {
+    inlineReasons.push('사용된 회차가 있어 회수할 수 없습니다.')
+  }
+  if (inlineReasons.length === 0) return revokeInfo
+  return {
+    ...revokeInfo,
+    canRevoke: false,
+    reason: inlineReasons[0],
+    reasons: [...inlineReasons, ...((revokeInfo && revokeInfo.reasons) || [])],
+  }
+}
+
 function packageKindLabel(packageType) {
   if (packageType === 'private') return '1:1'
   if (packageType === 'group' || packageType === 'openGroup') return '단체반'
@@ -190,17 +219,20 @@ function formatPrivatePackageTeacherSummary(
   const privatePackages = (Array.isArray(packages) ? packages : []).filter(
     (pkg) => String(pkg?.packageType || '').trim() === 'private'
   )
-  if (privatePackages.length === 0) return []
+  const rowVisiblePrivatePackages = privatePackages.filter(
+    (pkg) => normalizePackageStatus(pkg?.status) !== 'revoked'
+  )
+  if (rowVisiblePrivatePackages.length === 0) return []
 
-  const activeRemainingPackages = privatePackages.filter(
+  const activeRemainingPackages = rowVisiblePrivatePackages.filter(
     (pkg) => isStudentPackageRowActive(pkg) && toFiniteNumber(pkg.remainingCount) > 0
   )
   const displayPackages =
     activeRemainingPackages.length > 0
       ? activeRemainingPackages
-      : privatePackages.filter((pkg) => isStudentPackageRowActive(pkg)).length > 0
-        ? privatePackages.filter((pkg) => isStudentPackageRowActive(pkg))
-        : privatePackages
+      : rowVisiblePrivatePackages.filter((pkg) => isStudentPackageRowActive(pkg)).length > 0
+        ? rowVisiblePrivatePackages.filter((pkg) => isStudentPackageRowActive(pkg))
+        : rowVisiblePrivatePackages
 
   return displayPackages.map((pkg) => {
     const remaining = toFiniteNumber(pkg.remainingCount)
@@ -366,6 +398,7 @@ function creditTransactionHistoryStatus(row) {
   const actionType = String(row?.actionType || '').trim()
   const delta = Number(row?.deltaCount ?? 0)
   if (actionType === 'group_deduct' || delta < 0) return '출석 처리됨'
+  if (actionType === 'package_revoked') return '회수됨'
   if (actionType.includes('restore') || actionType.includes('cancel') || delta > 0) {
     return '차감 취소'
   }
@@ -458,6 +491,7 @@ export default function StudentsSection({
   privateLessonProgressByStudentId = new Map(),
   studentPackagesSortedByStudentId,
   privateTicketBalanceByPackageId = new Map(),
+  privatePackageRevokeInfoByPackageId = new Map(),
   expandedStudentPackageStudentId,
   setExpandedStudentPackageStudentId,
   showAllStudentPackagesInDetail,
@@ -486,6 +520,7 @@ export default function StudentsSection({
   openStudentPackageEditModal,
   canEditStudentPackageCountsForPackage = () => false,
   endStudentPackage,
+  revokeStudentPackage,
   openStudentPackageHistoryModal,
   openStudentPackageReRegisterModal,
   formatStudentFirstRegisteredForTable,
@@ -860,7 +895,8 @@ export default function StudentsSection({
               String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
               String(row.studentId || '').trim() === studentId &&
               (String(row.sourceType || '').trim() === 'groupLesson' ||
-                actionType.includes('deduct'))
+                actionType.includes('deduct') ||
+                actionType === 'package_revoked')
             )
           })
       )
@@ -1367,6 +1403,7 @@ export default function StudentsSection({
             <div
               className="table-row"
               data-testid="student-row"
+              data-student-id={student.id || ''}
               data-student-name={student.name || ''}
               style={{
                 gridTemplateColumns:
@@ -2069,9 +2106,27 @@ export default function StudentsSection({
                     }}
                   >
                     {displayedPkgList.map((pkg) => (
+                      (() => {
+                        const packageId = String(pkg.id || '').trim()
+                        const revokeInfo =
+                          mergeInlinePackageRevokeInfo(
+                            pkg,
+                            privatePackageRevokeInfoByPackageId.get(packageId) || {
+                              canRevoke: false,
+                              reason: '회수 가능 여부를 확인할 수 없습니다.',
+                            }
+                          )
+                        const status = normalizePackageStatus(pkg.status)
+                        const revokeDisabled =
+                          !revokeInfo.canRevoke ||
+                          busyStudentPackageActionId != null ||
+                          busyStudentPackageSubmit
+                        return (
                       <div
                         key={pkg.id}
                         data-testid="student-package-card"
+                        data-package-id={pkg.id || ''}
+                        data-teacher-key={cleanText(pkg.teacherKey || pkg.teacher || pkg.teacherName, '')}
                         style={{
                           padding: 12,
                           borderRadius: 10,
@@ -2094,6 +2149,14 @@ export default function StudentsSection({
                           <span>{pkg.title != null && String(pkg.title).trim() ? String(pkg.title) : '-'}</span>
                           <span style={{ opacity: 0.72 }}>상태</span>
                           <span>{formatStudentPackageDetailStatusLabel(pkg.status)}</span>
+                          {status === 'revoked' ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>회수 사유</span>
+                              <span>{cleanText(pkg.revokeReason)}</span>
+                              <span style={{ opacity: 0.72 }}>회수일</span>
+                              <span>{formatYmdDateTime(pkg.revokedAt)}</span>
+                            </>
+                          ) : null}
                           <span style={{ opacity: 0.72 }}>등록일</span>
                           <span>{formatYmdDateTime(pkg.createdAt)}</span>
                           <span style={{ opacity: 0.72 }}>연결 반</span>
@@ -2236,6 +2299,42 @@ export default function StudentsSection({
                               이력 보기
                             </button>
                             ) : null}
+                            {isAdmin && String(pkg.packageType || '').trim() === 'private' ? (
+                              <div style={{ display: 'grid', gap: 4 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => revokeStudentPackage?.(pkg, revokeInfo)}
+                                  data-testid="student-package-revoke-button"
+                                  data-can-revoke={revokeInfo.canRevoke ? 'true' : 'false'}
+                                  data-revoke-disabled-reason={revokeInfo.reason || ''}
+                                  disabled={revokeDisabled}
+                                  title={
+                                    revokeInfo.canRevoke
+                                      ? '실수로 발급한 개인 수강권을 회수합니다.'
+                                      : revokeInfo.reason
+                                  }
+                                  style={{
+                                    padding: '6px 12px',
+                                    borderRadius: 8,
+                                    border: '1px solid #663333',
+                                    background: '#3a2020',
+                                    color: 'white',
+                                    cursor: revokeDisabled ? 'not-allowed' : 'pointer',
+                                    fontSize: 13,
+                                  }}
+                                >
+                                  수강권 회수
+                                </button>
+                                {!revokeInfo.canRevoke ? (
+                                  <span
+                                    data-testid="student-package-revoke-disabled-reason"
+                                    style={{ fontSize: 12, opacity: 0.74, maxWidth: 240 }}
+                                  >
+                                    {revokeInfo.reason}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
                             {isAdmin ? (
                               <button
                               type="button"
@@ -2291,6 +2390,8 @@ export default function StudentsSection({
                           </div>
                         ) : null}
                       </div>
+                        )
+                      })()
                     ))}
                   </div>
                       )

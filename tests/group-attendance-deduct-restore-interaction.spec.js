@@ -4,7 +4,6 @@ import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import {
   clickGroupRow,
-  getGroupRow,
   getRegisteredStudentsHeading,
   loginAsAdmin,
   openDashboardSection,
@@ -12,11 +11,13 @@ import {
 import {
   cleanupTempGroupAttendanceSetup,
   cleanupTempCalendarGroupLessonSetup,
-  createTempCalendarGroupLessonSetup,
-  createTempStudent,
-  createTempGroupAttendanceSetup,
   getTempGroupAttendanceState,
 } from './e2e-firebase-helpers.js';
+import {
+  createAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededPrivateStudent,
+  createAdminSeededTempGroupAttendanceSetup,
+} from './e2e-admin-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -35,15 +36,13 @@ function addDays(baseDate, days) {
   return next;
 }
 
-async function getTodayInSeoul(page) {
-  return page.evaluate(() =>
-    new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Seoul',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(new Date())
-  );
+function getTodayInSeoul() {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
 function sleep(ms) {
@@ -122,6 +121,7 @@ async function expectAttendancePackageCounts(page, ids, expected) {
       async () => {
         const state = await getTempGroupAttendanceState(page, {
           ...ids,
+          strictLessonIdsOnly: true,
           firebaseTaskTimeoutMs: 10000,
         });
         return {
@@ -192,6 +192,7 @@ async function collectAttendanceDiagnostics({
   lessonDate,
   lessonTime,
   lessonSubject,
+  groupClassId,
   groupLessonId,
   studentId,
   packageId,
@@ -212,10 +213,12 @@ async function collectAttendanceDiagnostics({
       .evaluateAll((rows) => rows.slice(0, 40).map((row) => (row.textContent || '').trim()))
       .catch((error) => ({ error: error?.message || String(error) })),
     getTempGroupAttendanceState(page, {
+      groupClassId,
       groupLessonId,
       studentId,
       packageId,
       groupStudentId,
+      strictLessonIdsOnly: true,
       firebaseTaskTimeoutMs: 10000,
     }).catch((error) => ({ error: error?.message || String(error) })),
   ]);
@@ -266,6 +269,34 @@ async function clickAttendanceActionAndWait({
   }
 
   throw new Error(`${actionName} failed after ${maxAttempts} attempt(s).`);
+}
+
+async function expectAttendanceFixtureReady(page, ids) {
+  await expect
+    .poll(
+      async () => {
+        const state = await getTempGroupAttendanceState(page, {
+          ...ids,
+          strictLessonIdsOnly: true,
+          firebaseTaskTimeoutMs: 10000,
+        });
+        return {
+          groupClass: state?.groupClass?.exists === true,
+          groupLesson: state?.groupLesson?.exists === true,
+          studentPackage: state?.studentPackage?.exists === true,
+          groupStudent: state?.groupStudent?.exists === true,
+          privateStudent: state?.privateStudent?.exists === true,
+        };
+      },
+      { timeout: 20000 }
+    )
+    .toEqual({
+      groupClass: true,
+      groupLesson: true,
+      studentPackage: true,
+      groupStudent: true,
+      privateStudent: true,
+    });
 }
 
 async function openAttendanceDialogForLesson(targetLessonRow, page) {
@@ -337,11 +368,11 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
   test.slow();
   test.setTimeout(180000);
 
-  const todayYmd = await getTodayInSeoul(page);
+  const todayYmd = getTodayInSeoul();
   const lessonDate = formatYmd(addDays(new Date(`${todayYmd}T00:00:00`), -2));
   const lessonTime = '22:35';
   const uniqueToken = `interaction${Date.now()}-w${testInfo.workerIndex}-r${testInfo.repeatEachIndex}`;
-  const groupName = `E2E 출결상호작용반 ${uniqueToken}`;
+  const groupName = `000 E2E 출결상호작용반 ${uniqueToken}`;
   const lessonSubject = `E2E 출결상호작용 ${uniqueToken}`;
   const tempStudentName = `E2E 상호작용학생 ${uniqueToken}`;
   const tempPackageTitle = `E2E 출결상호작용 수강권 ${uniqueToken}`;
@@ -358,17 +389,15 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
   try {
     releaseFirebaseAttendanceLock = await acquireFirebaseAttendanceInteractionLock();
 
-    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    dialogCollector = createDialogCollector(page);
-
-    await createTempStudent(page, {
+    await createAdminSeededPrivateStudent({
       studentId: tempStudentId,
       studentName: tempStudentName,
+      name: tempStudentName,
       teacherName: '',
       note: 'E2E temporary student for group attendance interaction test',
     });
 
-    await createTempCalendarGroupLessonSetup(page, {
+    await createAdminSeededCalendarGroupLessonSetup({
       groupClassId: tempGroupClassId,
       groupLessonId: tempTargetLessonId,
       groupName,
@@ -379,7 +408,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
       skipPastAttendanceSync: true,
     });
 
-    await createTempGroupAttendanceSetup(page, {
+    await createAdminSeededTempGroupAttendanceSetup({
       groupClassId: tempGroupClassId,
       groupName,
       studentId: tempStudentId,
@@ -391,8 +420,18 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
       totalCount: 8,
     });
 
-    await openDashboardSection(page, '단체반 관리');
+    await expectAttendanceFixtureReady(page, {
+      groupClassId: tempGroupClassId,
+      groupLessonId: tempTargetLessonId,
+      studentId: tempStudentId,
+      packageId: tempPackageId,
+      groupStudentId: tempGroupStudentId,
+    });
 
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
+    dialogCollector = createDialogCollector(page);
+    await openDashboardSection(page, '단체반 관리');
     const groupRow = await clickGroupRow(page, groupName);
 
     await expect(getRegisteredStudentsHeading(page, groupName)).toBeVisible();
@@ -400,11 +439,9 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
     const lessonSection = page.getByTestId('group-lessons-section').locator('..');
     await expect(lessonSection).toBeVisible();
 
-    const targetLessonRow = lessonSection
-      .locator('.table-row')
-      .filter({ hasText: lessonDate })
-      .filter({ hasText: lessonTime })
-      .filter({ hasText: lessonSubject });
+    const targetLessonRow = lessonSection.locator(
+      `[data-testid="group-lesson-row"][data-lesson-id="${tempTargetLessonId}"]`
+    );
 
     await expect(targetLessonRow).toHaveCount(1, { timeout: 10000 });
 
@@ -430,6 +467,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
         lessonDate,
         lessonTime,
         lessonSubject,
+        groupClassId: tempGroupClassId,
         groupLessonId: tempTargetLessonId,
         studentId: tempStudentId,
         packageId: tempPackageId,
@@ -446,6 +484,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
     await expectAttendancePackageCounts(
       page,
       {
+        groupClassId: tempGroupClassId,
         groupLessonId: tempTargetLessonId,
         studentId: tempStudentId,
         packageId: tempPackageId,
@@ -479,6 +518,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
       await expectAttendancePackageCounts(
         page,
         {
+          groupClassId: tempGroupClassId,
           groupLessonId: tempTargetLessonId,
           studentId: tempStudentId,
           packageId: tempPackageId,
@@ -512,6 +552,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
       await expectAttendancePackageCounts(
         page,
         {
+          groupClassId: tempGroupClassId,
           groupLessonId: tempTargetLessonId,
           studentId: tempStudentId,
           packageId: tempPackageId,
@@ -541,7 +582,9 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
           packageId: tempPackageId,
           groupStudentId: tempGroupStudentId,
           studentId: tempStudentId,
+          groupClassId: tempGroupClassId,
           groupLessonId: tempTargetLessonId,
+          strictLessonIdsOnly: true,
           firebaseTaskTimeoutMs: 15000,
         })
       );

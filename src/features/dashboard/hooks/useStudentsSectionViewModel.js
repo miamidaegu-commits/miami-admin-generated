@@ -58,6 +58,101 @@ function isApprovedPrivateLessonForStudentProgress(lesson) {
   )
 }
 
+function normalizePackageStatus(status) {
+  return String(status == null || String(status).trim() === '' ? 'active' : status)
+    .trim()
+    .toLowerCase()
+}
+
+function isActivePrivateReservationStatus(status) {
+  return ['active', 'reserved', 'confirmed', 'booked'].includes(
+    String(status || '').trim().toLowerCase()
+  )
+}
+
+function isActivePrivateLessonRow(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  return (
+    lesson?.cancelled !== true &&
+    lesson?.canceled !== true &&
+    lesson?.isDeductCancelled !== true &&
+    lesson?.noDeduction !== true &&
+    status !== 'cancelled' &&
+    status !== 'canceled'
+  )
+}
+
+function getPackageLinkedIds(row) {
+  return [
+    row?.packageId,
+    row?.deductionPackageId,
+    row?.studentPackageId,
+    row?.privatePackageId,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+}
+
+function isFuturePackageRow(row) {
+  const dateStr = String(row?.date || row?.lessonDate || row?.scheduleDate || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr >= getTodayStorageDateString()
+  const startAt = row?.startAt || row?.startsAt
+  if (startAt && typeof startAt.toMillis === 'function') return startAt.toMillis() >= Date.now()
+  if (startAt && typeof startAt.toDate === 'function') return startAt.toDate().getTime() >= Date.now()
+  return false
+}
+
+function isFixedPrivateAssignmentLesson(lesson) {
+  return (
+    String(lesson?.packageType || '').trim() === 'private' &&
+    String(lesson?.sourceType || '').trim() === 'fixed-private-slot-assignment'
+  )
+}
+
+function buildPrivatePackageRevokeInfo(pkg, lessons, privateReservations) {
+  const packageId = String(pkg?.id || '').trim()
+  const reasons = []
+  const status = normalizePackageStatus(pkg?.status)
+
+  if (String(pkg?.packageType || '').trim() !== 'private') {
+    reasons.push('개인 수강권만 회수할 수 있습니다.')
+  }
+  if (status === 'revoked') reasons.push('이미 회수된 수강권입니다.')
+  else if (status !== 'active') reasons.push('사용 중인 수강권만 회수할 수 있습니다.')
+
+  const usedCount = Number(pkg?.usedCount ?? 0) || 0
+  const totalCount = Number(pkg?.totalCount ?? 0) || 0
+  const remainingCount = Number(pkg?.remainingCount ?? 0) || 0
+  if (usedCount !== 0 || remainingCount < totalCount) {
+    reasons.push('사용된 회차가 있어 회수할 수 없습니다.')
+  }
+
+  const hasBlockingReservation = (Array.isArray(privateReservations) ? privateReservations : []).some(
+    (reservation) =>
+      isActivePrivateReservationStatus(reservation?.status) &&
+      getPackageLinkedIds(reservation).includes(packageId)
+  )
+  if (hasBlockingReservation) {
+    reasons.push('활성 1:1 예약이 있어 회수할 수 없습니다.')
+  }
+
+  const hasBlockingLesson = (Array.isArray(lessons) ? lessons : []).some(
+    (lesson) =>
+      isActivePrivateLessonRow(lesson) &&
+      getPackageLinkedIds(lesson).includes(packageId) &&
+      (isFixedPrivateAssignmentLesson(lesson) || isFuturePackageRow(lesson))
+  )
+  if (hasBlockingLesson) {
+    reasons.push('고정 배정 또는 예정된 1:1 수업이 있어 회수할 수 없습니다.')
+  }
+
+  return {
+    canRevoke: reasons.length === 0,
+    reason: reasons[0] || '',
+    reasons,
+  }
+}
+
 /**
  * Students 탭 전용: 필터·정렬·KPI·표 요약·전화 복사 등 읽기/뷰 상태만 담당.
  * Firestore 쓰기·모달 submit·권한 판단 변경은 Dashboard에 둔다.
@@ -273,6 +368,17 @@ export default function useStudentsSectionViewModel({
           teacherId: pkg.teacherId,
         })
       )
+    }
+    return map
+  }, [studentPackages, lessons, privateLessonReservations])
+
+  const privatePackageRevokeInfoByPackageId = useMemo(() => {
+    const map = new Map()
+    for (const pkg of studentPackages) {
+      if (String(pkg?.packageType || '').trim() !== 'private') continue
+      const packageId = String(pkg?.id || '').trim()
+      if (!packageId) continue
+      map.set(packageId, buildPrivatePackageRevokeInfo(pkg, lessons, privateLessonReservations))
     }
     return map
   }, [studentPackages, lessons, privateLessonReservations])
@@ -715,6 +821,7 @@ export default function useStudentsSectionViewModel({
     privateLessonProgressByStudentId,
     studentPackagesSortedByStudentId,
     privateTicketBalanceByPackageId,
+    privatePackageRevokeInfoByPackageId,
     activeGroupRegistrationsByStudentId,
     nextPrivateLessonByStudentId,
     nextGroupLessonByStudentId,

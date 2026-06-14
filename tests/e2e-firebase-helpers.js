@@ -1,3 +1,10 @@
+import {
+  cleanupAdminSeededTempCalendarGroupLessonSetup,
+  cleanupAdminSeededTempGroupAttendanceSetup,
+  getAdminSeededGroupAttendanceState,
+  setAdminSeededTempGroupAttendanceState,
+} from './e2e-admin-helpers.js'
+
 const FIREBASE_ENV_KEYS = [
   'VITE_FIREBASE_API_KEY',
   'VITE_FIREBASE_AUTH_DOMAIN',
@@ -64,12 +71,21 @@ export async function createTempGroupAttendanceSetup(page, params) {
 }
 
 export async function cleanupTempGroupAttendanceSetup(page, params) {
+  void page;
   if (!params?.packageId && !params?.groupStudentId && !params?.studentId) return;
-  await runFirebaseTask(page, 'cleanupTempGroupAttendanceSetup', params);
+  try {
+    await cleanupAdminSeededTempGroupAttendanceSetup(params);
+  } catch (error) {
+    console.warn(`cleanupTempGroupAttendanceSetup warning: ${error?.message || String(error)}`);
+  }
 }
 
 export async function setTempGroupAttendanceState(page, params) {
   if (!params?.groupLessonId || !params?.studentId || !params?.packageId || !params?.groupStudentId) return;
+  if (params?.strictLessonIdsOnly === true || params?.useAdminSdk === true) {
+    await setAdminSeededTempGroupAttendanceState(params);
+    return;
+  }
   await runFirebaseTask(page, 'setTempGroupAttendanceState', params);
 }
 
@@ -79,7 +95,14 @@ export async function createTempCalendarGroupLessonSetup(page, params) {
 
 export async function cleanupTempCalendarGroupLessonSetup(page, params, options = {}) {
   if (!params?.groupClassId && !params?.groupLessonId && !params?.groupLessonIds?.length) return;
-  await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params, options);
+  try {
+    await cleanupAdminSeededTempCalendarGroupLessonSetup({
+      ...params,
+      ...(options || {}),
+    });
+  } catch (error) {
+    console.warn(`cleanupTempCalendarGroupLessonSetup warning: ${error?.message || String(error)}`);
+  }
 }
 
 export async function getGroupPackageStartDate(page, params) {
@@ -95,6 +118,16 @@ export async function getLessonRequestApprovalState(page, params) {
 }
 
 export async function getTempGroupAttendanceState(page, params) {
+  const hasExactFixtureIds = [
+    params?.groupClassId,
+    params?.groupLessonId,
+    params?.groupStudentId,
+    params?.packageId,
+    params?.studentId,
+  ].every((value) => String(value || '').trim());
+  if (params?.strictLessonIdsOnly === true && hasExactFixtureIds) {
+    return getAdminSeededGroupAttendanceState(params);
+  }
   return runFirebaseTask(page, 'getTempGroupAttendanceState', params);
 }
 
@@ -184,6 +217,25 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           uid: user?.uid || '',
           email: user?.email || '',
         };
+      }
+
+      function logCleanupWarning(label, error) {
+        console.warn(`${label} cleanup warning: ${error?.message || String(error)}`);
+      }
+
+      async function cleanupAllSettled(label, tasks) {
+        const results = await Promise.allSettled(tasks.filter(Boolean));
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            logCleanupWarning(`${label}[${index}]`, result.reason);
+          }
+        });
+        return results;
+      }
+
+      function isE2eFixtureDocId(value) {
+        const id = String(value || '').trim();
+        return id.startsWith('e2e-') || id.startsWith('__e2e_');
       }
 
       async function withFirestoreStep(stepName, context, action) {
@@ -936,16 +988,43 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           groupStudentId,
           studentId,
           groupLessonId,
+          creditTransactionId,
+          creditTransactionIds = [],
+          cleanupCreditTransactionsByPackage = false,
           skipCreditTransactionCleanup = false,
         } = params;
         const academyId = getTaskAcademyId(params);
 
-        if (groupStudentId) {
-          await deleteDoc(doc(db, 'groupStudents', groupStudentId)).catch(() => {});
-        }
+        const exactCreditTransactionIds = new Set(
+          [
+            creditTransactionId,
+            ...(Array.isArray(creditTransactionIds) ? creditTransactionIds : []),
+          ]
+            .map((id) => String(id || '').trim())
+            .filter(Boolean)
+        );
 
-        if (packageId) {
-          if (!skipCreditTransactionCleanup) {
+        await cleanupAllSettled('cleanupTempGroupAttendanceSetup.exactDocs', [
+          groupStudentId
+            ? deleteDoc(doc(db, 'groupStudents', String(groupStudentId)))
+            : null,
+          packageId
+            ? deleteDoc(doc(db, 'studentPackages', String(packageId)))
+            : null,
+          studentId
+            ? deleteDoc(doc(db, 'privateStudents', String(studentId)))
+            : null,
+          ...Array.from(exactCreditTransactionIds).map((txId) =>
+            deleteDoc(doc(db, 'creditTransactions', txId))
+          ),
+        ]);
+
+        if (
+          packageId &&
+          !skipCreditTransactionCleanup &&
+          cleanupCreditTransactionsByPackage === true &&
+          exactCreditTransactionIds.size === 0
+        ) {
             const creditTransactionSnap = await withFirestoreStep(
               'cleanupTempGroupAttendanceSetup.getCreditTransactionsByPackage',
               {
@@ -966,7 +1045,8 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
             ).catch(() => null);
 
             if (creditTransactionSnap && !creditTransactionSnap.empty) {
-              await Promise.all(
+              await cleanupAllSettled(
+                'cleanupTempGroupAttendanceSetup.creditTransactionsByPackage',
                 creditTransactionSnap.docs
                   .filter((txDoc) => {
                     if (!groupLessonId && !studentId) return true;
@@ -981,17 +1061,10 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
                     return true;
                   })
                   .map((txDoc) =>
-                    deleteDoc(doc(db, 'creditTransactions', txDoc.id)).catch(() => {})
+                    deleteDoc(doc(db, 'creditTransactions', txDoc.id))
                   )
               );
             }
-          }
-
-          await deleteDoc(doc(db, 'studentPackages', packageId)).catch(() => {});
-        }
-
-        if (studentId) {
-          await deleteDoc(doc(db, 'privateStudents', String(studentId))).catch(() => {});
         }
       }
 
@@ -1180,8 +1253,12 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           explicitLessonIds.add(String(groupLessonId));
         }
 
-        async function softCancelGroupLesson(lessonId) {
+        async function softCancelGroupLesson(lessonId, { deleteInstead = false } = {}) {
           const lessonRef = doc(db, 'groupLessons', lessonId);
+          if (deleteInstead && isE2eFixtureDocId(lessonId)) {
+            await deleteDoc(lessonRef);
+            return;
+          }
           const lessonSnap = await getDoc(lessonRef);
           if (!lessonSnap.exists()) return;
           const lesson = lessonSnap.data() || {};
@@ -1189,6 +1266,10 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
             throw new Error(
               `Refusing to cleanup groupLessons/${lessonId}: academyId ${lesson.academyId || '(missing)'} does not match ${academyId}.`
             );
+          }
+          if (deleteInstead) {
+            await deleteDoc(lessonRef);
+            return;
           }
           await updateDoc(lessonRef, {
             status: 'cancelled',
@@ -1202,7 +1283,8 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         }
 
         if (explicitLessonIds.size > 0) {
-          await Promise.all(
+          await cleanupAllSettled(
+            'cleanupTempCalendarGroupLessonSetup.explicitLessons',
             Array.from(explicitLessonIds).map((lessonId) =>
               withFirestoreStep(
                 'cleanupTempCalendarGroupLessonSetup.softCancelKnownGroupLesson',
@@ -1211,14 +1293,23 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
                   docId: lessonId,
                   academyId,
                 },
-                () => softCancelGroupLesson(lessonId)
+                () => softCancelGroupLesson(lessonId, { deleteInstead: strictLessonIdsOnly })
               )
             )
           );
         }
 
+        if (strictLessonIdsOnly) {
+          if (groupClassId) {
+            await cleanupAllSettled('cleanupTempCalendarGroupLessonSetup.strictGroupClass', [
+              deleteDoc(doc(db, 'groupClasses', String(groupClassId))),
+            ]);
+          }
+          return;
+        }
+
         if (groupClassId && !strictLessonIdsOnly) {
-          const [groupLessonsA, groupLessonsB] = await Promise.all([
+          const [groupLessonsAResult, groupLessonsBResult] = await Promise.allSettled([
             withFirestoreStep(
               'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassId',
               {
@@ -1258,6 +1349,22 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
                 )
             )
           ]);
+          const groupLessonsA =
+            groupLessonsAResult.status === 'fulfilled' ? groupLessonsAResult.value : null;
+          const groupLessonsB =
+            groupLessonsBResult.status === 'fulfilled' ? groupLessonsBResult.value : null;
+          if (groupLessonsAResult.status === 'rejected') {
+            logCleanupWarning(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassId',
+              groupLessonsAResult.reason
+            );
+          }
+          if (groupLessonsBResult.status === 'rejected') {
+            logCleanupWarning(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassID',
+              groupLessonsBResult.reason
+            );
+          }
 
           const lessonIds = new Set();
           for (const snap of [groupLessonsA, groupLessonsB]) {
@@ -1265,7 +1372,8 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
             snap.docs.forEach((lessonDoc) => lessonIds.add(lessonDoc.id));
           }
 
-          await Promise.all(
+          await cleanupAllSettled(
+            'cleanupTempCalendarGroupLessonSetup.queriedLessons',
             Array.from(lessonIds).map((lessonId) =>
               withFirestoreStep(
                 'cleanupTempCalendarGroupLessonSetup.softCancelQueriedGroupLesson',
@@ -1281,15 +1389,17 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         }
 
         if (groupClassId) {
-          await withFirestoreStep(
-            'cleanupTempCalendarGroupLessonSetup.deleteGroupClass',
-            {
-              collection: 'groupClasses',
-              docId: groupClassId,
-              academyId,
-            },
-            () => deleteDoc(doc(db, 'groupClasses', groupClassId))
-          );
+          await cleanupAllSettled('cleanupTempCalendarGroupLessonSetup.groupClass', [
+            withFirestoreStep(
+              'cleanupTempCalendarGroupLessonSetup.deleteGroupClass',
+              {
+                collection: 'groupClasses',
+                docId: groupClassId,
+                academyId,
+              },
+              () => deleteDoc(doc(db, 'groupClasses', groupClassId))
+            ),
+          ]);
         }
       }
 
@@ -1367,11 +1477,12 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           };
         }
 
-        const [groupLesson, studentPackage, groupStudent, privateStudent] = await Promise.all([
+        const [groupLesson, studentPackage, groupStudent, privateStudent, groupClass] = await Promise.all([
           readDoc('groupLessons', params?.groupLessonId),
           readDoc('studentPackages', params?.packageId),
           readDoc('groupStudents', params?.groupStudentId),
           readDoc('privateStudents', params?.studentId),
+          readDoc('groupClasses', params?.groupClassId),
         ]);
 
         return {
@@ -1380,6 +1491,7 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           studentPackage,
           groupStudent,
           privateStudent,
+          groupClass,
         };
       }
 

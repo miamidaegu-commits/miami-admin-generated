@@ -255,7 +255,7 @@ function isActivePrivatePackage(pkg) {
   const status = String(pkg?.status || 'active').trim().toLowerCase()
   return (
     (!packageType || packageType === 'private') &&
-    !['inactive', 'expired', 'ended', 'cancelled', 'canceled'].includes(status) &&
+    !['inactive', 'expired', 'ended', 'revoked', 'cancelled', 'canceled'].includes(status) &&
     Boolean(getPrivatePackageTeacherKey(pkg))
   )
 }
