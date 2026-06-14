@@ -1,4 +1,9 @@
-import { getAdminSeededGroupAttendanceState } from './e2e-admin-helpers.js'
+import {
+  cleanupAdminSeededTempCalendarGroupLessonSetup,
+  cleanupAdminSeededTempGroupAttendanceSetup,
+  getAdminSeededGroupAttendanceState,
+  setAdminSeededTempGroupAttendanceState,
+} from './e2e-admin-helpers.js'
 
 const FIREBASE_ENV_KEYS = [
   'VITE_FIREBASE_API_KEY',
@@ -66,9 +71,10 @@ export async function createTempGroupAttendanceSetup(page, params) {
 }
 
 export async function cleanupTempGroupAttendanceSetup(page, params) {
+  void page;
   if (!params?.packageId && !params?.groupStudentId && !params?.studentId) return;
   try {
-    await runFirebaseTask(page, 'cleanupTempGroupAttendanceSetup', params);
+    await cleanupAdminSeededTempGroupAttendanceSetup(params);
   } catch (error) {
     console.warn(`cleanupTempGroupAttendanceSetup warning: ${error?.message || String(error)}`);
   }
@@ -76,6 +82,10 @@ export async function cleanupTempGroupAttendanceSetup(page, params) {
 
 export async function setTempGroupAttendanceState(page, params) {
   if (!params?.groupLessonId || !params?.studentId || !params?.packageId || !params?.groupStudentId) return;
+  if (params?.strictLessonIdsOnly === true || params?.useAdminSdk === true) {
+    await setAdminSeededTempGroupAttendanceState(params);
+    return;
+  }
   await runFirebaseTask(page, 'setTempGroupAttendanceState', params);
 }
 
@@ -86,7 +96,10 @@ export async function createTempCalendarGroupLessonSetup(page, params) {
 export async function cleanupTempCalendarGroupLessonSetup(page, params, options = {}) {
   if (!params?.groupClassId && !params?.groupLessonId && !params?.groupLessonIds?.length) return;
   try {
-    await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params, options);
+    await cleanupAdminSeededTempCalendarGroupLessonSetup({
+      ...params,
+      ...(options || {}),
+    });
   } catch (error) {
     console.warn(`cleanupTempCalendarGroupLessonSetup warning: ${error?.message || String(error)}`);
   }

@@ -4,7 +4,6 @@ import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import {
   clickGroupRow,
-  getGroupRow,
   getRegisteredStudentsHeading,
   loginAsAdmin,
   openDashboardSection,
@@ -12,12 +11,14 @@ import {
 import {
   cleanupTempGroupAttendanceSetup,
   cleanupTempCalendarGroupLessonSetup,
-  createTempCalendarGroupLessonSetup,
-  createTempStudent,
-  createTempGroupAttendanceSetup,
   getTempGroupAttendanceState,
   setTempGroupAttendanceState,
 } from './e2e-firebase-helpers.js';
+import {
+  createAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededPrivateStudent,
+  createAdminSeededTempGroupAttendanceSetup,
+} from './e2e-admin-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -211,6 +212,7 @@ async function setAttendanceStateAndWait({
         syncGuardStudentId,
         deducted,
         totalCount,
+        strictLessonIdsOnly: true,
         firebaseTaskTimeoutMs: 10000,
       });
       lastError = null;
@@ -351,15 +353,14 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
 
   try {
     releaseFirebaseAttendanceLock = await acquireFirebaseAttendanceLock();
-    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await openDashboardSection(page, '단체반 관리');
-    await createTempStudent(page, {
+    await createAdminSeededPrivateStudent({
       studentId: tempStudentId,
       studentName: tempStudentName,
+      name: tempStudentName,
       teacherName: '',
       note: 'E2E temporary student for group attendance deduct/restore test',
     });
-    await createTempCalendarGroupLessonSetup(page, {
+    await createAdminSeededCalendarGroupLessonSetup({
       groupClassId: tempGroupClassId,
       groupLessonId: tempTargetLessonId,
       groupName,
@@ -369,7 +370,7 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       lessonSubject,
       skipPastAttendanceSync: true,
     });
-    await createTempGroupAttendanceSetup(page, {
+    await createAdminSeededTempGroupAttendanceSetup({
       groupClassId: tempGroupClassId,
       groupName,
       studentId: tempStudentId,
@@ -387,17 +388,17 @@ test('관리자가 그룹 출결 모달에서 backend 출결 상태 변경이 �
       packageId: tempPackageId,
       groupStudentId: tempGroupStudentId,
     });
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
     const groupRow = await clickGroupRow(page, groupName);
     await expect(getRegisteredStudentsHeading(page, groupName)).toBeVisible();
 
     const lessonSection = page.getByTestId('group-lessons-section').locator('..');
     await expect(lessonSection).toBeVisible();
 
-    const targetLessonRow = lessonSection
-      .locator('.table-row')
-      .filter({ hasText: lessonDate })
-      .filter({ hasText: lessonTime })
-      .filter({ hasText: lessonSubject });
+    const targetLessonRow = lessonSection.locator(
+      `[data-testid="group-lesson-row"][data-lesson-id="${tempTargetLessonId}"]`
+    );
 
     await expect(targetLessonRow).toHaveCount(1, { timeout: 10000 });
     attendanceDialog = await openAttendanceDialogForLesson(targetLessonRow, page);
