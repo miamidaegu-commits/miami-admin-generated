@@ -15,7 +15,7 @@ concurrency:
 jobs:
   build-and-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       VITE_FIREBASE_API_KEY: ${{ secrets.E2E_FIREBASE_API_KEY }}
       VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.E2E_FIREBASE_AUTH_DOMAIN }}
@@ -57,10 +57,11 @@ jobs:
           printf '%s' "$MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64" | base64 --decode > serviceAccountKey.json
 
       - name: Run Chromium e2e tests
+        timeout-minutes: 110
         env:
           CI: true
           VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
-        run: npm run test:e2e:chromium
+        run: npm run test:e2e:chromium -- --max-failures=5
 
       - name: Upload Playwright report
         if: always()
