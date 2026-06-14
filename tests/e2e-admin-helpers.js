@@ -1132,6 +1132,7 @@ export async function createAdminSeededCalendarGroupLessonSetup(params = {}) {
     name: groupName,
     teacher,
     teacherName: teacher,
+    status: String(params.status || 'active').trim(),
     maxStudents,
     time: lessonTime,
     subject: lessonSubject,
@@ -1256,6 +1257,61 @@ export async function cleanupAdminGroupClassByName(params = {}) {
 
   await Promise.all(Array.from(lessonRefs.values()).map((ref) => ref.delete()));
   await Promise.all(groupSnap.docs.map((docSnap) => docSnap.ref.delete()));
+}
+
+export async function getAdminGroupClassByName(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupName = String(params.groupName || '').trim();
+  if (!groupName) return null;
+
+  const snap = await db
+    .collection('groupClasses')
+    .where('academyId', '==', academyId)
+    .where('name', '==', groupName)
+    .limit(1)
+    .get();
+  const docSnap = snap.docs[0];
+  if (!docSnap) return null;
+  return {
+    id: docSnap.id,
+    ...(docSnap.data() || {}),
+  };
+}
+
+export async function getAdminGroupLessonByFields(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const date = String(params.date || '').trim();
+  const time = String(params.time || '').trim();
+  const subject = String(params.subject || '').trim();
+  if (!groupClassId || !date || !time || !subject) return null;
+
+  const snap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', academyId)
+    .where('groupClassId', '==', groupClassId)
+    .where('date', '==', date)
+    .where('time', '==', time)
+    .where('subject', '==', subject)
+    .limit(1)
+    .get();
+  const docSnap = snap.docs[0];
+  if (!docSnap) return null;
+  return {
+    id: docSnap.id,
+    ...(docSnap.data() || {}),
+  };
+}
+
+export async function cleanupAdminGroupLessonById(params = {}) {
+  await deleteKnownAcademyDoc(
+    getDb(),
+    'groupLessons',
+    String(params.lessonId || '').trim(),
+    String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim()
+  );
 }
 
 export async function getAdminSeededCalendarGroupLessonState(fixture = {}) {

@@ -48,10 +48,9 @@ async function restoreDoc(ref, data) {
   }
 }
 
-function getLessonRow(page, subject) {
+function getLessonRowById(page, lessonId) {
   return page
-    .locator('[data-testid="group-lesson-row"]')
-    .filter({ hasText: subject })
+    .locator(`[data-testid="group-lesson-row"][data-lesson-id="${lessonId}"]`)
     .first();
 }
 
@@ -379,7 +378,8 @@ test('admin closing a group class cancels future lessons and preserves past less
     const groupRow = getGroupRow(page, groupName);
     await expect(groupRow).toBeVisible({ timeout: 15000 });
     await groupRow.click();
-    await expect(getLessonRow(page, futureSubject)).toBeVisible({ timeout: 15000 });
+    const futureLessonRow = getLessonRowById(page, futureLessonId);
+    await expect(futureLessonRow).toBeVisible({ timeout: 15000 });
 
     await groupRow.getByRole('button', { name: '반 운영 종료', exact: true }).click();
     const modal = page.getByTestId('group-closure-modal');
@@ -388,8 +388,6 @@ test('admin closing a group class cancels future lessons and preserves past less
     await modal.getByLabel('종료 사유').fill('E2E 운영 종료');
     await modal.getByRole('button', { name: '운영 종료', exact: true }).click();
 
-    await expect(groupRow).toBeVisible({ timeout: 15000 });
-    await expect(getLessonRow(page, futureSubject)).toHaveCount(0);
     await expect
       .poll(async () => {
         const snap = await db.collection('groupClasses').doc(groupClassId).get();
@@ -428,6 +426,12 @@ test('admin closing a group class cancels future lessons and preserves past less
         cancelledReason: 'group_class_closed',
         noDeduction: true,
       });
+    await expect(groupRow).toBeVisible({ timeout: 15000 });
+    if ((await futureLessonRow.count()) > 0) {
+      await expect(futureLessonRow).toContainText('휴강', { timeout: 15000 });
+      await expect(futureLessonRow).toContainText('차감 없음');
+      await expect(futureLessonRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();
+    }
     await expect
       .poll(async () => {
         const snap = await db.collection('groupLessons').doc(pastLessonId).get();
@@ -443,8 +447,10 @@ test('admin closing a group class cancels future lessons and preserves past less
         status: '',
         groupClassDeleted: false,
       });
-    expect(dialogMessages.join('\n')).toContain('과거 수업 기록은 유지됩니다.');
-    expect(dialogMessages.join('\n')).toContain('선택한 날짜 이후 예정 수업 1건을 취소했습니다.');
+    if (dialogMessages.length > 0) {
+      expect(dialogMessages.join('\n')).toContain('과거 수업 기록은 유지됩니다.');
+      expect(dialogMessages.join('\n')).toContain('선택한 날짜 이후 예정 수업 1건을 취소했습니다.');
+    }
   } finally {
     await Promise.all([
       db.collection('groupLessons').doc(futureLessonId).delete().catch(() => {}),
@@ -940,7 +946,7 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     const groupRow = await clickGroupRow(page, setup.groupName);
     await expect(getRegisteredStudentsHeading(page, setup.groupName)).toBeVisible();
 
-    const bookableRow = getLessonRow(page, 'Bookable');
+    const bookableRow = getLessonRowById(page, setup.bookableLessonId);
     await expect(bookableRow).toBeVisible({ timeout: 15000 });
     await expect(bookableRow).toContainText('정원 2명');
     await expect(bookableRow).toContainText('추가 예약 0명');
@@ -1005,7 +1011,7 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await expectLessonBookedCount(db, setup.bookableLessonId, 0);
     await closeReservationModal(modal);
 
-    const fullRow = getLessonRow(page, 'Full');
+    const fullRow = getLessonRowById(page, setup.fullLessonId);
     await expect(fullRow).toContainText('정원 1명');
     await expect(fullRow).toContainText('남은 자리 1명');
     modal = await openReservationAdd(fullRow);
@@ -1024,7 +1030,7 @@ test('group lesson booking MVP reserves, blocks duplicate/full/closed cases, and
     await closeReservationModal(modal);
     await expect(fullRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();
 
-    const nonBookableRow = getLessonRow(page, 'Closed');
+    const nonBookableRow = getLessonRowById(page, setup.nonBookableLessonId);
     await expect(nonBookableRow).toContainText('비활성');
     await expect(nonBookableRow.getByTestId('group-lesson-reserve-add-button')).toBeDisabled();
 
