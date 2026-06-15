@@ -1413,6 +1413,50 @@ export async function getAdminGroupLessonByFields(params = {}) {
   };
 }
 
+export async function getAdminGroupPackageStartDate(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const groupName = String(params.groupName || '').trim();
+  let scopedGroupClassId = groupClassId;
+
+  if (!scopedGroupClassId && groupName) {
+    const groupSnap = await db
+      .collection('groupClasses')
+      .where('academyId', '==', academyId)
+      .where('name', '==', groupName)
+      .limit(1)
+      .get();
+    scopedGroupClassId = groupSnap.docs[0]?.id || '';
+  }
+
+  if (!scopedGroupClassId) {
+    throw new Error(`Group class not found for package start date: ${groupName || '(missing)'}`);
+  }
+
+  const todayYmd = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const lessonSnap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', academyId)
+    .where('groupClassId', '==', scopedGroupClassId)
+    .get();
+
+  const startDate = lessonSnap.docs
+    .map((docSnap) => String((docSnap.data() || {}).date || '').trim())
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= todayYmd)
+    .sort()[0];
+
+  if (!startDate) {
+    throw new Error(`No future lessons found for group class: ${scopedGroupClassId}`);
+  }
+  return startDate;
+}
+
 export async function getAdminGroupLessonIdsInRange(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();

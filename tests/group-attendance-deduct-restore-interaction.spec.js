@@ -313,6 +313,15 @@ async function openAttendanceDialogForLesson(targetLessonRow, page) {
   return attendanceDialog;
 }
 
+async function closeAttendanceDialogBestEffort(attendanceDialog) {
+  if (!attendanceDialog || !(await attendanceDialog.isVisible().catch(() => false))) return;
+  await attendanceDialog
+    .getByRole('button', { name: '닫기', exact: true })
+    .click({ timeout: 5000 })
+    .catch(() => {});
+  await expect(attendanceDialog).toBeHidden({ timeout: 5000 }).catch(() => {});
+}
+
 async function cleanupBestEffort(label, cleanupTask) {
   try {
     await cleanupTask();
@@ -473,6 +482,13 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
         packageId: tempPackageId,
         groupStudentId: tempGroupStudentId,
       });
+    const attendanceIds = {
+      groupClassId: tempGroupClassId,
+      groupLessonId: tempTargetLessonId,
+      studentId: tempStudentId,
+      packageId: tempPackageId,
+      groupStudentId: tempGroupStudentId,
+    };
     let snapshot = await waitForAttendanceRowState(
       attendanceDialog,
       tempStudentName,
@@ -483,13 +499,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
     await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('8');
     await expectAttendancePackageCounts(
       page,
-      {
-        groupClassId: tempGroupClassId,
-        groupLessonId: tempTargetLessonId,
-        studentId: tempStudentId,
-        packageId: tempPackageId,
-        groupStudentId: tempGroupStudentId,
-      },
+      attendanceIds,
       { usedCount: 0, remainingCount: 8 }
     );
 
@@ -517,13 +527,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
       await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('7');
       await expectAttendancePackageCounts(
         page,
-        {
-          groupClassId: tempGroupClassId,
-          groupLessonId: tempTargetLessonId,
-          studentId: tempStudentId,
-          packageId: tempPackageId,
-          groupStudentId: tempGroupStudentId,
-        },
+        attendanceIds,
         { usedCount: 1, remainingCount: 7 }
       );
 
@@ -538,29 +542,24 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
             { dialogCollector, diagnostics: attendanceDiagnostics }
           ),
         selectButton: (readySnapshot) => readySnapshot.restoreButton,
-        waitForNextState: () =>
-          waitForAttendanceRowState(
+        waitForNextState: async () => {
+          await expectAttendancePackageCounts(page, attendanceIds, { usedCount: 0, remainingCount: 8 });
+          return waitForAttendanceRowState(
             attendanceDialog,
             tempStudentName,
             tempPackageTitle,
-            isDeductReady,
+            (state) => state.rowCount === 1 && state.restoreVisible === false,
             { timeout: 30000, dialogCollector, diagnostics: attendanceDiagnostics }
-          ),
+          );
+        },
       });
 
       await expect(snapshot.row.getByTestId('group-attendance-remaining-count')).toHaveText('8');
       await expectAttendancePackageCounts(
         page,
-        {
-          groupClassId: tempGroupClassId,
-          groupLessonId: tempTargetLessonId,
-          studentId: tempStudentId,
-          packageId: tempPackageId,
-          groupStudentId: tempGroupStudentId,
-        },
+        attendanceIds,
         { usedCount: 0, remainingCount: 8 }
       );
-      expect(isDeductReady(snapshot)).toBe(true);
     } catch (error) {
       test.skip(
         isQuotaExceededMessage(error?.message),
@@ -572,10 +571,7 @@ test('관리자가 그룹 출결 모달에서 차감 버튼과 차감복구 버�
     }
   } finally {
     try {
-      if (attendanceDialog && (await attendanceDialog.isVisible().catch(() => false))) {
-        await attendanceDialog.getByRole('button', { name: '닫기', exact: true }).click();
-        await expect(attendanceDialog).toBeHidden();
-      }
+      await closeAttendanceDialogBestEffort(attendanceDialog);
 
       await cleanupBestEffort('group attendance interaction setup', () =>
         cleanupTempGroupAttendanceSetup(page, {

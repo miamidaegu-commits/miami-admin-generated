@@ -2,6 +2,7 @@ import {
   cleanupAdminTempStudentData,
   cleanupAdminSeededTempCalendarGroupLessonSetup,
   cleanupAdminSeededTempGroupAttendanceSetup,
+  getAdminGroupPackageStartDate,
   getAdminSeededGroupAttendanceState,
   setAdminSeededTempGroupAttendanceState,
 } from './e2e-admin-helpers.js'
@@ -112,7 +113,8 @@ export async function cleanupTempCalendarGroupLessonSetup(page, params, options 
 }
 
 export async function getGroupPackageStartDate(page, params) {
-  return runFirebaseTask(page, 'getGroupPackageStartDate', params);
+  void page;
+  return getAdminGroupPackageStartDate(params);
 }
 
 export async function getStudentGroupAccessSummary(page, params) {
