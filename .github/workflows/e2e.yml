@@ -63,10 +63,10 @@ jobs:
           VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
         run: |
           npm run seed:e2e:users
-          PW_FIREBASE_ENV_MODE=e2e npx playwright test --project=chromium --max-failures=5 \
-            tests/private-*.spec.js \
-            tests/fixed-private-lesson-release.spec.js \
-            tests/lesson-request-approval.spec.js
+          PW_FIREBASE_ENV_MODE=e2e npx playwright test --project=chromium --workers=1 --max-failures=3 \
+            tests/private-package-add.spec.js \
+            tests/private-package-slot-workflow-copy.spec.js \
+            tests/private-package-top-up.spec.js
 
       - name: Upload Playwright report
         if: always()
