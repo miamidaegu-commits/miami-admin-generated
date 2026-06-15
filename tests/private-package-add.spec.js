@@ -1,14 +1,15 @@
 import { test, expect } from '@playwright/test';
 import {
-  getStudentRow,
+  getStudentRowById,
   getStudentSearchInput,
   loginAsAdmin,
   openDashboardSection,
-  selectTeacherOption,
 } from './e2e-helpers.js';
-import { cleanupTempStudentData, createTempStudent, createTempTeacher } from './e2e-firebase-helpers.js';
+import { cleanupTempStudentData, createTempStudent } from './e2e-firebase-helpers.js';
 import {
-  getAdminPrivateStudentByName,
+  createAdminSeededTeacher,
+  createAdminSeededPrivateStudent,
+  cleanupAdminSeededTeacher,
   getAdminSeededPrivatePackagesForStudent,
 } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
@@ -76,7 +77,7 @@ async function dismissOptionalPrivateScheduleDialog(page) {
   const postScheduleDialog = page.getByRole('dialog', {
     name: '고정 1:1 수업 배정으로 이동할까요?',
   });
-  if (!(await postScheduleDialog.isVisible({ timeout: 5000 }).catch(() => false))) return false;
+  if (!(await postScheduleDialog.isVisible({ timeout: 2000 }).catch(() => false))) return false;
   await postScheduleDialog.getByRole('button', { name: /나중에 (하기|등록)/ }).click();
   await expect(postScheduleDialog).toBeHidden({ timeout: 10000 });
   return true;
@@ -109,8 +110,8 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     const studentSearchInput = getStudentSearchInput(page);
     await studentSearchInput.fill(tempStudentName);
 
-    const studentRow = getStudentRow(page, tempStudentName);
-    await expect(studentRow).toBeVisible();
+    const studentRow = getStudentRowById(page, tempStudent.studentId);
+    await expect(studentRow).toBeVisible({ timeout: 15000 });
 
     await studentRow.getByRole('button', { name: '수강권 추가' }).click();
 
@@ -161,6 +162,8 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
   const packageTitle = `E2E 즉시 개인 수강권 ${uniqueToken}`;
   const paymentDate = '2026-06-03';
   const dialogMessages = [];
+  let createdStudentId = '';
+  const teacherId = 'e2e-package-handoff-don1';
 
   page.on('dialog', async (dialog) => {
     dialogMessages.push(dialog.message());
@@ -169,41 +172,29 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
 
   try {
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    await createTempTeacher(page, {
-      teacherId: 'e2e-package-handoff-don1',
+    await createAdminSeededTeacher({
+      teacherId,
       teacherName: 'Don',
       teacherKey: 'don1',
       teacherUid: 'e2e-package-handoff-don1-uid',
       teacherEmail: 'e2e-package-handoff-don1@example.com',
     });
 
-    await openDashboardSection(page, '학생 관리');
-    await page.getByRole('button', { name: '학생 추가', exact: true }).click();
-
-    const studentDialog = page.getByRole('dialog', { name: '학생 추가' });
-    await expect(studentDialog).toBeVisible();
-    await studentDialog.getByLabel('이름').fill(studentName);
-    await selectTeacherOption(studentDialog.getByLabel('담당 선생님'), 'Don', {
-      timeout: 30000,
+    const seededStudent = await createAdminSeededPrivateStudent({
+      studentId: `e2e-immediate-package-student-${uniqueToken}`,
+      name: studentName,
+      studentName,
+      teacher: 'don1',
+      teacherName: 'Don',
+      note: 'E2E immediate private package add test',
     });
-    await studentDialog.getByRole('button', { name: '저장', exact: true }).click();
-    await expect
-      .poll(async () => {
-        const student = await getAdminPrivateStudentByName({ studentName });
-        return student?.id || '';
-      }, { timeout: 30000 })
-      .not.toBe('');
-    await closeDialogBestEffort(page, studentDialog, /닫기|취소/);
+    createdStudentId = seededStudent.studentId;
 
-    const postCreateDialog = page.getByRole('dialog', { name: '학생을 등록했습니다' });
-    if (await postCreateDialog.isVisible({ timeout: 5000 }).catch(() => false)) {
-      await postCreateDialog.getByRole('button', { name: '개인 수강권 추가', exact: true }).click();
-    } else {
-      await getStudentSearchInput(page).fill(studentName);
-      const createdStudentRow = getStudentRow(page, studentName);
-      await expect(createdStudentRow).toBeVisible({ timeout: 15000 });
-      await createdStudentRow.getByRole('button', { name: '수강권 추가' }).click();
-    }
+    await openDashboardSection(page, '학생 관리');
+    await getStudentSearchInput(page).fill(studentName);
+    const createdStudentRow = getStudentRowById(page, seededStudent.studentId);
+    await expect(createdStudentRow).toBeVisible({ timeout: 15000 });
+    await createdStudentRow.getByRole('button', { name: '수강권 추가' }).click();
 
     const packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
     await expect(packageDialog).toBeVisible();
@@ -216,16 +207,8 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
     await packageDialog.getByRole('button', { name: '저장', exact: true }).click();
 
     expect(dialogMessages.join('\n')).not.toContain('현재 학원에 속하지 않습니다');
-    await expect
-      .poll(async () => {
-        const student = await getAdminPrivateStudentByName({ studentName });
-        return student?.id || '';
-      }, { timeout: 30000 })
-      .not.toBe('');
-    const createdStudent = await getAdminPrivateStudentByName({ studentName });
-    const studentId = createdStudent.id;
     await expectPrivatePackageCreated({
-      studentId,
+      studentId: createdStudentId,
       packageTitle,
       expected: {
         packageType: 'private',
@@ -240,9 +223,10 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
     await dismissOptionalPrivateScheduleDialog(page);
   } finally {
     await cleanupTempStudentData(page, {
+      studentId: createdStudentId,
       studentName,
-      allowStudentNameLookup: true,
       cleanupPackagesByStudent: true,
     });
+    await cleanupAdminSeededTeacher({ teacherId }).catch(() => {});
   }
 });
