@@ -148,6 +148,24 @@ export async function getAdminSeededPrivateStudent({
   };
 }
 
+export async function getAdminPrivateStudentByName({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentName,
+}) {
+  const db = getDb();
+  const name = String(studentName || '').trim();
+  if (!name) return null;
+
+  const snap = await db
+    .collection('privateStudents')
+    .where('academyId', '==', String(academyId || '').trim())
+    .where('name', '==', name)
+    .limit(1)
+    .get();
+  const docSnap = snap.docs[0];
+  return docSnap ? { id: docSnap.id, ...docSnap.data() } : null;
+}
+
 export async function createAdminSeededStudentUser(params = {}) {
   const auth = admin.auth(getAdminApp());
   const db = getDb();
@@ -347,6 +365,42 @@ export async function getAdminSeededStudentPackage({
   if (!id) return null;
 
   const snap = await db.collection('studentPackages').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
+export async function getAdminSeededLesson({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  lessonId,
+}) {
+  const db = getDb();
+  const id = String(lessonId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('lessons').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
+export async function getAdminGroupStudentById({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  groupStudentId,
+}) {
+  const db = getDb();
+  const id = String(groupStudentId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('groupStudents').doc(id).get();
   if (!snap.exists) return null;
   const data = snap.data() || {};
   if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
@@ -1604,6 +1658,7 @@ export async function getAdminLessonsForStudentTeacher(params = {}) {
       studentID: String(lesson.studentID || ''),
       studentName: String(lesson.studentName || ''),
       teacher: String(lesson.teacher || ''),
+      packageId: String(lesson.packageId || ''),
       sessionNumber: lesson.sessionNumber || null,
       isDeductCancelled: lesson.isDeductCancelled === true,
     }));

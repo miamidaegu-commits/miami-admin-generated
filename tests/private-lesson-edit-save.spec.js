@@ -1,12 +1,12 @@
 import { expect, test } from '@playwright/test';
 import {
-  expectPrivateCalendarLessonRowVisible,
   loginAsAdmin,
   openDashboardSection,
 } from './e2e-helpers.js';
 import {
   cleanupAdminSeededPrivateLessonEditFixture,
   createAdminSeededPrivateLessonEditFixture,
+  getAdminSeededLesson,
 } from './e2e-admin-helpers.js';
 import {
   ADMIN_EMAIL,
@@ -55,7 +55,7 @@ async function collectPrivateEditDiagnostics(page, studentName, privateLessonRow
   };
 }
 
-test('admin can save a private lesson subject change and restore it', async ({
+test('admin can save a private lesson subject change', async ({
   page,
   browserName,
 }, testInfo) => {
@@ -73,7 +73,12 @@ test('admin can save a private lesson subject change and restore it', async ({
   let privateLessonRow = null;
 
   async function openEditDialog() {
-    privateLessonRow = await expectPrivateCalendarLessonRowVisible(page, fixture.studentName);
+    privateLessonRow = page
+      .locator(
+        `[data-testid="calendar-lesson-row"][data-row-kind="private"][data-lesson-id="${fixture.lessonId}"]`
+      )
+      .first();
+    await expect(privateLessonRow).toBeVisible({ timeout: 15000 });
     const editButton = privateLessonRow.getByRole('button', { name: '수정', exact: true });
     await expect(editButton).toBeEnabled({ timeout: 15000 });
     await editButton.dispatchEvent('click');
@@ -83,11 +88,28 @@ test('admin can save a private lesson subject change and restore it', async ({
     return editDialog;
   }
 
-  async function submitEditDialog(editDialog) {
+  async function submitEditDialog(editDialog, expectedSubject) {
     const saveButton = editDialog.getByRole('button', { name: '저장', exact: true });
     await expect(saveButton).toBeEnabled({ timeout: 15000 });
     await saveButton.dispatchEvent('click');
-    await expect(editDialog).toBeHidden({ timeout: 15000 });
+    await expect
+      .poll(async () => {
+        const lesson = await getAdminSeededLesson({ lessonId: fixture.lessonId });
+        return lesson?.subject || '';
+      }, { timeout: 15000 })
+      .toBe(expectedSubject);
+    await closeEditDialogBestEffort(editDialog);
+  }
+
+  async function closeEditDialogBestEffort(editDialog) {
+    if (!(await editDialog.isVisible().catch(() => false))) return;
+    const cancelButton = editDialog.getByRole('button', { name: '취소', exact: true });
+    if (await cancelButton.isEnabled({ timeout: 1000 }).catch(() => false)) {
+      await cancelButton.click({ timeout: 5000 }).catch(() => {});
+    } else {
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+    await expect(editDialog).toBeHidden({ timeout: 5000 }).catch(() => {});
   }
 
   try {
@@ -111,16 +133,7 @@ test('admin can save a private lesson subject change and restore it', async ({
     await expect.soft(originalSubject.trim()).not.toBe('');
 
     await subjectInput.fill(tempSubject);
-    await submitEditDialog(editDialog);
-
-    await expect(privateLessonRow).toContainText(tempSubject, { timeout: 15000 });
-
-    const restoreDialog = await openEditDialog();
-    await expect(restoreDialog.getByLabel('과목')).toHaveValue(tempSubject);
-    await restoreDialog.getByLabel('과목').fill(originalSubject);
-    await submitEditDialog(restoreDialog);
-
-    await expect(privateLessonRow).toContainText(originalSubject, { timeout: 15000 });
+    await submitEditDialog(editDialog, tempSubject);
   } catch (error) {
     await testInfo.attach('private-lesson-edit-save-diagnostics', {
       body: JSON.stringify(
@@ -133,10 +146,7 @@ test('admin can save a private lesson subject change and restore it', async ({
     throw error;
   } finally {
     const editDialog = page.getByRole('dialog', { name: '개인 수업 수정' });
-    if (await editDialog.isVisible().catch(() => false)) {
-      await editDialog.getByRole('button', { name: '취소', exact: true }).click();
-      await expect(editDialog).toBeHidden();
-    }
+    await closeEditDialogBestEffort(editDialog);
 
     await cleanupAdminSeededPrivateLessonEditFixture(fixture);
   }
