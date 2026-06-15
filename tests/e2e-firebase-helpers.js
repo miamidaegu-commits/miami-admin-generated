@@ -1,6 +1,8 @@
 import {
+  cleanupAdminTempStudentData,
   cleanupAdminSeededTempCalendarGroupLessonSetup,
   cleanupAdminSeededTempGroupAttendanceSetup,
+  getAdminGroupPackageStartDate,
   getAdminSeededGroupAttendanceState,
   setAdminSeededTempGroupAttendanceState,
 } from './e2e-admin-helpers.js'
@@ -57,8 +59,13 @@ export async function createTempTeacher(page, params) {
 }
 
 export async function cleanupTempStudentData(page, params) {
+  void page;
   if (!params?.studentId && !params?.studentName) return;
-  await runFirebaseTask(page, 'cleanupTempStudentData', params);
+  try {
+    await cleanupAdminTempStudentData(params);
+  } catch (error) {
+    console.warn(`cleanupTempStudentData warning: ${error?.message || String(error)}`);
+  }
 }
 
 export async function cleanupTempGroupStudentAddSetup(page, params) {
@@ -106,7 +113,8 @@ export async function cleanupTempCalendarGroupLessonSetup(page, params, options 
 }
 
 export async function getGroupPackageStartDate(page, params) {
-  return runFirebaseTask(page, 'getGroupPackageStartDate', params);
+  void page;
+  return getAdminGroupPackageStartDate(params);
 }
 
 export async function getStudentGroupAccessSummary(page, params) {

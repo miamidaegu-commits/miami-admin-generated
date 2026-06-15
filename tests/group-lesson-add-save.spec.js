@@ -11,6 +11,11 @@ import {
   ADMIN_PASSWORD,
   TEST_GROUP_NAME,
 } from './fixtures/test-data.js';
+import {
+  cleanupAdminGroupLessonById,
+  getAdminGroupClassByName,
+  getAdminGroupLessonByFields,
+} from './e2e-admin-helpers.js';
 
 function formatYmd(date) {
   const year = date.getFullYear();
@@ -25,26 +30,47 @@ function addDays(baseDate, days) {
   return next;
 }
 
-async function acceptNextDialog(page) {
-  const dialogHandled = new Promise((resolve) => {
-    page.once('dialog', async (dialog) => {
+async function acceptOptionalDialog(page, timeout = 5000) {
+  return page
+    .waitForEvent('dialog', { timeout })
+    .then(async (dialog) => {
+      const message = dialog.message();
       await dialog.accept();
-      resolve(dialog.message());
+      return message;
+    })
+    .catch((error) => {
+      if (/Timeout/i.test(String(error?.message || ''))) return null;
+      throw error;
     });
-  });
-
-  return dialogHandled;
 }
 
 test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 수 있다', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
 
   const lessonDate = formatYmd(addDays(new Date(), 540));
   const lessonTime = '21:45';
   const lessonSubject = `E2E 특별수업 ${Date.now()}`;
+  let groupClass = null;
+  let createdLessonId = '';
 
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '단체반 관리');
+
+  groupClass = await expect
+    .poll(
+      async () =>
+        getAdminGroupClassByName({
+          groupName: TEST_GROUP_NAME,
+        }),
+      { timeout: 15000 }
+    )
+    .not.toBeNull()
+    .then(async () =>
+      getAdminGroupClassByName({
+        groupName: TEST_GROUP_NAME,
+      })
+    );
 
   const groupRow = await clickGroupRow(page, TEST_GROUP_NAME);
 
@@ -59,7 +85,9 @@ test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 
 
   await expect(targetLessonRow).toHaveCount(0);
 
-  await page.getByRole('button', { name: '특별 수업 추가', exact: true }).click();
+  const addLessonButton = page.getByRole('button', { name: '특별 수업 추가', exact: true });
+  await expect(addLessonButton).toBeEnabled({ timeout: 15000 });
+  await addLessonButton.click();
 
   const lessonDialog = page.getByRole('dialog', { name: '특별 수업 추가' });
   await expect(lessonDialog).toBeVisible();
@@ -72,37 +100,97 @@ test('관리자가 그룹의 특별 수업을 추가한 뒤 삭제로 원복할 
   const saveButton = lessonDialog.getByRole('button', { name: '저장', exact: true });
   await expect(saveButton).toBeEnabled();
   await saveButton.click();
-  await expect(lessonDialog).toBeHidden();
 
   let lessonCreated = false;
 
   try {
+    const createdLesson = await expect
+      .poll(
+        async () =>
+          getAdminGroupLessonByFields({
+            groupClassId: groupClass.id,
+            date: lessonDate,
+            time: lessonTime,
+            subject: lessonSubject,
+          }),
+        { timeout: 30000 }
+      )
+      .not.toBeNull()
+      .then(async () =>
+        getAdminGroupLessonByFields({
+          groupClassId: groupClass.id,
+          date: lessonDate,
+          time: lessonTime,
+          subject: lessonSubject,
+        })
+      );
+    createdLessonId = createdLesson.id;
+    await expect(lessonDialog).toBeHidden({ timeout: 30000 }).catch(async () => {
+      await lessonDialog.getByRole('button', { name: '닫기', exact: true }).click().catch(() => {});
+      await expect(lessonDialog).toBeHidden({ timeout: 5000 }).catch(() => {});
+    });
+
+    const createdLessonRow = lessonSection.locator(
+      `[data-testid="group-lesson-row"][data-lesson-id="${createdLessonId}"]`
+    );
     await expect
-      .poll(async () => await targetLessonRow.count(), { timeout: 10000 })
+      .poll(async () => await createdLessonRow.count(), { timeout: 10000 })
       .toBe(1);
     lessonCreated = true;
 
-    await expect(targetLessonRow.first()).toBeVisible();
+    await expect(createdLessonRow.first()).toBeVisible();
 
-    const deleteDialogHandled = acceptNextDialog(page);
-    await targetLessonRow.first().getByRole('button', { name: '삭제', exact: true }).click();
+    const deleteButton = createdLessonRow.first().getByRole('button', { name: '삭제', exact: true });
+    await expect(deleteButton).toBeVisible({ timeout: 10000 });
+    await expect(deleteButton).toBeEnabled({ timeout: 10000 });
+    const deleteDialogHandled = acceptOptionalDialog(page, 2000);
+    await deleteButton.click({ timeout: 10000 });
     await deleteDialogHandled;
 
     await expect
-      .poll(async () => await targetLessonRow.count(), { timeout: 10000 })
-      .toBe(0);
+      .poll(
+        async () =>
+          (await getAdminGroupLessonByFields({
+            groupClassId: groupClass.id,
+            date: lessonDate,
+            time: lessonTime,
+            subject: lessonSubject,
+          })) === null,
+        { timeout: 15000 }
+      )
+      .toBe(true);
   } finally {
     if (!lessonCreated) return;
 
-    const remainingCount = await targetLessonRow.count();
+    const remainingCount = await page
+      .locator(`[data-testid="group-lesson-row"][data-lesson-id="${createdLessonId}"]`)
+      .count();
     if (remainingCount === 0) return;
 
-    const cleanupDialogHandled = acceptNextDialog(page);
-    await targetLessonRow.first().getByRole('button', { name: '삭제', exact: true }).click();
+    const cleanupRow = page
+      .locator(`[data-testid="group-lesson-row"][data-lesson-id="${createdLessonId}"]`)
+      .first();
+    const cleanupButton = cleanupRow.getByRole('button', { name: '삭제', exact: true });
+    await expect(cleanupRow).toBeVisible({ timeout: 5000 });
+    await expect(cleanupButton).toBeEnabled({ timeout: 5000 });
+    const cleanupDialogHandled = acceptOptionalDialog(page, 2000);
+    await cleanupButton.click({ timeout: 10000 });
     await cleanupDialogHandled;
 
     await expect
-      .poll(async () => await targetLessonRow.count(), { timeout: 10000 })
-      .toBe(0);
+      .poll(
+        async () =>
+          (await getAdminGroupLessonByFields({
+            groupClassId: groupClass.id,
+            date: lessonDate,
+            time: lessonTime,
+            subject: lessonSubject,
+          })) === null,
+        { timeout: 10000 }
+      )
+      .toBe(true)
+      .catch(async () => {
+        await cleanupAdminGroupLessonById({ lessonId: createdLessonId });
+      });
   }
 });

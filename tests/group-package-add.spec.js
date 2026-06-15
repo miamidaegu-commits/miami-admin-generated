@@ -8,10 +8,19 @@ import {
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
-  TEST_GROUP_NAME,
 } from './fixtures/test-data.js';
+import {
+  cleanupAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededCalendarGroupLessonSetup,
+} from './e2e-admin-helpers.js';
 
 test.setTimeout(90000);
+
+function futureYmd(daysAhead = 14) {
+  const date = new Date();
+  date.setDate(date.getDate() + daysAhead);
+  return date.toISOString().slice(0, 10);
+}
 
 async function expectPostEnrollDialog(page, packageDialog, dialogMessages) {
   try {
@@ -53,9 +62,22 @@ test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 �
 
   const uniqueToken = Date.now();
   const tempStudentName = `E2E 그룹수강권 ${uniqueToken}`;
+  const groupName = `E2E 그룹수강권반 ${uniqueToken}`;
   let tempStudent = null;
+  let groupSetup = null;
 
   try {
+    groupSetup = await createAdminSeededCalendarGroupLessonSetup({
+      groupClassId: `e2e-group-package-add-class-${uniqueToken}`,
+      groupLessonId: `e2e-group-package-add-lesson-${uniqueToken}`,
+      groupName,
+      teacherName: 'teacher',
+      lessonDate: futureYmd(14),
+      lessonTime: '21:10',
+      lessonSubject: `E2E 그룹수강권 수업 ${uniqueToken}`,
+      weekdays: [1],
+    });
+
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
 
     tempStudent = await createTempStudent(page, {
@@ -77,33 +99,48 @@ test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 �
     await packageDialog.getByLabel('수강권 유형').selectOption('group');
 
     const groupSelect = packageDialog.getByLabel('그룹 수업');
-    await expect.poll(async () => await groupSelect.locator('option').count()).toBeGreaterThan(1);
+    const getFixtureGroupValue = () =>
+      groupSelect.locator('option').evaluateAll((options, { groupClassId, groupName }) => {
+          const exactValue = options.find((option) => option.getAttribute('value') === groupClassId);
+          if (exactValue) return exactValue.getAttribute('value') || '';
+          const matched = options.find((option) =>
+            option.textContent?.includes(String(groupName))
+          );
+          return matched?.getAttribute('value') || '';
+        }, { groupClassId: groupSetup.groupClassId, groupName });
+    await expect.poll(getFixtureGroupValue, { timeout: 15000 }).not.toBe('');
+    const groupValue = await getFixtureGroupValue();
 
-    const groupValue = await groupSelect.locator('option').evaluateAll((options, groupName) => {
-      const matched = options.find((option) =>
-        option.textContent?.includes(String(groupName))
-      );
-      return matched?.getAttribute('value') || '';
-    }, TEST_GROUP_NAME);
-
-    expect(groupValue).not.toBe('');
     await groupSelect.selectOption(groupValue);
 
     const startDateInput = packageDialog.getByTestId('student-package-start-date-input');
-    await startDateInput.fill(await getGroupPackageStartDate(page, { groupName: TEST_GROUP_NAME }));
+    await startDateInput.fill(await getGroupPackageStartDate(page, {
+      groupClassId: groupSetup.groupClassId,
+      groupName,
+    }));
     await packageDialog.getByLabel('등록 주수').fill('4');
 
     await packageDialog.getByRole('button', { name: '저장' }).click();
 
     const postEnrollDialog = await expectPostEnrollDialog(page, packageDialog, dialogMessages);
     await expect(postEnrollDialog).toContainText(tempStudentName);
-    await expect(postEnrollDialog).toContainText(TEST_GROUP_NAME);
+    await expect(postEnrollDialog).toContainText(groupName);
 
     await postEnrollDialog.getByRole('button', { name: '나중에 등록' }).click();
     await expect(postEnrollDialog).toBeHidden();
   } finally {
     if (tempStudent) {
-      await cleanupTempStudentData(page, tempStudent);
+      await cleanupTempStudentData(page, {
+        ...tempStudent,
+        cleanupPackagesByStudent: true,
+        cleanupGroupStudentsByStudent: true,
+      });
+    }
+    if (groupSetup) {
+      await cleanupAdminSeededCalendarGroupLessonSetup({
+        ...groupSetup,
+        strictLessonIdsOnly: true,
+      }).catch(() => {});
     }
   }
 });

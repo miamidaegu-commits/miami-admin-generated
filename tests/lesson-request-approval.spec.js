@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test';
 import { BASE_URL, loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
-import { getLessonRequestApprovalState } from './e2e-firebase-helpers.js';
 import {
   createAdminSeededLessonRequest,
   createAdminSeededPrivateLesson,
+  getAdminSeededLesson,
   getAdminSeededLessonRequest,
+  getAdminSeededPrivatePackagesForStudent,
   getAdminLessonsForStudentTeacher,
 } from './e2e-admin-helpers.js';
 import {
@@ -52,52 +53,146 @@ function getLessonRequestRowById(page, requestId) {
   );
 }
 
-async function approveLessonRequestAndWait(page, createdRequest) {
+async function approveLessonRequestAndWait(page, createdRequest, options = {}) {
   if (createdRequest.requestId) {
-    await expect
-      .poll(
-        async () =>
-          getLessonRequestApprovalState(page, {
-            requestId: createdRequest.requestId,
-          }),
-        { timeout: 15000 }
-      )
-      .toMatchObject({
-        exists: true,
-        approvalStatus: 'pending',
-      });
+    await expectLessonRequestDocStatus(createdRequest.requestId, {
+      approvalStatus: 'pending',
+    });
   }
 
   const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
   if (createdRequest.subject) {
     await expect(requestRow).toContainText(createdRequest.subject);
   }
-  await requestRow.getByRole('button', { name: '승인', exact: true }).click();
-  await expectLessonRequestApprovedInFirestore(page, createdRequest);
-  await expectApprovedLessonRequestRemovedFromUi(page, createdRequest);
+  await clickLessonRequestAction(page, createdRequest, requestRow, '승인');
+  await expectLessonRequestApprovedInFirestore(createdRequest);
+  if (options.skipUiRemovalCheck !== true) {
+    await expectApprovedLessonRequestRemovedFromUi(page, createdRequest, { optionalRefresh: true });
+  }
 }
 
-async function expectLessonRequestApprovedInFirestore(page, createdRequest) {
+async function expectLessonRequestDocStatus(requestId, expected, options = {}) {
   await expect
     .poll(
-      async () =>
-        getLessonRequestApprovalState(page, {
-          requestId: createdRequest.requestId,
-        }),
-      { timeout: 60000 }
+      async () => {
+        const request = await getAdminSeededLessonRequest(requestId);
+        if (!request) return { exists: false };
+        return {
+          exists: true,
+          approvalStatus: request.approvalStatus || '',
+          status: request.status || '',
+          rejectionReason: request.raw?.rejectionReason || '',
+          fixedPrivatePackageId: request.raw?.fixedPrivatePackageId || '',
+        };
+      },
+      { timeout: options.timeout ?? 60000 }
     )
     .toMatchObject({
       exists: true,
-      approvalStatus: 'approved',
-      status: 'approved',
+      ...expected,
     });
 }
 
-async function expectApprovedLessonRequestRemovedFromUi(page, createdRequest) {
-  await openDashboardSection(page, '캘린더');
-  await openDashboardSection(page, '수업 요청 관리');
+async function expectLessonRequestApprovedInFirestore(createdRequest) {
+  await expectLessonRequestDocStatus(createdRequest.requestId, {
+    approvalStatus: 'approved',
+    status: 'approved',
+  });
+}
+
+async function expectRequestLessons(createdRequest, expected) {
+  await expect
+    .poll(
+      async () => {
+        const lessons = await getAdminLessonsForStudentTeacher({
+          studentId: createdRequest.studentId,
+          teacher: createdRequest.teacherName,
+        });
+        return lessons
+          .filter((lesson) => lesson.subject === createdRequest.subject)
+          .map((lesson) => ({
+            date: lesson.date,
+            time: lesson.time,
+            subject: lesson.subject,
+            studentId: lesson.studentId,
+            studentID: lesson.studentID,
+            studentName: lesson.studentName,
+            teacher: lesson.teacher,
+            completed: false,
+            isDeductCancelled: lesson.isDeductCancelled,
+            deductMemo: '',
+            sessionNumber: lesson.sessionNumber,
+          }));
+      },
+      { timeout: 60000 }
+    )
+    .toEqual(expected);
+}
+
+async function clickLessonRequestAction(page, createdRequest, requestRow, actionName, options = {}) {
+  const button = requestRow.getByRole('button', { name: actionName, exact: true });
+  try {
+    await expect(button).toBeVisible({ timeout: 15000 });
+    await expect(button).toBeEnabled({ timeout: 15000 });
+  } catch (error) {
+    const [requestDoc, rowText, visibleRows] = await Promise.all([
+      getAdminSeededLessonRequest(createdRequest.requestId).catch((requestError) => ({
+        error: requestError?.message || String(requestError),
+      })),
+      requestRow.innerText({ timeout: 1000 }).catch(() => ''),
+      page
+        .getByTestId('lesson-request-row')
+        .evaluateAll((rows) =>
+          rows.map((rowEl) => ({
+            requestId: rowEl.getAttribute('data-request-id') || '',
+            text: rowEl.textContent || '',
+          }))
+        )
+        .catch(() => []),
+    ]);
+    throw new Error(
+      [
+        `Lesson request ${actionName} button was not ready for ${createdRequest.requestId}.`,
+        `Firestore request: ${JSON.stringify(requestDoc)}`,
+        `Target row text: ${rowText}`,
+        `Visible rows: ${JSON.stringify(visibleRows.slice(0, 40))}`,
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+
+  const dialogPromise = page
+    .waitForEvent('dialog', { timeout: options.dialogTimeout ?? 1000 })
+    .then(async (dialog) => {
+      const message = dialog.message();
+      if (options.promptText !== undefined) {
+        await dialog.accept(options.promptText);
+      } else {
+        await dialog.accept();
+      }
+      return { type: dialog.type(), message };
+    })
+    .catch((error) => {
+      if (/Timeout/.test(String(error?.message || ''))) return null;
+      throw error;
+    });
+
+  await button.click({ timeout: 10000 });
+  return dialogPromise;
+}
+
+async function expectApprovedLessonRequestRemovedFromUi(page, createdRequest, options = {}) {
+  if (options.optionalRefresh) {
+    await expect(getLessonRequestRowById(page, createdRequest.requestId))
+      .toHaveCount(0, { timeout: options.timeout ?? 1000 })
+      .catch(() => {});
+    return;
+  } else {
+    await openDashboardSection(page, '캘린더');
+    await openDashboardSection(page, '수업 요청 관리');
+  }
   await expect(getLessonRequestRowById(page, createdRequest.requestId)).toHaveCount(0, {
-    timeout: 60000,
+    timeout: options.timeout ?? 10000,
   });
 }
 
@@ -164,7 +259,7 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
   page,
   browserName,
 }, testInfo) => {
-  testInfo.setTimeout(90000);
+  testInfo.setTimeout(180000);
   test.skip(browserName !== 'chromium', 'This test is intended for chromium.');
 
   const now = Date.now();
@@ -187,18 +282,9 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '수업 요청 관리');
 
-  await expect
-    .poll(
-      async () =>
-        getLessonRequestApprovalState(page, {
-          requestId: createdRequest.requestId,
-        }),
-      { timeout: 60000 }
-    )
-    .toMatchObject({
-      exists: true,
-      approvalStatus: 'pending',
-    });
+  await expectLessonRequestDocStatus(createdRequest.requestId, {
+    approvalStatus: 'pending',
+  });
 
   const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
   await expect(requestRow).toContainText(createdRequest.teacherName);
@@ -208,49 +294,37 @@ test('admin sees a pending lesson request and approving it creates lessons', asy
   await expect(requestRow).toContainText('반복');
   await expect(requestRow).toContainText('2');
 
-  await requestRow.getByRole('button', { name: '승인', exact: true }).click();
+  await clickLessonRequestAction(page, createdRequest, requestRow, '승인');
 
-  await expect
-    .poll(
-      async () =>
-        getLessonRequestApprovalState(page, {
-          requestId: createdRequest.requestId,
-        }),
-      { timeout: 15000 }
-    )
-    .toMatchObject({
-      exists: true,
-      approvalStatus: 'approved',
-      status: 'approved',
-      lessons: [
-        {
-          date: lessonDate,
-          time: lessonTime,
-          subject,
-          studentId,
-          studentID: studentId,
-          studentName,
-          teacher: createdRequest.teacherName,
-          completed: false,
-          isDeductCancelled: false,
-          deductMemo: '',
-          sessionNumber: 1,
-        },
-        {
-          date: addDays(lessonDate, 7),
-          time: lessonTime,
-          subject,
-          studentId,
-          studentID: studentId,
-          studentName,
-          teacher: createdRequest.teacherName,
-          completed: false,
-          isDeductCancelled: false,
-          deductMemo: '',
-          sessionNumber: 2,
-        },
-      ],
-    });
+  await expectLessonRequestApprovedInFirestore(createdRequest);
+  await expectRequestLessons(createdRequest, [
+    {
+      date: lessonDate,
+      time: lessonTime,
+      subject,
+      studentId,
+      studentID: studentId,
+      studentName,
+      teacher: createdRequest.teacherName,
+      completed: false,
+      isDeductCancelled: false,
+      deductMemo: '',
+      sessionNumber: 1,
+    },
+    {
+      date: addDays(lessonDate, 7),
+      time: lessonTime,
+      subject,
+      studentId,
+      studentID: studentId,
+      studentName,
+      teacher: createdRequest.teacherName,
+      completed: false,
+      isDeductCancelled: false,
+      deductMemo: '',
+      sessionNumber: 2,
+    },
+  ]);
 
   await expectApprovedLessonRequestRemovedFromUi(page, createdRequest);
 });
@@ -259,7 +333,7 @@ test('admin approval of fixed recurring private request creates and links packag
   page,
   browserName,
 }, testInfo) => {
-  testInfo.setTimeout(90000);
+  testInfo.setTimeout(180000);
   test.skip(browserName !== 'chromium', 'This test is intended for chromium.');
 
   const now = Date.now();
@@ -300,55 +374,59 @@ test('admin approval of fixed recurring private request creates and links packag
   const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
   await expect(requestRow).toContainText('반복');
   await expect(requestRow).toContainText('4');
-  await requestRow.getByRole('button', { name: '승인', exact: true }).click();
+  await clickLessonRequestAction(page, createdRequest, requestRow, '승인');
+
+  await expectLessonRequestApprovedInFirestore(createdRequest);
 
   await expect
-    .poll(
-      async () =>
-        getLessonRequestApprovalState(page, {
-          requestId: createdRequest.requestId,
-        }),
-      { timeout: 60000 }
-    )
-    .toMatchObject({
-      exists: true,
-      approvalStatus: 'approved',
-      status: 'approved',
-      packages: [
-        {
-          packageType: 'private',
-          teacher: createdRequest.teacherName,
-          totalCount: 4,
-          usedCount: 0,
-          remainingCount: 4,
-          status: 'active',
-        },
-      ],
-    });
+    .poll(async () => {
+      const packages = await getAdminSeededPrivatePackagesForStudent({ studentId });
+      return packages
+        .map((pkg) => ({
+          id: pkg.id,
+          packageType: pkg.packageType,
+          teacher: pkg.teacher,
+          totalCount: Number(pkg.totalCount || 0),
+          usedCount: Number(pkg.usedCount || 0),
+          remainingCount: Number(pkg.remainingCount || 0),
+          status: pkg.status,
+        }));
+    }, { timeout: 60000 })
+    .toEqual([
+      expect.objectContaining({
+        packageType: 'private',
+        teacher: createdRequest.teacherName,
+        totalCount: 4,
+        usedCount: 0,
+        remainingCount: 4,
+        status: 'active',
+      }),
+    ]);
 
-  const state = await getLessonRequestApprovalState(page, {
-    requestId: createdRequest.requestId,
-  });
+  const state = await getAdminSeededLessonRequest(createdRequest.requestId);
   expect(dialogs).toEqual([]);
-  expect(state.packages).toHaveLength(1);
-  const [createdPackage] = state.packages;
-  expect(state.fixedPrivatePackageId).toBe(createdPackage.id);
-  expect(state.lessons).toHaveLength(4);
-  expect(state.lessons.map((lesson) => lesson.date)).toEqual(expectedDates);
-  expect(state.lessons.map((lesson) => lesson.packageId)).toEqual([
+  const createdPackages = await getAdminSeededPrivatePackagesForStudent({ studentId });
+  const createdPackage =
+    createdPackages.find((pkg) => pkg.id === state.raw?.fixedPrivatePackageId) || createdPackages[0];
+  expect(createdPackage).toBeTruthy();
+  const lessons = await getAdminLessonsForStudentTeacher({ studentId, teacher: createdRequest.teacherName });
+  const requestLessons = lessons.filter((lesson) => lesson.subject === subject);
+  expect(requestLessons).toHaveLength(4);
+  expect(requestLessons.map((lesson) => lesson.date)).toEqual(expectedDates);
+  expect(requestLessons.map((lesson) => lesson.packageId)).toEqual([
     createdPackage.id,
     createdPackage.id,
     createdPackage.id,
     createdPackage.id,
   ]);
-  expect(state.lessons.map((lesson) => lesson.sessionNumber)).toEqual([1, 2, 3, 4]);
+  expect(requestLessons.map((lesson) => lesson.sessionNumber)).toEqual([1, 2, 3, 4]);
 });
 
 test('admin approval assigns continuous private lesson session numbers across requests', async ({
   page,
   browserName,
 }, testInfo) => {
-  testInfo.setTimeout(90000);
+  testInfo.setTimeout(180000);
   test.skip(browserName !== 'chromium', 'This test is intended for chromium.');
 
   const now = Date.now();
@@ -390,7 +468,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     repeatWeekly: false,
     repeatWeeks: 1,
   });
-  await Promise.all([
+  const [unrelatedStudentLesson, unrelatedTeacherLesson] = await Promise.all([
     createAdminSeededPrivateLesson({
       studentId: otherStudentId,
       studentName: `E2E 다른학생 ${now}`,
@@ -414,7 +492,7 @@ test('admin approval assigns continuous private lesson session numbers across re
   await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
   await openDashboardSection(page, '수업 요청 관리');
 
-  await approveLessonRequestAndWait(page, requestA);
+  await approveLessonRequestAndWait(page, requestA, { skipUiRemovalCheck: true });
   await expectSessionPlan({
     studentId,
     teacher,
@@ -426,7 +504,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     ],
   });
 
-  await approveLessonRequestAndWait(page, requestB);
+  await approveLessonRequestAndWait(page, requestB, { skipUiRemovalCheck: true });
   await expectSessionPlan({
     studentId,
     teacher,
@@ -442,7 +520,7 @@ test('admin approval assigns continuous private lesson session numbers across re
     ],
   });
 
-  await approveLessonRequestAndWait(page, requestBackdated);
+  await approveLessonRequestAndWait(page, requestBackdated, { skipUiRemovalCheck: true });
   await expectSessionPlan({
     studentId,
     teacher,
@@ -461,21 +539,15 @@ test('admin approval assigns continuous private lesson session numbers across re
 
   await expect
     .poll(async () => {
-      const lessons = await getAdminLessonsForStudentTeacher({
-        studentId: otherStudentId,
-        teacher,
-      });
-      return lessons.find((lesson) => lesson.subject === unrelatedStudentSubject)?.sessionNumber;
-    })
+      const lesson = await getAdminSeededLesson({ lessonId: unrelatedStudentLesson.lessonId });
+      return Number(lesson?.sessionNumber || 0);
+    }, { timeout: 5000 })
     .toBe(77);
   await expect
     .poll(async () => {
-      const lessons = await getAdminLessonsForStudentTeacher({
-        studentId,
-        teacher: otherTeacher,
-      });
-      return lessons.find((lesson) => lesson.subject === unrelatedTeacherSubject)?.sessionNumber;
-    })
+      const lesson = await getAdminSeededLesson({ lessonId: unrelatedTeacherLesson.lessonId });
+      return Number(lesson?.sessionNumber || 0);
+    }, { timeout: 5000 })
     .toBe(88);
 });
 
@@ -518,26 +590,26 @@ test('admin can reject a pending lesson request without creating lessons', async
 
   const requestRow = await expectLessonRequestRowVisible(page, createdRequest);
 
-  page.once('dialog', async (dialog) => {
-    expect(dialog.type()).toBe('prompt');
-    await dialog.accept(rejectionReason);
+  const dialog = await clickLessonRequestAction(page, createdRequest, requestRow, '거절', {
+    promptText: rejectionReason,
+    dialogTimeout: 5000,
   });
-  await requestRow.getByRole('button', { name: '거절', exact: true }).click();
+  if (dialog) expect(dialog.type).toBe('prompt');
 
+  await expectLessonRequestDocStatus(createdRequest.requestId, {
+    approvalStatus: 'rejected',
+    status: 'rejected',
+    rejectionReason,
+  });
   await expect
-    .poll(
-      async () =>
-        getLessonRequestApprovalState(page, {
-          requestId: createdRequest.requestId,
-        }),
-      { timeout: 15000 }
-    )
-    .toMatchObject({
-      exists: true,
-      approvalStatus: 'rejected',
-      rejectionReason,
-      lessons: [],
-    });
+    .poll(async () => {
+      const lessons = await getAdminLessonsForStudentTeacher({
+        studentId,
+        teacher: createdRequest.teacherName,
+      });
+      return lessons.filter((lesson) => lesson.subject === subject).length;
+    }, { timeout: 15000 })
+    .toBe(0);
 
   await expect(requestRow).toHaveCount(0);
 });

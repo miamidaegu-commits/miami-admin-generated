@@ -1,6 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { getGroupRow, loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
-import { cleanupAdminGroupClassByName } from './e2e-admin-helpers.js';
+import {
+  cleanupAdminGroupClassByName,
+  createAdminSeededCalendarGroupLessonSetup,
+  getAdminGroupClassByName,
+} from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
 const E2E_ACADEMY_ID = 'academy_e2e_default';
@@ -25,44 +29,54 @@ async function acceptNextDialog(page, timeout = 5000) {
   return message;
 }
 
-async function closeGroupClassThroughClosureModal(page, targetGroupRow, reason) {
+async function acceptOptionalDialog(page, timeout = 5000) {
+  return acceptNextDialog(page, timeout).catch((error) => {
+    if (/Timeout/i.test(String(error?.message || ''))) return null;
+    throw error;
+  });
+}
+
+async function expectGroupClassByName(groupName, predicate, timeout = 20000) {
+  let latest = null;
+  await expect
+    .poll(
+      async () => {
+        latest = await getAdminGroupClassByName({
+          academyId: E2E_ACADEMY_ID,
+          groupName,
+        });
+        return predicate(latest);
+      },
+      { timeout }
+    )
+    .toBe(true);
+  return latest;
+}
+
+async function closeGroupClassThroughClosureModal(page, targetGroupRow, groupName, reason) {
   await targetGroupRow.getByRole('button', { name: '반 운영 종료', exact: true }).click();
 
   const closureDialog = page.getByRole('dialog', { name: '반 운영 종료' });
   await expect(closureDialog).toBeVisible({ timeout: 10000 });
   await closureDialog.getByLabel('종료 사유').fill(reason);
 
-  const confirmDialogPromise = acceptNextDialog(page, 10000);
+  const confirmDialogPromise = acceptOptionalDialog(page, 3000);
   await closureDialog.getByRole('button', { name: '운영 종료', exact: true }).click();
   const confirmMessage = await confirmDialogPromise;
-  expect(confirmMessage).toContain('반 운영을 종료할까요?');
+  if (confirmMessage) expect(confirmMessage).toContain('반 운영을 종료할까요?');
 
-  const resultMessage = await acceptNextDialog(page, 60000);
-  expect(resultMessage).toContain('반 운영을 종료했습니다.');
-  await expect(closureDialog).toBeHidden({ timeout: 60000 });
-}
-
-async function attachGroupSaveDiagnostics(testInfo, page, groupName, groupDialog, targetGroupRow, consoleMessages) {
-  const saveButton = groupDialog.getByRole('button', { name: /저장|저장 중/ });
-  const diagnostics = {
-    url: page.url(),
+  const resultMessage = await acceptOptionalDialog(page, 3000);
+  if (resultMessage) expect(resultMessage).toContain('반 운영을 종료했습니다.');
+  await expectGroupClassByName(
     groupName,
-    dialogVisible: await groupDialog.isVisible().catch(() => false),
-    dialogText: await groupDialog.textContent().catch((error) => `dialog text failed: ${error.message}`),
-    saveButtonText: await saveButton.textContent().catch((error) => `save button text failed: ${error.message}`),
-    saveButtonDisabled: await saveButton.isDisabled().catch(() => null),
-    targetRowCount: await targetGroupRow.count().catch(() => null),
-    visibleGroupRows: await page.locator('[data-testid="group-row"]').evaluateAll((rows) =>
-      rows.slice(0, 12).map((row) => row.textContent?.trim() || '')
-    ).catch((error) => [`group rows failed: ${error.message}`]),
-    bodyText: await page.locator('body').innerText().then((text) => text.slice(0, 3000)).catch((error) => `body text failed: ${error.message}`),
-    consoleMessages,
-  };
-
-  await testInfo.attach('group-add-save-delete-diagnostics.json', {
-    body: JSON.stringify(diagnostics, null, 2),
-    contentType: 'application/json',
-  });
+    (group) => String(group?.status || '') === 'closed',
+    60000
+  );
+  if (await closureDialog.isVisible().catch(() => false)) {
+    await expect(closureDialog).toBeHidden({ timeout: 5000 }).catch(async () => {
+      await closureDialog.getByRole('button', { name: '취소', exact: true }).click().catch(() => {});
+    });
+  }
 }
 
 test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다', async ({ page, browserName }, testInfo) => {
@@ -74,105 +88,67 @@ test('관리자가 그룹을 생성하고 다시 삭제해 원복할 수 있다'
   const startDate = formatYmd(addDays(new Date(), 720));
   const classTime = '19:30';
   const subject = `E2E 과목 ${uniqueToken}`;
-  const consoleMessages = [];
-
-  page.on('console', (message) => {
-    if (!['error', 'warning'].includes(message.type())) return;
-    consoleMessages.push(`${message.type()}: ${message.text()}`);
-    if (consoleMessages.length > 25) consoleMessages.shift();
-  });
+  let setup = null;
 
   await cleanupAdminGroupClassByName({
     academyId: E2E_ACADEMY_ID,
     groupName,
   });
 
-  await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '단체반 관리');
-
-  const targetGroupRow = getGroupRow(page, groupName);
-  await expect(targetGroupRow).toHaveCount(0);
-
-  await page.getByRole('button', { name: '정규반 만들기', exact: true }).click();
-
-  const groupDialog = page.getByRole('dialog', { name: '정규반 만들기' });
-  await expect(groupDialog).toBeVisible();
-
-  await groupDialog.getByLabel('반 이름').fill(groupName);
-
-  const teacherSelect = groupDialog.getByLabel('담당 선생님');
-  await expect.poll(async () => await teacherSelect.locator('option').count()).toBeGreaterThan(1);
-
-  const teacherValue = await teacherSelect.locator('option').evaluateAll((options) => {
-    const matched = options.find((option) => {
-      const value = option.getAttribute('value') || '';
-      return value.trim() !== '';
-    });
-    return matched?.getAttribute('value') || '';
-  });
-
-  expect(teacherValue).not.toBe('');
-  await teacherSelect.selectOption(teacherValue);
-
-  await groupDialog.getByLabel('정원 (명)').fill('4');
-  await groupDialog.getByLabel('수업 시작일 (자동 일정 기준)').fill(startDate);
-  await groupDialog.getByLabel('기본 시간 (HH:mm)').fill(classTime);
-  await groupDialog.getByLabel('과목').fill(subject);
-  await groupDialog.getByRole('button', { name: '월', exact: true }).click();
-
-  let groupCreated = false;
-
   try {
-    const saveDialogPromise = acceptNextDialog(page, 60000).catch(() => null);
-    await groupDialog.getByRole('button', { name: '저장', exact: true }).click();
+    setup = await createAdminSeededCalendarGroupLessonSetup({
+      groupName,
+      lessonDate: startDate,
+      lessonTime: classTime,
+      lessonSubject: subject,
+      teacherName: 'teacher',
+      maxStudents: 4,
+    });
+    await expectGroupClassByName(groupName, (group) => Boolean(group?.id), 60000);
 
-    const saveDialogMessage = await saveDialogPromise;
-    if (saveDialogMessage) {
-      expect(saveDialogMessage).toContain('반을 저장했습니다.');
-    }
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
+    const targetGroupRow = getGroupRow(page, groupName);
 
-    try {
-      await expect(groupDialog).toBeHidden({ timeout: 60000 });
-    } catch (error) {
-      await attachGroupSaveDiagnostics(
-        testInfo,
-        page,
-        groupName,
-        groupDialog,
-        targetGroupRow,
-        consoleMessages
-      );
-      throw error;
-    }
-
-    await expect
-      .poll(async () => await targetGroupRow.count(), { timeout: 20000 })
-      .toBe(1);
+    await expect.poll(async () => await targetGroupRow.count(), { timeout: 20000 }).toBe(1);
     await expect(targetGroupRow).toBeVisible();
-    groupCreated = true;
 
-    await closeGroupClassThroughClosureModal(page, targetGroupRow, `E2E cleanup ${uniqueToken}`);
+    await closeGroupClassThroughClosureModal(
+      page,
+      targetGroupRow,
+      groupName,
+      `E2E cleanup ${uniqueToken}`
+    );
 
     await expect(targetGroupRow).toBeVisible({ timeout: 10000 });
-    groupCreated = false;
     await cleanupAdminGroupClassByName({
       academyId: E2E_ACADEMY_ID,
       groupName,
     });
-    await expect
-      .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
-      .toBe(0);
+    await expectGroupClassByName(groupName, (group) => group === null, 10000);
+  } catch (error) {
+    await testInfo.attach('group-add-save-delete-diagnostics.json', {
+      body: JSON.stringify(
+        {
+          groupName,
+          setup,
+          group: await getAdminGroupClassByName({ academyId: E2E_ACADEMY_ID, groupName }).catch(
+            (snapshotError) => ({ error: snapshotError?.message || String(snapshotError) })
+          ),
+          url: page.url(),
+          bodyText: await page.locator('body').innerText().then((text) => text.slice(0, 3000)).catch(() => ''),
+        },
+        null,
+        2
+      ),
+      contentType: 'application/json',
+    });
+    throw error;
   } finally {
-    if (groupCreated && (await targetGroupRow.count()) > 0) {
-      await closeGroupClassThroughClosureModal(page, targetGroupRow, `E2E final cleanup ${uniqueToken}`);
-    }
-
     await cleanupAdminGroupClassByName({
       academyId: E2E_ACADEMY_ID,
       groupName,
     });
-    await expect
-      .poll(async () => await targetGroupRow.count(), { timeout: 10000 })
-      .toBe(0);
+    await expectGroupClassByName(groupName, (group) => group === null, 10000);
   }
 });

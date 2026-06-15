@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
 import {
-  getStudentRow,
+  getStudentRowById,
   getStudentSearchInput,
   BASE_URL,
   loginAsAdmin,
@@ -73,6 +73,64 @@ function reservationId({ lessonId, studentId }) {
 
 function privateReservationId({ slotId, studentId }) {
   return `${DEFAULT_E2E_ACADEMY_ID}__${slotId}__${studentId}`;
+}
+
+async function collectGridRows(locator) {
+  return locator.evaluateAll((rows) =>
+    rows.map((row) => Array.from(row.children).map((cell) => (cell.textContent || '').trim()))
+  );
+}
+
+function rowIncludes(cells, expectedParts) {
+  const rowText = cells.join('\n');
+  return expectedParts.every((part) => rowText.includes(part));
+}
+
+async function expectHistoryFixtureReady(db, fixture) {
+  await expect
+    .poll(
+      async () => {
+        const [
+          studentSnap,
+          activePackageSnap,
+          endedPackageSnap,
+          privateReservationSnap,
+          groupReservationSnap,
+          creditSnap,
+          restoreSnap,
+        ] = await Promise.all([
+          db.collection('privateStudents').doc(fixture.studentId).get(),
+          db.collection('studentPackages').doc(fixture.activePackageId).get(),
+          db.collection('studentPackages').doc(fixture.endedPackageId).get(),
+          db.collection('privateLessonReservations').doc(fixture.privateReservationId).get(),
+          db.collection('groupLessonReservations').doc(fixture.groupReservationId).get(),
+          db.collection('creditTransactions').doc(fixture.creditId).get(),
+          db.collection('creditTransactions').doc(fixture.restoreCreditId).get(),
+        ]);
+        const activePackage = activePackageSnap.data() || {};
+        return {
+          student: studentSnap.exists,
+          activePackage: activePackageSnap.exists,
+          activeRemaining: activePackage.remainingCount,
+          endedPackage: endedPackageSnap.exists,
+          privateReservation: privateReservationSnap.exists,
+          groupReservation: groupReservationSnap.exists,
+          credit: creditSnap.exists,
+          restore: restoreSnap.exists,
+        };
+      },
+      { timeout: 15000 }
+    )
+    .toEqual({
+      student: true,
+      activePackage: true,
+      activeRemaining: 7,
+      endedPackage: true,
+      privateReservation: true,
+      groupReservation: true,
+      credit: true,
+      restore: true,
+    });
 }
 
 async function createFixture(unique) {
@@ -390,6 +448,12 @@ async function createFixture(unique) {
     studentId,
     otherStudentId,
     studentName,
+    activePackageId,
+    endedPackageId,
+    privateReservationId: privateReservationId({ slotId: privateSlotId, studentId }),
+    groupReservationId: reservationId({ lessonId: groupLessonId, studentId }),
+    creditId,
+    restoreCreditId,
     originals,
     refs: [
       db.collection('privateStudents').doc(studentId),
@@ -434,12 +498,14 @@ test('admin can open student lesson history with packages and student-only reser
   test.setTimeout(120000);
 
   const fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}`);
+  const db = admin.firestore();
 
   try {
+    await expectHistoryFixtureReady(db, fixture);
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '학생 관리');
     await getStudentSearchInput(page).fill(fixture.studentName);
-    const row = getStudentRow(page, fixture.studentName);
+    const row = getStudentRowById(page, fixture.studentId);
     await expect(row).toBeVisible({ timeout: 15000 });
     await row.getByTestId('student-history-open-button').click();
 
@@ -449,26 +515,63 @@ test('admin can open student lesson history with packages and student-only reser
     await expect(modal.getByTestId('student-history-profile')).toContainText(fixture.studentName);
 
     const summary = modal.getByTestId('student-history-package-summary');
-    await expect(summary).toContainText('사용 중 수강권');
-    await expect(summary).toContainText('1');
-    await expect(summary).toContainText('종료 수강권');
-    await expect(summary).toContainText('남은 횟수 합계');
-    await expect(summary).toContainText('7');
+    const summaryCards = await summary.evaluate((summaryEl) =>
+      Array.from(summaryEl.children).map((card) => {
+        const children = Array.from(card.children);
+        return {
+          label: (children[0]?.textContent || '').trim(),
+          value: (children[1]?.textContent || '').trim(),
+        };
+      })
+    );
+    expect(summaryCards).toEqual(
+      expect.arrayContaining([
+        { label: '사용 중 수강권', value: '1' },
+        { label: '종료 수강권', value: '1' },
+      ])
+    );
 
-    const activePackage = modal.getByTestId('student-history-package-row').filter({ hasText: 'Active Private Pack' });
-    await expect(activePackage).toContainText('1:1');
-    await expect(activePackage).toContainText('남은 7');
-    const endedPackage = modal.getByTestId('student-history-package-row').filter({ hasText: 'Ended Group Pack' });
-    await expect(endedPackage).toContainText('단체반');
-    await expect(endedPackage).toContainText('종료');
+    await expect
+      .poll(async () => collectGridRows(modal.getByTestId('student-history-package-row')), {
+        timeout: 15000,
+      })
+      .toEqual(
+        expect.arrayContaining([
+          expect.arrayContaining(['Active Private Pack', '1:1', '총 10', '사용 3', '남은 7', '사용 중']),
+          expect.arrayContaining(['Ended Group Pack', '단체반', '총 8', '사용 8', '남은 0', '종료']),
+        ])
+      );
 
-    const privateReservationRow = modal.getByTestId('student-history-lesson-row').filter({ hasText: '2099-02-01' });
-    await expect(privateReservationRow).toContainText('1:1 수업');
-    await expect(privateReservationRow).toContainText('예약 완료');
-    await expect(modal.getByTestId('student-history-lesson-row').filter({ hasText: 'Admin Group Reservation' })).toContainText('단체반 수업');
-    await expect(modal.getByTestId('student-history-lesson-row').filter({ hasText: '2099-02-02' })).toContainText('예약 취소');
-    await expect(modal.getByTestId('student-history-lesson-row').filter({ hasText: 'Admin Deduct History' })).toContainText('출석 처리됨');
-    await expect(modal.getByTestId('student-history-lesson-row').filter({ hasText: 'Admin Restore History' })).toContainText('차감 취소');
+    await expect
+      .poll(async () => collectGridRows(modal.getByTestId('student-history-lesson-row')), {
+        timeout: 15000,
+      })
+      .toEqual(
+        expect.arrayContaining([
+          expect.arrayContaining([
+            '2099-02-01',
+            '10:00',
+            '1:1 수업',
+            TEACHER_NAME,
+            '예약 완료',
+            'Active Private Pack',
+            '1:1 수업',
+          ]),
+          expect.arrayContaining([
+            '2099-03-01',
+            '15:00',
+            '단체반 수업',
+            TEACHER_NAME,
+            '예약 완료',
+            'Ended Group Pack',
+            'Admin Group Reservation',
+          ]),
+        ])
+      );
+    const lessonRows = await collectGridRows(modal.getByTestId('student-history-lesson-row'));
+    expect(lessonRows.some((cells) => rowIncludes(cells, ['2099-02-02', '예약 취소']))).toBe(true);
+    expect(lessonRows.some((cells) => rowIncludes(cells, ['Admin Deduct History', '출석 처리됨']))).toBe(true);
+    expect(lessonRows.some((cells) => rowIncludes(cells, ['Admin Restore History', '차감 취소']))).toBe(true);
     await expect(modal).not.toContainText('Other Student History');
   } finally {
     await cleanupFixture(fixture).catch(() => {});
@@ -492,7 +595,7 @@ test('teacher and student cannot access admin-only student history view', async 
     if ((await page.getByRole('button', { name: '학생 관리', exact: true }).count()) > 0) {
       await openDashboardSection(page, '학생 관리');
       await getStudentSearchInput(page).fill(fixture.studentName);
-      const row = getStudentRow(page, fixture.studentName);
+      const row = getStudentRowById(page, fixture.studentId);
       await expect(row).toBeVisible({ timeout: 15000 });
       await expect(row.getByTestId('student-history-open-button')).toHaveCount(0);
     } else {

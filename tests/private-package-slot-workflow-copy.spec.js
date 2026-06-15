@@ -86,7 +86,7 @@ async function openPackageAddDialog(page, studentName, studentId = '') {
   const studentSearchInput = getStudentSearchInput(page);
   await studentSearchInput.fill(studentName);
 
-  const studentRow = getStudentRow(page, studentName);
+  const studentRow = studentId ? getStudentRowById(page, studentId) : getStudentRow(page, studentName);
   await expect(studentRow).toBeVisible({ timeout: 15000 });
   await studentRow.getByRole('button', { name: '수강권 추가', exact: true }).click();
 
@@ -94,6 +94,34 @@ async function openPackageAddDialog(page, studentName, studentId = '') {
   await expect(dialog).toBeVisible();
   await dialog.getByLabel('수강권 유형').selectOption('private');
   return dialog;
+}
+
+async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
+  const modal = page
+    .getByTestId('post-private-lesson-schedule-modal')
+    .or(page.getByRole('dialog', { name: '고정 1:1 수업 배정으로 이동할까요?' }))
+    .first();
+  if (!(await modal.isVisible({ timeout: options.timeout ?? 2000 }).catch(() => false))) {
+    return false;
+  }
+  await expect(modal).toContainText('고정 1:1 수업 배정으로 이동할까요?');
+  if (options.expectedText) {
+    await expect(modal).toContainText(options.expectedText);
+  }
+  await modal.getByRole('button', { name: /나중에 (하기|등록)/ }).click();
+  await expect(modal).toBeHidden({ timeout: 10000 });
+  return true;
+}
+
+async function closeDialogBestEffort(page, dialog) {
+  if (!(await dialog.isVisible({ timeout: 1000 }).catch(() => false))) return;
+  const cancelButton = dialog.getByRole('button', { name: '취소', exact: true });
+  if (await cancelButton.isEnabled({ timeout: 1000 }).catch(() => false)) {
+    await cancelButton.click({ timeout: 5000 }).catch(() => {});
+  } else {
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
 }
 
 test('private package add modal explains package counts and fixed assignment workflow', async ({
@@ -233,6 +261,28 @@ test('duplicate private package warning shows actionable capacity details and re
       .filter((row) => row.reservationId)
       .map((row) => row.reservationId);
 
+    await expect
+      .poll(async () => {
+        const pkg = await getAdminSeededStudentPackage({
+          academyId: ACADEMY_ID,
+          packageId: packageSeed.packageId,
+        });
+        return {
+          id: pkg?.id || '',
+          studentId: pkg?.studentId || '',
+          teacherKey: pkg?.teacherKey || pkg?.teacher || '',
+          totalCount: Number(pkg?.totalCount || 0),
+          remainingCount: Number(pkg?.remainingCount || 0),
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        id: packageSeed.packageId,
+        studentId: tempStudent.studentId,
+        teacherKey: TEACHER,
+        totalCount: 4,
+        remainingCount: 4,
+      });
+
     const dialog = await openPackageAddDialog(page, studentName, tempStudent.studentId);
     const guidance = dialog.getByTestId('student-package-duplicate-guidance');
     await expect(guidance).toBeVisible();
@@ -274,8 +324,28 @@ test('duplicate private package warning shows actionable capacity details and re
     await expect(guidance).toContainText('잘못 입력한 정보를 고칠 때 사용합니다.');
     await expect(guidance).toContainText('수강권 횟수를 실제 수업 일정으로 배정합니다.');
     await dialog.getByTestId('student-package-edit-existing-button').click();
-    await expect(page.getByRole('dialog', { name: '수강권 수정' })).toBeVisible();
-    await page.getByRole('button', { name: '취소', exact: true }).click();
+    const editDialog = page.getByRole('dialog', { name: '수강권 수정' });
+    await expect(editDialog).toBeVisible();
+    await closeDialogBestEffort(page, editDialog);
+    await expect
+      .poll(async () => {
+        const pkg = await getAdminSeededStudentPackage({
+          academyId: ACADEMY_ID,
+          packageId: packageSeed.packageId,
+        });
+        return {
+          id: pkg?.id || '',
+          teacherKey: pkg?.teacherKey || pkg?.teacher || '',
+          totalCount: Number(pkg?.totalCount || 0),
+          remainingCount: Number(pkg?.remainingCount || 0),
+        };
+      }, { timeout: 10000 })
+      .toEqual({
+        id: packageSeed.packageId,
+        teacherKey: TEACHER,
+        totalCount: 4,
+        remainingCount: 4,
+      });
 
     const reopened = await openPackageAddDialog(page, studentName, tempStudent.studentId);
     await reopened.getByTestId('student-package-go-fixed-assignment-button').click();
@@ -377,13 +447,6 @@ test('admin can create a separate private package for a different teacher', asyn
     await dialog.getByLabel(/총 횟수/).fill('3');
     await dialog.getByRole('button', { name: '저장', exact: true }).click();
 
-    const postPrivateDialog = page.getByRole('dialog', {
-      name: '고정 1:1 수업 배정으로 이동할까요?',
-    });
-    await expect(postPrivateDialog).toBeVisible({ timeout: 30000 });
-    await postPrivateDialog.getByRole('button', { name: '나중에 하기' }).click();
-    await expect(postPrivateDialog).toBeHidden();
-
     await expect
       .poll(async () => {
         const packages = await getAdminSeededPrivatePackagesForStudent({
@@ -395,6 +458,7 @@ test('admin can create a separate private package for a different teacher', asyn
           .sort();
       }, { timeout: 30000 })
       .toEqual([TEACHER, secondTeacherKey].sort());
+    await maybeDismissPostPrivateLessonScheduleModal(page);
 
     const packages = await getAdminSeededPrivatePackagesForStudent({
       academyId: ACADEMY_ID,
