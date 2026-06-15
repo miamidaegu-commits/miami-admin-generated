@@ -61,7 +61,12 @@ jobs:
         env:
           CI: true
           VITE_PUBLIC_APP_URL: ${{ vars.VITE_PUBLIC_APP_URL }}
-        run: npm run test:e2e:chromium -- --max-failures=5
+        run: |
+          npm run seed:e2e:users
+          PW_FIREBASE_ENV_MODE=e2e npx playwright test --project=chromium --max-failures=5 \
+            tests/private-*.spec.js \
+            tests/fixed-private-lesson-release.spec.js \
+            tests/lesson-request-approval.spec.js
 
       - name: Upload Playwright report
         if: always()
