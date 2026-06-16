@@ -81,7 +81,7 @@ function mergeInlinePackageRevokeInfo(pkg, revokeInfo) {
     inlineReasons.push('개인 수강권만 회수할 수 있습니다.')
   }
   if (status === 'revoked') inlineReasons.push('이미 회수된 수강권입니다.')
-  else if (status !== 'active') inlineReasons.push('사용 중인 수강권만 회수할 수 있습니다.')
+  else if (status !== 'active') inlineReasons.push('활성 상태의 수강권만 회수할 수 있습니다.')
   if (inlineReasons.length === 0) return revokeInfo
   return {
     ...revokeInfo,

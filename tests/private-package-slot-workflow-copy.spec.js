@@ -519,14 +519,17 @@ test('admin can create a separate private package for a different teacher', asyn
   }
 });
 
-test('admin can revoke an unused private package', async ({ page, browserName }) => {
+test('admin can revoke a private package with usage history', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
   test.setTimeout(120000);
 
   const unique = Date.now();
-  const studentName = `E2E 0회수강권회수 ${unique}`;
-  const studentId = `e2e-zero-revoke-student-${unique}`;
+  const studentName = `E2E 사용이력회수 ${unique}`;
+  const studentId = `e2e-used-history-revoke-student-${unique}`;
   const cleanupFixture = { academyId: ACADEMY_ID, packageIds: [], studentId };
+  const totalCount = 5;
+  const usedCount = 3;
+  const remainingCount = totalCount - usedCount;
 
   try {
     await createAdminSeededPrivateStudent({
@@ -537,20 +540,20 @@ test('admin can revoke an unused private package', async ({ page, browserName })
       teacher: TEACHER,
       teacherName: TEACHER,
       status: 'active',
-      note: 'E2E zero-use private package revoke test',
+      note: 'E2E used-history private package revoke test',
     });
     const studentPackage = await createAdminSeededStudentPackage({
       academyId: ACADEMY_ID,
       studentId,
       studentName,
-      title: `E2E 미사용 회수 수강권 ${unique}`,
+      title: `E2E 사용 이력 회수 수강권 ${unique}`,
       packageType: 'private',
       teacher: TEACHER,
       teacherKey: TEACHER,
       teacherName: TEACHER,
-      totalCount: 5,
-      remainingCount: 5,
-      usedCount: 0,
+      totalCount,
+      remainingCount,
+      usedCount,
       privatePackageMode: 'countBased',
       expiresAt: '2099-01-01',
     });
@@ -578,9 +581,9 @@ test('admin can revoke an unused private package', async ({ page, browserName })
     const promptMessage = await clickRevokeAndAcceptPrompt(
       page,
       packageCard.getByTestId('student-package-revoke-button'),
-      'E2E 미사용 회수'
+      'E2E 사용 이력 회수'
     );
-    expect(promptMessage).toContain('총 5회 · 사용 0회 · 남은 5회');
+    expect(promptMessage).toContain('총 5회 · 사용 3회 · 남은 2회');
 
     await expect
       .poll(async () => {
@@ -596,14 +599,24 @@ test('admin can revoke an unused private package', async ({ page, browserName })
         ]);
         return {
           status: String(pkg?.status || '').trim(),
+          totalCount: Number(pkg?.totalCount || 0),
+          usedCount: Number(pkg?.usedCount || 0),
+          remainingCount: Number(pkg?.remainingCount || 0),
           revokeReason: String(pkg?.revokeReason || '').trim(),
+          hasRevokedAt: Boolean(pkg?.revokedAt),
+          revokedByUid: String(pkg?.revokedByUid || '').trim(),
           activePackageIds: summary?.activePackageIds || [],
           teacherKeys: summary?.teacherKeys || [],
         };
       }, { timeout: 30000 })
       .toEqual({
         status: 'revoked',
-        revokeReason: 'E2E 미사용 회수',
+        totalCount,
+        usedCount,
+        remainingCount,
+        revokeReason: 'E2E 사용 이력 회수',
+        hasRevokedAt: true,
+        revokedByUid: expect.stringMatching(/\S/),
         activePackageIds: [],
         teacherKeys: [],
       });
@@ -622,7 +635,7 @@ test('admin can revoke an unused private package', async ({ page, browserName })
       `[data-testid="student-package-card"][data-package-id="${studentPackage.packageId}"][data-teacher-key="${TEACHER}"]`
     );
     await expect(revokedCard).toContainText('회수됨');
-    await expect(revokedCard).toContainText('E2E 미사용 회수');
+    await expect(revokedCard).toContainText('E2E 사용 이력 회수');
   } finally {
     await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
     await cleanupAdminSeededCreditTransactionsForStudent({

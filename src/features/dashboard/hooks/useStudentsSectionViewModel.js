@@ -111,7 +111,7 @@ function buildPrivatePackageRevokeInfo(pkg, lessons, privateReservations) {
     reasons.push('개인 수강권만 회수할 수 있습니다.')
   }
   if (status === 'revoked') reasons.push('이미 회수된 수강권입니다.')
-  else if (status !== 'active') reasons.push('사용 중인 수강권만 회수할 수 있습니다.')
+  else if (status !== 'active') reasons.push('활성 상태의 수강권만 회수할 수 있습니다.')
 
   const hasBlockingReservation = (Array.isArray(privateReservations) ? privateReservations : []).some(
     (reservation) =>

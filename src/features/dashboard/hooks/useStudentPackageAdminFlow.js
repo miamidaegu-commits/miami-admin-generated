@@ -605,7 +605,7 @@ export default function useStudentPackageAdminFlow({
         return
       }
       if (latestStatus !== 'active') {
-        alert(latestStatus === 'revoked' ? '이미 회수된 수강권입니다.' : '사용 중인 수강권만 회수할 수 있습니다.')
+        alert(latestStatus === 'revoked' ? '이미 회수된 수강권입니다.' : '활성 상태의 수강권만 회수할 수 있습니다.')
         return
       }
 
