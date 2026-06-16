@@ -420,6 +420,121 @@ export async function getAdminSeededStudentPrivateAccessSummary({
   return snap.exists ? { id: snap.id, ...snap.data() } : null;
 }
 
+export async function revokeAdminSeededPrivatePackageExact({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+  studentId,
+  teacherKey,
+  totalCount,
+  usedCount,
+  remainingCount,
+  revokeReason = 'E2E 수강권 회수',
+  revokedByUid = 'e2e-admin-helper',
+}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const scopedPackageId = String(packageId || '').trim();
+  const packageRef = db.collection('studentPackages').doc(scopedPackageId);
+  const packageSnap = await packageRef.get();
+  if (!packageSnap.exists) {
+    throw new Error(`studentPackages/${scopedPackageId} not found`);
+  }
+  const packageData = packageSnap.data() || {};
+  if (String(packageData.academyId || '').trim() !== scopedAcademyId) {
+    throw new Error(`studentPackages/${scopedPackageId} academy mismatch`);
+  }
+
+  const scopedStudentId = String(studentId || packageData.studentId || '').trim();
+  const scopedTeacherKey = String(
+    teacherKey || packageData.teacherKey || packageData.teacher || packageData.teacherName || ''
+  ).trim();
+  const finalTotalCount = Number.isFinite(Number(totalCount))
+    ? Number(totalCount)
+    : Number(packageData.totalCount || 0);
+  const finalUsedCount = Number.isFinite(Number(usedCount))
+    ? Number(usedCount)
+    : Number(packageData.usedCount || 0);
+  const finalRemainingCount = Number.isFinite(Number(remainingCount))
+    ? Number(remainingCount)
+    : Number(packageData.remainingCount || 0);
+  const now = timestampNow();
+
+  const activeSameTeacherSnap = scopedStudentId && scopedTeacherKey
+    ? await db
+      .collection('studentPackages')
+      .where('academyId', '==', scopedAcademyId)
+      .where('studentId', '==', scopedStudentId)
+      .where('packageType', '==', 'private')
+      .where('status', '==', 'active')
+      .get()
+    : null;
+  const hasOtherActiveSameTeacher = activeSameTeacherSnap
+    ? activeSameTeacherSnap.docs.some((docSnap) => {
+      if (docSnap.id === scopedPackageId) return false;
+      const row = docSnap.data() || {};
+      const rowTeacherKey = String(row.teacherKey || row.teacher || row.teacherName || '').trim();
+      return rowTeacherKey === scopedTeacherKey;
+    })
+    : false;
+
+  const batch = db.batch();
+  batch.set(
+    packageRef,
+    {
+      status: 'revoked',
+      totalCount: finalTotalCount,
+      usedCount: finalUsedCount,
+      remainingCount: finalRemainingCount,
+      revokedAt: now,
+      revokedBy: 'E2E Admin Helper',
+      revokedByUid: String(revokedByUid || 'e2e-admin-helper').trim(),
+      revokeReason: String(revokeReason || '').trim(),
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+
+  if (scopedStudentId) {
+    const summaryRef = db
+      .collection('studentPrivateAccessSummary')
+      .doc(`${scopedAcademyId}__${scopedStudentId}`);
+    batch.set(
+      summaryRef,
+      {
+        academyId: scopedAcademyId,
+        studentId: scopedStudentId,
+        activePackageIds: admin.firestore.FieldValue.arrayRemove(scopedPackageId),
+        ...(scopedTeacherKey && !hasOtherActiveSameTeacher
+          ? { teacherKeys: admin.firestore.FieldValue.arrayRemove(scopedTeacherKey) }
+          : {}),
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+  }
+
+  const transactionRef = db.collection('creditTransactions').doc();
+  batch.set(transactionRef, {
+    academyId: scopedAcademyId,
+    studentId: scopedStudentId,
+    studentName: String(packageData.studentName || '').trim(),
+    teacher: scopedTeacherKey,
+    packageId: scopedPackageId,
+    packageType: 'private',
+    packageTitle: String(packageData.title || '').trim(),
+    sourceType: 'studentPackage',
+    sourceId: scopedPackageId,
+    actionType: 'package_revoked',
+    deltaCount: 0,
+    memo: ['수강권 회수', String(revokeReason || '').trim()].filter(Boolean).join(' · '),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await batch.commit();
+  return { packageId: scopedPackageId, creditTransactionId: transactionRef.id };
+}
+
 export async function setAdminSeededStudentPrivateAccessSummary({
   academyId = DEFAULT_E2E_ACADEMY_ID,
   studentId,

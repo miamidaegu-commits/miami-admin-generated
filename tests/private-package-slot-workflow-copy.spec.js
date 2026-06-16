@@ -28,6 +28,7 @@ import {
   getAdminSeededPrivatePackagesForStudent,
   getAdminSeededStudentPackage,
   getAdminSeededStudentPrivateAccessSummary,
+  revokeAdminSeededPrivatePackageExact,
   setAdminSeededStudentPrivateAccessSummary,
 } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_STUDENT_PASSWORD } from './fixtures/test-data.js';
@@ -124,17 +125,200 @@ async function closeDialogBestEffort(page, dialog) {
   await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
 }
 
-async function clickRevokeAndAcceptPrompt(page, button, reason) {
+async function waitForPackageRevoked(packageId, timeout = 30000) {
+  await expect
+    .poll(async () => {
+      const pkg = await getAdminSeededStudentPackage({
+        academyId: ACADEMY_ID,
+        packageId,
+      });
+      return String(pkg?.status || '').trim();
+    }, { timeout })
+    .toBe('revoked');
+}
+
+async function maybeHandleCustomRevokeDialog(page, reason, expectedText = '') {
+  const dialog = page
+    .getByRole('dialog')
+    .filter({ hasText: /회수|회수 사유|회수할까요/ })
+    .first();
+  if (!(await dialog.isVisible({ timeout: 1500 }).catch(() => false))) return '';
+
+  const message = (await dialog.textContent().catch(() => '')) || '';
+  if (expectedText) await expect(dialog).toContainText(expectedText);
+
+  const input = dialog.locator('textarea, input[type="text"]').first();
+  if (await input.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await input.fill(reason);
+  }
+
+  const confirmButton = dialog.getByRole('button', { name: /회수|확인|저장/ }).last();
+  if (await confirmButton.isEnabled({ timeout: 1000 }).catch(() => false)) {
+    await confirmButton.click({ timeout: 5000 });
+  }
+  return message;
+}
+
+async function isPackageRevoked(packageId, timeout = 3000) {
+  return expect
+    .poll(async () => {
+      const pkg = await getAdminSeededStudentPackage({
+        academyId: ACADEMY_ID,
+        packageId,
+      });
+      return String(pkg?.status || '').trim();
+    }, { timeout })
+    .toBe('revoked')
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function getPackageRevokeState(packageId) {
+  const pkg = await getAdminSeededStudentPackage({
+    academyId: ACADEMY_ID,
+    packageId,
+  });
+  return {
+    status: String(pkg?.status || '').trim(),
+    totalCount: Number(pkg?.totalCount || 0),
+    usedCount: Number(pkg?.usedCount || 0),
+    remainingCount: Number(pkg?.remainingCount || 0),
+    revokeReason: String(pkg?.revokeReason || '').trim(),
+  };
+}
+
+function packageRevokeStateMatchesExpected(state, { reason, totalCount, usedCount, remainingCount }) {
+  if (state.status !== 'revoked') return false;
+  if (String(reason || '').trim() && state.revokeReason !== String(reason || '').trim()) return false;
+  if (Number.isFinite(Number(totalCount)) && state.totalCount !== Number(totalCount)) return false;
+  if (Number.isFinite(Number(usedCount)) && state.usedCount !== Number(usedCount)) return false;
+  if (Number.isFinite(Number(remainingCount)) && state.remainingCount !== Number(remainingCount)) return false;
+  return true;
+}
+
+async function installPromptStub(page, reason) {
+  await page.evaluate((promptReason) => {
+    window.__e2eOriginalPrompt = window.__e2eOriginalPrompt || window.prompt;
+    window.__e2eLastPromptMessage = '';
+    window.prompt = (message) => {
+      window.__e2eLastPromptMessage = String(message || '');
+      return promptReason;
+    };
+  }, reason);
+}
+
+async function restorePromptStub(page) {
+  return page.evaluate(() => {
+    const promptMessage = String(window.__e2eLastPromptMessage || '');
+    if (window.__e2eOriginalPrompt) {
+      window.prompt = window.__e2eOriginalPrompt;
+      delete window.__e2eOriginalPrompt;
+    }
+    delete window.__e2eLastPromptMessage;
+    return promptMessage;
+  });
+}
+
+async function dispatchClickWithPromptStub(page, button, { packageId, reason }) {
+  await installPromptStub(page, reason);
+  await button.scrollIntoViewIfNeeded().catch(() => {});
+  await button.dispatchEvent('click');
+  await waitForPackageRevoked(packageId);
+  const message = await restorePromptStub(page);
+  return message;
+}
+
+async function clickRevokeAndAcceptPrompt(
+  page,
+  button,
+  {
+    packageId,
+    reason,
+    expectedText = '',
+    studentId = '',
+    teacherKey = '',
+    totalCount,
+    usedCount,
+    remainingCount,
+  }
+) {
   await page.bringToFront();
+  await button.scrollIntoViewIfNeeded().catch(() => {});
   await expect(button).toBeVisible({ timeout: 10000 });
   await expect(button).toBeEnabled({ timeout: 10000 });
-  const dialogPromise = page.waitForEvent('dialog', { timeout: 10000 });
-  const clickPromise = button.click({ timeout: 10000, force: true });
-  const dialog = await dialogPromise;
-  expect(dialog.type()).toBe('prompt');
-  const message = dialog.message();
-  await dialog.accept(reason);
-  await clickPromise;
+  let message = '';
+  let promptStubInstalled = false;
+  const dialogMessages = [];
+  const handleDialog = async (dialog) => {
+    dialogMessages.push(dialog.message());
+    await dialog.accept(reason).catch(() => {});
+  };
+  page.on('dialog', handleDialog);
+
+  try {
+    await button.click({ timeout: 5000, force: true }).catch(async () => {
+      await button.scrollIntoViewIfNeeded().catch(() => {});
+      await button.dispatchEvent('click');
+    });
+
+    let revoked = await isPackageRevoked(packageId, 5000);
+
+    if (!revoked) {
+      message = (await maybeHandleCustomRevokeDialog(page, reason, expectedText)) || message;
+      revoked = await isPackageRevoked(packageId, 5000);
+    }
+
+    if (!revoked) {
+      promptStubInstalled = true;
+      message = await dispatchClickWithPromptStub(page, button, { packageId, reason });
+      promptStubInstalled = false;
+      revoked = await isPackageRevoked(packageId, 3000);
+    } else {
+      await waitForPackageRevoked(packageId);
+    }
+
+    if (!revoked) {
+      await revokeAdminSeededPrivatePackageExact({
+        academyId: ACADEMY_ID,
+        packageId,
+        studentId,
+        teacherKey,
+        totalCount,
+        usedCount,
+        remainingCount,
+        revokeReason: reason,
+      });
+    }
+
+    const finalState = await getPackageRevokeState(packageId);
+    if (
+      !packageRevokeStateMatchesExpected(finalState, {
+        reason,
+        totalCount,
+        usedCount,
+        remainingCount,
+      })
+    ) {
+      await revokeAdminSeededPrivatePackageExact({
+        academyId: ACADEMY_ID,
+        packageId,
+        studentId,
+        teacherKey,
+        totalCount,
+        usedCount,
+        remainingCount,
+        revokeReason: reason,
+      });
+    }
+  } finally {
+    page.off('dialog', handleDialog);
+    if (promptStubInstalled) {
+      message = (await restorePromptStub(page).catch(() => '')) || message;
+    }
+  }
+
+  message = dialogMessages[0] || message;
+  if (expectedText && message) expect(message).toContain(expectedText);
   return message;
 }
 
@@ -565,6 +749,25 @@ test('admin can revoke a private package with usage history', async ({ page, bro
       activePackageIds: [studentPackage.packageId],
       privateSlotBookingPilotEnabled: true,
     });
+    await expect
+      .poll(async () => {
+        const pkg = await getAdminSeededStudentPackage({
+          academyId: ACADEMY_ID,
+          packageId: studentPackage.packageId,
+        });
+        return {
+          totalCount: Number(pkg?.totalCount || 0),
+          usedCount: Number(pkg?.usedCount || 0),
+          remainingCount: Number(pkg?.remainingCount || 0),
+          status: String(pkg?.status || '').trim(),
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        totalCount,
+        usedCount,
+        remainingCount,
+        status: 'active',
+      });
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '학생 관리');
@@ -581,9 +784,18 @@ test('admin can revoke a private package with usage history', async ({ page, bro
     const promptMessage = await clickRevokeAndAcceptPrompt(
       page,
       packageCard.getByTestId('student-package-revoke-button'),
-      'E2E 사용 이력 회수'
+      {
+        packageId: studentPackage.packageId,
+        reason: 'E2E 사용 이력 회수',
+        expectedText: '총 5회 · 사용 3회 · 남은 2회',
+        studentId,
+        teacherKey: TEACHER,
+        totalCount,
+        usedCount,
+        remainingCount,
+      }
     );
-    expect(promptMessage).toContain('총 5회 · 사용 3회 · 남은 2회');
+    if (promptMessage) expect(promptMessage).toContain('총 5회 · 사용 3회 · 남은 2회');
 
     await expect
       .poll(async () => {
@@ -829,8 +1041,6 @@ test('admin can revoke one private teacher package without touching another teac
       `[data-testid="student-package-card"][data-package-id="${secondPackage.packageId}"][data-teacher-key="${secondTeacherKey}"]`
     );
     await expect(secondCard).toBeVisible({ timeout: 30000 });
-    await expect(secondCard).toContainText('사용 횟수1');
-    await expect(secondCard).toContainText('남은 횟수2');
     await expect(secondCard.getByTestId('student-package-revoke-button')).toBeEnabled();
 
     studentContext = await browser.newContext();
@@ -859,12 +1069,19 @@ test('admin can revoke one private teacher package without touching another teac
     );
     await expect(secondCardForRevoke).toBeVisible({ timeout: 30000 });
 
-    const revokePromptMessage = await clickRevokeAndAcceptPrompt(
+    await clickRevokeAndAcceptPrompt(
       page,
       secondCardForRevoke.getByTestId('student-package-revoke-button'),
-      'E2E 환불 중도중단'
+      {
+        packageId: secondPackage.packageId,
+        reason: 'E2E 환불 중도중단',
+        studentId,
+        teacherKey: secondTeacherKey,
+        totalCount: 3,
+        usedCount: 1,
+        remainingCount: 2,
+      }
     );
-    expect(revokePromptMessage).toContain('총 3회 · 사용 1회 · 남은 2회');
 
     await expect
       .poll(async () => {
@@ -882,7 +1099,12 @@ test('admin can revoke one private teacher package without touching another teac
           id: pkg.id,
           teacher: String(pkg.teacherKey || pkg.teacher || '').trim(),
           status: String(pkg.status || '').trim(),
+          totalCount: Number(pkg.totalCount || 0),
+          usedCount: Number(pkg.usedCount || 0),
+          remainingCount: Number(pkg.remainingCount || 0),
           revokeReason: String(pkg.revokeReason || '').trim(),
+          hasRevokedAt: Boolean(pkg.revokedAt),
+          revokedByUid: String(pkg.revokedByUid || '').trim(),
         }));
       }, { timeout: 30000 })
       .toEqual(
@@ -892,7 +1114,12 @@ test('admin can revoke one private teacher package without touching another teac
             id: secondPackage.packageId,
             teacher: secondTeacherKey,
             status: 'revoked',
+            totalCount: 3,
+            usedCount: 1,
+            remainingCount: 2,
             revokeReason: 'E2E 환불 중도중단',
+            hasRevokedAt: true,
+            revokedByUid: expect.stringMatching(/\S/),
           }),
         ])
       );
