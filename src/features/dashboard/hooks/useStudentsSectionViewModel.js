@@ -102,13 +102,6 @@ function isFuturePackageRow(row) {
   return false
 }
 
-function isFixedPrivateAssignmentLesson(lesson) {
-  return (
-    String(lesson?.packageType || '').trim() === 'private' &&
-    String(lesson?.sourceType || '').trim() === 'fixed-private-slot-assignment'
-  )
-}
-
 function buildPrivatePackageRevokeInfo(pkg, lessons, privateReservations) {
   const packageId = String(pkg?.id || '').trim()
   const reasons = []
@@ -118,32 +111,26 @@ function buildPrivatePackageRevokeInfo(pkg, lessons, privateReservations) {
     reasons.push('개인 수강권만 회수할 수 있습니다.')
   }
   if (status === 'revoked') reasons.push('이미 회수된 수강권입니다.')
-  else if (status !== 'active') reasons.push('사용 중인 수강권만 회수할 수 있습니다.')
-
-  const usedCount = Number(pkg?.usedCount ?? 0) || 0
-  const totalCount = Number(pkg?.totalCount ?? 0) || 0
-  const remainingCount = Number(pkg?.remainingCount ?? 0) || 0
-  if (usedCount !== 0 || remainingCount < totalCount) {
-    reasons.push('사용된 회차가 있어 회수할 수 없습니다.')
-  }
+  else if (status !== 'active') reasons.push('활성 상태의 수강권만 회수할 수 있습니다.')
 
   const hasBlockingReservation = (Array.isArray(privateReservations) ? privateReservations : []).some(
     (reservation) =>
       isActivePrivateReservationStatus(reservation?.status) &&
-      getPackageLinkedIds(reservation).includes(packageId)
+      getPackageLinkedIds(reservation).includes(packageId) &&
+      isFuturePackageRow(reservation)
   )
   if (hasBlockingReservation) {
-    reasons.push('활성 1:1 예약이 있어 회수할 수 없습니다.')
+    reasons.push('미래 예약/고정 배정을 먼저 취소한 뒤 회수하세요.')
   }
 
   const hasBlockingLesson = (Array.isArray(lessons) ? lessons : []).some(
     (lesson) =>
       isActivePrivateLessonRow(lesson) &&
       getPackageLinkedIds(lesson).includes(packageId) &&
-      (isFixedPrivateAssignmentLesson(lesson) || isFuturePackageRow(lesson))
+      isFuturePackageRow(lesson)
   )
   if (hasBlockingLesson) {
-    reasons.push('고정 배정 또는 예정된 1:1 수업이 있어 회수할 수 없습니다.')
+    reasons.push('미래 예약/고정 배정을 먼저 취소한 뒤 회수하세요.')
   }
 
   return {

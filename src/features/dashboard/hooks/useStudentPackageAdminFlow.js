@@ -68,6 +68,15 @@ function isActivePrivateReservationStatus(status) {
   )
 }
 
+function isFuturePackageRow(row) {
+  const date = String(row?.date || row?.lessonDate || row?.scheduleDate || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date >= getTodayStorageDateString()
+  const startAt = row?.startAt || row?.startsAt
+  if (startAt && typeof startAt.toMillis === 'function') return startAt.toMillis() >= Date.now()
+  if (startAt && typeof startAt.toDate === 'function') return startAt.toDate().getTime() >= Date.now()
+  return false
+}
+
 function isBlockingPrivateLessonForRevoke(lesson) {
   const status = String(lesson?.status || '').trim().toLowerCase()
   if (
@@ -85,7 +94,7 @@ function isBlockingPrivateLessonForRevoke(lesson) {
     String(lesson?.packageType || '').trim() === 'private' &&
     sourceType === 'fixed-private-slot-assignment'
   ) {
-    return true
+    return isFuturePackageRow(lesson)
   }
   const date = String(lesson?.date || lesson?.lessonDate || lesson?.scheduleDate || '').trim()
   if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
@@ -596,11 +605,7 @@ export default function useStudentPackageAdminFlow({
         return
       }
       if (latestStatus !== 'active') {
-        alert(latestStatus === 'revoked' ? '이미 회수된 수강권입니다.' : '사용 중인 수강권만 회수할 수 있습니다.')
-        return
-      }
-      if (latestUsedCount !== 0 || latestRemainingCount < latestTotalCount) {
-        alert('사용된 회차가 있어 회수할 수 없습니다.')
+        alert(latestStatus === 'revoked' ? '이미 회수된 수강권입니다.' : '활성 상태의 수강권만 회수할 수 있습니다.')
         return
       }
 
@@ -624,11 +629,12 @@ export default function useStudentPackageAdminFlow({
         const row = docItem.data() || {}
         return (
           isActivePrivateReservationStatus(row.status) &&
-          getPackageLinkedIds(row).includes(pkg.id)
+          getPackageLinkedIds(row).includes(pkg.id) &&
+          isFuturePackageRow(row)
         )
       })
       if (hasBlockingReservation) {
-        alert('활성 1:1 예약이 있어 회수할 수 없습니다.')
+        alert('미래 예약/고정 배정을 먼저 취소한 뒤 회수하세요.')
         return
       }
       const hasBlockingLesson = lessonSnap.docs.some((docItem) => {
@@ -636,13 +642,20 @@ export default function useStudentPackageAdminFlow({
         return getPackageLinkedIds(row).includes(pkg.id) && isBlockingPrivateLessonForRevoke(row)
       })
       if (hasBlockingLesson) {
-        alert('고정 배정 또는 예정된 1:1 수업이 있어 회수할 수 없습니다.')
+        alert('미래 예약/고정 배정을 먼저 취소한 뒤 회수하세요.')
         return
       }
 
       const title = String(latestPackage.title || pkg.title || '').trim() || pkg.id
       const reasonInput = window.prompt(
-        `이 개인 수강권을 회수할까요?\n${title}\n\n회수 사유를 입력해 주세요.`,
+        [
+          '이 개인 수강권을 회수할까요?',
+          title,
+          '',
+          `총 ${latestTotalCount}회 · 사용 ${latestUsedCount}회 · 남은 ${latestRemainingCount}회`,
+          '',
+          '회수 사유를 입력해 주세요.',
+        ].join('\n'),
         '오발급 회수'
       )
       if (reasonInput === null) return
@@ -671,6 +684,9 @@ export default function useStudentPackageAdminFlow({
       const batch = writeBatch(db)
       batch.update(pkgRef, {
         status: 'revoked',
+        totalCount: latestTotalCount,
+        usedCount: latestUsedCount,
+        remainingCount: latestRemainingCount,
         revokedAt: serverTimestamp(),
         revokedBy: String(userProfile?.displayName || userProfile?.email || '관리자').trim(),
         revokedByUid: String(user?.uid || userProfile?.uid || userProfile?.userId || '').trim(),

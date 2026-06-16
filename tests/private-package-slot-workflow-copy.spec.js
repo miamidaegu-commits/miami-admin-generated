@@ -124,6 +124,20 @@ async function closeDialogBestEffort(page, dialog) {
   await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
 }
 
+async function clickRevokeAndAcceptPrompt(page, button, reason) {
+  await page.bringToFront();
+  await expect(button).toBeVisible({ timeout: 10000 });
+  await expect(button).toBeEnabled({ timeout: 10000 });
+  const dialogPromise = page.waitForEvent('dialog', { timeout: 10000 });
+  const clickPromise = button.click({ timeout: 10000, force: true });
+  const dialog = await dialogPromise;
+  expect(dialog.type()).toBe('prompt');
+  const message = dialog.message();
+  await dialog.accept(reason);
+  await clickPromise;
+  return message;
+}
+
 test('private package add modal explains package counts and fixed assignment workflow', async ({
   page,
   browserName,
@@ -505,6 +519,136 @@ test('admin can create a separate private package for a different teacher', asyn
   }
 });
 
+test('admin can revoke a private package with usage history', async ({ page, browserName }) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(120000);
+
+  const unique = Date.now();
+  const studentName = `E2E 사용이력회수 ${unique}`;
+  const studentId = `e2e-used-history-revoke-student-${unique}`;
+  const cleanupFixture = { academyId: ACADEMY_ID, packageIds: [], studentId };
+  const totalCount = 5;
+  const usedCount = 3;
+  const remainingCount = totalCount - usedCount;
+
+  try {
+    await createAdminSeededPrivateStudent({
+      academyId: ACADEMY_ID,
+      studentId,
+      name: studentName,
+      studentName,
+      teacher: TEACHER,
+      teacherName: TEACHER,
+      status: 'active',
+      note: 'E2E used-history private package revoke test',
+    });
+    const studentPackage = await createAdminSeededStudentPackage({
+      academyId: ACADEMY_ID,
+      studentId,
+      studentName,
+      title: `E2E 사용 이력 회수 수강권 ${unique}`,
+      packageType: 'private',
+      teacher: TEACHER,
+      teacherKey: TEACHER,
+      teacherName: TEACHER,
+      totalCount,
+      remainingCount,
+      usedCount,
+      privatePackageMode: 'countBased',
+      expiresAt: '2099-01-01',
+    });
+    cleanupFixture.packageIds.push(studentPackage.packageId);
+    await setAdminSeededStudentPrivateAccessSummary({
+      academyId: ACADEMY_ID,
+      studentId,
+      teacherKeys: [TEACHER],
+      activePackageIds: [studentPackage.packageId],
+      privateSlotBookingPilotEnabled: true,
+    });
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '학생 관리');
+    await getStudentSearchInput(page).fill(studentName);
+    const studentRow = getStudentRowById(page, studentId);
+    await expect(studentRow).toBeVisible({ timeout: 30000 });
+    await studentRow.getByRole('button', { name: '수강권 보기', exact: true }).click();
+    const packageCard = page.locator(
+      `[data-testid="student-package-card"][data-package-id="${studentPackage.packageId}"][data-teacher-key="${TEACHER}"]`
+    );
+    await expect(packageCard).toBeVisible({ timeout: 30000 });
+    await expect(packageCard.getByTestId('student-package-revoke-button')).toBeEnabled();
+
+    const promptMessage = await clickRevokeAndAcceptPrompt(
+      page,
+      packageCard.getByTestId('student-package-revoke-button'),
+      'E2E 사용 이력 회수'
+    );
+    expect(promptMessage).toContain('총 5회 · 사용 3회 · 남은 2회');
+
+    await expect
+      .poll(async () => {
+        const [pkg, summary] = await Promise.all([
+          getAdminSeededStudentPackage({
+            academyId: ACADEMY_ID,
+            packageId: studentPackage.packageId,
+          }),
+          getAdminSeededStudentPrivateAccessSummary({
+            academyId: ACADEMY_ID,
+            studentId,
+          }),
+        ]);
+        return {
+          status: String(pkg?.status || '').trim(),
+          totalCount: Number(pkg?.totalCount || 0),
+          usedCount: Number(pkg?.usedCount || 0),
+          remainingCount: Number(pkg?.remainingCount || 0),
+          revokeReason: String(pkg?.revokeReason || '').trim(),
+          hasRevokedAt: Boolean(pkg?.revokedAt),
+          revokedByUid: String(pkg?.revokedByUid || '').trim(),
+          activePackageIds: summary?.activePackageIds || [],
+          teacherKeys: summary?.teacherKeys || [],
+        };
+      }, { timeout: 30000 })
+      .toEqual({
+        status: 'revoked',
+        totalCount,
+        usedCount,
+        remainingCount,
+        revokeReason: 'E2E 사용 이력 회수',
+        hasRevokedAt: true,
+        revokedByUid: expect.stringMatching(/\S/),
+        activePackageIds: [],
+        teacherKeys: [],
+      });
+
+    await page.goto(BASE_URL);
+    await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
+      timeout: 30000,
+    });
+    await openDashboardSection(page, '학생 관리');
+    await getStudentSearchInput(page).fill(studentName);
+    const refreshedStudentRow = getStudentRowById(page, studentId);
+    await expect(refreshedStudentRow).toBeVisible({ timeout: 30000 });
+    await refreshedStudentRow.getByRole('button', { name: '수강권 보기', exact: true }).click();
+    await page.getByTestId('student-package-show-all-button').click();
+    const revokedCard = page.locator(
+      `[data-testid="student-package-card"][data-package-id="${studentPackage.packageId}"][data-teacher-key="${TEACHER}"]`
+    );
+    await expect(revokedCard).toContainText('회수됨');
+    await expect(revokedCard).toContainText('E2E 사용 이력 회수');
+  } finally {
+    await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
+    await cleanupAdminSeededCreditTransactionsForStudent({
+      academyId: ACADEMY_ID,
+      studentId,
+    }).catch(() => {});
+    await cleanupAdminSeededStudentPrivateAccessSummary({
+      academyId: ACADEMY_ID,
+      studentId,
+    }).catch(() => {});
+  }
+});
+
 test('admin can revoke one private teacher package without touching another teacher', async ({
   page,
   browser,
@@ -579,8 +723,8 @@ test('admin can revoke one private teacher package without touching another teac
       teacherKey: secondTeacherKey,
       teacherName: 'miketest',
       totalCount: 3,
-      remainingCount: 3,
-      usedCount: 0,
+      remainingCount: 2,
+      usedCount: 1,
       privatePackageMode: 'countBased',
       expiresAt: '2099-01-01',
     });
@@ -639,6 +783,8 @@ test('admin can revoke one private teacher package without touching another teac
             teacher: String(pkg.teacherKey || pkg.teacher || '').trim(),
             teacherName: String(pkg.teacherName || '').trim(),
             status: String(pkg.status || '').trim(),
+            usedCount: Number(pkg.usedCount || 0),
+            remainingCount: Number(pkg.remainingCount || 0),
           })),
         };
       }, { timeout: 30000 })
@@ -653,6 +799,8 @@ test('admin can revoke one private teacher package without touching another teac
               teacher: secondTeacherKey,
               teacherName: 'miketest',
               status: 'active',
+              usedCount: 1,
+              remainingCount: 2,
             }),
           ]),
         })
@@ -674,13 +822,15 @@ test('admin can revoke one private teacher package without touching another teac
     await expect(donCard).toBeVisible({ timeout: 30000 });
     await expect(donCard.getByTestId('student-package-revoke-button')).toBeDisabled();
     await expect(donCard.getByTestId('student-package-revoke-disabled-reason')).toContainText(
-      /사용된 회차|활성 1:1 예약/
+      '미래 예약/고정 배정을 먼저 취소한 뒤 회수하세요.'
     );
 
     const secondCard = page.locator(
       `[data-testid="student-package-card"][data-package-id="${secondPackage.packageId}"][data-teacher-key="${secondTeacherKey}"]`
     );
     await expect(secondCard).toBeVisible({ timeout: 30000 });
+    await expect(secondCard).toContainText('사용 횟수1');
+    await expect(secondCard).toContainText('남은 횟수2');
     await expect(secondCard.getByTestId('student-package-revoke-button')).toBeEnabled();
 
     studentContext = await browser.newContext();
@@ -690,12 +840,31 @@ test('admin can revoke one private teacher package without touching another teac
       privateSlotCardForDateTime(studentPage, slotDate, slotTime),
       'miketest package should expose the public weekly slot before revoke'
     ).toBeVisible({ timeout: 30000 });
+    await studentContext.close();
+    studentContext = null;
+    studentPage = null;
 
-    page.once('dialog', async (dialog) => {
-      expect(dialog.type()).toBe('prompt');
-      await dialog.accept('E2E 오발급 회수');
+    await page.goto(BASE_URL);
+    await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
+      timeout: 30000,
     });
-    await secondCard.getByTestId('student-package-revoke-button').click();
+    await openDashboardSection(page, '학생 관리');
+    await getStudentSearchInput(page).fill(studentName);
+    const preRevokeStudentRow = getStudentRowById(page, studentId);
+    await expect(preRevokeStudentRow).toBeVisible({ timeout: 30000 });
+    await preRevokeStudentRow.getByRole('button', { name: '수강권 보기', exact: true }).click();
+    await page.getByTestId('student-package-show-all-button').click();
+    const secondCardForRevoke = page.locator(
+      `[data-testid="student-package-card"][data-package-id="${secondPackage.packageId}"][data-teacher-key="${secondTeacherKey}"]`
+    );
+    await expect(secondCardForRevoke).toBeVisible({ timeout: 30000 });
+
+    const revokePromptMessage = await clickRevokeAndAcceptPrompt(
+      page,
+      secondCardForRevoke.getByTestId('student-package-revoke-button'),
+      'E2E 환불 중도중단'
+    );
+    expect(revokePromptMessage).toContain('총 3회 · 사용 1회 · 남은 2회');
 
     await expect
       .poll(async () => {
@@ -723,7 +892,7 @@ test('admin can revoke one private teacher package without touching another teac
             id: secondPackage.packageId,
             teacher: secondTeacherKey,
             status: 'revoked',
-            revokeReason: 'E2E 오발급 회수',
+            revokeReason: 'E2E 환불 중도중단',
           }),
         ])
       );
@@ -780,7 +949,7 @@ test('admin can revoke one private teacher package without touching another teac
       `[data-testid="student-package-card"][data-package-id="${secondPackage.packageId}"][data-teacher-key="${secondTeacherKey}"]`
     );
     await expect(revokedCard).toContainText('회수됨');
-    await expect(revokedCard).toContainText('E2E 오발급 회수');
+    await expect(revokedCard).toContainText('E2E 환불 중도중단');
     await revokedCard.getByTestId('student-package-history-button').click();
     const packageHistoryDialog = page.getByRole('dialog', { name: '수강권 이력' });
     await expect(packageHistoryDialog).toBeVisible();
@@ -796,10 +965,9 @@ test('admin can revoke one private teacher package without touching another teac
     await expect(revokedHistoryPackageRow).toContainText('회수됨');
     await studentHistoryDialog.getByRole('button', { name: '닫기' }).click();
 
-    await studentPage.goto(new URL('/student-booking?privateSlotBooking=enabled', BASE_URL).toString());
-    await expect(studentPage.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
-      timeout: 15000,
-    });
+    studentContext = await browser.newContext();
+    studentPage = await studentContext.newPage();
+    await openStudentPrivateBooking(studentPage, studentEmail);
     await expect(
       privateSlotCardForDateTime(studentPage, slotDate, slotTime),
       'miketest slot should disappear after revoking the only miketest package'

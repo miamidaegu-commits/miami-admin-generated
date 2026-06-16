@@ -76,18 +76,12 @@ function normalizePackageStatus(status) {
 
 function mergeInlinePackageRevokeInfo(pkg, revokeInfo) {
   const status = normalizePackageStatus(pkg?.status)
-  const usedCount = Number(pkg?.usedCount ?? 0) || 0
-  const totalCount = Number(pkg?.totalCount ?? 0) || 0
-  const remainingCount = Number(pkg?.remainingCount ?? 0) || 0
   const inlineReasons = []
   if (String(pkg?.packageType || '').trim() !== 'private') {
     inlineReasons.push('개인 수강권만 회수할 수 있습니다.')
   }
   if (status === 'revoked') inlineReasons.push('이미 회수된 수강권입니다.')
-  else if (status !== 'active') inlineReasons.push('사용 중인 수강권만 회수할 수 있습니다.')
-  if (usedCount !== 0 || remainingCount < totalCount) {
-    inlineReasons.push('사용된 회차가 있어 회수할 수 없습니다.')
-  }
+  else if (status !== 'active') inlineReasons.push('활성 상태의 수강권만 회수할 수 있습니다.')
   if (inlineReasons.length === 0) return revokeInfo
   return {
     ...revokeInfo,
