@@ -250,9 +250,9 @@ test('admin creates a single weekly default slot with an effective date range', 
     await openDashboardSection(page, '1:1 예약 시간 관리');
 
     const singleSection = page.getByTestId('private-availability-template-section');
-    await expect(singleSection).toContainText('주간 기본 슬롯 (고정 배정용)');
+    await expect(singleSection).toContainText('선생님 주간 가능 시간');
     await expect(singleSection).toContainText(
-      '특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.'
+      '학생 직접예약 공개는 선택한 슬롯만 적용됩니다.'
     );
     await selectTeacherOption(
       singleSection.getByTestId('private-availability-template-teacher-select'),

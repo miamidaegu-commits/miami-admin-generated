@@ -232,22 +232,22 @@ test('duplicate private package warning shows actionable capacity details and re
       '수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.'
     );
     await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
-      '고정수업은 주간 기본 슬롯에서만 만들 수 있습니다.'
+      '고정수업은 "고정 배정에 사용"이 켜진 주간 가능 시간에서만 만들 수 있습니다.'
     );
     await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
       '날짜별 예약 가능 시간은 학생 직접 예약용입니다.'
     );
     await expect(page.getByTestId('private-availability-template-section')).toContainText(
-      '특정 기간만 고정 배정에 사용하려면 시작일과 종료일을 입력하세요.'
+      '선생님의 반복 가능한 시간을 고정 1:1 배정이나 학생 직접예약 공개에 사용합니다.'
     );
     await expect(page.getByTestId('private-availability-template-section')).toContainText(
-      '비워두면 기간 제한 없이 반복됩니다.'
+      '학생 직접예약 공개는 선택한 슬롯만 적용됩니다.'
     );
     await expect(page.getByTestId('private-dated-availability-helper')).toContainText(
       '날짜별 예약 가능 시간 (학생 직접 예약용)'
     );
     await expect(page.getByTestId('private-dated-availability-helper')).toContainText(
-      '고정 1:1 배정에 사용하려면 주간 기본 슬롯으로 등록하세요.'
+      '고정 1:1 배정에 사용하려면 선생님 주간 가능 시간으로 등록하세요.'
     );
   } finally {
     await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});

@@ -1017,6 +1017,8 @@ service cloud.firestore {
           "durationMinutes",
           "effectiveStartDate",
           "effectiveEndDate",
+          "useForFixedAssignment",
+          "openForStudentBooking",
           "status",
           "createdAt",
           "updatedAt"
@@ -1047,6 +1049,10 @@ service cloud.firestore {
         data.durationMinutes is int &&
         data.durationMinutes >= 10 &&
         data.durationMinutes <= 240 &&
+        (!("useForFixedAssignment" in data.keys()) ||
+          data.useForFixedAssignment is bool) &&
+        (!("openForStudentBooking" in data.keys()) ||
+          data.openForStudentBooking is bool) &&
         data.status in ["active", "inactive"];
     }
 
@@ -1939,7 +1945,14 @@ service cloud.firestore {
         request.resource.data.time == resource.data.time &&
         request.resource.data.durationMinutes == resource.data.durationMinutes &&
         request.resource.data.createdAt == resource.data.createdAt &&
-        changedOnly(["status", "effectiveStartDate", "effectiveEndDate", "updatedAt"]) &&
+        changedOnly([
+          "status",
+          "effectiveStartDate",
+          "effectiveEndDate",
+          "useForFixedAssignment",
+          "openForStudentBooking",
+          "updatedAt"
+        ]) &&
         request.resource.data.updatedAt == request.time;
 
       allow delete: if false;

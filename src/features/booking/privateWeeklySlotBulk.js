@@ -161,6 +161,8 @@ export function buildPrivateWeeklyBulkSlotPlan({
   status = 'active',
   effectiveStartDate = '',
   effectiveEndDate = '',
+  useForFixedAssignment = true,
+  openForStudentBooking = false,
   existingTemplates = [],
 }) {
   const requestedRows = []
@@ -184,6 +186,8 @@ export function buildPrivateWeeklyBulkSlotPlan({
         status,
         effectiveStartDate,
         effectiveEndDate,
+        useForFixedAssignment,
+        openForStudentBooking,
       })
     })
   })
