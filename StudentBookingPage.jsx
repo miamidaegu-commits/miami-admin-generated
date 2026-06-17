@@ -2527,7 +2527,7 @@ export default function StudentBookingPage() {
 	                        data-testid="student-private-ticket-summary-empty"
 	                        style={{ margin: 0, opacity: 0.78 }}
 	                      >
-	                        개인 수강권 등록 필요
+	                        사용 가능한 개인 수강권이 없습니다.
 	                      </p>
 	                    )}
 	                  </div>

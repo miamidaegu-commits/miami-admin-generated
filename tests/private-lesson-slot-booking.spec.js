@@ -683,6 +683,133 @@ async function cleanupFixture(fixture) {
   ]);
 }
 
+async function createRevokedPrivatePackageStudentFixture(unique) {
+  const db = admin.firestore();
+  const nowTs = admin.firestore.Timestamp.now();
+  const studentId = `e2e-revoked-private-student-${unique}`;
+  const studentName = `E2E 회수학생 ${unique}`;
+  const email = `e2e-revoked-private-${unique}@example.com`;
+  const displayName = `Revoked Private Student ${unique}`;
+  const teacherKey = `miketest-revoked-${unique}`;
+  const packageId = `e2e-revoked-private-package-${unique}`;
+  const slotId = `e2e-revoked-private-slot-${unique}`;
+  const slotDate = upcomingMondaySaturdayYmd(35);
+  const { user, created } = await createOrGetStudentAuthUser({ email, displayName });
+
+  await Promise.all([
+    db.collection('users').doc(user.uid).set({
+      uid: user.uid,
+      email,
+      displayName,
+      role: 'student',
+      isActive: true,
+      lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
+      updatedAt: nowTs,
+    }),
+    db.collection('privateStudents').doc(studentId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      name: studentName,
+      studentName,
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${user.uid}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      uid: user.uid,
+      email,
+      displayName,
+      role: 'student',
+      studentId,
+      teacherName: '',
+      status: 'active',
+      permissions: {
+        canManageAttendance: false,
+        canAddStudent: false,
+        canEditStudent: false,
+        canDeleteStudent: false,
+        canEditLesson: false,
+        canDeleteLesson: false,
+        canCreateLessonDirectly: false,
+        requiresLessonApproval: false,
+      },
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPackages').doc(packageId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId,
+      studentName,
+      title: `E2E 회수 개인 수강권 ${unique}`,
+      packageType: 'private',
+      teacher: teacherKey,
+      teacherKey,
+      teacherName: teacherKey,
+      status: 'revoked',
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
+      revokedAt: nowTs,
+      revokedBy: 'E2E Admin',
+      revokedByUid: 'e2e-admin',
+      revokeReason: 'E2E 회수 학생 화면',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId })).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId,
+      teacherKeys: [],
+      activePackageIds: [],
+      privateSlotBookingPilotEnabled: true,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('privateLessonSlots').doc(slotId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      teacherKey,
+      date: slotDate,
+      time: '15:30',
+      startAt: admin.firestore.Timestamp.fromDate(new Date(`${slotDate}T15:30:00`)),
+      durationMinutes: 50,
+      status: 'open',
+      reservedStudentId: '',
+      reservationId: '',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      reservedAt: null,
+      cancelledAt: null,
+    }),
+  ]);
+
+  await linkStudentAccountWithScript({ studentId, email, displayName });
+  return { studentId, email, uid: user.uid, authCreated: created, packageId, slotId };
+}
+
+async function cleanupRevokedPrivatePackageStudentFixture(fixture) {
+  if (!fixture) return;
+  const db = admin.firestore();
+  await Promise.all([
+    db.collection('privateStudents').doc(fixture.studentId).delete().catch(() => {}),
+    db.collection('studentPackages').doc(fixture.packageId).delete().catch(() => {}),
+    db.collection('studentPrivateAccessSummary')
+      .doc(privateSummaryId({ studentId: fixture.studentId }))
+      .delete()
+      .catch(() => {}),
+    db.collection('privateLessonSlots').doc(fixture.slotId).delete().catch(() => {}),
+    db.collection('users').doc(fixture.uid).delete().catch(() => {}),
+    db.collection('academyMemberships')
+      .doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.uid}`)
+      .delete()
+      .catch(() => {}),
+  ]);
+  if (fixture.authCreated) {
+    await admin.auth().deleteUser(fixture.uid).catch(() => {});
+  }
+}
+
 async function getVisiblePrivateSlotRows(page) {
   return page.locator('[data-testid="private-slot-row"]').evaluateAll((rows) =>
     rows.map((row) => ({
@@ -744,6 +871,38 @@ async function expectPrivateSlotRowVisible(page, slotId, message) {
   }
   return row;
 }
+
+test('student booking page does not show revoked private package as reservable', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private slot setup을 실행합니다.');
+  test.setTimeout(90000);
+
+  initializeAdmin();
+  let fixture = null;
+
+  try {
+    fixture = await createRevokedPrivatePackageStudentFixture(`${Date.now()}-${testInfo.workerIndex}`);
+    await loginAsStudent(page, fixture.email, TEST_STUDENT_PASSWORD);
+
+    await expect(page.getByTestId('student-ticket-summary-section')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('불러오는 중...', { exact: true })).toHaveCount(0, { timeout: 30000 });
+    await expect(page.getByTestId('student-private-ticket-summary-empty')).toContainText(
+      '사용 가능한 개인 수강권이 없습니다.'
+    );
+    await expect(page.getByTestId('student-private-ticket-summary-row')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('예약 가능 4회');
+    await expect(page.locator('body')).not.toContainText('소진');
+    await expect(page.locator('[data-testid="student-private-slot-card"]')).toHaveCount(0);
+    await expect(
+      page.getByText('지금 예약 가능한 1:1 수업 시간이 없습니다. 학원 안내 후 다시 확인해 주세요.')
+    ).toBeVisible({ timeout: 30000 });
+  } finally {
+    await cleanupRevokedPrivatePackageStudentFixture(fixture).catch(() => {});
+  }
+});
 
 test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and tenant scope', async ({
   browser,

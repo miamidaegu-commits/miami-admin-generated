@@ -3,6 +3,7 @@ import path from 'node:path';
 import { test, expect } from '@playwright/test';
 import {
   buildStudentPrivateTicketSummaries,
+  buildStudentPrivateTicketSummariesFromCallablePackages,
   buildStudentTicketSummaryViewModel,
   formatPrivateTicketScheduleSummary,
   formatStudentBookingIdentityLine,
@@ -155,6 +156,51 @@ test('general unused private package shows 예약 가능 not 보충 가능', () 
   })).toBe('고정 예정 0회 · 예약 가능 8회');
 });
 
+test('revoked private package is not shown as reservable or exhausted in student summary', () => {
+  const revokedTicket = {
+    id: 'revoked-private',
+    academyId: ACADEMY_ID,
+    studentId: STUDENT_ID,
+    packageType: 'private',
+    teacher: 'miketest',
+    totalCount: 4,
+    usedCount: 0,
+    remainingCount: 4,
+    status: 'revoked',
+  };
+  const viewModel = buildStudentTicketSummaryViewModel({
+    packages: [revokedTicket],
+    privateLessons: [],
+    privateReservations: [],
+    groupReservations: [],
+    academyId: ACADEMY_ID,
+    studentId: STUDENT_ID,
+  });
+
+  expect(viewModel.hasPrivateTicket).toBe(false);
+  expect(viewModel.privateSummaries).toEqual([]);
+});
+
+test('revoked callable private package summary is ignored in student fallback summary', () => {
+  const summaries = buildStudentPrivateTicketSummariesFromCallablePackages([
+    {
+      id: 'slot-for-revoked-package',
+      teacher: 'miketest',
+      packageId: 'revoked-private',
+      packageSummary: {
+        packageId: 'revoked-private',
+        status: 'revoked',
+        totalCount: 4,
+        usedDeductedCount: 0,
+        remainingCount: 4,
+        makeupAvailableCount: 4,
+      },
+    },
+  ]);
+
+  expect(summaries).toEqual([]);
+});
+
 test('private ticket summary copy separates fixed assignments from remaining balance', () => {
   expect(formatPrivateTicketScheduleSummary({
     futureFixedAllocatedCount: 2,
@@ -207,6 +253,7 @@ test('student booking page wiring exposes identity and ticket summary without bi
   expect(source).toContain('data-testid="student-booking-identity-line"');
   expect(source).toContain('data-testid="student-ticket-summary-section"');
   expect(source).toContain('data-testid="student-private-ticket-summary-schedule"');
+  expect(source).toContain('사용 가능한 개인 수강권이 없습니다.');
   expect(source).toContain('buildStudentTicketSummaryViewModel');
   expect(source).not.toMatch(/amountPaid|결제 금액|payment|billingAmount/i);
 });
