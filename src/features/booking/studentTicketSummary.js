@@ -109,14 +109,19 @@ function selectDisplayPackages(packages, packageType) {
     (pkg) => String(pkg?.packageType || '').trim() === packageType
   )
   if (scoped.length === 0) return []
+  const displayScoped =
+    packageType === 'private'
+      ? scoped.filter((pkg) => String(pkg?.status || '').trim().toLowerCase() !== 'revoked')
+      : scoped
+  if (displayScoped.length === 0) return []
 
-  const activeRemaining = scoped.filter(
+  const activeRemaining = displayScoped.filter(
     (pkg) => isStudentPackageRowActive(pkg) && toFiniteNumber(pkg.remainingCount) > 0
   )
   if (activeRemaining.length > 0) return activeRemaining
-  const active = scoped.filter((pkg) => isStudentPackageRowActive(pkg))
+  const active = displayScoped.filter((pkg) => isStudentPackageRowActive(pkg))
   if (active.length > 0) return active
-  return scoped
+  return displayScoped
 }
 
 export function buildStudentPrivateTicketSummaries({
@@ -192,6 +197,7 @@ export function buildStudentPrivateTicketSummariesFromCallablePackages(slots = [
   const byPackageId = new Map()
   ;(Array.isArray(slots) ? slots : []).forEach((slot) => {
     const summary = slot?.packageSummary
+    if (String(summary?.status || '').trim().toLowerCase() === 'revoked') return
     const packageId = String(summary?.packageId || slot?.packageId || '').trim()
     if (!packageId || !summary) return
     byPackageId.set(packageId, {
