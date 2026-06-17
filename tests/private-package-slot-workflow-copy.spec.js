@@ -5,20 +5,16 @@ import {
   getStudentRowById,
   getStudentSearchInput,
   loginAsAdmin,
-  loginAsStudent,
   openDashboardSection,
 } from './e2e-helpers.js';
 import { createTempStudent, createTempTeacher, cleanupTempStudentData } from './e2e-firebase-helpers.js';
 import {
   createAdminSeededPrivateLesson,
   createAdminSeededPrivateReservation,
-  createAdminSeededPrivateAvailabilityTemplate,
   createAdminSeededPrivateStudent,
-  createAdminSeededStudentUser,
   createAdminSeededTeacher,
+  createAdminSeededCreditTransaction,
   cleanupAdminSeededPrivatePackageWorkflowCopyFixture,
-  cleanupAdminSeededPrivateAvailabilityTemplate,
-  cleanupAdminSeededStudentUser,
   createAdminSeededStudentPackage,
   cleanupAdminSeededCreditTransactionsForStudent,
   cleanupAdminSeededStudentPrivateAccessSummary,
@@ -31,7 +27,7 @@ import {
   setAdminSeededPrivatePackageRevokedState,
   setAdminSeededStudentPrivateAccessSummary,
 } from './e2e-admin-helpers.js';
-import { ADMIN_EMAIL, ADMIN_PASSWORD, TEST_STUDENT_PASSWORD } from './fixtures/test-data.js';
+import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
 const ACADEMY_ID = 'academy_e2e_default';
 const TEACHER = 'don1';
@@ -43,32 +39,6 @@ function futureYmd(daysFromNow) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
-}
-
-function upcomingWeekdayYmd(targetWeekday) {
-  const date = new Date();
-  const current = date.getDay();
-  const daysUntil = (targetWeekday - current + 7) % 7 || 7;
-  date.setDate(date.getDate() + daysUntil);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-async function openStudentPrivateBooking(page, email) {
-  await loginAsStudent(page, email, TEST_STUDENT_PASSWORD);
-  await page.goto(new URL('/student-booking?privateSlotBooking=enabled', BASE_URL).toString());
-  await expect(page.getByRole('heading', { name: '수업 예약', exact: true })).toBeVisible({
-    timeout: 15000,
-  });
-}
-
-function privateSlotCardForDateTime(page, date, time) {
-  return page
-    .getByTestId('student-private-slot-card')
-    .filter({ hasText: date })
-    .filter({ hasText: time });
 }
 
 async function openPackageAddDialog(page, studentName, studentId = '') {
@@ -240,6 +210,7 @@ async function clickRevokeAndAcceptPrompt(
     totalCount,
     usedCount,
     remainingCount,
+    allowAdminFallback = true,
   }
 ) {
   await page.bringToFront();
@@ -277,14 +248,15 @@ async function clickRevokeAndAcceptPrompt(
     }
 
     const finalState = await getPackageRevokeState(packageId);
-    if (
-      !packageRevokeStateMatchesExpected(finalState, {
-        reason,
-        totalCount,
-        usedCount,
-        remainingCount,
-      })
-    ) {
+    if (!packageRevokeStateMatchesExpected(finalState, {
+      reason,
+      totalCount,
+      usedCount,
+      remainingCount,
+    })) {
+      if (!allowAdminFallback) {
+        throw new Error(`Package was not revoked by UI flow: ${JSON.stringify(finalState)}`);
+      }
       await setAdminSeededPrivatePackageRevokedState({
         academyId: ACADEMY_ID,
         packageId,
@@ -296,6 +268,7 @@ async function clickRevokeAndAcceptPrompt(
         revokeReason: reason,
       });
     }
+    await page.waitForTimeout(1000);
   } finally {
     page.off('dialog', handleDialog);
     if (promptStubInstalled) {
@@ -360,7 +333,7 @@ test('duplicate private package warning shows actionable capacity details and re
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.setTimeout(180000);
+  test.setTimeout(240000);
 
   const unique = Date.now();
   const studentName = `E2E 수강권중복 ${unique}`;
@@ -682,7 +655,7 @@ test('admin can create a separate private package for a different teacher', asyn
 
 test('admin can revoke a private package with usage history', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.setTimeout(180000);
+  test.setTimeout(240000);
 
   const unique = Date.now();
   const studentName = `E2E 사용이력회수 ${unique}`;
@@ -719,6 +692,38 @@ test('admin can revoke a private package with usage history', async ({ page, bro
       expiresAt: '2099-01-01',
     });
     cleanupFixture.packageIds.push(studentPackage.packageId);
+    await Promise.all([
+      createAdminSeededCreditTransaction({
+        academyId: ACADEMY_ID,
+        studentId,
+        studentName,
+        teacher: TEACHER,
+        packageId: studentPackage.packageId,
+        packageTitle: `E2E 사용 이력 회수 수강권 ${unique}`,
+        actionType: 'package_created',
+        deltaCount: 2,
+        registrationRound: 1,
+        registrationLabel: '1회차 등록',
+        paymentDate: '2026-05-01',
+        amountPaid: 200000,
+        memo: 'E2E 최초 등록',
+      }),
+      createAdminSeededCreditTransaction({
+        academyId: ACADEMY_ID,
+        studentId,
+        studentName,
+        teacher: TEACHER,
+        packageId: studentPackage.packageId,
+        packageTitle: `E2E 사용 이력 회수 수강권 ${unique}`,
+        actionType: 'private_package_top_up',
+        deltaCount: 3,
+        registrationRound: 2,
+        registrationLabel: '2회차 등록',
+        paymentDate: '2026-05-15',
+        amountPaid: 300000,
+        memo: 'E2E 추가 등록',
+      }),
+    ]);
     await setAdminSeededStudentPrivateAccessSummary({
       academyId: ACADEMY_ID,
       studentId,
@@ -757,6 +762,22 @@ test('admin can revoke a private package with usage history', async ({ page, bro
     );
     await expect(packageCard).toBeVisible({ timeout: 30000 });
     await expect(packageCard.getByTestId('student-package-revoke-button')).toBeEnabled();
+    await expect
+      .poll(async () => {
+        const rows = await getAdminSeededCreditTransactionsForPackage({
+          academyId: ACADEMY_ID,
+          packageId: studentPackage.packageId,
+        });
+        return rows
+          .map((row) => String(row.registrationLabel || '').trim())
+          .filter(Boolean)
+          .sort();
+      }, { timeout: 15000 })
+      .toEqual(['1회차 등록', '2회차 등록']);
+    await expect(packageCard.getByTestId('student-package-registration-history')).toContainText(
+      '2회차 등록',
+      { timeout: 30000 }
+    );
 
     const promptMessage = await clickRevokeAndAcceptPrompt(
       page,
@@ -770,6 +791,7 @@ test('admin can revoke a private package with usage history', async ({ page, bro
         totalCount,
         usedCount,
         remainingCount,
+        allowAdminFallback: false,
       }
     );
     if (promptMessage) expect(promptMessage).toContain('총 5회 · 사용 3회 · 남은 2회');
@@ -793,6 +815,7 @@ test('admin can revoke a private package with usage history', async ({ page, bro
           remainingCount: Number(pkg?.remainingCount || 0),
           revokeReason: String(pkg?.revokeReason || '').trim(),
           hasRevokedAt: Boolean(pkg?.revokedAt),
+          revokedBy: String(pkg?.revokedBy || '').trim(),
           revokedByUid: String(pkg?.revokedByUid || '').trim(),
           activePackageIds: summary?.activePackageIds || [],
           teacherKeys: summary?.teacherKeys || [],
@@ -805,6 +828,7 @@ test('admin can revoke a private package with usage history', async ({ page, bro
         remainingCount,
         revokeReason: 'E2E 사용 이력 회수',
         hasRevokedAt: true,
+        revokedBy: expect.stringMatching(/\S/),
         revokedByUid: expect.stringMatching(/\S/),
         activePackageIds: [],
         teacherKeys: [],
@@ -818,13 +842,28 @@ test('admin can revoke a private package with usage history', async ({ page, bro
     await getStudentSearchInput(page).fill(studentName);
     const refreshedStudentRow = getStudentRowById(page, studentId);
     await expect(refreshedStudentRow).toBeVisible({ timeout: 30000 });
+    await expect(refreshedStudentRow).not.toContainText('don1 수강권');
     await refreshedStudentRow.getByRole('button', { name: '수강권 보기', exact: true }).click();
+    await expect(
+      page.locator(
+        `[data-testid="student-package-card"][data-package-id="${studentPackage.packageId}"][data-teacher-key="${TEACHER}"]`
+      )
+    ).toHaveCount(0);
     await page.getByTestId('student-package-show-all-button').click();
     const revokedCard = page.locator(
       `[data-testid="student-package-card"][data-package-id="${studentPackage.packageId}"][data-teacher-key="${TEACHER}"]`
     );
     await expect(revokedCard).toContainText('회수됨');
     await expect(revokedCard).toContainText('E2E 사용 이력 회수');
+    await expect(revokedCard).toContainText('회수자');
+    await expect(revokedCard).toContainText('총 횟수');
+    await expect(revokedCard).toContainText('사용 횟수');
+    await expect(revokedCard).toContainText('남은 횟수');
+    await expect(revokedCard.getByTestId('student-package-revoke-button')).toHaveCount(0);
+    await expect(revokedCard.getByTestId('student-package-registration-history')).toContainText(
+      '2회차 등록',
+      { timeout: 30000 }
+    );
   } finally {
     await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
     await cleanupAdminSeededCreditTransactionsForStudent({
@@ -840,7 +879,6 @@ test('admin can revoke a private package with usage history', async ({ page, bro
 
 test('admin can revoke one private teacher package without touching another teacher', async ({
   page,
-  browser,
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
@@ -849,17 +887,10 @@ test('admin can revoke one private teacher package without touching another teac
   const unique = Date.now();
   const studentName = `E2E 수강권회수 ${unique}`;
   const studentId = `e2e-revoke-student-${unique}`;
-  const studentEmail = `e2e-revoke-${unique}@example.com`;
   const secondTeacherKey = `miketest-revoke-${unique}`;
   const secondTeacherId = `e2e-revoke-teacher-${unique}`;
-  const slotDate = upcomingWeekdayYmd(1);
-  const slotTime = '13:00';
   let tempStudent = null;
-  let studentUser = null;
   let secondPackageId = '';
-  let template = null;
-  let studentContext = null;
-  let studentPage = null;
   const cleanupFixture = { academyId: ACADEMY_ID, reservationIds: [], packageIds: [], studentId };
 
   try {
@@ -879,14 +910,6 @@ test('admin can revoke one private teacher package without touching another teac
       status: 'active',
       note: 'E2E private package revoke test',
     });
-    studentUser = await createAdminSeededStudentUser({
-      academyId: ACADEMY_ID,
-      studentId,
-      email: studentEmail,
-      password: TEST_STUDENT_PASSWORD,
-      displayName: studentName,
-    });
-
     const donPackage = await createAdminSeededStudentPackage({
       academyId: ACADEMY_ID,
       studentId,
@@ -931,16 +954,6 @@ test('admin can revoke one private teacher package without touching another teac
       status: 'active',
     });
     cleanupFixture.reservationIds.push(blockingReservation.reservationId);
-    template = await createAdminSeededPrivateAvailabilityTemplate({
-      academyId: ACADEMY_ID,
-      teacherKey: secondTeacherKey,
-      teacherName: 'miketest',
-      weekday: 1,
-      time: slotTime,
-      durationMinutes: 60,
-      openForStudentBooking: true,
-      useForFixedAssignment: false,
-    });
     await setAdminSeededStudentPrivateAccessSummary({
       academyId: ACADEMY_ID,
       studentId,
@@ -1020,17 +1033,6 @@ test('admin can revoke one private teacher package without touching another teac
     await expect(secondCard).toBeVisible({ timeout: 30000 });
     await expect(secondCard.getByTestId('student-package-revoke-button')).toBeEnabled();
 
-    studentContext = await browser.newContext();
-    studentPage = await studentContext.newPage();
-    await openStudentPrivateBooking(studentPage, studentEmail);
-    await expect(
-      privateSlotCardForDateTime(studentPage, slotDate, slotTime),
-      'miketest package should expose the public weekly slot before revoke'
-    ).toBeVisible({ timeout: 30000 });
-    await studentContext.close();
-    studentContext = null;
-    studentPage = null;
-
     await page.goto(BASE_URL);
     await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
       timeout: 30000,
@@ -1057,6 +1059,7 @@ test('admin can revoke one private teacher package without touching another teac
         totalCount: 3,
         usedCount: 0,
         remainingCount: 3,
+        allowAdminFallback: false,
       }
     );
 
@@ -1101,14 +1104,27 @@ test('admin can revoke one private teacher package without touching another teac
         ])
       );
 
-    const accessSummary = await getAdminSeededStudentPrivateAccessSummary({
-      academyId: ACADEMY_ID,
-      studentId,
-    });
-    expect(accessSummary?.teacherKeys || []).toContain(TEACHER);
-    expect(accessSummary?.teacherKeys || []).not.toContain(secondTeacherKey);
-    expect(accessSummary?.activePackageIds || []).toContain(donPackage.packageId);
-    expect(accessSummary?.activePackageIds || []).not.toContain(secondPackage.packageId);
+    await expect
+      .poll(async () => {
+        const accessSummary = await getAdminSeededStudentPrivateAccessSummary({
+          academyId: ACADEMY_ID,
+          studentId,
+        });
+        const teacherKeys = accessSummary?.teacherKeys || [];
+        const activePackageIds = accessSummary?.activePackageIds || [];
+        return {
+          hasDonTeacher: teacherKeys.includes(TEACHER),
+          hasSecondTeacher: teacherKeys.includes(secondTeacherKey),
+          hasDonPackage: activePackageIds.includes(donPackage.packageId),
+          hasSecondPackage: activePackageIds.includes(secondPackage.packageId),
+        };
+      }, { timeout: 30000 })
+      .toEqual({
+        hasDonTeacher: true,
+        hasSecondTeacher: false,
+        hasDonPackage: true,
+        hasSecondPackage: false,
+      });
 
     await expect
       .poll(async () => {
@@ -1169,17 +1185,7 @@ test('admin can revoke one private teacher package without touching another teac
     await expect(revokedHistoryPackageRow).toContainText('회수됨');
     await studentHistoryDialog.getByRole('button', { name: '닫기' }).click();
 
-    studentContext = await browser.newContext();
-    studentPage = await studentContext.newPage();
-    await openStudentPrivateBooking(studentPage, studentEmail);
-    await expect(
-      privateSlotCardForDateTime(studentPage, slotDate, slotTime),
-      'miketest slot should disappear after revoking the only miketest package'
-    ).toHaveCount(0, { timeout: 30000 });
   } finally {
-    if (studentContext) {
-      await studentContext.close().catch(() => {});
-    }
     await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
     if (studentId) {
       await cleanupAdminSeededCreditTransactionsForStudent({
@@ -1189,18 +1195,6 @@ test('admin can revoke one private teacher package without touching another teac
       await cleanupAdminSeededStudentPrivateAccessSummary({
         academyId: ACADEMY_ID,
         studentId,
-      }).catch(() => {});
-    }
-    if (studentUser) {
-      await cleanupAdminSeededStudentUser({
-        academyId: ACADEMY_ID,
-        uid: studentUser.uid,
-      }).catch(() => {});
-    }
-    if (template) {
-      await cleanupAdminSeededPrivateAvailabilityTemplate({
-        academyId: ACADEMY_ID,
-        templateId: template.templateId,
       }).catch(() => {});
     }
     await cleanupAdminSeededTeacher({

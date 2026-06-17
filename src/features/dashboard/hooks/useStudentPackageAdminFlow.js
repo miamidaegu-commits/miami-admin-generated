@@ -3,7 +3,6 @@ import {
   collection,
   deleteField,
   doc,
-  getDoc,
   getDocFromServer,
   getDocs,
   query,
@@ -113,6 +112,7 @@ export default function useStudentPackageAdminFlow({
   currentAcademyId,
   addCreditTransaction,
   studentDocFieldToYmdString,
+  onStudentPackageRevoked,
 }) {
   const [studentPackageEditModalPackage, setStudentPackageEditModalPackage] =
     useState(null)
@@ -588,8 +588,6 @@ export default function useStudentPackageAdminFlow({
       assertSameAcademy(pkg, scopedAcademyId, '수강권')
       setBusyStudentPackageActionId(pkg.id)
 
-      const studentId = String(pkg.studentId || '').trim()
-      const teacher = getPrivatePackageTeacher(pkg)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
       const latestPackageSnap = await getDocFromServer(pkgRef)
       if (!latestPackageSnap.exists()) {
@@ -597,6 +595,8 @@ export default function useStudentPackageAdminFlow({
       }
       const latestPackage = { id: latestPackageSnap.id, ...latestPackageSnap.data() }
       assertSameAcademy(latestPackage, scopedAcademyId, '수강권')
+      const studentId = String(latestPackage.studentId || pkg.studentId || '').trim()
+      const teacher = getPrivatePackageTeacher(latestPackage) || getPrivatePackageTeacher(pkg)
       const latestStatus = String(latestPackage.status || 'active').trim().toLowerCase()
       const latestUsedCount = Number(latestPackage.usedCount ?? 0) || 0
       const latestTotalCount = Number(latestPackage.totalCount ?? 0) || 0
@@ -682,45 +682,70 @@ export default function useStudentPackageAdminFlow({
             return getPrivatePackageTeacher(docItem.data() || {}) === teacher
           })
         : false
-      const batch = writeBatch(db)
-      batch.update(pkgRef, {
+      const revokedBy = String(userProfile?.displayName || userProfile?.email || '관리자').trim()
+      const revokedByUid = String(user?.uid || userProfile?.uid || userProfile?.userId || '').trim()
+      await updateDoc(pkgRef, {
         status: 'revoked',
         totalCount: latestTotalCount,
         usedCount: latestUsedCount,
         remainingCount: latestRemainingCount,
         revokedAt: serverTimestamp(),
-        revokedBy: String(userProfile?.displayName || userProfile?.email || '관리자').trim(),
-        revokedByUid: String(user?.uid || userProfile?.uid || userProfile?.userId || '').trim(),
+        revokedBy,
+        revokedByUid,
         revokeReason,
         updatedAt: serverTimestamp(),
       })
+
+      const revokedPackageSnap = await getDocFromServer(pkgRef)
+      const revokedPackage = revokedPackageSnap.exists()
+        ? { id: revokedPackageSnap.id, ...revokedPackageSnap.data() }
+        : null
+      if (String(revokedPackage?.status || '').trim().toLowerCase() !== 'revoked') {
+        throw new Error('수강권 회수 상태가 저장되지 않았습니다.')
+      }
+      onStudentPackageRevoked?.(revokedPackage)
+
       if (studentId && teacher) {
-        removeStudentPrivateTeacherAccessBatch(batch, db, {
-          academyId: scopedAcademyId,
+        try {
+          const accessBatch = writeBatch(db)
+          removeStudentPrivateTeacherAccessBatch(accessBatch, db, {
+            academyId: scopedAcademyId,
+            studentId,
+            teacher,
+            packageId: pkg.id,
+            removeTeacher: !hasOtherActiveSameTeacher,
+          })
+          await accessBatch.commit()
+        } catch (accessError) {
+          console.error('수강권 회수 접근 요약 갱신 실패:', accessError)
+          alert('수강권은 회수되었지만 학생 예약 권한 요약 갱신에 실패했습니다. 새로고침 후 다시 확인해 주세요.')
+          return
+        }
+      }
+
+      try {
+        await addCreditTransaction({
           studentId,
+          studentName: String(latestPackage.studentName || pkg.studentName || '').trim() || '-',
           teacher,
           packageId: pkg.id,
-          removeTeacher: !hasOtherActiveSameTeacher,
+          packageType: 'private',
+          packageTitle: String(latestPackage.title || pkg.title || '').trim(),
+          sourceType: 'studentPackage',
+          sourceId: pkg.id,
+          actionType: 'package_revoked',
+          deltaCount: 0,
+          memo: ['수강권 회수', revokeReason].filter(Boolean).join(' · '),
         })
+      } catch (transactionError) {
+        console.error('수강권 회수 이력 기록 실패:', transactionError)
+        alert('수강권은 회수되었지만 이력 기록에 실패했습니다. 새로고침 후 다시 확인해 주세요.')
+        return
       }
-      await batch.commit()
-
-      await addCreditTransaction({
-        studentId,
-        studentName: String(pkg.studentName || '').trim() || '-',
-        teacher,
-        packageId: pkg.id,
-        packageType: 'private',
-        packageTitle: String(pkg.title || '').trim(),
-        sourceType: 'studentPackage',
-        sourceId: pkg.id,
-        actionType: 'package_revoked',
-        deltaCount: 0,
-        memo: ['수강권 회수', revokeReason].filter(Boolean).join(' · '),
-      })
+      alert('수강권이 회수되었습니다.')
     } catch (error) {
       console.error('수강권 회수 실패:', error)
-      alert(`수강권 회수 실패: ${error.message}`)
+      alert('수강권 회수에 실패했습니다. 다시 시도해 주세요.')
     } finally {
       setBusyStudentPackageActionId(null)
     }
