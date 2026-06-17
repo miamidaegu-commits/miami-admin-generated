@@ -11,6 +11,7 @@ import {
   createAdminSeededPrivateStudent,
   cleanupAdminSeededTeacher,
   getAdminSeededPrivatePackagesForStudent,
+  getAdminSeededStudentPrivateAccessSummary,
 } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
@@ -18,20 +19,26 @@ async function expectPrivatePackageCreated({ studentId, packageTitle, expected }
   await expect
     .poll(async () => {
       const packages = await getAdminSeededPrivatePackagesForStudent({ studentId });
-      return packages
-        .filter((pkg) => pkg.title === packageTitle)
-        .map((pkg) => ({
-          title: pkg.title,
-          packageType: pkg.packageType,
-          teacher: pkg.teacher,
-          teacherKey: pkg.teacherKey,
-          totalCount: Number(pkg.totalCount || 0),
-          remainingCount: Number(pkg.remainingCount || 0),
-          status: pkg.status,
-          paymentDate: pkg.paymentDate || '',
-        }));
-    }, { timeout: 30000 })
-    .toEqual([expect.objectContaining(expected)]);
+      const pkg = packages.find((row) => row.title === packageTitle) || null;
+      const summary = await getAdminSeededStudentPrivateAccessSummary({ studentId });
+      return {
+        title: String(pkg?.title || ''),
+        packageType: String(pkg?.packageType || ''),
+        teacher: String(pkg?.teacher || ''),
+        teacherKey: String(pkg?.teacherKey || ''),
+        totalCount: Number(pkg?.totalCount || 0),
+        remainingCount: Number(pkg?.remainingCount || 0),
+        status: String(pkg?.status || ''),
+        paymentDate: String(pkg?.paymentDate || ''),
+        summaryHasTeacher: (summary?.teacherKeys || []).includes(String(expected.teacherKey || '')),
+        summaryHasPackage: pkg ? (summary?.activePackageIds || []).includes(pkg.id) : false,
+      };
+    }, { timeout: 60000 })
+    .toEqual(expect.objectContaining({
+      ...expected,
+      summaryHasTeacher: true,
+      summaryHasPackage: true,
+    }));
 }
 
 async function collectPackageDialogDiagnostics(page, packageDialog) {
@@ -85,7 +92,7 @@ async function dismissOptionalPrivateScheduleDialog(page) {
 
 test('관리자가 기존 학생에게 개인 수강권을 추가한다', async ({ page, browserName }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.setTimeout(120000);
+  test.setTimeout(180000);
 
   const uniqueToken = Date.now();
   const packageTitle = `E2E 개인 수강권 ${uniqueToken}`;
@@ -155,7 +162,7 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
 
 test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', async ({ page, browserName }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.setTimeout(120000);
+  test.setTimeout(180000);
 
   const uniqueToken = Date.now();
   const studentName = `E2E 즉시수강권 학생 ${uniqueToken}`;

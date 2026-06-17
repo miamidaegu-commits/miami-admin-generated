@@ -1766,6 +1766,7 @@ export default function Dashboard() {
           (pkg) =>
             String(pkg.academyId || '').trim() === scopedAcademyId &&
             pkg.packageType === 'private' &&
+            String(pkg.status || 'active').trim().toLowerCase() === 'active' &&
             String(pkg.id || '').trim()
         )
         .map((pkg) => [String(pkg.id), pkg])
@@ -1803,6 +1804,7 @@ export default function Dashboard() {
       const currentUsed = Number(pkg.usedCount ?? 0)
       const currentRemaining = Number(pkg.remainingCount ?? 0)
       if (currentUsed === expectedUsed && currentRemaining === expectedRemaining) return
+      if (currentUsed > expectedUsed) return
       if (privatePackageUsageSyncInFlightRef.current.has(packageId)) return
 
       privatePackageUsageSyncInFlightRef.current.add(packageId)
@@ -3107,6 +3109,17 @@ export default function Dashboard() {
     currentAcademyId,
     addCreditTransaction,
     studentDocFieldToYmdString,
+    onStudentPackageRevoked: (revokedPackage) => {
+      const packageId = String(revokedPackage?.id || '').trim()
+      if (!packageId) return
+      setStudentPackages((prev) =>
+        prev.map((pkg) =>
+          String(pkg.id || '').trim() === packageId
+            ? { ...pkg, ...revokedPackage, id: packageId }
+            : pkg
+        )
+      )
+    },
   })
 
   function openExistingStudentPackageFromAddModal(pkg) {

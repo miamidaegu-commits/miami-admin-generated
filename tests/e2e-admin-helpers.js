@@ -302,6 +302,48 @@ export async function createAdminSeededStudentPackage(params = {}) {
   };
 }
 
+export async function createAdminSeededCreditTransaction(params = {}) {
+  const db = getDb();
+  const txRef = params.transactionId
+    ? db.collection('creditTransactions').doc(String(params.transactionId))
+    : db.collection('creditTransactions').doc();
+  await txRef.set({
+    academyId: String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim(),
+    studentId: String(params.studentId || '').trim(),
+    studentName: String(params.studentName || '').trim(),
+    teacher: String(params.teacher || '').trim(),
+    packageId: String(params.packageId || '').trim(),
+    packageType: String(params.packageType || 'private').trim(),
+    packageTitle: String(params.packageTitle || '').trim(),
+    groupClassName: String(params.groupClassName || '').trim(),
+    sourceType: String(params.sourceType || 'studentPackage').trim(),
+    sourceId: String(params.sourceId || params.packageId || '').trim(),
+    actionType: String(params.actionType || 'package_created').trim(),
+    deltaCount: Number(params.deltaCount || 0),
+    memo: String(params.memo || '').trim(),
+    actorUid: String(params.actorUid || 'e2e-admin').trim(),
+    actorRole: String(params.actorRole || 'admin').trim(),
+    ...(params.registrationRound !== undefined
+      ? { registrationRound: Number(params.registrationRound) || null }
+      : {}),
+    ...(params.roundNumber !== undefined
+      ? { roundNumber: Number(params.roundNumber) || null }
+      : {}),
+    ...(params.registrationLabel !== undefined
+      ? { registrationLabel: String(params.registrationLabel || '').trim() }
+      : {}),
+    ...(params.paymentDate !== undefined
+      ? { paymentDate: String(params.paymentDate || '').trim() }
+      : {}),
+    ...(params.amountPaid !== undefined ? { amountPaid: Number(params.amountPaid || 0) } : {}),
+    ...(params.registrationMemo !== undefined
+      ? { registrationMemo: String(params.registrationMemo || '').trim() }
+      : {}),
+    createdAt: timestampNow(),
+  });
+  return { transactionId: txRef.id };
+}
+
 export async function createAdminSeededPrivateAvailabilityTemplate(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();

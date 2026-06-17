@@ -220,7 +220,8 @@ export function countUsedAsOfTodayForStudent(allLessons, targetStudentName) {
 
 /** remainingCount에 맞춰 status 동기화 (수동 종료 ended는 유지) */
 export function getNextStudentPackageStatus(currentStatus, remainingCount) {
-  if (String(currentStatus || '').toLowerCase() === 'ended') return 'ended'
+  const status = String(currentStatus || '').toLowerCase()
+  if (status === 'ended' || status === 'revoked') return status
   const rem = Number(remainingCount ?? 0)
   if (!Number.isFinite(rem) || rem <= 0) return 'exhausted'
   return 'active'

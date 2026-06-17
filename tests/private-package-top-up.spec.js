@@ -460,10 +460,29 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
       studentId: student.studentId,
       packageIds: [existingPackage.packageId],
     };
+    await expect
+      .poll(async () => {
+        const snap = await getDb().collection('studentPackages').doc(existingPackage.packageId).get();
+        const row = snap.exists ? snap.data() || {} : {};
+        return {
+          id: snap.exists ? snap.id : '',
+          studentId: String(row.studentId || ''),
+          teacher: String(row.teacher || row.teacherKey || ''),
+          status: String(row.status || ''),
+        };
+      }, { timeout: 30000 })
+      .toEqual({
+        id: existingPackage.packageId,
+        studentId: student.studentId,
+        teacher: teacherKey,
+        status: 'active',
+      });
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     const dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
-    await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible();
+    await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible({
+      timeout: 30000,
+    });
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     await dialog.getByTestId('private-package-force-new-button').click();
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();

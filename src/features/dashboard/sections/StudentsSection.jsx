@@ -2149,6 +2149,8 @@ export default function StudentsSection({
                               <span>{cleanText(pkg.revokeReason)}</span>
                               <span style={{ opacity: 0.72 }}>회수일</span>
                               <span>{formatYmdDateTime(pkg.revokedAt)}</span>
+                              <span style={{ opacity: 0.72 }}>회수자</span>
+                              <span>{cleanText(pkg.revokedBy || pkg.revokedByUid)}</span>
                             </>
                           ) : null}
                           <span style={{ opacity: 0.72 }}>등록일</span>
@@ -2293,7 +2295,9 @@ export default function StudentsSection({
                               이력 보기
                             </button>
                             ) : null}
-                            {isAdmin && String(pkg.packageType || '').trim() === 'private' ? (
+                            {isAdmin &&
+                            String(pkg.packageType || '').trim() === 'private' &&
+                            status !== 'revoked' ? (
                               <div style={{ display: 'grid', gap: 4 }}>
                                 <button
                                   type="button"

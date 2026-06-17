@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  addDoc,
   collection,
   doc,
   getDoc,
@@ -1093,17 +1092,18 @@ export default function useStudentPackageFlow({
         newStudentPackagePayload.privatePackageMode = 'countBased'
       }
 
-      const docRef = await addDoc(collection(db, 'studentPackages'), newStudentPackagePayload)
+      const docRef = doc(collection(db, 'studentPackages'))
+      const createBatch = writeBatch(db)
+      createBatch.set(docRef, newStudentPackagePayload)
       if (result.packageType === 'private') {
-        const accessBatch = writeBatch(db)
-        addStudentPrivateTeacherAccessBatch(accessBatch, db, {
+        addStudentPrivateTeacherAccessBatch(createBatch, db, {
           academyId: scopedAcademyId,
           studentId,
           teacher,
           packageId: docRef.id,
         })
-        await accessBatch.commit()
       }
+      await createBatch.commit()
       await addCreditTransaction({
         studentId,
         studentName,
