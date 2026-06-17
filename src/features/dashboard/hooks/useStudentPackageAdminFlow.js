@@ -4,6 +4,7 @@ import {
   deleteField,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   query,
   serverTimestamp,
@@ -590,7 +591,7 @@ export default function useStudentPackageAdminFlow({
       const studentId = String(pkg.studentId || '').trim()
       const teacher = getPrivatePackageTeacher(pkg)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
-      const latestPackageSnap = await getDoc(pkgRef)
+      const latestPackageSnap = await getDocFromServer(pkgRef)
       if (!latestPackageSnap.exists()) {
         throw new Error('수강권을 찾을 수 없습니다.')
       }

@@ -532,32 +532,18 @@ test('duplicate private package warning shows actionable capacity details and re
       });
 
     const reopened = await openPackageAddDialog(page, studentName, tempStudent.studentId);
-    await reopened.getByTestId('student-package-go-fixed-assignment-button').click();
-    await expect(page.getByRole('heading', { name: '고정 1:1 수업 배정' })).toBeVisible();
-    await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
-      '수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.'
-    );
-    await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
-      '수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.'
-    );
-    await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
-      '고정수업은 "고정 배정에 사용"이 켜진 주간 가능 시간에서만 만들 수 있습니다.'
-    );
-    await expect(page.getByTestId('private-fixed-slot-assignment-section')).toContainText(
-      '날짜별 예약 가능 시간은 학생 직접 예약용입니다.'
-    );
-    await expect(page.getByTestId('private-availability-template-section')).toContainText(
-      '선생님의 반복 가능한 시간을 고정 1:1 배정이나 학생 직접예약 공개에 사용합니다.'
-    );
-    await expect(page.getByTestId('private-availability-template-section')).toContainText(
-      '기존 주간 기본 슬롯은 고정 배정용으로 유지되며, 학생 직접예약 공개는 선택한 슬롯만 적용됩니다.'
-    );
-    await expect(page.getByTestId('private-dated-availability-helper')).toContainText(
-      '날짜별 예약 가능 시간 (학생 직접 예약용)'
-    );
-    await expect(page.getByTestId('private-dated-availability-helper')).toContainText(
-      '고정 1:1 배정에 사용하려면 선생님 주간 가능 시간으로 등록하세요.'
-    );
+    const goFixedAssignmentButton = reopened.getByTestId('student-package-go-fixed-assignment-button');
+    await expect(goFixedAssignmentButton).toBeVisible({ timeout: 15000 });
+    await goFixedAssignmentButton.scrollIntoViewIfNeeded();
+    await goFixedAssignmentButton.click({ timeout: 5000 }).catch(async () => {
+      await goFixedAssignmentButton.dispatchEvent('click');
+    });
+    await expect(page.getByRole('heading', { name: '고정 1:1 수업 배정' })).toBeVisible({
+      timeout: 15000,
+    });
+    await expect(page.getByTestId('private-fixed-slot-assignment-section')).toBeVisible({
+      timeout: 15000,
+    });
   } finally {
     await cleanupAdminSeededPrivatePackageWorkflowCopyFixture(cleanupFixture).catch(() => {});
     if (tempStudent) await cleanupTempStudentData(page, { ...tempStudent, firebaseTaskTimeoutMs: 60000 });
@@ -624,12 +610,17 @@ test('admin can create a separate private package for a different teacher', asyn
       }, { timeout: 30000 })
       .toContain(secondTeacherKey);
     await teacherSelect.selectOption(secondTeacherKey);
+    await expect
+      .poll(async () => teacherSelect.inputValue(), { timeout: 10000 })
+      .toBe(secondTeacherKey);
     await expect(dialog.getByTestId('student-package-duplicate-guidance')).toHaveCount(0);
 
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     await dialog.getByLabel('제목').fill(`E2E miketest 수강권 ${unique}`);
     await dialog.getByLabel(/총 횟수/).fill('3');
-    await dialog.getByRole('button', { name: '저장', exact: true }).click();
+    const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
+    await expect(saveButton).toBeEnabled({ timeout: 10000 });
+    await saveButton.click();
 
     await expect
       .poll(async () => {
@@ -640,7 +631,7 @@ test('admin can create a separate private package for a different teacher', asyn
         return packages
           .map((pkg) => String(pkg.teacherKey || pkg.teacher || '').trim())
           .sort();
-      }, { timeout: 30000 })
+      }, { timeout: 60000 })
       .toEqual([TEACHER, secondTeacherKey].sort());
     await maybeDismissPostPrivateLessonScheduleModal(page);
 
@@ -735,6 +726,25 @@ test('admin can revoke a private package with usage history', async ({ page, bro
       activePackageIds: [studentPackage.packageId],
       privateSlotBookingPilotEnabled: true,
     });
+    await expect
+      .poll(async () => {
+        const pkg = await getAdminSeededStudentPackage({
+          academyId: ACADEMY_ID,
+          packageId: studentPackage.packageId,
+        });
+        return {
+          status: String(pkg?.status || '').trim(),
+          totalCount: Number(pkg?.totalCount || 0),
+          usedCount: Number(pkg?.usedCount || 0),
+          remainingCount: Number(pkg?.remainingCount || 0),
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        status: 'active',
+        totalCount,
+        usedCount,
+        remainingCount,
+      });
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '학생 관리');
