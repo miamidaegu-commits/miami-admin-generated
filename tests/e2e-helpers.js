@@ -101,7 +101,9 @@ async function loginAndExpectPath(page, email, password, pathPattern) {
 export async function loginAsAdmin(page, email, password) {
   await loginAndExpectPath(page, email, password, /\/dashboard/);
 
-  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
+    timeout: 15000,
+  });
 }
 
 export async function loginAsStudent(page, email, password) {

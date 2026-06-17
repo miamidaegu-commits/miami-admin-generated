@@ -640,10 +640,7 @@ export default function CalendarSection(props) {
     setSelectedDate,
     setShowOnlySelectedDate,
     showPrivateLessonAddInCalendar,
-    openPrivateLessonModal,
     loading,
-    isPrivateLessonModalSubmitting,
-    sortedPrivateStudentsLength,
     enableLegacyLessonMigrationButton,
     enableGroupLegacyBackfillTool,
     isAdmin,
@@ -879,31 +876,20 @@ export default function CalendarSection(props) {
           </button>
 
           {activeSection === 'calendar' && showPrivateLessonAddInCalendar ? (
-            <button
-              type="button"
-              onClick={openPrivateLessonModal}
-              disabled={
-                loading || isPrivateLessonModalSubmitting || sortedPrivateStudentsLength === 0
-              }
-              title={
-                sortedPrivateStudentsLength === 0
-                  ? '표시할 개인 학생이 없습니다.'
-                  : undefined
-              }
+            <div
+              data-testid="calendar-private-lesson-add-guidance"
               style={{
                 padding: '10px 14px',
                 borderRadius: 10,
                 border: '1px solid #444',
                 background: '#1f2a44',
                 color: 'white',
-                cursor:
-                  loading || isPrivateLessonModalSubmitting || sortedPrivateStudentsLength === 0
-                    ? 'not-allowed'
-                    : 'pointer',
+                fontSize: 13,
+                lineHeight: 1.45,
               }}
             >
-              개인 수업 추가
-            </button>
+              고정 1:1 신규 배정은 1:1 예약 시간 관리 &gt; 주간 슬롯에서 진행하세요.
+            </div>
           ) : null}
 
           {enableLegacyLessonMigrationButton && isAdmin ? (

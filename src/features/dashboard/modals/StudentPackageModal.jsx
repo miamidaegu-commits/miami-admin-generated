@@ -190,7 +190,7 @@ export default function StudentPackageModal({
               <span style={{ fontSize: 12, opacity: 0.78 }}>
                 수강권은 수업을 들을 수 있는 횟수만 등록합니다.
                 <br />
-                고정 수업 일정은 1:1 예약 시간 관리 &gt; 고정 1:1 수업 배정에서 생성하세요.
+                고정 수업 일정은 1:1 예약 시간 관리 &gt; 주간 슬롯 고정 배정에서 예약하세요.
               </span>
             </p>
 
@@ -214,8 +214,8 @@ export default function StudentPackageModal({
                   요일/시간을 만듭니다.
                 </div>
                 <div>
-                  3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 실제 수업 날짜를
-                  생성합니다.
+                  3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 주간 슬롯 고정 예약을
+                  만듭니다.
                 </div>
               </div>
             ) : null}
@@ -929,7 +929,7 @@ export default function StudentPackageModal({
                       <div>2회차/3회차 결제 등록 → 기존 수강권에 추가 등록</div>
                       <div>결제일/금액/횟수 오입력 수정 → 기존 수강권 수정</div>
                       <div>별도 계약으로 분리 → 새 수강권으로 발급</div>
-                      <div>수업 날짜 생성 → 고정 1:1 수업 배정으로 이동</div>
+                      <div>주간 슬롯 고정 예약 → 고정 1:1 수업 배정으로 이동</div>
                     </div>
                     <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <span style={{ opacity: 0.85 }}>등록명 (선택)</span>
@@ -1251,7 +1251,7 @@ export default function StudentPackageModal({
                         고정 1:1 수업 배정으로 이동
                       </button>
                       <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
-                        수강권 횟수를 실제 수업 일정으로 배정합니다.
+                        수강권 횟수를 주간 슬롯 고정 예약으로 배정합니다.
                       </span>
                     </div>
                   ) : null}

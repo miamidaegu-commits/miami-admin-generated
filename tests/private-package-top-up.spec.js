@@ -342,7 +342,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
       '별도 계약으로 분리 → 새 수강권으로 발급'
     );
     await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
-      '수업 날짜 생성 → 고정 1:1 수업 배정으로 이동'
+      '주간 슬롯 고정 예약 → 고정 1:1 수업 배정으로 이동'
     );
     await expect(dialog).toContainText('이번에 추가할 수업 횟수');
     await expect(dialog).toContainText(

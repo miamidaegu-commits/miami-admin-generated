@@ -4824,45 +4824,65 @@ export default function Dashboard() {
       const batchId = `fixed-private-assignment-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 10)}`
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       const studentName = String(plan.student?.name || plan.student?.studentName || '').trim() || '-'
       const packageTitle = String(plan.selectedPackage?.title || '고정 1:1').trim()
       plan.dates.forEach((date) => {
-        const lessonRef = doc(collection(db, 'lessons'))
         const start = parseLegacyLessonToDate(date, plan.template.time)
-        batch.set(lessonRef, {
-          academyId: requireCurrentAcademyId(currentAcademyId),
+        const slotRef = doc(collection(db, 'privateLessonSlots'))
+        const reservationId = buildPrivateLessonReservationId({
+          academyId: scopedAcademyId,
+          slotId: slotRef.id,
+          studentId: plan.student.id,
+        })
+        const reservationRef = doc(db, 'privateLessonReservations', reservationId)
+        batch.set(slotRef, {
+          academyId: scopedAcademyId,
           teacher: plan.teacherFields.teacher,
           teacherName: plan.teacherFields.teacherName,
           teacherKey: plan.teacherFields.teacherKey,
           teacherUid: plan.teacherFields.teacherUid,
-          teacherUID: plan.teacherFields.teacherUID,
-          teacherId: plan.teacherFields.teacherId,
-          student: studentName,
+          teacherEmail: plan.teacherFields.teacherEmail,
+          date,
+          time: String(plan.template.time || '').trim(),
+          durationMinutes: plan.durationMinutes,
+          status: 'reserved',
+          slotType: 'fixed',
+          isBookable: false,
+          reservedStudentId: plan.student.id,
+          fixedStudentId: plan.student.id,
+          fixedStudentName: studentName,
+          reservationId,
+          createdByUid: user?.uid || '',
+          ...(start ? { startAt: Timestamp.fromDate(start) } : {}),
+          reservedAt: serverTimestamp(),
+          cancelledAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        })
+        batch.set(reservationRef, {
+          academyId: scopedAcademyId,
+          slotId: slotRef.id,
           studentName,
           studentId: plan.student.id,
-          studentID: plan.student.id,
+          teacher: plan.teacherFields.teacher,
+          teacherName: plan.teacherFields.teacherName,
+          teacherKey: plan.teacherFields.teacherKey,
+          teacherUid: plan.teacherFields.teacherUid,
           date,
           time: String(plan.template.time || '').trim(),
           subject: plan.subject,
-          durationMinutes: plan.durationMinutes,
-          completed: false,
-          completedAt: null,
-          isDeductCancelled: false,
-          deductMemo: '',
-          packageId: plan.selectedPackage.id,
-          packageType: 'private',
-          packageTitle,
-          billingType: 'private',
+          status: 'active',
+          source: 'fixed_admin',
           sourceType: 'fixed-private-slot-assignment',
-          privateLessonAvailabilityTemplateId: plan.template.id,
-          fixedPrivateAssignmentBatchId: batchId,
-          seriesID: batchId,
-          createdBy: String(userProfile?.name || user?.email || user?.uid || '').trim(),
-          createdByUID: user?.uid || '',
-          createdByUid: user?.uid || '',
-          ...(start ? { startAt: Timestamp.fromDate(start) } : {}),
+          reservationType: 'fixed',
+          packageId: plan.selectedPackage.id,
+          deductionPackageId: plan.selectedPackage.id,
+          durationMinutes: plan.durationMinutes,
+          reservedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
+          cancelledAt: null,
         })
       })
       await batch.commit()

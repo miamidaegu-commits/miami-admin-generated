@@ -1142,9 +1142,9 @@ export default function PrivateLessonSlotsSection({
               <h3 style={{ margin: 0, fontSize: 16 }}>고정 1:1 수업 배정</h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
                 선생님 주간 가능 시간은 반복 가능한 시간으로 유지하고, 선택한 기간의 실제 고정 1:1
-                수업만 생성합니다.
+                예약을 배정합니다.
                 <br />
-                수강권 횟수를 사용해 날짜별 고정수업을 생성합니다.
+                수강권 횟수를 사용해 날짜별 주간 슬롯 예약을 만듭니다.
                 <br />
                 수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.
                 <br />
@@ -1385,7 +1385,7 @@ export default function PrivateLessonSlotsSection({
                     cursor: busyPrivateFixedSlotAssignment ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  {busyPrivateFixedSlotAssignment ? '생성 중...' : '배정 생성'}
+                  {busyPrivateFixedSlotAssignment ? '배정 중...' : '고정 예약 배정'}
                 </button>
               </div>
 
@@ -1403,13 +1403,13 @@ export default function PrivateLessonSlotsSection({
                 >
                   <strong>
                     {privateFixedSlotAssignmentPreview.mode === 'created'
-                      ? `생성 완료 ${privateFixedSlotAssignmentPreview.requestedCount}회`
-                      : `생성 예정 ${privateFixedSlotAssignmentPreview.requestedCount}회`}
+                      ? `배정 완료 ${privateFixedSlotAssignmentPreview.requestedCount}회`
+                      : `배정 예정 ${privateFixedSlotAssignmentPreview.requestedCount}회`}
                   </strong>
                   {privateFixedSlotAssignmentPreview.mode === 'created' &&
                   Number.isFinite(Number(privateFixedSlotAssignmentPreview.availableAssignmentCount)) ? (
                     <div>
-                      생성 후 새 배정 가능{' '}
+                      배정 후 새 배정 가능{' '}
                       {Math.max(
                         0,
                         Number(privateFixedSlotAssignmentPreview.availableAssignmentCount) || 0
@@ -1453,13 +1453,14 @@ export default function PrivateLessonSlotsSection({
             }}
           >
             <div>
-              <h3 style={{ margin: 0, fontSize: 16 }}>고정 1:1 수업 일정</h3>
+              <h3 style={{ margin: 0, fontSize: 16 }}>기존 고정 1:1 수업 일정</h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
-                수강권으로 배정된 날짜별 고정수업을 한 번씩 취소하거나 공개합니다.
+                예전 방식으로 생성된 고정수업을 유지 표시합니다. 새 고정 배정은 아래 날짜별
+                예약 가능 시간의 예약으로 관리됩니다.
               </p>
             </div>
             {futureFixedPrivateLessons.length === 0 ? (
-              <p style={{ margin: 0, opacity: 0.78 }}>예정된 고정 1:1 수업이 없습니다.</p>
+              <p style={{ margin: 0, opacity: 0.78 }}>예정된 기존 고정 1:1 수업이 없습니다.</p>
             ) : (
               <div className="activity-table">
                 <div

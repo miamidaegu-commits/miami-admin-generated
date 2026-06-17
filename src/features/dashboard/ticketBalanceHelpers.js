@@ -109,6 +109,17 @@ function isActivePrivateReservationStatus(status) {
   )
 }
 
+function isFixedPrivateReservation(row) {
+  const sourceType = normalizeId(row?.sourceType).toLowerCase()
+  const reservationType = normalizeId(row?.reservationType || row?.type).toLowerCase()
+  return (
+    sourceType === 'fixed-private-slot-assignment' ||
+    sourceType === 'weekly-slot-fixed-assignment' ||
+    reservationType === 'fixed' ||
+    reservationType === 'fixed_private'
+  )
+}
+
 function isPrivateLessonReleasedFromDeduction(lesson) {
   const status = normalizeId(lesson?.status).toLowerCase()
   const cancellationType = normalizeId(lesson?.cancellationType).toLowerCase()
@@ -305,6 +316,10 @@ function buildBalanceResult({
   ;(Array.isArray(reservations) ? reservations : []).forEach((reservation) => {
     if (!isActivePrivateReservationStatus(reservation?.status)) return
     if (!rowMatchesTicketScope(reservation, ['packageId', 'deductionPackageId'])) return
+    if (isFixedPrivateReservation(reservation)) {
+      if (isFutureAllocation(reservation, now)) futureFixedAllocatedCount += 1
+      return
+    }
     activeFutureReservationCount += 1
   })
 
