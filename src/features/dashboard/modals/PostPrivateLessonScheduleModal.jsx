@@ -52,7 +52,7 @@ export default function PostPrivateLessonScheduleModal({
           {isTopUp
             ? '기존 개인 수강권에 추가 등록했습니다.'
             : '새 개인 수강권이 발급되었습니다.'}{' '}
-          고정 수업 일정은 1:1 예약 시간 관리 &gt; 고정 1:1 수업 배정에서 생성하세요.
+          고정 수업 일정은 1:1 예약 시간 관리 &gt; 주간 슬롯 고정 배정에서 예약하세요.
         </p>
 
         <div
@@ -95,7 +95,7 @@ export default function PostPrivateLessonScheduleModal({
             background: 'rgba(40, 55, 110, 0.25)',
           }}
         >
-          이 수강권은 횟수만 늘립니다. 실제 고정 수업은 기존 주간 기본 슬롯에서 배정하면
+          이 수강권은 횟수만 늘립니다. 실제 고정 수업은 기존 주간 기본 슬롯에서 예약 배정하면
           같은 수강권에 계속 연결됩니다.
         </p>
 

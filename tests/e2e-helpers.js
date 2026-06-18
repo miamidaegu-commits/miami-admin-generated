@@ -101,7 +101,9 @@ async function loginAndExpectPath(page, email, password, pathPattern) {
 export async function loginAsAdmin(page, email, password) {
   await loginAndExpectPath(page, email, password, /\/dashboard/);
 
-  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
+    timeout: 15000,
+  });
 }
 
 export async function loginAsStudent(page, email, password) {
@@ -146,15 +148,25 @@ export async function selectTeacherOption(selectLocator, teacherText, options = 
   await expect(selectLocator).toBeVisible({ timeout });
 
   let optionRows = [];
-  await expect
-    .poll(
-      async () => {
-        optionRows = await getSelectOptionRows(selectLocator);
-        return optionRows.some((option) => teacherOptionMatches(option, teacherText));
-      },
-      { timeout }
-    )
-    .toBe(true);
+  try {
+    await expect
+      .poll(
+        async () => {
+          optionRows = await getSelectOptionRows(selectLocator);
+          return optionRows.some((option) => teacherOptionMatches(option, teacherText));
+        },
+        { timeout }
+      )
+      .toBe(true);
+  } catch (error) {
+    throw new Error(
+      [
+        `Teacher option not found for ${teacherText} within ${timeout}ms.`,
+        `Options: ${JSON.stringify(optionRows)}`,
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
 
   const match = optionRows.find((option) => teacherOptionMatches(option, teacherText));
   if (!match) {

@@ -131,6 +131,27 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     statusLabel: '보충 가능 0회',
   });
 
+  const fixedReservation = computePrivateTicketBalance({
+    ticket,
+    fixedPrivateLessons: [],
+    privateReservations: [
+      privateReservation('fixed-reservation-1', {
+        packageId: ticket.id,
+        deductionPackageId: ticket.id,
+        sourceType: 'fixed-private-slot-assignment',
+        reservationType: 'fixed',
+      }),
+    ],
+    studentId: STUDENT_ID,
+    teacherScope: { teacher: 'Don1', teacherKey: 'don1' },
+    now: NOW,
+  });
+  expect(fixedReservation).toMatchObject({
+    futureFixedAllocatedCount: 1,
+    activeFutureReservationCount: 0,
+    availableToBook: 3,
+  });
+
   const pastActiveBooking = computePrivateTicketBalance({
     ticket,
     fixedPrivateLessons: released,

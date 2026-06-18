@@ -304,7 +304,7 @@ test('private package add modal explains package counts and fixed assignment wor
     await expect(dialog.getByRole('button', { name: '횟수 수강권', exact: true })).toBeVisible();
     await expect(dialog.getByRole('button', { name: '정기등록', exact: true })).toHaveCount(0);
     await expect(dialog).toContainText('수강권은 수업을 들을 수 있는 횟수만 등록합니다');
-    await expect(dialog).toContainText('고정 수업 일정은 1:1 예약 시간 관리 > 고정 1:1 수업 배정');
+    await expect(dialog).toContainText('고정 수업 일정은 1:1 예약 시간 관리 > 주간 슬롯 고정 배정');
     await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
       '운영 순서'
     );
@@ -315,7 +315,7 @@ test('private package add modal explains package counts and fixed assignment wor
       '2) 선생님 주간 가능 시간 등록: 고정 배정 또는 학생 직접예약에 사용할 반복 요일/시간을 만듭니다.'
     );
     await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
-      '3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 실제 수업 날짜를 생성합니다.'
+      '3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 주간 슬롯 고정 예약을 만듭니다.'
     );
     await expect(dialog).toContainText('주당 횟수와 등록 주수로 총 횟수를 자동 계산합니다.');
 

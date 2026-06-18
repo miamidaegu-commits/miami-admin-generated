@@ -174,6 +174,17 @@ function isFixedPrivateLesson(lesson) {
   )
 }
 
+function isFixedPrivateReservation(reservation) {
+  const sourceType = String(reservation?.sourceType || '').trim()
+  const reservationType = String(reservation?.reservationType || reservation?.type || '').trim()
+  return (
+    sourceType === 'fixed-private-slot-assignment' ||
+    sourceType === 'weekly-slot-fixed-assignment' ||
+    reservationType === 'fixed' ||
+    reservationType === 'fixed_private'
+  )
+}
+
 function isCancelledLesson(lesson) {
   const status = String(lesson?.status || '').trim().toLowerCase()
   return status === 'cancelled' || status === 'canceled'
@@ -1732,7 +1743,7 @@ export default function StudentBookingPage() {
         title: String(reservation.subject || '').trim() || '1:1 수업',
         sessionLabel: '',
         durationLabel: getPrivateDurationLabel(reservation),
-        statusLabel: '예약 완료',
+        statusLabel: isFixedPrivateReservation(reservation) ? '고정 예약' : '예약 완료',
         reservation,
       }))
 
@@ -1775,7 +1786,7 @@ export default function StudentBookingPage() {
       return {
         id: `private-${reservation.id}`,
         source: 'privateReservation',
-        typeLabel: '학생 직접예약 1:1',
+        typeLabel: isFixedPrivateReservation(reservation) ? '고정 예약 1:1' : '학생 직접예약 1:1',
         title: String(reservation.subject || '').trim() || '1:1 수업',
         date,
         time,
@@ -3216,6 +3227,7 @@ export default function StudentBookingPage() {
                   {sortedPrivateReservations.map((reservation) => {
                     const slot = privateSlotsById.get(reservation.slotId) || null
                     const isActive = reservation.status === 'active'
+                    const isFixedReservation = isFixedPrivateReservation(reservation)
                     const reservationDateTime = [
                       String(reservation.date || slot?.date || '').trim(),
                       String(reservation.time || slot?.time || '').trim(),
@@ -3254,13 +3266,19 @@ export default function StudentBookingPage() {
                               <strong style={{ fontSize: '1rem' }}>
                                 {reservation.teacher || slot?.teacher || '1:1 수업'}
                               </strong>
-                              <span style={getPrivateSlotBadgeStyle('my_reservation')}>내 예약</span>
+                              <span style={getPrivateSlotBadgeStyle('my_reservation')}>
+                                {isFixedReservation ? '고정 예약' : '내 예약'}
+                              </span>
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {reservationDateTime || `slotId: ${reservation.slotId}`}
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {isActive ? '내 예약' : getReservationStatusLabel(reservation)}
+                              {isActive
+                                ? isFixedReservation
+                                  ? '고정 예약'
+                                  : '내 예약'
+                                : getReservationStatusLabel(reservation)}
                             </div>
                             {isActive ? (
                               <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
