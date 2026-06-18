@@ -8,12 +8,29 @@ function slotStatusLabel(status) {
   return '예약 가능한 시간'
 }
 
+function isTeacherUnavailablePrivateSlot(slot) {
+  return [
+    'teacher_absent',
+    'teacher_unavailable',
+    'teacher_unavailable_closed',
+    'teacher_absence',
+    'teacher_no_show',
+    'closed',
+    'academy_closed',
+    'holiday',
+    'class_closure',
+  ].includes(String(slot?.releaseReason || '').trim().toLowerCase())
+}
+
 function privateSlotStatusLabel(slot) {
+  if (String(slot?.status || '').trim() === 'cancelled' && isTeacherUnavailablePrivateSlot(slot)) {
+    return '선생님 수업불가로 닫힘'
+  }
   if (
     slot?.releasedFromFixed === true ||
     String(slot?.slotType || '').trim() === 'released_fixed'
   ) {
-    return '고정 취소로 오픈됨'
+    return '고정 취소로 예약 가능'
   }
   return slotStatusLabel(slot?.status)
 }
@@ -1840,7 +1857,29 @@ export default function PrivateLessonSlotsSection({
                         cursor: busy ? 'not-allowed' : 'pointer',
                       }}
                     >
-                      {busy ? '처리 중...' : activeReservation ? '예약 취소' : '수업 시간 취소'}
+                      {busy ? '처리 중...' : activeReservation ? '예약 취소 후 공개' : '수업 시간 취소'}
+                    </button>
+                  ) : null}
+                  {activeReservation && slot.status !== 'cancelled' ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        cancelPrivateSlotOrReservation(slot, activeReservation, {
+                          closeAsTeacherUnavailable: true,
+                        })
+                      }
+                      disabled={busy}
+                      data-testid="private-slot-close-unavailable-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #6b4d2a',
+                        background: '#4a351f',
+                        color: 'white',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {busy ? '처리 중...' : '수업불가로 닫기'}
                     </button>
                   ) : null}
                 </span>

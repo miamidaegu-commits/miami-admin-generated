@@ -1184,8 +1184,15 @@ test('released fixed private slot behavior is wired server-side', async () => {
   expect(source).toContain('slotType: "released_fixed"');
   expect(source).toContain('releasedFromFixed: true');
   expect(source).toContain('releasedByStudentId: studentId');
-  expect(source).toContain('releaseReason: "fixed_student_cancelled"');
+  expect(source).toContain('releaseReason = "fixed_student_cancelled"');
   expect(source).toContain('exports.adminCancelPrivateLessonReservation');
+  expect(source).toContain('function isTeacherUnavailablePrivateCancellationReason');
+  expect(source).toContain('releaseReason: "admin_cancelled"');
+  expect(source).toContain('const shouldCloseSlot');
+  expect(source).toContain('buildAdminClosedPrivateSlotUpdates');
+  expect(source).toMatch(
+    /adminCancelPrivateLessonReservation[\s\S]*buildReleasedPrivateSlotUpdates\(\{[\s\S]*releaseReason: "admin_cancelled"/
+  );
   expect(source).toMatch(
     /exports\.reservePrivateLessonSlot[\s\S]*findUsablePrivatePackageForTeacher/
   );
@@ -2785,7 +2792,7 @@ async function createWeeklyTemplateFixture(unique) {
   const teacherKey = `miketest-${unique}`;
   const teacherName = 'miketest';
   const teacherUid = `uid-weekly-template-${unique}`;
-  const publicDate = '2026-06-15';
+  const publicDate = upcomingMondaySaturdayYmd(1);
   const fixedConflictDate = upcomingMondaySaturdayYmd(2);
   const hiddenDate = upcomingMondaySaturdayYmd(3);
   const publicTime = '13:00';

@@ -1186,7 +1186,13 @@ function buildCancelledPrivateReservationUpdates({
   };
 }
 
-function buildReleasedPrivateSlotUpdates({slot, reservation, studentId, now}) {
+function buildReleasedPrivateSlotUpdates({
+  slot,
+  reservation,
+  studentId,
+  now,
+  releaseReason = "fixed_student_cancelled",
+}) {
   const fixedSlot = isFixedPrivateSlot(slot, reservation);
   const fixedStudentId =
     normalizeId(slot && slot.fixedStudentId) ||
@@ -1219,7 +1225,7 @@ function buildReleasedPrivateSlotUpdates({slot, reservation, studentId, now}) {
     releasedFromFixed: true,
     releasedByStudentId: studentId,
     releasedAt: now,
-    releaseReason: "fixed_student_cancelled",
+    releaseReason,
     isBookable: true,
   };
 }
@@ -1283,11 +1289,30 @@ function buildReservablePrivateSlotFromStaleReservation(slot) {
   };
 }
 
-function buildAdminCancelledPrivateSlotUpdates({now}) {
+function isTeacherUnavailablePrivateCancellationReason(reason) {
+  return [
+    "teacher_absent",
+    "teacher_unavailable",
+    "teacher_unavailable_closed",
+    "teacher_absence",
+    "teacher_no_show",
+    "closed",
+    "academy_closed",
+    "holiday",
+    "class_closure",
+  ].includes(normalizeId(reason).toLowerCase());
+}
+
+function buildAdminClosedPrivateSlotUpdates({
+  now,
+  cancellationReason = "teacher_unavailable",
+}) {
   return {
     status: "cancelled",
     cancelledAt: now,
     updatedAt: now,
+    releaseReason: cancellationReason,
+    isBookable: false,
   };
 }
 
@@ -5831,6 +5856,8 @@ exports.adminCancelPrivateLessonReservation = onCall(
         const academyId = requireString(data, "academyId");
         const slotId = requireString(data, "slotId");
         const studentId = requireString(data, "studentId");
+        const cancellationReason =
+          normalizeId(data.cancellationReason) || "admin_cancelled";
         validateAcademyId(academyId);
 
         const db = admin.firestore();
@@ -5915,16 +5942,38 @@ exports.adminCancelPrivateLessonReservation = onCall(
                 uid,
                 studentId,
                 cancelledBy: "admin",
-                cancellationReason: "admin_cancelled",
+                cancellationReason,
               }),
           );
+          const shouldCloseSlot =
+            isTeacherUnavailablePrivateCancellationReason(
+                cancellationReason,
+            );
           if (normalizeId(slot.reservationId) === reservationId) {
-            transaction.update(slotRef, buildAdminCancelledPrivateSlotUpdates({
-              now,
-            }));
+            if (shouldCloseSlot) {
+              transaction.update(slotRef, buildAdminClosedPrivateSlotUpdates({
+                now,
+                cancellationReason,
+              }));
+            } else {
+              transaction.update(slotRef, buildReleasedPrivateSlotUpdates({
+                slot,
+                reservation,
+                studentId,
+                now,
+                releaseReason: "admin_cancelled",
+              }));
+            }
           }
 
-          return {ok: true, academyId, slotId, studentId, reservationId};
+          return {
+            ok: true,
+            academyId,
+            slotId,
+            studentId,
+            reservationId,
+            releasedForPrivateBooking: !shouldCloseSlot,
+          };
         });
       } catch (error) {
         throw asHttpsError(error);
