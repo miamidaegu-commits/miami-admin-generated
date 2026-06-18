@@ -250,9 +250,9 @@ test('admin creates a single weekly default slot with an effective date range', 
     await openDashboardSection(page, '1:1 예약 시간 관리');
 
     const singleSection = page.getByTestId('private-availability-template-section');
-    await expect(singleSection).toContainText('선생님 주간 가능 시간');
+    await expect(singleSection).toContainText('선생님 주간 1:1 시간표');
     await expect(singleSection).toContainText(
-      '기존 주간 기본 슬롯은 고정 배정용으로 유지되며, 학생 직접예약 공개는 선택한 슬롯만 적용됩니다.'
+      '학생 직접 예약 허용은 학생이 직접 예약할 수 있는 공개 시간입니다.'
     );
     await selectTeacherOption(
       singleSection.getByTestId('private-availability-template-teacher-select'),
@@ -307,7 +307,7 @@ test('admin creates a single weekly default slot with an effective date range', 
       .filter({ hasText: '22:45' });
     await expect(row).toContainText('2026-06-10 ~ 2026-07-01', { timeout: 15000 });
     await expect(row.getByTestId('private-availability-template-usage-cell')).toContainText(
-      '고정 배정 · 학생 직접예약',
+      '고정 수업 배정용 · 학생 직접 예약 허용',
       { timeout: 15000 }
     );
 

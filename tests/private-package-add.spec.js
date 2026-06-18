@@ -82,7 +82,7 @@ async function ensurePackageDialogClosed(page, testInfo, packageDialog) {
 
 async function dismissOptionalPrivateScheduleDialog(page) {
   const postScheduleDialog = page.getByRole('dialog', {
-    name: '고정 1:1 수업 배정으로 이동할까요?',
+    name: '주간 시간에 학생 고정 배정으로 이동할까요?',
   });
   if (!(await postScheduleDialog.isVisible({ timeout: 2000 }).catch(() => false))) return false;
   await postScheduleDialog.getByRole('button', { name: /나중에 (하기|등록)/ }).click();

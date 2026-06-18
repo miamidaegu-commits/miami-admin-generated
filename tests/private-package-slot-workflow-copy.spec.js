@@ -68,12 +68,12 @@ async function openPackageAddDialog(page, studentName, studentId = '') {
 async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   const modal = page
     .getByTestId('post-private-lesson-schedule-modal')
-    .or(page.getByRole('dialog', { name: '고정 1:1 수업 배정으로 이동할까요?' }))
+    .or(page.getByRole('dialog', { name: '주간 시간에 학생 고정 배정으로 이동할까요?' }))
     .first();
   if (!(await modal.isVisible({ timeout: options.timeout ?? 2000 }).catch(() => false))) {
     return false;
   }
-  await expect(modal).toContainText('고정 1:1 수업 배정으로 이동할까요?');
+  await expect(modal).toContainText('주간 시간에 학생 고정 배정으로 이동할까요?');
   if (options.expectedText) {
     await expect(modal).toContainText(options.expectedText);
   }
@@ -304,7 +304,9 @@ test('private package add modal explains package counts and fixed assignment wor
     await expect(dialog.getByRole('button', { name: '횟수 수강권', exact: true })).toBeVisible();
     await expect(dialog.getByRole('button', { name: '정기등록', exact: true })).toHaveCount(0);
     await expect(dialog).toContainText('수강권은 수업을 들을 수 있는 횟수만 등록합니다');
-    await expect(dialog).toContainText('고정 수업 일정은 1:1 예약 시간 관리 > 주간 슬롯 고정 배정');
+    await expect(dialog).toContainText(
+      '고정 수업 일정은 1:1 예약 시간 관리 > 주간 시간에 학생 고정 배정'
+    );
     await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
       '운영 순서'
     );
@@ -312,10 +314,10 @@ test('private package add modal explains package counts and fixed assignment wor
       '1) 수강권 등록/추가 등록: 학생에게 수업 가능 횟수를 부여합니다.'
     );
     await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
-      '2) 선생님 주간 가능 시간 등록: 고정 배정 또는 학생 직접예약에 사용할 반복 요일/시간을 만듭니다.'
+      '2) 선생님 주간 1:1 시간표 등록: 고정 수업 배정용 또는 학생 직접 예약 허용에 사용할 반복 요일/시간을 만듭니다.'
     );
     await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
-      '3) 고정 1:1 수업 배정: 수강권 횟수를 사용해 주간 슬롯 고정 예약을 만듭니다.'
+      '3) 주간 시간에 학생 고정 배정: 수강권 횟수를 사용해 선택한 주간 시간에 학생을 고정 배정합니다.'
     );
     await expect(dialog).toContainText('주당 횟수와 등록 주수로 총 횟수를 자동 계산합니다.');
 
