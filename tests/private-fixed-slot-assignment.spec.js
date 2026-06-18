@@ -48,6 +48,22 @@ function privateSummaryId(studentId) {
   return `${DEFAULT_E2E_ACADEMY_ID}__${studentId}`;
 }
 
+function privateReservationId(slotId, studentId) {
+  return `${DEFAULT_E2E_ACADEMY_ID}__${slotId}__${studentId}`;
+}
+
+async function expectReservationStatus(slotId, studentId, expected) {
+  await expect
+    .poll(async () => {
+      const snap = await getDb()
+        .collection('privateLessonReservations')
+        .doc(privateReservationId(slotId, studentId))
+        .get();
+      return snap.exists ? snap.data()?.status || null : null;
+    }, { timeout: 30000 })
+    .toBe(expected);
+}
+
 function formatSeoulDate(date) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Seoul',
@@ -103,6 +119,20 @@ async function queryFixedReservationsByPackage(packageId) {
     .where('deductionPackageId', '==', packageId)
     .get();
   return snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+}
+
+async function queryReservationsByPackageIds(packageIds) {
+  const snapshots = await Promise.all(
+    packageIds.map((packageId) =>
+      getDb()
+        .collection('privateLessonReservations')
+        .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+        .where('deductionPackageId', '==', packageId)
+        .get()
+        .catch(() => ({ docs: [] }))
+    )
+  );
+  return snapshots.flatMap((snap) => snap.docs);
 }
 
 async function queryFixedSlotsByPackage(packageId) {
@@ -411,7 +441,15 @@ async function cleanupFixture(fixture) {
     .where('deductionPackageId', '==', fixture.packageId)
     .get()
     .catch(() => ({ docs: [] }));
+  const reservationDocs = await queryReservationsByPackageIds([
+    fixture.packageId,
+    fixture.otherPackageId,
+  ]);
   const slotRefsFromReservations = reservationSnap.docs
+    .map((docSnap) => String(docSnap.data()?.slotId || '').trim())
+    .filter(Boolean)
+    .map((slotId) => db.collection('privateLessonSlots').doc(slotId));
+  const extraSlotRefsFromReservations = reservationDocs
     .map((docSnap) => String(docSnap.data()?.slotId || '').trim())
     .filter(Boolean)
     .map((slotId) => db.collection('privateLessonSlots').doc(slotId));
@@ -438,7 +476,8 @@ async function cleanupFixture(fixture) {
     ...(fixture.conflictLessonId ? [db.collection('lessons').doc(fixture.conflictLessonId)] : []),
     ...lessonSnap.docs.map((docSnap) => docSnap.ref),
     ...slotRefsFromReservations,
-    ...reservationSnap.docs.map((docSnap) => docSnap.ref),
+    ...extraSlotRefsFromReservations,
+    ...reservationDocs.map((docSnap) => docSnap.ref),
     ...templateSnap.docs.map((docSnap) => docSnap.ref),
   ];
   await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
@@ -534,6 +573,7 @@ test('admin can assign fixed private lessons from a weekly template', async ({
       .toBe(4);
     const reservations = await queryFixedReservationsByPackage(fixture.packageId);
     const slots = await queryFixedSlotsByPackage(fixture.packageId);
+    const slotByDate = new Map(slots.map((slot) => [slot.date, slot]));
     expect(reservations.map((reservation) => reservation.date).sort()).toEqual(fixture.dates);
     expect(slots.map((slot) => slot.date).sort()).toEqual(fixture.dates);
     for (const reservation of reservations) {
@@ -595,6 +635,132 @@ test('admin can assign fixed private lessons from a weekly template', async ({
         .locator('[data-testid="student-private-slot-card"]')
         .filter({ hasText: fixture.dates[0] })
         .filter({ hasText: fixture.time })
+    ).toHaveCount(0, { timeout: 15000 });
+
+    const studentReleasedSlot = slotByDate.get(fixture.dates[0]);
+    expect(studentReleasedSlot?.id).toBeTruthy();
+    const studentFixedCard = studentPage
+      .locator('[data-testid="student-upcoming-private-lesson-card"]')
+      .filter({ hasText: fixture.dates[0] })
+      .filter({ hasText: fixture.time });
+    await expect(studentFixedCard).toContainText('고정 예약', { timeout: 15000 });
+    studentPage.once('dialog', async (dialog) => {
+      await dialog.accept();
+    });
+    await studentFixedCard.getByTestId('student-upcoming-private-reservation-cancel-button').click();
+    await expectReservationStatus(studentReleasedSlot.id, fixture.studentId, 'cancelled');
+    await expect
+      .poll(async () => {
+        const snap = await getDb().collection('privateLessonSlots').doc(studentReleasedSlot.id).get();
+        const data = snap.data() || {};
+        return [
+          data.status,
+          data.slotType,
+          data.isBookable === true ? 'bookable' : 'blocked',
+          data.releaseReason || '',
+        ].join('|');
+      }, { timeout: 30000 })
+      .toBe('open|released_fixed|bookable|fixed_student_cancelled');
+
+    await otherStudentPage.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
+    await otherStudentPage.getByTestId('private-slot-view-mode-available').click();
+    const studentReleasedCard = otherStudentPage.locator(
+      `[data-testid="student-private-slot-card"][data-slot-id="${studentReleasedSlot.id}"]`
+    );
+    await expect(studentReleasedCard, 'student-cancelled fixed slot should be bookable').toBeVisible({
+      timeout: 30000,
+    });
+    otherStudentPage.once('dialog', async (dialog) => {
+      await dialog.accept();
+    });
+    await studentReleasedCard.getByTestId('student-private-slot-reserve-button').click();
+    await expectReservationStatus(studentReleasedSlot.id, fixture.otherStudentId, 'active');
+    await expect
+      .poll(async () => {
+        const snap = await getDb()
+          .collection('privateLessonReservations')
+          .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+          .where('slotId', '==', studentReleasedSlot.id)
+          .where('status', '==', 'active')
+          .get();
+        return snap.size;
+      }, { timeout: 15000 })
+      .toBe(1);
+
+    const adminReleasedSlot = slotByDate.get(fixture.dates[1]);
+    expect(adminReleasedSlot?.id).toBeTruthy();
+    await openDashboardSection(page, '1:1 예약 시간 관리');
+    const adminReleaseRow = page.locator(
+      `[data-testid="private-slot-row"][data-slot-id="${adminReleasedSlot.id}"]`
+    );
+    await expect(adminReleaseRow).toContainText('예약 완료', { timeout: 30000 });
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('다른 학생에게 공개');
+      await dialog.accept();
+    });
+    await adminReleaseRow.getByTestId('private-slot-cancel-button').click();
+    await expectReservationStatus(adminReleasedSlot.id, fixture.studentId, 'cancelled');
+    await expect
+      .poll(async () => {
+        const snap = await getDb().collection('privateLessonSlots').doc(adminReleasedSlot.id).get();
+        const data = snap.data() || {};
+        return [
+          data.status,
+          data.slotType,
+          data.isBookable === true ? 'bookable' : 'blocked',
+          data.releaseReason || '',
+        ].join('|');
+      }, { timeout: 30000 })
+      .toBe('open|released_fixed|bookable|admin_cancelled');
+    await expect(adminReleaseRow).toContainText('고정 취소로 예약 가능', { timeout: 30000 });
+
+    await otherStudentPage.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
+    await otherStudentPage.getByTestId('private-slot-view-mode-all').click();
+    await expect(
+      otherStudentPage.locator(
+        `[data-testid="student-private-slot-card"][data-slot-id="${adminReleasedSlot.id}"]`
+      ),
+      'admin-cancelled fixed slot should be visible as a non-busy slot'
+    ).toBeVisible({ timeout: 30000 });
+    await expect(
+      otherStudentPage.locator(
+        `[data-testid="student-private-busy-slot-card"][data-slot-id="${adminReleasedSlot.id}"]`
+      ),
+      'admin-cancelled fixed slot must not stay busy'
+    ).toHaveCount(0);
+
+    const unavailableSlot = slotByDate.get(fixture.dates[3]);
+    expect(unavailableSlot?.id).toBeTruthy();
+    const unavailableRow = page.locator(
+      `[data-testid="private-slot-row"][data-slot-id="${unavailableSlot.id}"]`
+    );
+    await expect(unavailableRow).toContainText('예약 완료', { timeout: 30000 });
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('선생님 결석/휴강/수업불가');
+      await dialog.accept();
+    });
+    await unavailableRow.getByTestId('private-slot-close-unavailable-button').click();
+    await expectReservationStatus(unavailableSlot.id, fixture.studentId, 'cancelled');
+    await expect
+      .poll(async () => {
+        const snap = await getDb().collection('privateLessonSlots').doc(unavailableSlot.id).get();
+        const data = snap.data() || {};
+        return [
+          data.status,
+          data.isBookable === true ? 'bookable' : 'blocked',
+          data.releaseReason || '',
+        ].join('|');
+      }, { timeout: 30000 })
+      .toBe('cancelled|blocked|teacher_unavailable');
+    await expect(unavailableRow).toContainText('선생님 수업불가로 닫힘', { timeout: 30000 });
+
+    await otherStudentPage.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
+    await otherStudentPage.getByTestId('private-slot-view-mode-available').click();
+    await expect(
+      otherStudentPage.locator(
+        `[data-testid="student-private-slot-card"][data-slot-id="${unavailableSlot.id}"]`
+      ),
+      'teacher-unavailable fixed slot must not be bookable'
     ).toHaveCount(0, { timeout: 15000 });
   } finally {
     await studentContext?.close().catch(() => {});

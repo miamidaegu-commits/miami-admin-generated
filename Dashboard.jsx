@@ -5115,15 +5115,21 @@ export default function Dashboard() {
     }
   }
 
-  async function cancelPrivateSlotOrReservation(slot, reservation) {
+  async function cancelPrivateSlotOrReservation(slot, reservation, options = {}) {
     if (!isAdmin) {
       alert('1:1 수업 관리 권한이 없습니다.')
       return
     }
     if (!slot?.id) return
 
+    const closeAsTeacherUnavailable = options?.closeAsTeacherUnavailable === true
     const label = `${slot.date || ''} ${slot.time || ''} ${slot.teacher || ''}`.trim()
-    if (!window.confirm(`${reservation ? '이 예약을 취소할까요?' : '이 수업 시간을 취소할까요?'}\n${label}`)) {
+    const actionLabel = closeAsTeacherUnavailable
+      ? '선생님 결석/휴강/수업불가로 닫을까요?'
+      : reservation
+        ? '이 예약을 취소하고 다른 학생에게 공개할까요?'
+        : '이 수업 시간을 취소할까요?'
+    if (!window.confirm(`${actionLabel}\n${label}`)) {
       return
     }
 
@@ -5140,6 +5146,7 @@ export default function Dashboard() {
           academyId: scopedAcademyId,
           slotId: slot.id,
           studentId,
+          ...(closeAsTeacherUnavailable ? { cancellationReason: 'teacher_unavailable' } : {}),
         })
       } else {
         const slotRef = doc(db, 'privateLessonSlots', slot.id)

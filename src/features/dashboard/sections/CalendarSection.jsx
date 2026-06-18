@@ -74,9 +74,37 @@ const PRIVATE_RESERVATION_HISTORY_STATUSES = new Set([
   'canceled',
 ])
 
-function getPrivateReservationHistoryStatusLabel(row) {
+function isTeacherUnavailablePrivateReason(value) {
+  return [
+    'teacher_absent',
+    'teacher_unavailable',
+    'teacher_unavailable_closed',
+    'teacher_absence',
+    'teacher_no_show',
+    'closed',
+    'academy_closed',
+    'holiday',
+    'class_closure',
+  ].includes(String(value || '').trim().toLowerCase())
+}
+
+function isReleasedFixedPrivateSlot(slot) {
+  return (
+    slot?.releasedFromFixed === true ||
+    String(slot?.slotType || '').trim() === 'released_fixed'
+  )
+}
+
+function getPrivateReservationHistoryStatusLabel(row, slot) {
   const status = String(row?.status || '').trim().toLowerCase()
-  if (status === 'cancelled' || status === 'canceled') return '예약 취소'
+  if (status === 'cancelled' || status === 'canceled') {
+    const reason = row?.cancellationReason || row?.cancelledReason || slot?.releaseReason
+    if (isTeacherUnavailablePrivateReason(reason)) return '예약 취소 · 수업불가 닫힘'
+    if (isReleasedFixedPrivateSlot(slot) || slot?.isBookable === true) {
+      return '예약 취소 · 예약 가능 공개'
+    }
+    return '예약 취소'
+  }
   return '예약 완료'
 }
 
@@ -97,6 +125,7 @@ function getPrivateReservationCancelActorLabel(row) {
   const reason = String(row?.cancellationReason || row?.cancelledReason || '')
     .trim()
     .toLowerCase()
+  if (isTeacherUnavailablePrivateReason(reason)) return '선생님 휴강/수업불가'
   if (actor.includes('student') || reason.includes('student')) return '학생 취소'
   if (actor.includes('teacher') || reason.includes('teacher')) return '선생님 취소'
   if (
@@ -729,7 +758,7 @@ export default function CalendarSection(props) {
             String(slot?.subject || '').trim() ||
             '1:1 수업',
           durationLabel: Number.isFinite(duration) && duration > 0 ? `${duration}분` : '-',
-          statusLabel: getPrivateReservationHistoryStatusLabel(reservation),
+          statusLabel: getPrivateReservationHistoryStatusLabel(reservation, slot),
           cancelActorLabel: getPrivateReservationCancelActorLabel(reservation),
           cancelledAtLabel: formatPrivateReservationCancelledAt(reservation),
         }
