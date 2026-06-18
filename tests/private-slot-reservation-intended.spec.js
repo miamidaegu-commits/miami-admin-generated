@@ -1145,7 +1145,7 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(dashboardSource).toContain('getPrivateAvailabilityTemplateUsagePatch');
   expect(dashboardSource).toContain('isPrivateAvailabilityTemplateForFixedAssignment');
   expect(sectionSource).toContain('private-availability-template-section');
-  expect(sectionSource).toContain('선생님 주간 가능 시간');
+  expect(sectionSource).toContain('선생님 주간 1:1 시간표');
   expect(sectionSource).toContain('private-availability-template-start-date-input');
   expect(sectionSource).toContain('private-availability-template-end-date-input');
   expect(sectionSource).toContain('private-availability-template-use-fixed-checkbox');
@@ -1155,11 +1155,11 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(sectionSource).toContain('private-availability-template-edit-button');
   expect(sectionSource).toContain('private-availability-template-edit-start-date-input');
   expect(sectionSource).toContain('private-availability-template-edit-status-select');
-  expect(sectionSource).toContain('학생 직접 예약에 공개');
+  expect(sectionSource).toContain('학생 직접 예약 허용');
   expect(sectionSource).toContain('기간 제한 없음');
-  expect(sectionSource).toContain('날짜별 예약 가능 시간 (학생 직접 예약용)');
-  expect(sectionSource).toContain('등록된 주간 가능 시간이 없습니다.');
-  expect(sectionSource).toContain('등록된 고정 배정용 주간 가능 시간이 없습니다.');
+  expect(sectionSource).toContain('날짜별 1:1 예약 가능 시간 (학생 직접 예약 허용)');
+  expect(sectionSource).toContain('등록된 주간 1:1 시간이 없습니다.');
+  expect(sectionSource).toContain('등록된 고정 수업 배정용 주간 시간이 없습니다.');
   expect(sectionSource).toContain('private-availability-template-add-button');
 
   expect(rulesSource).toContain('match /privateLessonAvailabilityTemplates/{templateId}');

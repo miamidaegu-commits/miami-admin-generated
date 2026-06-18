@@ -191,14 +191,14 @@ async function openPrivatePackageAddDialog(page, studentName, studentId = '') {
 async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   const modalByTestId = page.getByTestId('post-private-lesson-schedule-modal');
   const modalByRole = page.getByRole('dialog', {
-    name: '고정 1:1 수업 배정으로 이동할까요?',
+    name: '주간 시간에 학생 고정 배정으로 이동할까요?',
   });
   const modal = modalByTestId.or(modalByRole).first();
   if (!(await modal.isVisible({ timeout: options.timeout ?? 2000 }).catch(() => false))) {
     return false;
   }
 
-  await expect(modal).toContainText('고정 1:1 수업 배정으로 이동할까요?');
+  await expect(modal).toContainText('주간 시간에 학생 고정 배정으로 이동할까요?');
   if (options.expectedText) {
     await expect(modal).toContainText(options.expectedText);
   }
@@ -342,7 +342,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
       '별도 계약으로 분리 → 새 수강권으로 발급'
     );
     await expect(dialog.getByTestId('private-package-situation-guidance')).toContainText(
-      '주간 슬롯 고정 예약 → 고정 1:1 수업 배정으로 이동'
+      '주간 시간 고정 배정 → 주간 시간에 학생 고정 배정으로 이동'
     );
     await expect(dialog).toContainText('이번에 추가할 수업 횟수');
     await expect(dialog).toContainText(

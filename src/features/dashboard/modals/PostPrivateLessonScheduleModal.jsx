@@ -46,13 +46,14 @@ export default function PostPrivateLessonScheduleModal({
           id="post-private-lesson-schedule-title"
           style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
         >
-          고정 1:1 수업 배정으로 이동할까요?
+          주간 시간에 학생 고정 배정으로 이동할까요?
         </h2>
         <p style={{ margin: '0 0 12px 0', fontSize: 13, opacity: 0.88, lineHeight: 1.5 }}>
           {isTopUp
             ? '기존 개인 수강권에 추가 등록했습니다.'
             : '새 개인 수강권이 발급되었습니다.'}{' '}
-          고정 수업 일정은 1:1 예약 시간 관리 &gt; 주간 슬롯 고정 배정에서 예약하세요.
+          고정 수업 일정은 1:1 예약 시간 관리 &gt; 주간 시간에 학생 고정 배정에서
+          예약하세요.
         </p>
 
         <div
@@ -95,8 +96,8 @@ export default function PostPrivateLessonScheduleModal({
             background: 'rgba(40, 55, 110, 0.25)',
           }}
         >
-          이 수강권은 횟수만 늘립니다. 실제 고정 수업은 기존 주간 기본 슬롯에서 예약 배정하면
-          같은 수강권에 계속 연결됩니다.
+          이 수강권은 횟수만 늘립니다. 실제 고정 수업은 선생님 주간 1:1 시간표에서
+          학생을 고정 배정하면 같은 수강권에 계속 연결됩니다.
         </p>
 
         <div
@@ -136,7 +137,7 @@ export default function PostPrivateLessonScheduleModal({
               cursor: busyPostPrivateLessonSchedule ? 'not-allowed' : 'pointer',
             }}
           >
-            고정 1:1 수업 배정으로 이동
+            주간 시간에 학생 고정 배정으로 이동
           </button>
         </div>
       </div>

@@ -153,8 +153,8 @@ function isTemplateOpenForStudentBooking(template) {
 
 function getTemplateUsageLabel(template) {
   const labels = []
-  if (isTemplateForFixedAssignment(template)) labels.push('고정 배정')
-  if (isTemplateOpenForStudentBooking(template)) labels.push('학생 직접예약')
+  if (isTemplateForFixedAssignment(template)) labels.push('고정 수업 배정용')
+  if (isTemplateOpenForStudentBooking(template)) labels.push('학생 직접 예약 허용')
   return labels.join(' · ') || '용도 없음'
 }
 
@@ -357,7 +357,7 @@ export default function PrivateLessonSlotsSection({
             }}
           >
             <div>
-              <h3 style={{ margin: 0, fontSize: 16 }}>기본 1:1 슬롯 일괄 등록</h3>
+              <h3 style={{ margin: 0, fontSize: 16 }}>주간 1:1 시간표 일괄 등록</h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
                 선생님별 반복 요일과 시작 시간을 한 번에 등록합니다. 학생 화면에는 기존처럼
                 이번 주와 다음 주 범위만 표시됩니다.
@@ -460,7 +460,7 @@ export default function PrivateLessonSlotsSection({
                         }))
                       }
                     />
-                    고정 배정에 사용
+                    고정 수업 배정용
                   </label>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <input
@@ -474,7 +474,7 @@ export default function PrivateLessonSlotsSection({
                         }))
                       }
                     />
-                    학생 직접 예약에 공개
+                    학생 직접 예약 허용
                   </label>
                   {privateAvailabilityBulkErrors.usage ? (
                     <span style={{ color: '#f4a7a7' }}>
@@ -651,11 +651,11 @@ export default function PrivateLessonSlotsSection({
               marginBottom: 20,
             }}
           >
-            <h3 style={{ margin: 0, fontSize: 16 }}>선생님 주간 가능 시간</h3>
+            <h3 style={{ margin: 0, fontSize: 16 }}>선생님 주간 1:1 시간표</h3>
             <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
-              선생님의 반복 가능한 시간을 고정 1:1 배정이나 학생 직접예약 공개에 사용합니다.
+              선생님의 반복 가능한 1:1 요일과 시간을 만들고, 그 시간에 학생을 고정 배정합니다.
               <br />
-              기존 주간 기본 슬롯은 고정 배정용으로 유지되며, 학생 직접예약 공개는 선택한 슬롯만 적용됩니다.
+              학생 직접 예약 허용은 학생이 직접 예약할 수 있는 공개 시간입니다.
             </p>
             <form
               onSubmit={(event) => {
@@ -823,7 +823,7 @@ export default function PrivateLessonSlotsSection({
                       }))
                     }
                   />
-                  고정 배정에 사용
+                  고정 수업 배정용
                 </label>
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <input
@@ -837,7 +837,7 @@ export default function PrivateLessonSlotsSection({
                       }))
                     }
                   />
-                  학생 직접 예약에 공개
+                  학생 직접 예약 허용
                 </label>
                 {privateAvailabilityTemplateErrors.usage ? (
                   <span style={{ color: '#f4a7a7' }}>
@@ -868,7 +868,7 @@ export default function PrivateLessonSlotsSection({
             {privateAvailabilityTemplatesLoading ? (
               <p style={{ margin: 0, opacity: 0.76 }}>불러오는 중...</p>
             ) : privateAvailabilityTemplates.length === 0 ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 가능 시간이 없습니다.</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 1:1 시간이 없습니다.</p>
             ) : (
               <div style={{ display: 'grid', gap: 8 }}>
                 <div
@@ -1054,7 +1054,7 @@ export default function PrivateLessonSlotsSection({
                                   }))
                                 }
                               />
-                              고정 배정에 사용
+                              고정 수업 배정용
                             </label>
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               <input
@@ -1068,7 +1068,7 @@ export default function PrivateLessonSlotsSection({
                                   }))
                                 }
                               />
-                              학생 직접 예약에 공개
+                              학생 직접 예약 허용
                             </label>
                             {editingAvailabilityTemplateErrors.usage ? (
                               <span style={{ color: '#f4a7a7' }}>
@@ -1139,21 +1139,15 @@ export default function PrivateLessonSlotsSection({
             }}
           >
             <div>
-              <h3 style={{ margin: 0, fontSize: 16 }}>고정 1:1 수업 배정</h3>
+              <h3 style={{ margin: 0, fontSize: 16 }}>주간 시간에 학생 고정 배정</h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
-                선생님 주간 가능 시간은 반복 가능한 시간으로 유지하고, 선택한 기간의 실제 고정 1:1
-                예약을 배정합니다.
-                <br />
-                수강권 횟수를 사용해 날짜별 주간 슬롯 예약을 만듭니다.
+                먼저 선생님의 주간 1:1 시간표를 만들고, 그 시간에 학생을 고정 배정합니다.
                 <br />
                 수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.
                 <br />
-                고정수업은 "고정 배정에 사용"이 켜진 주간 가능 시간에서만 만들 수 있습니다.
+                고정 배정은 ‘고정 수업 배정용’으로 켜진 주간 시간에서만 만들 수 있습니다.
                 <br />
-                원하는 시간이 보이지 않으면 위의 선생님 주간 가능 시간에 요일/시간/기간을 먼저
-                등록하세요.
-                <br />
-                날짜별 예약 가능 시간은 학생 직접 예약용입니다.
+                학생 직접 예약 허용은 학생이 직접 예약할 수 있는 공개 시간입니다.
               </p>
             </div>
             <form
@@ -1196,7 +1190,7 @@ export default function PrivateLessonSlotsSection({
                 </label>
 
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                  주간 가능 시간 선택
+                  배정할 주간 시간 선택
                   <select
                     value={privateFixedSlotAssignmentForm.templateId}
                     data-testid="private-fixed-assignment-template-select"
@@ -1229,9 +1223,9 @@ export default function PrivateLessonSlotsSection({
                   {privateFixedSlotAssignmentForm.teacher &&
                   privateFixedAssignmentTemplateOptions.length === 0 ? (
                     <span style={{ color: '#f4a7a7' }}>
-                      등록된 고정 배정용 주간 가능 시간이 없습니다.
+                      등록된 고정 수업 배정용 주간 시간이 없습니다.
                       <br />
-                      위의 선생님 주간 가능 시간에서 고정 배정 용도를 켜서 등록하세요.
+                      위의 선생님 주간 1:1 시간표에서 고정 수업 배정용을 켜서 등록하세요.
                     </span>
                   ) : null}
                 </label>
@@ -1385,7 +1379,7 @@ export default function PrivateLessonSlotsSection({
                     cursor: busyPrivateFixedSlotAssignment ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  {busyPrivateFixedSlotAssignment ? '배정 중...' : '고정 예약 배정'}
+                  {busyPrivateFixedSlotAssignment ? '배정 중...' : '학생 고정 배정'}
                 </button>
               </div>
 
@@ -1455,8 +1449,8 @@ export default function PrivateLessonSlotsSection({
             <div>
               <h3 style={{ margin: 0, fontSize: 16 }}>기존 고정 1:1 수업 일정</h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12 }}>
-                예전 방식으로 생성된 고정수업을 유지 표시합니다. 새 고정 배정은 아래 날짜별
-                예약 가능 시간의 예약으로 관리됩니다.
+                예전 방식으로 생성된 고정수업을 유지 표시합니다. 새 고정 배정은 위의 주간
+                시간에 학생 고정 배정에서 관리합니다.
               </p>
             </div>
             {futureFixedPrivateLessons.length === 0 ? (
@@ -1547,12 +1541,12 @@ export default function PrivateLessonSlotsSection({
             }}
           >
             <h3 style={{ margin: 0, fontSize: 16 }}>
-              날짜별 예약 가능 시간 (학생 직접 예약용)
+              날짜별 1:1 예약 가능 시간 (학생 직접 예약 허용)
             </h3>
             <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
               이 목록은 학생이 직접 예약할 수 있는 날짜별 시간입니다.
               <br />
-              고정 1:1 배정에 사용하려면 선생님 주간 가능 시간으로 등록하세요.
+                고정 1:1 배정에 사용하려면 선생님 주간 1:1 시간표로 등록하세요.
             </p>
           </div>
 

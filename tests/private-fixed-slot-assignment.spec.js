@@ -451,16 +451,17 @@ async function fillAssignmentForm(page, fixture) {
   await openDashboardSection(page, '1:1 예약 시간 관리');
   const section = page.getByTestId('private-fixed-slot-assignment-section');
   await expect(section).toBeVisible({ timeout: 15000 });
-  await expect(section).toContainText('수강권 횟수를 사용해 날짜별 주간 슬롯 예약을 만듭니다.');
+  await expect(section).toContainText(
+    '먼저 선생님의 주간 1:1 시간표를 만들고, 그 시간에 학생을 고정 배정합니다.'
+  );
   await expect(section).toContainText('수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.');
   await expect(section).toContainText(
-    '고정수업은 "고정 배정에 사용"이 켜진 주간 가능 시간에서만 만들 수 있습니다.'
+    '고정 배정은 ‘고정 수업 배정용’으로 켜진 주간 시간에서만 만들 수 있습니다.'
   );
   await expect(section).toContainText(
-    '원하는 시간이 보이지 않으면 위의 선생님 주간 가능 시간에 요일/시간/기간을 먼저 등록하세요.'
+    '학생 직접 예약 허용은 학생이 직접 예약할 수 있는 공개 시간입니다.'
   );
-  await expect(section).toContainText('날짜별 예약 가능 시간은 학생 직접 예약용입니다.');
-  await expect(section.getByLabel('주간 가능 시간 선택')).toBeVisible();
+  await expect(section.getByLabel('배정할 주간 시간 선택')).toBeVisible();
   await selectTeacherOption(
     section.getByTestId('private-fixed-assignment-teacher-select'),
     fixture.teacher.name,
