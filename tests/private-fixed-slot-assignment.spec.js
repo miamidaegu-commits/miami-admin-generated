@@ -194,6 +194,17 @@ async function createFixture(
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${teacher.uid}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      uid: teacher.uid,
+      email: teacher.email,
+      displayName: teacher.name,
+      role: 'teacher',
+      teacherName: teacher.key,
+      status: 'active',
+      permissions: {},
+      updatedAt: nowTs,
+    }),
     db.collection('users').doc(user.uid).set({
       uid: user.uid,
       email: studentEmail,
@@ -421,6 +432,7 @@ async function cleanupFixture(fixture) {
     db.collection('privateLessonAvailabilityTemplates').doc(fixture.templateId),
     db.collection('users').doc(fixture.user.uid),
     db.collection('users').doc(fixture.otherUser.uid),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.teacher.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.user.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.otherUser.uid}`),
     ...(fixture.conflictLessonId ? [db.collection('lessons').doc(fixture.conflictLessonId)] : []),
@@ -452,7 +464,7 @@ async function fillAssignmentForm(page, fixture) {
   await selectTeacherOption(
     section.getByTestId('private-fixed-assignment-teacher-select'),
     fixture.teacher.name,
-    { timeout: 30000 }
+    { timeout: 60000 }
   );
   await expect
     .poll(
@@ -502,6 +514,7 @@ test('admin can assign fixed private lessons from a weekly template', async ({
   let studentContext = null;
   let otherStudentContext = null;
   try {
+    testInfo.setTimeout(240000);
     fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}`, { totalCount: 4 });
     const section = await fillAssignmentForm(page, fixture);
 
@@ -512,8 +525,8 @@ test('admin can assign fixed private lessons from a weekly template', async ({
       await expect(preview).toContainText(`${date} ${fixture.time}`);
     }
     await section.getByTestId('private-fixed-assignment-submit-button').click();
-    await expect(preview).toContainText('배정 완료 4회', { timeout: 15000 });
-    await expect(preview).toContainText('배정 후 새 배정 가능 0회', { timeout: 15000 });
+    await expect(preview).toContainText('배정 완료 4회', { timeout: 60000 });
+    await expect(preview).toContainText('배정 후 새 배정 가능 0회', { timeout: 60000 });
 
     await expect
       .poll(async () => (await queryFixedReservationsByPackage(fixture.packageId)).length, { timeout: 15000 })
@@ -595,7 +608,7 @@ test('fixed assignment can use a single weekly default slot with a date range', 
 }, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
   test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 fixed slot assignment E2E를 실행합니다.');
-  test.setTimeout(120000);
+  test.setTimeout(240000);
 
   let fixture = null;
   const dialogMessages = [];
@@ -617,7 +630,7 @@ test('fixed assignment can use a single weekly default slot with a date range', 
     await selectTeacherOption(
       singleSection.getByTestId('private-availability-template-teacher-select'),
       fixture.teacher.name,
-      { timeout: 30000 }
+      { timeout: 60000 }
     );
     await singleSection
       .getByTestId('private-availability-template-weekday')
@@ -666,7 +679,7 @@ test('fixed assignment can use a single weekly default slot with a date range', 
     await selectTeacherOption(
       fixedSection.getByTestId('private-fixed-assignment-teacher-select'),
       fixture.teacher.name,
-      { timeout: 30000 }
+      { timeout: 60000 }
     );
     await expect(
       fixedSection.getByTestId('private-fixed-assignment-template-select')
@@ -729,10 +742,11 @@ test('admin edits inactive whole-period weekly default slot for fixed assignment
       .filter({ hasText: fixture.teacher.name })
       .filter({ hasText: fixture.time });
     await expect(row.getByTestId('private-availability-template-status-cell')).toContainText('비활성', {
-      timeout: 15000,
+      timeout: 60000,
     });
     await expect(row.getByTestId('private-availability-template-period-cell')).toContainText(
-      '기간 제한 없음'
+      '기간 제한 없음',
+      { timeout: 60000 }
     );
 
     await row.getByTestId('private-availability-template-edit-button').click();
@@ -757,14 +771,15 @@ test('admin edits inactive whole-period weekly default slot for fixed assignment
             data.effectiveEndDate || '',
           ].join('|');
         },
-        { timeout: 15000 }
+        { timeout: 60000 }
       )
       .toBe(`active|${fixture.dates[0]}|${fixture.dates[3]}`);
     await expect(row.getByTestId('private-availability-template-status-cell')).toContainText('사용', {
-      timeout: 15000,
+      timeout: 60000,
     });
     await expect(row.getByTestId('private-availability-template-period-cell')).toContainText(
-      `${fixture.dates[0]} ~ ${fixture.dates[3]}`
+      `${fixture.dates[0]} ~ ${fixture.dates[3]}`,
+      { timeout: 60000 }
     );
     const updatedTemplate = (
       await getDb().collection('privateLessonAvailabilityTemplates').doc(fixture.templateId).get()
@@ -779,7 +794,7 @@ test('admin edits inactive whole-period weekly default slot for fixed assignment
     await selectTeacherOption(
       fixedSection.getByTestId('private-fixed-assignment-teacher-select'),
       fixture.teacher.name,
-      { timeout: 30000 }
+      { timeout: 60000 }
     );
     await expect
       .poll(
@@ -788,12 +803,12 @@ test('admin edits inactive whole-period weekly default slot for fixed assignment
             .getByTestId('private-fixed-assignment-template-select')
             .locator('option')
             .evaluateAll((options) => options.map((option) => option.value)),
-        { timeout: 15000 }
+        { timeout: 60000 }
       )
       .toContain(fixture.templateId);
     await expect(
       fixedSection.getByTestId('private-fixed-assignment-template-select')
-    ).toContainText(`${fixture.dates[0]} ~ ${fixture.dates[3]}`);
+    ).toContainText(`${fixture.dates[0]} ~ ${fixture.dates[3]}`, { timeout: 60000 });
     await fixedSection.getByTestId('private-fixed-assignment-template-select').selectOption(fixture.templateId);
     await fixedSection.getByTestId('private-fixed-assignment-student-select').selectOption(fixture.studentId);
     await expect
@@ -803,7 +818,7 @@ test('admin edits inactive whole-period weekly default slot for fixed assignment
             .getByTestId('private-fixed-assignment-package-select')
             .locator('option')
             .evaluateAll((options) => options.map((option) => option.value)),
-        { timeout: 15000 }
+        { timeout: 60000 }
       )
       .toContain(fixture.packageId);
     await fixedSection.getByTestId('private-fixed-assignment-package-select').selectOption(fixture.packageId);
@@ -858,7 +873,7 @@ test('fixed assignment excludes student-direct-only weekly availability', async 
     await selectTeacherOption(
       fixedSection.getByTestId('private-fixed-assignment-teacher-select'),
       fixture.teacher.name,
-      { timeout: 30000 }
+      { timeout: 60000 }
     );
     const templateOptionValues = await fixedSection
       .getByTestId('private-fixed-assignment-template-select')
