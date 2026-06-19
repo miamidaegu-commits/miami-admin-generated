@@ -1304,16 +1304,67 @@ function isTeacherUnavailablePrivateCancellationReason(reason) {
   ].includes(normalizeId(reason).toLowerCase());
 }
 
+function shouldBlockClosedPrivateSlot(slot) {
+  const slotType = normalizeId(slot && slot.slotType).toLowerCase();
+  return Boolean(
+      slot &&
+      (slot.isGeneratedFromTemplate === true ||
+        slotType === "template" ||
+        normalizeId(slot.availabilityTemplateId)),
+  );
+}
+
 function buildAdminClosedPrivateSlotUpdates({
+  slot = null,
   now,
+  uid = "",
+  actorRole = "admin",
+  actorName = "",
+  cancellationReason = "teacher_unavailable",
+}) {
+  const status = shouldBlockClosedPrivateSlot(slot) ? "blocked" : "cancelled";
+  return {
+    status,
+    reservedStudentId: "",
+    reservationId: "",
+    reservedAt: null,
+    reservedCount: 0,
+    cancelledAt: now,
+    blockedAt: now,
+    updatedAt: now,
+    releaseReason: cancellationReason,
+    cancellationReason,
+    cancelledReason: cancellationReason,
+    cancelledBy: "admin",
+    cancelledByUid: uid,
+    cancelledByRole: actorRole,
+    cancelledByName: actorName,
+    isBookable: false,
+  };
+}
+
+function buildAdminClosedPrivateSlotFromTemplate({
+  templateId,
+  template,
+  date,
+  time,
+  now,
+  uid,
+  actor,
   cancellationReason = "teacher_unavailable",
 }) {
   return {
-    status: "cancelled",
-    cancelledAt: now,
-    updatedAt: now,
-    releaseReason: cancellationReason,
-    isBookable: false,
+    ...buildSlotFromAvailabilityTemplate({templateId, template, date, time}),
+    ...buildAdminClosedPrivateSlotUpdates({
+      slot: {slotType: "template", isGeneratedFromTemplate: true},
+      now,
+      uid,
+      actorRole: actor.actorRole,
+      actorName: actor.actorName,
+      cancellationReason,
+    }),
+    createdByUid: uid,
+    createdAt: now,
   };
 }
 
@@ -1478,6 +1529,44 @@ function buildSlotFromReleasedFixedPrivateLesson({
     uid: normalizeId(lesson && lesson.releasedByUid),
     actorRole: normalizeId(lesson && lesson.releasedByRole),
   });
+}
+
+function buildClosedFixedPrivateLessonSlot({
+  academyId,
+  lessonId,
+  lesson,
+  now,
+  uid,
+  actorRole,
+  actorName = "",
+  cancellationReason = "teacher_unavailable",
+}) {
+  const slot = buildReleasedFixedPrivateLessonSlot({
+    academyId,
+    lessonId,
+    lesson,
+    now,
+    uid,
+    actorRole,
+    actorName,
+  });
+  return {
+    ...slot,
+    status: "blocked",
+    slotType: "fixed_closed",
+    releasedFromFixed: false,
+    releasedForPrivateBooking: false,
+    releasedFromFixedLessonId: "",
+    reservationId: "",
+    reservedStudentId: "",
+    reservedCount: 0,
+    releaseReason: cancellationReason,
+    cancellationReason,
+    cancelledReason: cancellationReason,
+    cancelledAt: now,
+    blockedAt: now,
+    isBookable: false,
+  };
 }
 
 function getTimestampMillis(value) {
@@ -1697,6 +1786,10 @@ function buildBusyPrivateScheduleRowId({
 
 function buildReleasedFixedPrivateSlotId(lessonId) {
   return `released_fixed__${normalizeId(lessonId)}`;
+}
+
+function buildClosedFixedPrivateSlotId(lessonId) {
+  return `closed_fixed__${normalizeId(lessonId)}`;
 }
 
 function parseReleasedFixedPrivateSlotId(slotId) {
@@ -4701,10 +4794,17 @@ exports.listPrivateLessonSlotAvailability = onCall(
           const slotId = docSnap.id;
           const status = String(slot.status || "").trim();
           const date = normalizeId(slot.date);
+          const isClosedByTeacherUnavailable =
+            status === "cancelled" &&
+            isTeacherUnavailablePrivateCancellationReason(
+                slot.releaseReason || slot.cancelledReason ||
+                slot.cancellationReason,
+            );
           if (normalizeId(slot.academyId) !== academyId) return;
           if (!(status === "open" ||
             status === "reserved" ||
-            status === "blocked")) {
+            status === "blocked" ||
+            isClosedByTeacherUnavailable)) {
             return;
           }
           if (!isPrivateScheduleDateInRange(date, rangeStart, rangeEnd)) {
@@ -4735,7 +4835,7 @@ exports.listPrivateLessonSlotAvailability = onCall(
 
         if (hasTeacherPackageAccess) {
           const queryPromises = [];
-          ["open", "reserved", "blocked"].forEach((status) => {
+          ["open", "reserved", "blocked", "cancelled"].forEach((status) => {
             chunkValues(teacherKeys, PRIVATE_SLOT_QUERY_CHUNK_SIZE)
                 .forEach((chunk) => {
                   queryPromises.push(
@@ -5807,6 +5907,23 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
                   actorName,
                 }),
             );
+          } else {
+            const closedSlotRef = db
+                .collection("privateLessonSlots")
+                .doc(buildClosedFixedPrivateSlotId(lessonId));
+            transaction.set(
+                closedSlotRef,
+                buildClosedFixedPrivateLessonSlot({
+                  academyId,
+                  lessonId,
+                  lesson,
+                  now,
+                  uid,
+                  actorRole,
+                  actorName,
+                  cancellationReason: effectiveReason,
+                }),
+            );
           }
           createPrivateSlotNotification(transaction, db, {
             academyId,
@@ -5858,6 +5975,216 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
             cancelledByRole: actorRole,
             isSeatReleased: cancellationType === "seat_released",
             cancelAllowance: nextAllowance,
+          };
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.adminClosePrivateLessonSlot = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const slotId = requireString(data, "slotId");
+        const availabilityTemplateId = optionalString(
+            data,
+            "availabilityTemplateId",
+        );
+        const requestedDate = optionalString(data, "date");
+        const requestedTime = optionalString(data, "time");
+        const cancellationReason =
+          normalizeId(data.cancellationReason) || "teacher_unavailable";
+        if (!isTeacherUnavailablePrivateCancellationReason(
+            cancellationReason,
+        )) {
+          throw new HttpsError(
+              "invalid-argument",
+              "Only teacher unavailable closure reasons are supported.",
+          );
+        }
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const adminMembership = await requireAcademyAdmin(db, academyId, uid);
+        const actor = buildAdminActorContext(request.auth, adminMembership);
+        const slotRef = db.collection("privateLessonSlots").doc(slotId);
+
+        return await db.runTransaction(async (transaction) => {
+          const slotSnap = await transaction.get(slotRef);
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          let slot = null;
+          let closedReservation = null;
+          let closedReservationId = "";
+
+          if (slotSnap.exists) {
+            slot = slotSnap.data() || {};
+            if (normalizeId(slot.academyId) !== academyId) {
+              throw new HttpsError(
+                  "permission-denied",
+                  "Private lesson slot academy mismatch.",
+              );
+            }
+            const status = normalizeId(slot.status).toLowerCase();
+            if (status === "reserved") {
+              const linkedReservationId = getPrivateSlotLinkedReservationId({
+                academyId,
+                slotId,
+                slot,
+              });
+              if (linkedReservationId) {
+                const reservationRef = db
+                    .collection("privateLessonReservations")
+                    .doc(linkedReservationId);
+                const reservationSnap = await transaction.get(reservationRef);
+                if (reservationSnap.exists) {
+                  const reservation = reservationSnap.data() || {};
+                  if (
+                    normalizeId(reservation.academyId) === academyId &&
+                    normalizeId(reservation.slotId) === slotId &&
+                    isActivePrivateReservation(reservation)
+                  ) {
+                    closedReservation = reservation;
+                    closedReservationId = linkedReservationId;
+                    transaction.update(
+                        reservationRef,
+                        buildCancelledPrivateReservationUpdates({
+                          now,
+                          uid,
+                          studentId: normalizeId(reservation.studentId),
+                          cancelledBy: "admin",
+                          cancelledByRole: actor.actorRole,
+                          actorName: actor.actorName,
+                          cancellationReason,
+                        }),
+                    );
+                  }
+                }
+              }
+            }
+            transaction.update(slotRef, buildAdminClosedPrivateSlotUpdates({
+              slot,
+              now,
+              uid,
+              actorRole: actor.actorRole,
+              actorName: actor.actorName,
+              cancellationReason,
+            }));
+          } else {
+            if (!availabilityTemplateId || !requestedDate || !requestedTime) {
+              throw new HttpsError(
+                  "invalid-argument",
+                  "Template id, date, and time are required for empty slots.",
+              );
+            }
+            const expectedSlotId = buildPrivateTemplateSlotId({
+              templateId: availabilityTemplateId,
+              date: requestedDate,
+              time: requestedTime,
+            });
+            if (expectedSlotId !== slotId) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Template slot id does not match date/time.",
+              );
+            }
+            const templateRef = db
+                .collection("privateLessonAvailabilityTemplates")
+                .doc(availabilityTemplateId);
+            const templateSnap = await transaction.get(templateRef);
+            if (!templateSnap.exists) {
+              throw new HttpsError(
+                  "not-found",
+                  "Availability template not found.",
+              );
+            }
+            const template = templateSnap.data() || {};
+            if (normalizeId(template.academyId) !== academyId) {
+              throw new HttpsError(
+                  "permission-denied",
+                  "Availability template academy mismatch.",
+              );
+            }
+            if (normalizeId(template.status || "active") !== "active") {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Availability template is inactive.",
+              );
+            }
+            if (!privateAvailabilityTemplateAppliesToDate(
+                template,
+                requestedDate,
+            )) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Availability template does not apply to this date.",
+              );
+            }
+            if (getSeoulWeekday(requestedDate) !== Number(template.weekday)) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Availability template weekday mismatch.",
+              );
+            }
+            if (normalizeId(template.time) !== requestedTime) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "Availability template time mismatch.",
+              );
+            }
+            slot = buildAdminClosedPrivateSlotFromTemplate({
+              templateId: availabilityTemplateId,
+              template,
+              date: requestedDate,
+              time: requestedTime,
+              now,
+              uid,
+              actor,
+              cancellationReason,
+            });
+            transaction.set(slotRef, slot);
+          }
+
+          createPrivateSlotNotification(transaction, db, {
+            academyId,
+            type: closedReservation ?
+              "private_slot_cancelled" :
+              "private_slot_closed",
+            studentId: normalizeId(
+                closedReservation && closedReservation.studentId,
+            ),
+            studentName: normalizeId(
+                closedReservation && closedReservation.studentName,
+            ),
+            teacher: normalizeId(slot.teacher || slot.teacherKey),
+            teacherName: normalizeId(slot.teacherName || slot.teacher),
+            slotId,
+            reservationId: closedReservationId,
+            date: normalizeId(slot.date),
+            time: normalizeId(slot.time),
+            source: "admin",
+            actorUid: actor.actorUid,
+            actorRole: actor.actorRole,
+            actorName: actor.actorName,
+            reason: cancellationReason,
+            createdAt: now,
+          });
+
+          return {
+            ok: true,
+            academyId,
+            slotId,
+            reservationId: closedReservationId,
+            cancelledReservation: Boolean(closedReservation),
+            releasedForPrivateBooking: false,
           };
         });
       } catch (error) {
@@ -5977,7 +6304,11 @@ exports.adminCancelPrivateLessonReservation = onCall(
           if (normalizeId(slot.reservationId) === reservationId) {
             if (shouldCloseSlot) {
               transaction.update(slotRef, buildAdminClosedPrivateSlotUpdates({
+                slot,
                 now,
+                uid,
+                actorRole: actor.actorRole,
+                actorName: actor.actorName,
                 cancellationReason,
               }));
             } else {

@@ -1123,6 +1123,22 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(functionSource).toContain('no-remaining-package');
   expect(functionSource).toContain('buildPrivateTemplateSlotId');
   expect(functionSource).toContain('function privateAvailabilityTemplateOpenForStudentBooking');
+  expect(functionSource).toContain('exports.adminClosePrivateLessonSlot');
+  expect(functionSource).toMatch(
+    /adminClosePrivateLessonSlot[\s\S]*requireAcademyAdmin\(db, academyId, uid\)/
+  );
+  expect(functionSource).toMatch(
+    /adminClosePrivateLessonSlot[\s\S]*buildSlotFromAvailabilityTemplate/
+  );
+  expect(functionSource).toMatch(
+    /adminClosePrivateLessonSlot[\s\S]*buildCancelledPrivateReservationUpdates/
+  );
+  expect(functionSource).toMatch(
+    /listPrivateLessonSlotAvailability[\s\S]*"open", "reserved", "blocked", "cancelled"/
+  );
+  expect(functionSource).toMatch(
+    /addVisibleSlot[\s\S]*isClosedByTeacherUnavailable[\s\S]*isTeacherUnavailablePrivateCancellationReason/
+  );
   expect(functionSource).toMatch(
     /buildTemplateSlots[\s\S]*privateAvailabilityTemplateOpenForStudentBooking\(data\)/
   );
@@ -1145,6 +1161,13 @@ test('weekly private booking templates are wired through UI, rules, and callable
   expect(dashboardSource).toContain('getPrivateAvailabilityTemplateUsagePatch');
   expect(dashboardSource).toContain('isPrivateAvailabilityTemplateForFixedAssignment');
   expect(sectionSource).toContain('private-availability-template-section');
+  expect(sectionSource).toContain('private-teacher-weekly-board-section');
+  expect(sectionSource).toContain('선생님별 1:1 시간표/예약판');
+  expect(sectionSource).toContain('private-teacher-weekly-board-close-button');
+  expect(sectionSource).toContain('학생 직접예약');
+  expect(sectionSource).toContain('고정 예약');
+  expect(sectionSource).toContain('예약 취소 후 공개');
+  expect(sectionSource).toContain('수업불가로 닫기');
   expect(sectionSource).toContain('선생님 주간 1:1 시간표');
   expect(sectionSource).toContain('private-availability-template-start-date-input');
   expect(sectionSource).toContain('private-availability-template-end-date-input');
@@ -1229,9 +1252,14 @@ test('private admin actions are restricted away from teacher execution paths', a
   expect(privateSlotsSource).toContain('if (!isAdmin) return null');
   expect(privateSlotsSource).toContain('예약 취소 후 공개');
   expect(privateSlotsSource).toContain('수업불가로 닫기');
+  expect(privateSlotsSource).toContain('선생님별 1:1 시간표/예약판');
+  expect(privateSlotsSource).toContain('private-teacher-weekly-board-close-button');
+  expect(privateSlotsSource).toContain('private-teacher-weekly-board-release-button');
   expect(privateSlotsSource).toContain('학생 고정 배정');
   expect(calendarSource).toContain('data-testid="calendar-deduction-toggle-button"');
   expect(dashboardSource).toContain('const canManagePrivateLessonDeductions = isAdmin');
+  expect(dashboardSource).toContain('adminClosePrivateLessonSlot');
+  expect(dashboardSource).toContain("cancellationReason: 'teacher_unavailable'");
   expect(dashboardSource).toContain('const canUseStudentPackageCountSection = false');
   expect(packageFlowSource).toMatch(
     /function canEditStudentPackageCountsForPackage[\s\S]*return isAdminPackageEditor\(\)/
@@ -1245,6 +1273,10 @@ test('private admin actions are restricted away from teacher execution paths', a
   expect(adminCancelBlock).toContain('actorUid: actor.actorUid');
   expect(adminCancelBlock).toContain('actorName: actor.actorName');
   expect(adminCancelBlock).toContain('reason: cancellationReason');
+  expect(functionsSource).toContain('exports.adminClosePrivateLessonSlot');
+  expect(functionsSource).toContain('buildAdminClosedPrivateSlotFromTemplate');
+  expect(functionsSource).toContain('status: "blocked"');
+  expect(functionsSource).toContain('buildClosedFixedPrivateLessonSlot');
 
   const fixedCancelBlock = functionsSource.match(
     /exports\.cancelFixedPrivateLessonOccurrence[\s\S]*?exports\.adminCancelPrivateLessonReservation/
