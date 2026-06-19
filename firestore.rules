@@ -177,27 +177,7 @@ service cloud.firestore {
     }
 
     function validTeacherStudentPackageCountUpdate() {
-      return signedIn() &&
-        resource.data.academyId is string &&
-        resource.data.academyId != "" &&
-        request.resource.data.academyId == resource.data.academyId &&
-        exists(membershipPath(resource.data.academyId)) &&
-        get(membershipPath(resource.data.academyId)).data.status == "active" &&
-        get(membershipPath(resource.data.academyId)).data.role == "teacher" &&
-        get(membershipPath(resource.data.academyId)).data.permissions.canEditStudentPackageCounts == true &&
-        resource.data.teacher is string &&
-        resource.data.teacher != "" &&
-        resource.data.teacher == get(membershipPath(resource.data.academyId)).data.teacherName &&
-        request.resource.data.teacher == resource.data.teacher &&
-        request.resource.data.teacherName == resource.data.teacherName &&
-        request.resource.data.studentId == resource.data.studentId &&
-        request.resource.data.packageType == resource.data.packageType &&
-        request.resource.data.status == resource.data.status &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        request.resource.data.totalCount is int &&
-        request.resource.data.totalCount >= resource.data.usedCount &&
-        request.resource.data.remainingCount == request.resource.data.totalCount - resource.data.usedCount &&
-        changedOnly(["totalCount", "remainingCount", "updatedAt"]);
+      return false;
     }
 
     function parentGroupClassBelongsToTeacher(academyId, groupClassId) {
@@ -2317,6 +2297,8 @@ service cloud.firestore {
       allow update: if sameAcademyOnUpdate() && (
         isAcademyAdmin(resource.data.academyId) || (
           canTeacherUpdateStudentPackageUsage(resource.data.academyId) &&
+          resource.data.packageType in ["group", "openGroup"] &&
+          request.resource.data.packageType == resource.data.packageType &&
           studentPackageBelongsToTeacher(resource.data) &&
           studentPackageBelongsToTeacher(request.resource.data) &&
           changedOnly(["usedCount", "remainingCount", "status", "updatedAt"])
@@ -2334,8 +2316,7 @@ service cloud.firestore {
       allow create: if sameAcademyOnCreate() && (
         isAcademyAdmin(request.resource.data.academyId) ||
         (
-          (canManageAttendance(request.resource.data.academyId) ||
-            canManageOwnLessonDeductions(request.resource.data.academyId)) &&
+          canManageAttendance(request.resource.data.academyId) &&
           creditTransactionBelongsToTeacher(request.resource.data)
         )
       );

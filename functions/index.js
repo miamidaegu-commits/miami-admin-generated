@@ -306,9 +306,28 @@ async function requireAcademyAdmin(db, academyId, uid) {
   };
 }
 
-async function canMarkPrivateReservationOutcome(db, academyId, uid) {
-  await requireAcademyAdmin(db, academyId, uid);
-  return {actorRole: "admin"};
+function getCallableActorName(auth, membership) {
+  return normalizeId(membership && (
+    membership.displayName ||
+    membership.name ||
+    membership.teacherName ||
+    membership.email
+  )) ||
+    normalizeId(auth && auth.token && (auth.token.name || auth.token.email)) ||
+    normalizeId(auth && auth.uid);
+}
+
+function buildAdminActorContext(auth, membership) {
+  return {
+    actorRole: "admin",
+    actorUid: normalizeId(auth && auth.uid),
+    actorName: getCallableActorName(auth, membership),
+  };
+}
+
+async function canMarkPrivateReservationOutcome(db, academyId, auth) {
+  const membership = await requireAcademyAdmin(db, academyId, auth.uid);
+  return buildAdminActorContext(auth, membership);
 }
 
 function requireActiveStudentMembership(membershipSnap) {
@@ -379,28 +398,6 @@ function canManageGroupAttendance(membership) {
         membership.permissions.canManageAttendance === true,
     )
   );
-}
-
-function requireTeacherPackageCountEditor(membershipSnap) {
-  const membership = requireActiveAcademyMembership(membershipSnap);
-  if (
-    membership.role !== "teacher" ||
-    !membership.permissions ||
-    membership.permissions.canEditStudentPackageCounts !== true
-  ) {
-    throw new HttpsError(
-        "permission-denied",
-        "Teacher package count edit permission required.",
-    );
-  }
-  const teacherName = normalizeId(membership.teacherName);
-  if (!teacherName) {
-    throw new HttpsError(
-        "failed-precondition",
-        "Teacher membership is missing teacherName.",
-    );
-  }
-  return {...membership, teacherName};
 }
 
 function parsePackageTotalCount(value) {
@@ -1173,6 +1170,8 @@ function buildCancelledPrivateReservationUpdates({
   uid,
   studentId,
   cancelledBy = "student",
+  cancelledByRole = cancelledBy,
+  actorName = "",
   cancellationReason = "student_cancelled",
 }) {
   return {
@@ -1180,6 +1179,8 @@ function buildCancelledPrivateReservationUpdates({
     cancelledAt: now,
     cancelledBy,
     cancelledByUid: uid,
+    cancelledByRole,
+    cancelledByName: actorName,
     cancelledByStudentId: studentId,
     cancellationReason,
     updatedAt: now,
@@ -1353,26 +1354,11 @@ function getFixedPrivateActorRole(membership) {
   );
 }
 
-function teacherMembershipMatchesFixedLesson(membership, lesson) {
-  const lessonKeys = getPrivateTeacherScopeKeys(lesson);
-  const membershipKeys = getPrivateTeacherScopeKeys({
-    teacher: membership && membership.teacherName,
-    teacherName: membership && membership.teacherName,
-    teacherKey: membership && membership.teacherKey,
-    teacherUid: membership && membership.teacherUid,
-    teacherUID: membership && membership.teacherUID,
-    teacherId: membership && membership.teacherId,
-    displayName: membership && membership.displayName,
-    name: membership && membership.name,
-  });
-  return lessonKeys.length > 0 &&
-    membershipKeys.some((key) => lessonKeys.includes(key));
-}
-
 function buildFixedPrivateLessonCancellationPatch({
   now,
   uid,
   actorRole,
+  actorName = "",
   cancellationType,
   reason,
   lessonId,
@@ -1389,6 +1375,7 @@ function buildFixedPrivateLessonCancellationPatch({
     cancelledBy: uid,
     cancelledByUid: uid,
     cancelledByRole: actorRole,
+    cancelledByName: actorName,
     cancellationReason,
     cancelledReason: cancellationReason,
     cancellationType,
@@ -1399,6 +1386,7 @@ function buildFixedPrivateLessonCancellationPatch({
     releasedBy: isSeatReleased ? uid : "",
     releasedByUid: isSeatReleased ? uid : "",
     releasedByRole: isSeatReleased ? actorRole : "",
+    releasedByName: isSeatReleased ? actorName : "",
     noDeduction: true,
     updatedAt: now,
   };
@@ -1411,6 +1399,7 @@ function buildReleasedFixedPrivateLessonSlot({
   now,
   uid,
   actorRole,
+  actorName = "",
 }) {
   const date = normalizeId(lesson && lesson.date);
   const time = normalizeId(lesson && lesson.time);
@@ -1462,6 +1451,7 @@ function buildReleasedFixedPrivateLessonSlot({
     releasedBy: uid,
     releasedByUid: uid,
     releasedByRole: actorRole,
+    releasedByName: actorName,
     isBookable: true,
     createdByUid: uid,
     updatedAt: now,
@@ -2714,6 +2704,10 @@ function createPrivateSlotNotification(transaction, db, {
   date,
   time,
   source,
+  actorUid,
+  actorRole,
+  actorName,
+  reason,
   createdAt,
 }) {
   const eventData = {
@@ -2730,6 +2724,10 @@ function createPrivateSlotNotification(transaction, db, {
   };
   if (studentName) eventData.studentName = studentName;
   if (teacherName) eventData.teacherName = teacherName;
+  if (actorUid) eventData.actorUid = actorUid;
+  if (actorRole) eventData.actorRole = actorRole;
+  if (actorName) eventData.actorName = actorName;
+  if (reason) eventData.reason = reason;
 
   transaction.create(db.collection("notificationEvents").doc(), eventData);
 }
@@ -5697,6 +5695,7 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
           ]);
           const membership = requireActiveAcademyMembership(membershipSnap);
           const actorRole = getFixedPrivateActorRole(membership);
+          const actorName = getCallableActorName(request.auth, membership);
           if (!lessonSnap.exists) {
             throw new HttpsError(
                 "not-found",
@@ -5768,23 +5767,27 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
               );
             }
           } else if (actorRole === "teacher") {
-            if (!teacherMembershipMatchesFixedLesson(membership, lesson)) {
-              throw new HttpsError(
-                  "permission-denied",
-                  "Cannot cancel another teacher's fixed private lesson.",
-              );
-            }
+            throw new HttpsError(
+                "permission-denied",
+                "Fixed private lesson actions require admin permission.",
+            );
           }
 
           const now = admin.firestore.FieldValue.serverTimestamp();
+          const effectiveReason = reason || (
+            cancellationType === "seat_released" ?
+              "fixed_private_seat_released" :
+              "fixed_private_lesson_cancelled"
+          );
           transaction.update(
               lessonRef,
               buildFixedPrivateLessonCancellationPatch({
                 now,
                 uid,
                 actorRole,
+                actorName,
                 cancellationType,
-                reason,
+                reason: effectiveReason,
                 lessonId,
               }),
           );
@@ -5801,9 +5804,28 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
                   now,
                   uid,
                   actorRole,
+                  actorName,
                 }),
             );
           }
+          createPrivateSlotNotification(transaction, db, {
+            academyId,
+            type: "private_fixed_lesson_cancelled",
+            studentId: lessonStudentId,
+            studentName: normalizeId(lesson.studentName || lesson.student),
+            teacher: normalizeId(lesson.teacher || lesson.teacherKey),
+            teacherName: normalizeId(lesson.teacherName || lesson.teacher),
+            slotId: buildReleasedFixedPrivateSlotId(lessonId),
+            reservationId: normalizeId(lesson.reservationId),
+            date: normalizeId(lesson.date),
+            time: normalizeId(lesson.time),
+            source: actorRole,
+            actorUid: uid,
+            actorRole,
+            actorName,
+            reason: effectiveReason,
+            createdAt: now,
+          });
 
           let nextAllowance = null;
           if (actorRole === "student" && statsRef && allowance) {
@@ -5862,7 +5884,8 @@ exports.adminCancelPrivateLessonReservation = onCall(
 
         const db = admin.firestore();
         const uid = request.auth.uid;
-        await requireAcademyAdmin(db, academyId, uid);
+        const adminMembership = await requireAcademyAdmin(db, academyId, uid);
+        const actor = buildAdminActorContext(request.auth, adminMembership);
 
         const reservationId = privateReservationDocId({
           academyId,
@@ -5942,6 +5965,8 @@ exports.adminCancelPrivateLessonReservation = onCall(
                 uid,
                 studentId,
                 cancelledBy: "admin",
+                cancelledByRole: actor.actorRole,
+                actorName: actor.actorName,
                 cancellationReason,
               }),
           );
@@ -5965,6 +5990,28 @@ exports.adminCancelPrivateLessonReservation = onCall(
               }));
             }
           }
+          createPrivateSlotNotification(transaction, db, {
+            academyId,
+            type: "private_slot_cancelled",
+            studentId,
+            studentName: normalizeId(
+                reservation.studentName || slot.studentName,
+            ),
+            teacher: normalizeId(slot.teacher || reservation.teacher),
+            teacherName: normalizeId(
+                slot.teacherName || reservation.teacherName,
+            ),
+            slotId,
+            reservationId,
+            date: normalizeId(slot.date || reservation.date),
+            time: normalizeId(slot.time || reservation.time),
+            source: "admin",
+            actorUid: actor.actorUid,
+            actorRole: actor.actorRole,
+            actorName: actor.actorName,
+            reason: cancellationReason,
+            createdAt: now,
+          });
 
           return {
             ok: true,
@@ -6133,7 +6180,7 @@ exports.markPrivateReservationOutcome = onCall(
         const db = admin.firestore();
         const uid = request.auth.uid;
         const outcomeActor =
-          await canMarkPrivateReservationOutcome(db, academyId, uid);
+          await canMarkPrivateReservationOutcome(db, academyId, request.auth);
 
         const reservationRef = db
             .collection("privateLessonReservations")
@@ -6340,6 +6387,7 @@ exports.markPrivateReservationOutcome = onCall(
             deductionAttemptNumber,
             outcomeByUid: uid,
             outcomeActorRole: outcomeActor.actorRole,
+            outcomeActorName: outcomeActor.actorName,
             updatedAt: now,
           });
           transaction.set(creditRef, {
@@ -6360,6 +6408,8 @@ exports.markPrivateReservationOutcome = onCall(
               "유연 1:1 예약 차감",
             actorUid: uid,
             actorRole: outcomeActor.actorRole,
+            actorName: outcomeActor.actorName,
+            reason: outcome,
             createdAt: now,
           }, {merge: false});
 
@@ -6394,15 +6444,10 @@ exports.updateTeacherStudentPackageCounts = onCall(
 
         const db = admin.firestore();
         const uid = request.auth.uid;
-        const membershipRef = db
-            .collection("academyMemberships")
-            .doc(`${academyId}_${uid}`);
+        const adminMembership = await requireAcademyAdmin(db, academyId, uid);
+        const actor = buildAdminActorContext(request.auth, adminMembership);
         const packageRef = db.collection("studentPackages").doc(packageId);
-        const [membershipSnap, packageSnap] = await Promise.all([
-          membershipRef.get(),
-          packageRef.get(),
-        ]);
-        const membership = requireTeacherPackageCountEditor(membershipSnap);
+        const packageSnap = await packageRef.get();
         if (!packageSnap.exists) {
           throw new HttpsError("not-found", "Student package not found.");
         }
@@ -6412,14 +6457,6 @@ exports.updateTeacherStudentPackageCounts = onCall(
           throw new HttpsError(
               "permission-denied",
               "Student package academy mismatch.",
-          );
-        }
-
-        const packageTeacher = normalizeId(pkg.teacher || pkg.teacherName);
-        if (!packageTeacher || packageTeacher !== membership.teacherName) {
-          throw new HttpsError(
-              "permission-denied",
-              "Only own teacher-scoped packages can be edited.",
           );
         }
 
@@ -6437,12 +6474,36 @@ exports.updateTeacherStudentPackageCounts = onCall(
           );
         }
 
+        const previousTotalCount = Number(pkg.totalCount || 0);
         const remainingCount = Math.max(0, totalCount - usedCount);
+        const now = admin.firestore.FieldValue.serverTimestamp();
         await packageRef.update({
           totalCount,
           remainingCount,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: now,
         });
+        if (totalCount !== previousTotalCount) {
+          await db.collection("creditTransactions").add({
+            academyId,
+            studentId: normalizeId(pkg.studentId),
+            studentName: normalizeId(pkg.studentName),
+            teacher: normalizeId(pkg.teacher || pkg.teacherName),
+            packageId,
+            packageType: normalizeId(pkg.packageType),
+            packageTitle: String(pkg.packageTitle || pkg.title || ""),
+            groupClassName: normalizeId(pkg.groupClassName),
+            sourceType: "studentPackage",
+            sourceId: packageId,
+            actionType: "package_adjusted",
+            deltaCount: totalCount - previousTotalCount,
+            memo: `수강권 총 횟수 조정 (${previousTotalCount} → ${totalCount})`,
+            actorUid: actor.actorUid,
+            actorRole: actor.actorRole,
+            actorName: actor.actorName,
+            reason: "admin_package_count_update",
+            createdAt: now,
+          });
+        }
 
         return {ok: true, totalCount, remainingCount};
       } catch (error) {
@@ -6474,7 +6535,7 @@ exports.reversePrivateReservationOutcome = onCall(
         const db = admin.firestore();
         const uid = request.auth.uid;
         const outcomeActor =
-          await canMarkPrivateReservationOutcome(db, academyId, uid);
+          await canMarkPrivateReservationOutcome(db, academyId, request.auth);
         const reservationRef = db
             .collection("privateLessonReservations")
             .doc(reservationId);
@@ -6620,6 +6681,8 @@ exports.reversePrivateReservationOutcome = onCall(
             deductionApplied: false,
             outcomeReversedAt: now,
             outcomeReversedByUid: uid,
+            outcomeReversedByRole: outcomeActor.actorRole,
+            outcomeReversedByName: outcomeActor.actorName,
             outcomeReversalReason: reason,
             previousOutcomeStatus,
             reversalAttemptNumber,
@@ -6642,6 +6705,8 @@ exports.reversePrivateReservationOutcome = onCall(
             memo: `1:1 예약 처리 취소: ${reason}`,
             actorUid: uid,
             actorRole: outcomeActor.actorRole,
+            actorName: outcomeActor.actorName,
+            reason,
             reversalReason: reason,
             createdAt: now,
           }, {merge: false});
