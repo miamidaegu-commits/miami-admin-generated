@@ -12,8 +12,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore'
-import { httpsCallable } from 'firebase/functions'
-import { db, functions as firebaseFunctions } from '../../../../firebase'
+import { db } from '../../../../firebase'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   creditTransactionCreatedAtToMillis,
@@ -141,31 +140,14 @@ export default function useStudentPackageAdminFlow({
     return canViewBillingFields(userProfile)
   }
 
-  function packageBelongsToCurrentTeacher(pkg) {
-    const teacherKey = normalizeText(userProfile?.teacherName || '')
-    if (!teacherKey || !pkg) return false
-    if (String(pkg.academyId || '').trim() !== String(currentAcademyId || '').trim()) {
-      return false
-    }
-    return (
-      normalizeText(pkg.teacher || '') === teacherKey ||
-      normalizeText(pkg.teacherName || '') === teacherKey
-    )
-  }
-
   function canEditStudentPackageCountsForPackage(pkg) {
     if (!pkg?.id) return false
-    if (isAdminPackageEditor()) return true
-    return (
-      userProfile?.role === 'teacher' &&
-      userProfile?.canEditStudentPackageCounts === true &&
-      packageBelongsToCurrentTeacher(pkg)
-    )
+    return isAdminPackageEditor()
   }
 
   function getStudentPackageEditMode(pkg) {
     if (!pkg?.id) return 'none'
-    return isAdminPackageEditor() ? 'admin' : 'teacherCount'
+    return isAdminPackageEditor() ? 'admin' : 'none'
   }
 
   async function openStudentPackageHistoryModal(pkg) {
@@ -335,20 +317,6 @@ export default function useStudentPackageAdminFlow({
       setBusyStudentPackageActionId(pkg.id)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
       const remainingCount = Math.max(0, result.totalCount - usedCount)
-      if (!isAdminEdit) {
-        const updateCounts = httpsCallable(
-          firebaseFunctions,
-          'updateTeacherStudentPackageCounts'
-        )
-        await updateCounts({
-          academyId: scopedAcademyId,
-          packageId: pkg.id,
-          totalCount: result.totalCount,
-        })
-        closeStudentPackageEditModal()
-        return
-      }
-
       const status = getNextStudentPackageStatus(pkg.status, remainingCount)
       const updates = {
         title: result.title,

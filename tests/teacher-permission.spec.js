@@ -488,7 +488,7 @@ test('teacher without count edit permission cannot open student package count ed
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
 });
 
-test('teacher with count edit permission can edit only own teacher package counts', async ({
+test('teacher with count edit permission still cannot edit package counts directly', async ({
   page,
   browserName,
 }) => {
@@ -497,104 +497,14 @@ test('teacher with count edit permission can edit only own teacher package count
 
   await ensureTeacherPackageCountFixture();
   await setTeacherCountEditPermission(true);
-  const dialogMessages = [];
-  const consoleMessages = [];
-  const pageErrors = [];
 
   try {
-    page.on('dialog', async (dialog) => {
-      dialogMessages.push(dialog.message());
-      await dialog.accept();
-    });
-    page.on('console', (message) => {
-      if (['error', 'warning'].includes(message.type())) {
-        consoleMessages.push(`${message.type()}: ${message.text()}`);
-      }
-    });
-    page.on('pageerror', (error) => {
-      pageErrors.push(error.message || String(error));
-    });
-
     await loginAsTeacher(page);
-    await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
-      timeout: 15000,
-    });
-
-    const { studentDetail, packageCard } = await openTeacherCountEditStudentPackage(page);
-    await expect(packageCard).toContainText('총 횟수');
-    await expect(packageCard).toContainText('4');
-    await expect(packageCard).toContainText('사용 횟수');
-    await expect(packageCard).toContainText('1');
-    await expect(packageCard).toContainText('남은 횟수');
-    await expect(packageCard).toContainText('3');
-    await expect(packageCard).not.toContainText(/결제|금액|amountPaid|payment|price|tuition|fee|billing/i);
-    await expect(packageCard).not.toContainText('teacher-hidden billing memo');
-    await expect(studentDetail.getByText('E2E other teacher package count edit')).toHaveCount(0);
-    await expect(packageCard.getByTestId('student-package-history-button')).toHaveCount(0);
-
-    await packageCard.getByTestId('student-package-edit-button').click();
-    const editDialog = page.getByRole('dialog', { name: '수강권 수정' });
-    await expect(editDialog).toBeVisible({ timeout: 15000 });
-    await expect(editDialog.getByTestId('student-package-count-edit-limited-note')).toBeVisible();
-    await expect(editDialog.getByLabel('제목')).toHaveCount(0);
-    await expect(editDialog).not.toContainText(/결제|금액|amountPaid|payment|price|tuition|fee|billing/i);
-    await expect(editDialog).not.toContainText('teacher-hidden billing memo');
-    await editDialog.getByLabel('총 횟수 (totalCount)').fill('5');
-    await expect(editDialog.getByTestId('student-package-edit-save-button')).toBeEnabled();
-    await editDialog.getByTestId('student-package-edit-save-button').click();
-    await expect
-      .poll(async () => {
-        const snap = await getDb()
-          .collection('studentPackages')
-          .doc('e2e-count-edit-own-package')
-          .get();
-        return snap.data()?.totalCount;
-      }, { timeout: 15000 })
-      .toBe(5);
-    await expect(
-      editDialog,
-      [
-        `dialog messages: ${dialogMessages.join(' | ') || '(none)'}`,
-        `console: ${consoleMessages.slice(-10).join(' | ') || '(none)'}`,
-        `page errors: ${pageErrors.slice(-5).join(' | ') || '(none)'}`,
-      ].join('\n')
-    ).toBeHidden({
-      timeout: 15000,
-    });
-
-    await expect
-      .poll(async () => {
-        const snap = await getDb()
-          .collection('studentPackages')
-          .doc('e2e-count-edit-own-package')
-          .get();
-        const data = snap.data() || {};
-        return {
-          totalCount: data.totalCount,
-          usedCount: data.usedCount,
-          remainingCount: data.remainingCount,
-          title: data.title,
-          teacher: data.teacher,
-          amountPaid: data.amountPaid,
-          paymentStatus: data.paymentStatus,
-          paymentMethod: data.paymentMethod,
-          memo: data.memo,
-        };
-      }, { timeout: 15000 })
-      .toEqual({
-        totalCount: 5,
-        usedCount: 1,
-        remainingCount: 4,
-        title: 'E2E teacher package count edit',
-        teacher: 'teacher',
-        amountPaid: 12345,
-        paymentStatus: 'paid',
-        paymentMethod: 'cash',
-        memo: 'teacher-hidden billing memo',
-      });
-
-    await expect(packageCard).toContainText('5', { timeout: 15000 });
-    await expect(packageCard).toContainText('4', { timeout: 15000 });
+    await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '수강권 추가', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '수강권 회수', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '차감취소', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '차감복구', exact: true })).toHaveCount(0);
   } finally {
     await setTeacherCountEditPermission(false);
   }

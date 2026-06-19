@@ -1209,6 +1209,66 @@ test('released fixed private slot behavior is wired server-side', async () => {
   expect(sanitizeSource).not.toContain('fixedStudentName');
 });
 
+test('private admin actions are restricted away from teacher execution paths', async () => {
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const privateSlotsSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+  const calendarSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/CalendarSection.jsx'),
+    'utf8'
+  );
+  const packageFlowSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/hooks/useStudentPackageAdminFlow.js'),
+    'utf8'
+  );
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const rulesSource = fs.readFileSync(path.join(process.cwd(), 'firestore.rules'), 'utf8');
+
+  expect(privateSlotsSource).toContain('if (!isAdmin) return null');
+  expect(privateSlotsSource).toContain('예약 취소 후 공개');
+  expect(privateSlotsSource).toContain('수업불가로 닫기');
+  expect(privateSlotsSource).toContain('학생 고정 배정');
+  expect(calendarSource).toContain('data-testid="calendar-deduction-toggle-button"');
+  expect(dashboardSource).toContain('const canManagePrivateLessonDeductions = isAdmin');
+  expect(dashboardSource).toContain('const canUseStudentPackageCountSection = false');
+  expect(packageFlowSource).toMatch(
+    /function canEditStudentPackageCountsForPackage[\s\S]*return isAdminPackageEditor\(\)/
+  );
+
+  const adminCancelBlock = functionsSource.match(
+    /exports\.adminCancelPrivateLessonReservation[\s\S]*?exports\.updateStudentPrivateCancelAllowance/
+  )?.[0] || '';
+  expect(adminCancelBlock).toContain('requireAcademyAdmin(db, academyId, uid)');
+  expect(adminCancelBlock).toContain('actorRole: actor.actorRole');
+  expect(adminCancelBlock).toContain('actorUid: actor.actorUid');
+  expect(adminCancelBlock).toContain('actorName: actor.actorName');
+  expect(adminCancelBlock).toContain('reason: cancellationReason');
+
+  const fixedCancelBlock = functionsSource.match(
+    /exports\.cancelFixedPrivateLessonOccurrence[\s\S]*?exports\.adminCancelPrivateLessonReservation/
+  )?.[0] || '';
+  expect(fixedCancelBlock).toContain('actorRole === "student"');
+  expect(fixedCancelBlock).toContain('actorRole === "teacher"');
+  expect(fixedCancelBlock).toContain('Fixed private lesson actions require admin permission.');
+  expect(fixedCancelBlock).toContain('actorName');
+  expect(fixedCancelBlock).toContain('reason: effectiveReason');
+
+  const teacherPackageCallableBlock = functionsSource.match(
+    /exports\.updateTeacherStudentPackageCounts[\s\S]*?exports\.reversePrivateReservationOutcome/
+  )?.[0] || '';
+  expect(teacherPackageCallableBlock).toContain('requireAcademyAdmin(db, academyId, uid)');
+  expect(teacherPackageCallableBlock).not.toContain('requireTeacherPackageCountEditor');
+
+  expect(functionsSource).toContain('actorName: outcomeActor.actorName');
+  expect(functionsSource).toContain('reason: outcome');
+  expect(functionsSource).toContain('reason,');
+  expect(rulesSource).toContain('function validTeacherStudentPackageCountUpdate() {\n      return false;');
+  expect(rulesSource).toContain('resource.data.packageType in ["group", "openGroup"]');
+  expect(rulesSource).not.toContain('canManageOwnLessonDeductions(request.resource.data.academyId)) &&');
+});
+
 test('fixed private lesson approval creates and links private packages', async () => {
   const helperSource = fs.readFileSync(
     path.join(process.cwd(), 'src/features/dashboard/privatePackageHelpers.js'),

@@ -2673,17 +2673,14 @@ export default function Dashboard() {
   const teacherGroupClassKey = normalizeText(userProfile?.teacherName || '')
   const canManageOwnGroupClasses =
     !isAdmin && isDashboardTeacherProfile(userProfile) && Boolean(teacherGroupClassKey)
-  const canUseStudentPackageCountSection =
-    canManageOwnGroupClasses && userProfile?.canEditStudentPackageCounts === true
+  const canUseStudentPackageCountSection = false
   const canAddStudent = isAdmin
   const canEditStudent = isAdmin
   const canDeleteStudent = isAdmin
   const canEditLesson = isAdmin
   const canDeleteLesson = isAdmin
   const canManageAttendance = isAdmin
-  const canManagePrivateLessonDeductions =
-    isAdmin ||
-    (canManageOwnGroupClasses && userProfile?.canManageOwnLessonDeductions === true)
+  const canManagePrivateLessonDeductions = isAdmin
   const canCreateLessonDirectly = isAdmin
   const requiresLessonApproval = userProfile?.requiresLessonApproval === true
   const canUseDirectLessonCreation = canCreateLessonDirectly && !requiresLessonApproval
@@ -3767,6 +3764,15 @@ export default function Dashboard() {
   async function addCreditTransaction(payload) {
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const actorName = String(
+        userProfile?.displayName ||
+          userProfile?.name ||
+          userProfile?.teacherName ||
+          userProfile?.email ||
+          user?.email ||
+          user?.uid ||
+          ''
+      ).trim()
       const extraFields = {}
       if (payload.registrationRound != null) {
         extraFields.registrationRound = Number(payload.registrationRound) || null
@@ -3802,6 +3808,8 @@ export default function Dashboard() {
         memo: String(payload.memo ?? ''),
         actorUid: user?.uid || '',
         actorRole: userProfile?.role || '',
+        actorName,
+        reason: String(payload.reason ?? payload.revokeReason ?? payload.memo ?? '').trim(),
         createdAt: serverTimestamp(),
         ...extraFields,
       })
