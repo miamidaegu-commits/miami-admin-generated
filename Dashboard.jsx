@@ -5123,6 +5123,43 @@ export default function Dashboard() {
     }
   }
 
+  async function closePrivateLessonSlot(slot) {
+    if (!isAdmin) {
+      alert('1:1 수업 관리 권한이 없습니다.')
+      return
+    }
+    if (!slot?.id) return
+
+    const label = `${slot.date || ''} ${slot.time || ''} ${slot.teacher || ''}`.trim()
+    if (!window.confirm(`선생님 결석/휴강/수업불가로 닫을까요?\n${label}`)) {
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(slot, scopedAcademyId, '1:1 수업 시간')
+      setBusyPrivateSlotActionId(slot.id)
+      const callable = httpsCallable(firebaseFunctions, 'adminClosePrivateLessonSlot')
+      const payload = {
+        academyId: scopedAcademyId,
+        slotId: slot.id,
+        cancellationReason: 'teacher_unavailable',
+      }
+      const availabilityTemplateId = String(slot.availabilityTemplateId || '').trim()
+      const date = String(slot.date || '').trim()
+      const time = String(slot.time || '').trim()
+      if (availabilityTemplateId) payload.availabilityTemplateId = availabilityTemplateId
+      if (date) payload.date = date
+      if (time) payload.time = time
+      await callable(payload)
+    } catch (error) {
+      console.error('1:1 수업 시간 닫기 실패:', error)
+      alert(`1:1 수업 시간 닫기 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateSlotActionId('')
+    }
+  }
+
   async function cancelPrivateSlotOrReservation(slot, reservation, options = {}) {
     if (!isAdmin) {
       alert('1:1 수업 관리 권한이 없습니다.')
@@ -5156,6 +5193,20 @@ export default function Dashboard() {
           studentId,
           ...(closeAsTeacherUnavailable ? { cancellationReason: 'teacher_unavailable' } : {}),
         })
+      } else if (closeAsTeacherUnavailable) {
+        const callable = httpsCallable(firebaseFunctions, 'adminClosePrivateLessonSlot')
+        const payload = {
+          academyId: scopedAcademyId,
+          slotId: slot.id,
+          cancellationReason: 'teacher_unavailable',
+        }
+        const availabilityTemplateId = String(slot.availabilityTemplateId || '').trim()
+        const date = String(slot.date || '').trim()
+        const time = String(slot.time || '').trim()
+        if (availabilityTemplateId) payload.availabilityTemplateId = availabilityTemplateId
+        if (date) payload.date = date
+        if (time) payload.time = time
+        await callable(payload)
       } else {
         const slotRef = doc(db, 'privateLessonSlots', slot.id)
         await updateDoc(slotRef, {
@@ -5298,9 +5349,10 @@ export default function Dashboard() {
     }
   }
 
-  async function cancelFixedPrivateLessonOccurrence(lesson, cancellationType) {
+  async function cancelFixedPrivateLessonOccurrence(lesson, cancellationType, options = {}) {
     const type = String(cancellationType || '').trim()
     const isSeatRelease = type === 'seat_released'
+    const reason = String(options?.reason || '').trim()
     if (!isAdmin) {
       alert('고정 1:1 수업 취소 권한이 없습니다.')
       return
@@ -5324,6 +5376,7 @@ export default function Dashboard() {
         academyId: scopedAcademyId,
         lessonId: lesson.id,
         cancellationType: isSeatRelease ? 'seat_released' : 'lesson_cancelled',
+        ...(reason ? { reason } : {}),
       })
     } catch (error) {
       console.error('고정 1:1 수업 취소 실패:', error)
@@ -5577,6 +5630,7 @@ export default function Dashboard() {
     privateLessonReservationsLoading,
     busyPrivateSlotActionId,
     cancelPrivateSlotOrReservation,
+    closePrivateLessonSlot,
     privateFixedLessons: lessons,
     busyFixedPrivateLessonCancelId,
     onCancelFixedPrivateLesson: cancelFixedPrivateLessonOccurrence,

@@ -5,6 +5,7 @@ import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActio
 function slotStatusLabel(status) {
   if (status === 'reserved') return '예약 완료'
   if (status === 'cancelled') return '취소된 시간'
+  if (status === 'blocked') return '차단된 시간'
   return '예약 가능한 시간'
 }
 
@@ -19,11 +20,20 @@ function isTeacherUnavailablePrivateSlot(slot) {
     'academy_closed',
     'holiday',
     'class_closure',
-  ].includes(String(slot?.releaseReason || '').trim().toLowerCase())
+  ].includes(
+    String(slot?.releaseReason || slot?.cancellationReason || slot?.cancelledReason || '')
+      .trim()
+      .toLowerCase()
+  )
+}
+
+function isPrivateSlotClosedByTeacher(slot) {
+  const status = String(slot?.status || '').trim().toLowerCase()
+  return ['cancelled', 'canceled', 'blocked'].includes(status) && isTeacherUnavailablePrivateSlot(slot)
 }
 
 function privateSlotStatusLabel(slot) {
-  if (String(slot?.status || '').trim() === 'cancelled' && isTeacherUnavailablePrivateSlot(slot)) {
+  if (isPrivateSlotClosedByTeacher(slot)) {
     return '선생님 수업불가로 닫힘'
   }
   if (
@@ -196,6 +206,124 @@ function toggleStudentId(values, studentId) {
   return [...current, normalizedId]
 }
 
+function formatYmd(date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addDaysToYmd(ymd, days) {
+  const base = new Date(`${ymd}T00:00:00`)
+  if (Number.isNaN(base.getTime())) return ''
+  base.setDate(base.getDate() + days)
+  return formatYmd(base)
+}
+
+function getMondayYmd(value = new Date()) {
+  const date = value instanceof Date ? new Date(value) : new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return formatYmd(new Date())
+  const day = date.getDay()
+  date.setDate(date.getDate() - (day === 0 ? 6 : day - 1))
+  return formatYmd(date)
+}
+
+function getWeekdayShortLabel(ymd) {
+  const date = new Date(`${ymd}T00:00:00`)
+  const labels = ['일', '월', '화', '수', '목', '금', '토']
+  return labels[date.getDay()] || ''
+}
+
+function buildPrivateTemplateSlotId({ templateId, date, time }) {
+  const safeTemplateId = String(templateId || '').trim().replace(/[^A-Za-z0-9_-]/g, '_')
+  const safeDate = String(date || '').trim().replace(/-/g, '')
+  const safeTime = String(time || '').trim().replace(/:/g, '')
+  return `template__${safeTemplateId}__${safeDate}__${safeTime}`
+}
+
+function privateAvailabilityTemplateAppliesToDate(template, date) {
+  const safeDate = String(date || '').trim()
+  if (!isYmd(safeDate)) return false
+  const effectiveStartDate = isYmd(template?.effectiveStartDate)
+    ? String(template.effectiveStartDate)
+    : ''
+  const effectiveEndDate = isYmd(template?.effectiveEndDate) ? String(template.effectiveEndDate) : ''
+  if (effectiveStartDate && safeDate < effectiveStartDate) return false
+  if (effectiveEndDate && safeDate > effectiveEndDate) return false
+  return true
+}
+
+function privateBoardRowMatchesTeacher(row, option) {
+  if (!option) return false
+  const rowKeys = getTemplateTeacherKeys(row)
+  const optionKeys = getTeacherOptionKeys(option)
+  if (rowKeys.length === 0 || optionKeys.length === 0) return false
+  return optionKeys.some((key) => rowKeys.includes(key))
+}
+
+function isActivePrivateReservation(reservation) {
+  return ['active', 'reserved', 'confirmed', 'booked'].includes(
+    String(reservation?.status || '').trim().toLowerCase()
+  )
+}
+
+function isFixedPrivateReservation(reservation, slot) {
+  const sourceType = String(reservation?.sourceType || '').trim()
+  const reservationType = String(reservation?.reservationType || reservation?.type || '').trim()
+  const source = String(reservation?.source || '').trim()
+  const slotType = String(slot?.slotType || '').trim()
+  return (
+    sourceType === 'fixed-private-slot-assignment' ||
+    sourceType === 'weekly-slot-fixed-assignment' ||
+    reservationType === 'fixed' ||
+    reservationType === 'fixed_private' ||
+    source === 'fixed_admin' ||
+    slotType === 'fixed'
+  )
+}
+
+function isCancelledLessonStatus(value) {
+  return ['cancelled', 'canceled'].includes(String(value || '').trim().toLowerCase())
+}
+
+function getPrivateBoardSlotKey({ date, time }) {
+  return `${String(date || '').trim()}__${String(time || '').trim()}`
+}
+
+function getPrivateBoardSlotStatusLabel({ slot, reservation, fixedLesson }) {
+  if (slot && isPrivateSlotClosedByTeacher(slot)) {
+    return '선생님 수업불가로 닫힘'
+  }
+  if (fixedLesson || isFixedPrivateReservation(reservation, slot)) return '고정 예약'
+  if (reservation && isActivePrivateReservation(reservation)) return '학생 직접예약'
+  if (
+    slot?.releasedFromFixed === true ||
+    String(slot?.slotType || '').trim() === 'released_fixed'
+  ) {
+    return '고정 취소로 예약 가능'
+  }
+  return '예약 가능'
+}
+
+function getPrivateBoardSlotDetail({ slot, reservation, fixedLesson }) {
+  if (fixedLesson) {
+    return `학생: ${fixedLesson.studentName || fixedLesson.student || fixedLesson.studentId || '-'}`
+  }
+  if (reservation && isActivePrivateReservation(reservation)) {
+    return `예약: ${reservation.studentName || reservation.studentId || '-'}`
+  }
+  if (
+    slot?.releasedFromFixed === true ||
+    String(slot?.slotType || '').trim() === 'released_fixed'
+  ) {
+    return `원래 학생: ${slot.fixedStudentName || slot.fixedStudentId || '-'}`
+  }
+  if (slot && ['cancelled', 'canceled', 'blocked'].includes(String(slot.status || '').trim())) {
+    return '닫힌 시간'
+  }
+  return '예약 없음'
+}
+
 export default function PrivateLessonSlotsSection({
   canManagePrivateSlots,
   teacherSelectOptions,
@@ -236,6 +364,7 @@ export default function PrivateLessonSlotsSection({
   privateLessonReservationsLoading,
   busyPrivateSlotActionId,
   cancelPrivateSlotOrReservation,
+  closePrivateLessonSlot,
   privateFixedLessons = [],
   busyFixedPrivateLessonCancelId = '',
   onCancelFixedPrivateLesson,
@@ -253,6 +382,8 @@ export default function PrivateLessonSlotsSection({
     openForStudentBooking: false,
   })
   const [editingAvailabilityTemplateErrors, setEditingAvailabilityTemplateErrors] = useState({})
+  const [privateBoardTeacherValue, setPrivateBoardTeacherValue] = useState('')
+  const [privateBoardWeekStart, setPrivateBoardWeekStart] = useState(() => getMondayYmd())
 
   function openAvailabilityTemplateEdit(template) {
     setEditingAvailabilityTemplateId(String(template?.id || ''))
@@ -340,6 +471,143 @@ export default function PrivateLessonSlotsSection({
       )
   }, [privateFixedLessons])
 
+  const selectedPrivateBoardTeacherOption = useMemo(() => {
+    if (teacherSelectOptions.length === 0) return null
+    return (
+      teacherSelectOptions.find((option) => option.value === privateBoardTeacherValue) ||
+      teacherSelectOptions[0]
+    )
+  }, [privateBoardTeacherValue, teacherSelectOptions])
+
+  const privateBoardWeekDays = useMemo(
+    () =>
+      Array.from({ length: 6 }, (_, index) => {
+        const date = addDaysToYmd(privateBoardWeekStart, index)
+        return {
+          date,
+          label: `${date} (${getWeekdayShortLabel(date)})`,
+        }
+      }),
+    [privateBoardWeekStart]
+  )
+
+  const privateBoardRows = useMemo(() => {
+    if (!selectedPrivateBoardTeacherOption) return []
+    const weekDateSet = new Set(privateBoardWeekDays.map((day) => day.date))
+    const rowsByKey = new Map()
+    const activeReservationsBySlotId = new Map()
+
+    ;(Array.isArray(privateLessonReservations) ? privateLessonReservations : []).forEach(
+      (reservation) => {
+        if (!isActivePrivateReservation(reservation)) return
+        const slotId = String(reservation.slotId || '').trim()
+        if (slotId) activeReservationsBySlotId.set(slotId, reservation)
+      }
+    )
+
+    const matchingSlots = (Array.isArray(privateLessonSlots) ? privateLessonSlots : []).filter(
+      (slot) =>
+        weekDateSet.has(String(slot.date || '').trim()) &&
+        privateBoardRowMatchesTeacher(slot, selectedPrivateBoardTeacherOption)
+    )
+    const slotByDateTime = new Map()
+    matchingSlots.forEach((slot) => {
+      const key = getPrivateBoardSlotKey(slot)
+      if (!slotByDateTime.has(key)) slotByDateTime.set(key, slot)
+    })
+
+    ;(Array.isArray(privateAvailabilityTemplates) ? privateAvailabilityTemplates : [])
+      .filter((template) => String(template.status || 'active') === 'active')
+      .filter((template) => privateBoardRowMatchesTeacher(template, selectedPrivateBoardTeacherOption))
+      .forEach((template) => {
+        const weekday = Number(template.weekday)
+        const time = String(template.time || '').trim()
+        if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6 || !time) return
+        const date = privateBoardWeekDays[weekday - 1]?.date || ''
+        if (!date || !privateAvailabilityTemplateAppliesToDate(template, date)) return
+        const key = getPrivateBoardSlotKey({ date, time })
+        const existingSlot = slotByDateTime.get(key) || null
+        const slot =
+          existingSlot ||
+          {
+            id: buildPrivateTemplateSlotId({ templateId: template.id, date, time }),
+            academyId: template.academyId,
+            teacher: template.teacher,
+            teacherName: template.teacherName,
+            teacherKey: template.teacherKey,
+            teacherUid: template.teacherUid || template.teacherUID || template.teacherId,
+            teacherEmail: template.teacherEmail,
+            date,
+            time,
+            durationMinutes: Number(template.durationMinutes || 60),
+            status: 'open',
+            slotType: 'template',
+            availabilityTemplateId: template.id,
+            isGeneratedFromTemplate: true,
+            openForStudentBooking: template.openForStudentBooking === true,
+            useForFixedAssignment: template.useForFixedAssignment !== false,
+          }
+        rowsByKey.set(key, {
+          key,
+          date,
+          time,
+          slot,
+          template,
+          reservation: activeReservationsBySlotId.get(slot.id) || null,
+          fixedLesson: null,
+          source: existingSlot ? 'slot' : 'template',
+        })
+      })
+
+    matchingSlots.forEach((slot) => {
+      const key = getPrivateBoardSlotKey(slot)
+      if (rowsByKey.has(key)) return
+      rowsByKey.set(key, {
+        key,
+        date: String(slot.date || '').trim(),
+        time: String(slot.time || '').trim(),
+        slot,
+        template: null,
+        reservation: activeReservationsBySlotId.get(slot.id) || null,
+        fixedLesson: null,
+        source: 'slot',
+      })
+    })
+
+    ;(Array.isArray(privateFixedLessons) ? privateFixedLessons : [])
+      .filter((lesson) => isFixedPrivateLesson(lesson))
+      .filter((lesson) => !isCancelledLessonStatus(lesson.status))
+      .filter((lesson) => weekDateSet.has(String(lesson.date || '').trim()))
+      .filter((lesson) => privateBoardRowMatchesTeacher(lesson, selectedPrivateBoardTeacherOption))
+      .forEach((lesson) => {
+        const key = getPrivateBoardSlotKey(lesson)
+        const existing = rowsByKey.get(key) || {}
+        if (existing.reservation && !isFixedPrivateReservation(existing.reservation, existing.slot)) return
+        if (existing.slot && isPrivateSlotClosedByTeacher(existing.slot)) return
+        rowsByKey.set(key, {
+          ...existing,
+          key,
+          date: String(lesson.date || '').trim(),
+          time: String(lesson.time || '').trim(),
+          slot: existing.slot || null,
+          reservation: existing.reservation || null,
+          fixedLesson: lesson,
+          source: 'fixedLesson',
+        })
+      })
+
+    return Array.from(rowsByKey.values()).sort((a, b) =>
+      `${a.date || ''} ${a.time || ''}`.localeCompare(`${b.date || ''} ${b.time || ''}`, 'ko')
+    )
+  }, [
+    privateAvailabilityTemplates,
+    privateBoardWeekDays,
+    privateFixedLessons,
+    privateLessonReservations,
+    privateLessonSlots,
+    selectedPrivateBoardTeacherOption,
+  ])
+
   if (!isAdmin) return null
 
   return (
@@ -361,6 +629,231 @@ export default function PrivateLessonSlotsSection({
 
       {canManagePrivateSlots ? (
         <>
+          <section
+            data-testid="private-teacher-weekly-board-section"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #3b4152',
+              borderRadius: 10,
+              background: '#141b28',
+              marginBottom: 20,
+            }}
+          >
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16 }}>선생님별 1:1 시간표/예약판</h3>
+              <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+                학생 예약 화면처럼 선생님별 주간 슬롯을 보고, 예약된 수업과 빈 주간 슬롯을
+                해당 날짜만 수업불가로 닫습니다.
+              </p>
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(180px, 1fr) minmax(220px, auto)',
+                gap: 12,
+                alignItems: 'end',
+              }}
+            >
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                선생님
+                <select
+                  value={selectedPrivateBoardTeacherOption?.value || ''}
+                  data-testid="private-teacher-weekly-board-teacher-select"
+                  onChange={(event) => setPrivateBoardTeacherValue(event.target.value)}
+                >
+                  {teacherSelectOptions.length === 0 ? (
+                    <option value="">선생님 없음</option>
+                  ) : null}
+                  {teacherSelectOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  data-testid="private-teacher-weekly-board-prev-week-button"
+                  onClick={() => setPrivateBoardWeekStart((prev) => addDaysToYmd(prev, -7))}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                  }}
+                >
+                  이전 주
+                </button>
+                <button
+                  type="button"
+                  data-testid="private-teacher-weekly-board-this-week-button"
+                  onClick={() => setPrivateBoardWeekStart(getMondayYmd())}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                  }}
+                >
+                  이번 주
+                </button>
+                <button
+                  type="button"
+                  data-testid="private-teacher-weekly-board-next-week-button"
+                  onClick={() => setPrivateBoardWeekStart((prev) => addDaysToYmd(prev, 7))}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                  }}
+                >
+                  다음 주
+                </button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', opacity: 0.72, fontSize: 12 }}>
+              {privateBoardWeekDays.map((day) => (
+                <span key={day.date}>{day.label}</span>
+              ))}
+            </div>
+            {privateLessonSlotsLoading || privateLessonReservationsLoading || privateAvailabilityTemplatesLoading ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>예약판을 불러오는 중...</p>
+            ) : !selectedPrivateBoardTeacherOption ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>선생님을 먼저 등록해 주세요.</p>
+            ) : privateBoardRows.length === 0 ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>해당 주에 표시할 1:1 시간이 없습니다.</p>
+            ) : (
+              <div className="activity-table">
+                <div
+                  className="table-head"
+                  style={{ gridTemplateColumns: '0.85fr 0.55fr 0.8fr 1fr 1fr minmax(150px, auto)' }}
+                >
+                  <span>날짜</span>
+                  <span>시간</span>
+                  <span>상태</span>
+                  <span>내용</span>
+                  <span>출처</span>
+                  <span>작업</span>
+                </div>
+                {privateBoardRows.map((row) => {
+                  const statusLabel = getPrivateBoardSlotStatusLabel(row)
+                  const isClosed = statusLabel === '선생님 수업불가로 닫힘'
+                  const busy =
+                    (row.slot?.id && busyPrivateSlotActionId === row.slot.id) ||
+                    (row.fixedLesson?.id && busyFixedPrivateLessonCancelId === row.fixedLesson.id)
+                  const sourceLabel =
+                    row.source === 'fixedLesson'
+                      ? '고정 수업'
+                      : row.source === 'template'
+                        ? '주간 시간표'
+                        : row.slot?.isGeneratedFromTemplate
+                          ? '주간 시간표'
+                          : '날짜별 슬롯'
+                  return (
+                    <div
+                      key={row.key}
+                      className="table-row"
+                      data-testid="private-teacher-weekly-board-slot-row"
+                      data-slot-id={row.slot?.id || ''}
+                      data-lesson-id={row.fixedLesson?.id || ''}
+                      data-date={row.date || ''}
+                      data-time={row.time || ''}
+                      style={{ gridTemplateColumns: '0.85fr 0.55fr 0.8fr 1fr 1fr minmax(150px, auto)' }}
+                    >
+                      <span>{row.date || '-'}</span>
+                      <span>{row.time || '-'}</span>
+                      <span data-testid="private-teacher-weekly-board-slot-status">
+                        {statusLabel}
+                      </span>
+                      <span>{getPrivateBoardSlotDetail(row)}</span>
+                      <span>
+                        {sourceLabel}
+                        {row.slot?.openForStudentBooking === true ? (
+                          <span style={{ display: 'block', marginTop: 4, opacity: 0.7, fontSize: 12 }}>
+                            학생 직접 예약 허용
+                          </span>
+                        ) : null}
+                      </span>
+                      <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {isClosed ? (
+                          <span style={{ opacity: 0.65, fontSize: 12 }}>닫힘</span>
+                        ) : (
+                          <>
+                            {row.reservation || row.fixedLesson ? (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                data-testid="private-teacher-weekly-board-release-button"
+                                onClick={() => {
+                                  if (row.fixedLesson) {
+                                    onCancelFixedPrivateLesson?.(row.fixedLesson, 'seat_released')
+                                    return
+                                  }
+                                  cancelPrivateSlotOrReservation(row.slot, row.reservation)
+                                }}
+                                style={{
+                                  padding: '6px 10px',
+                                  borderRadius: 8,
+                                  border: '1px solid #553333',
+                                  background: '#4a2a2a',
+                                  color: 'white',
+                                  cursor: busy ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                {busy ? '처리 중...' : '예약 취소 후 공개'}
+                              </button>
+                            ) : null}
+                            <button
+                              type="button"
+                              disabled={busy}
+                              data-testid="private-teacher-weekly-board-close-button"
+                              onClick={() => {
+                                if (row.reservation) {
+                                  cancelPrivateSlotOrReservation(row.slot, row.reservation, {
+                                    closeAsTeacherUnavailable: true,
+                                  })
+                                  return
+                                }
+                                if (row.fixedLesson) {
+                                  onCancelFixedPrivateLesson?.(row.fixedLesson, 'lesson_cancelled', {
+                                    reason: 'teacher_unavailable',
+                                  })
+                                  return
+                                }
+                                closePrivateLessonSlot?.(row.slot)
+                              }}
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #6b4d2a',
+                                background: '#4a351f',
+                                color: 'white',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {busy ? '처리 중...' : '수업불가로 닫기'}
+                            </button>
+                          </>
+                        )}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <p style={{ margin: 0, opacity: 0.65, fontSize: 12 }}>
+              “예약 취소 후 공개”는 다른 학생에게 열고, “수업불가로 닫기”는 누구에게도 열지
+              않습니다. 수업불가 해제는 별도 TODO로 남깁니다.
+            </p>
+          </section>
+
           <section
             data-testid="private-weekly-slot-bulk-section"
             style={{
@@ -1778,6 +2271,7 @@ export default function PrivateLessonSlotsSection({
             const activeReservation =
               slotReservations.find((reservation) => reservation.status === 'active') || null
             const busy = busyPrivateSlotActionId === slot.id
+            const closedByTeacher = isPrivateSlotClosedByTeacher(slot)
             const eligibleStudentIds = normalizeEligibleStudentIds(slot.eligibleStudentIds)
             const eligibleStudentLabels = eligibleStudentIds.map((studentId) => {
               const student = privateStudentOptions.find((option) => option.id === studentId)
@@ -1842,7 +2336,7 @@ export default function PrivateLessonSlotsSection({
                       대상 수정
                     </button>
                   ) : null}
-                  {slot.status !== 'cancelled' ? (
+                  {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
                     <button
                       type="button"
                       onClick={() => cancelPrivateSlotOrReservation(slot, activeReservation)}
@@ -1860,7 +2354,7 @@ export default function PrivateLessonSlotsSection({
                       {busy ? '처리 중...' : activeReservation ? '예약 취소 후 공개' : '수업 시간 취소'}
                     </button>
                   ) : null}
-                  {activeReservation && slot.status !== 'cancelled' ? (
+                  {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
                     <button
                       type="button"
                       onClick={() =>
