@@ -1368,6 +1368,59 @@ function buildAdminClosedPrivateSlotFromTemplate({
   };
 }
 
+function buildAdminReopenedPrivateSlotUpdates({
+  slot = null,
+  now,
+  uid = "",
+  actorRole = "admin",
+  actorName = "",
+  reason = "teacher_unavailable_reopened",
+}) {
+  const deleteField = admin.firestore.FieldValue.delete();
+  const slotType = normalizeId(slot && slot.slotType).toLowerCase();
+  const updates = {
+    status: "open",
+    reservedStudentId: "",
+    reservationId: "",
+    reservedAt: null,
+    reservedCount: 0,
+    cancelledAt: null,
+    blockedAt: null,
+    updatedAt: now,
+    isBookable: true,
+    reopenedAt: now,
+    reopenedByUid: uid,
+    reopenedByRole: actorRole,
+    reopenedByName: actorName,
+    reopenedReason: reason,
+    reopenMetadata: {
+      actorUid: uid,
+      actorRole,
+      actorName,
+      reason,
+    },
+    cancellationReason: deleteField,
+    cancelledReason: deleteField,
+    cancelledBy: deleteField,
+    cancelledByUid: deleteField,
+    cancelledByRole: deleteField,
+    cancelledByName: deleteField,
+  };
+  if (slotType === "fixed_closed") {
+    updates.slotType = "released_fixed";
+    updates.releasedFromFixed = true;
+    updates.releasedForPrivateBooking = true;
+    updates.releasedAt = now;
+    updates.releasedByUid = uid;
+    updates.releasedByRole = actorRole;
+    updates.releasedByName = actorName;
+    updates.releaseReason = reason;
+  } else {
+    updates.releaseReason = deleteField;
+  }
+  return updates;
+}
+
 function getFixedPrivateLessonStartMillis(lesson) {
   const startAtMillis = getTimestampMillis(lesson && lesson.startAt);
   if (startAtMillis !== null) return startAtMillis;
@@ -6185,6 +6238,102 @@ exports.adminClosePrivateLessonSlot = onCall(
             reservationId: closedReservationId,
             cancelledReservation: Boolean(closedReservation),
             releasedForPrivateBooking: false,
+          };
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.adminReopenPrivateLessonSlot = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const academyId = requireString(data, "academyId");
+        const slotId = requireString(data, "slotId");
+        const reason =
+          normalizeId(data.reason) || "teacher_unavailable_reopened";
+        validateAcademyId(academyId);
+
+        const db = admin.firestore();
+        const uid = request.auth.uid;
+        const adminMembership = await requireAcademyAdmin(db, academyId, uid);
+        const actor = buildAdminActorContext(request.auth, adminMembership);
+        const slotRef = db.collection("privateLessonSlots").doc(slotId);
+
+        return await db.runTransaction(async (transaction) => {
+          const slotSnap = await transaction.get(slotRef);
+          if (!slotSnap.exists) {
+            throw new HttpsError(
+                "not-found",
+                "Private lesson slot not found.",
+            );
+          }
+
+          const slot = slotSnap.data() || {};
+          if (normalizeId(slot.academyId) !== academyId) {
+            throw new HttpsError(
+                "permission-denied",
+                "Private lesson slot academy mismatch.",
+            );
+          }
+
+          const status = normalizeId(slot.status).toLowerCase();
+          const closedReason = normalizeId(
+              slot.releaseReason ||
+              slot.cancellationReason ||
+              slot.cancelledReason,
+          );
+          if (
+            !["blocked", "cancelled", "canceled"].includes(status) ||
+            !isTeacherUnavailablePrivateCancellationReason(closedReason)
+          ) {
+            throw new HttpsError(
+                "failed-precondition",
+                "Only teacher-unavailable closed slots can be reopened.",
+            );
+          }
+
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          transaction.update(slotRef, buildAdminReopenedPrivateSlotUpdates({
+            slot,
+            now,
+            uid,
+            actorRole: actor.actorRole,
+            actorName: actor.actorName,
+            reason,
+          }));
+
+          createPrivateSlotNotification(transaction, db, {
+            academyId,
+            type: "private_slot_reopened",
+            studentId: "",
+            studentName: "",
+            teacher: normalizeId(slot.teacher || slot.teacherKey),
+            teacherName: normalizeId(slot.teacherName || slot.teacher),
+            slotId,
+            reservationId: "",
+            date: normalizeId(slot.date),
+            time: normalizeId(slot.time),
+            source: "admin",
+            actorUid: actor.actorUid,
+            actorRole: actor.actorRole,
+            actorName: actor.actorName,
+            reason,
+            createdAt: now,
+          });
+
+          return {
+            ok: true,
+            academyId,
+            slotId,
+            releasedForPrivateBooking: true,
           };
         });
       } catch (error) {

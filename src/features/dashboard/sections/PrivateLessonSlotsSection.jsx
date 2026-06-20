@@ -295,7 +295,7 @@ function getPrivateBoardSlotStatusLabel({ slot, reservation, fixedLesson }) {
     return '선생님 수업불가로 닫힘'
   }
   if (fixedLesson || isFixedPrivateReservation(reservation, slot)) return '고정 예약'
-  if (reservation && isActivePrivateReservation(reservation)) return '학생 직접예약'
+  if (reservation && isActivePrivateReservation(reservation)) return '학생 예약 있음'
   if (
     slot?.releasedFromFixed === true ||
     String(slot?.slotType || '').trim() === 'released_fixed'
@@ -365,6 +365,7 @@ export default function PrivateLessonSlotsSection({
   busyPrivateSlotActionId,
   cancelPrivateSlotOrReservation,
   closePrivateLessonSlot,
+  reopenPrivateLessonSlot,
   privateFixedLessons = [],
   busyFixedPrivateLessonCancelId = '',
   onCancelFixedPrivateLesson,
@@ -608,7 +609,10 @@ export default function PrivateLessonSlotsSection({
     selectedPrivateBoardTeacherOption,
   ])
 
-  if (!isAdmin) return null
+  const showPrivateBoardActions = canManagePrivateSlots === true
+  const privateBoardGridTemplate = showPrivateBoardActions
+    ? '0.85fr 0.55fr 0.8fr 1fr 1fr minmax(150px, auto)'
+    : '0.85fr 0.55fr 0.8fr 1fr 1fr'
 
   return (
     <section className="activity-section" data-testid="private-slots-section">
@@ -627,8 +631,7 @@ export default function PrivateLessonSlotsSection({
         </h2>
       </div>
 
-      {canManagePrivateSlots ? (
-        <>
+      {isAdmin || selectedPrivateBoardTeacherOption ? (
           <section
             data-testid="private-teacher-weekly-board-section"
             style={{
@@ -642,10 +645,13 @@ export default function PrivateLessonSlotsSection({
             }}
           >
             <div>
-              <h3 style={{ margin: 0, fontSize: 16 }}>선생님별 1:1 시간표/예약판</h3>
+              <h3 style={{ margin: 0, fontSize: 16 }}>
+                {showPrivateBoardActions ? '선생님별 1:1 시간표/예약판' : '내 주간 1:1 시간표'}
+              </h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
-                학생 예약 화면처럼 선생님별 주간 슬롯을 보고, 예약된 수업과 빈 주간 슬롯을
-                해당 날짜만 수업불가로 닫습니다.
+                {showPrivateBoardActions
+                  ? '학생 예약 화면처럼 선생님별 주간 슬롯을 보고, 예약된 수업과 빈 주간 슬롯을 해당 날짜만 수업불가로 닫거나 다시 엽니다.'
+                  : '본인에게 연결된 주간 1:1 시간표와 예약 상태를 읽기 전용으로 확인합니다.'}
               </p>
             </div>
             <div
@@ -662,6 +668,7 @@ export default function PrivateLessonSlotsSection({
                   value={selectedPrivateBoardTeacherOption?.value || ''}
                   data-testid="private-teacher-weekly-board-teacher-select"
                   onChange={(event) => setPrivateBoardTeacherValue(event.target.value)}
+                  disabled={!showPrivateBoardActions}
                 >
                   {teacherSelectOptions.length === 0 ? (
                     <option value="">선생님 없음</option>
@@ -733,14 +740,14 @@ export default function PrivateLessonSlotsSection({
               <div className="activity-table">
                 <div
                   className="table-head"
-                  style={{ gridTemplateColumns: '0.85fr 0.55fr 0.8fr 1fr 1fr minmax(150px, auto)' }}
+                  style={{ gridTemplateColumns: privateBoardGridTemplate }}
                 >
                   <span>날짜</span>
                   <span>시간</span>
                   <span>상태</span>
                   <span>내용</span>
                   <span>출처</span>
-                  <span>작업</span>
+                  {showPrivateBoardActions ? <span>작업</span> : null}
                 </div>
                 {privateBoardRows.map((row) => {
                   const statusLabel = getPrivateBoardSlotStatusLabel(row)
@@ -765,7 +772,7 @@ export default function PrivateLessonSlotsSection({
                       data-lesson-id={row.fixedLesson?.id || ''}
                       data-date={row.date || ''}
                       data-time={row.time || ''}
-                      style={{ gridTemplateColumns: '0.85fr 0.55fr 0.8fr 1fr 1fr minmax(150px, auto)' }}
+                      style={{ gridTemplateColumns: privateBoardGridTemplate }}
                     >
                       <span>{row.date || '-'}</span>
                       <span>{row.time || '-'}</span>
@@ -781,79 +788,100 @@ export default function PrivateLessonSlotsSection({
                           </span>
                         ) : null}
                       </span>
-                      <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        {isClosed ? (
-                          <span style={{ opacity: 0.65, fontSize: 12 }}>닫힘</span>
-                        ) : (
-                          <>
-                            {row.reservation || row.fixedLesson ? (
-                              <button
-                                type="button"
-                                disabled={busy}
-                                data-testid="private-teacher-weekly-board-release-button"
-                                onClick={() => {
-                                  if (row.fixedLesson) {
-                                    onCancelFixedPrivateLesson?.(row.fixedLesson, 'seat_released')
-                                    return
-                                  }
-                                  cancelPrivateSlotOrReservation(row.slot, row.reservation)
-                                }}
-                                style={{
-                                  padding: '6px 10px',
-                                  borderRadius: 8,
-                                  border: '1px solid #553333',
-                                  background: '#4a2a2a',
-                                  color: 'white',
-                                  cursor: busy ? 'not-allowed' : 'pointer',
-                                }}
-                              >
-                                {busy ? '처리 중...' : '예약 취소 후 공개'}
-                              </button>
-                            ) : null}
+                      {showPrivateBoardActions ? (
+                        <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {isClosed ? (
                             <button
                               type="button"
                               disabled={busy}
-                              data-testid="private-teacher-weekly-board-close-button"
-                              onClick={() => {
-                                if (row.reservation) {
-                                  cancelPrivateSlotOrReservation(row.slot, row.reservation, {
-                                    closeAsTeacherUnavailable: true,
-                                  })
-                                  return
-                                }
-                                if (row.fixedLesson) {
-                                  onCancelFixedPrivateLesson?.(row.fixedLesson, 'lesson_cancelled', {
-                                    reason: 'teacher_unavailable',
-                                  })
-                                  return
-                                }
-                                closePrivateLessonSlot?.(row.slot)
-                              }}
+                              data-testid="private-teacher-weekly-board-reopen-button"
+                              onClick={() => reopenPrivateLessonSlot?.(row.slot)}
                               style={{
                                 padding: '6px 10px',
                                 borderRadius: 8,
-                                border: '1px solid #6b4d2a',
-                                background: '#4a351f',
+                                border: '1px solid #456034',
+                                background: '#2d4d2d',
                                 color: 'white',
                                 cursor: busy ? 'not-allowed' : 'pointer',
                               }}
                             >
-                              {busy ? '처리 중...' : '수업불가로 닫기'}
+                              {busy ? '처리 중...' : '수업불가 해제'}
                             </button>
-                          </>
-                        )}
-                      </span>
+                          ) : (
+                            <>
+                              {row.reservation || row.fixedLesson ? (
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  data-testid="private-teacher-weekly-board-release-button"
+                                  onClick={() => {
+                                    if (row.fixedLesson) {
+                                      onCancelFixedPrivateLesson?.(row.fixedLesson, 'seat_released')
+                                      return
+                                    }
+                                    cancelPrivateSlotOrReservation(row.slot, row.reservation)
+                                  }}
+                                  style={{
+                                    padding: '6px 10px',
+                                    borderRadius: 8,
+                                    border: '1px solid #553333',
+                                    background: '#4a2a2a',
+                                    color: 'white',
+                                    cursor: busy ? 'not-allowed' : 'pointer',
+                                  }}
+                                >
+                                  {busy ? '처리 중...' : '예약 취소 후 공개'}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                disabled={busy}
+                                data-testid="private-teacher-weekly-board-close-button"
+                                onClick={() => {
+                                  if (row.reservation) {
+                                    cancelPrivateSlotOrReservation(row.slot, row.reservation, {
+                                      closeAsTeacherUnavailable: true,
+                                    })
+                                    return
+                                  }
+                                  if (row.fixedLesson) {
+                                    onCancelFixedPrivateLesson?.(row.fixedLesson, 'lesson_cancelled', {
+                                      reason: 'teacher_unavailable',
+                                    })
+                                    return
+                                  }
+                                  closePrivateLessonSlot?.(row.slot)
+                                }}
+                                style={{
+                                  padding: '6px 10px',
+                                  borderRadius: 8,
+                                  border: '1px solid #6b4d2a',
+                                  background: '#4a351f',
+                                  color: 'white',
+                                  cursor: busy ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                {busy ? '처리 중...' : '수업불가로 닫기'}
+                              </button>
+                            </>
+                          )}
+                        </span>
+                      ) : null}
                     </div>
                   )
                 })}
               </div>
             )}
             <p style={{ margin: 0, opacity: 0.65, fontSize: 12 }}>
-              “예약 취소 후 공개”는 다른 학생에게 열고, “수업불가로 닫기”는 누구에게도 열지
-              않습니다. 수업불가 해제는 별도 TODO로 남깁니다.
+              {showPrivateBoardActions
+                ? '“예약 취소 후 공개”는 다른 학생에게 열고, “수업불가로 닫기”는 누구에게도 열지 않습니다. “수업불가 해제”는 해당 날짜/시간만 다시 예약 가능하게 엽니다.'
+                : '이 화면은 읽기 전용입니다. 수업불가 닫기/해제와 예약 조작은 관리자만 할 수 있습니다.'}
             </p>
           </section>
+      ) : null}
 
+      {canManagePrivateSlots ? (
+        <>
           <section
             data-testid="private-weekly-slot-bulk-section"
             style={{
@@ -2249,12 +2277,13 @@ export default function PrivateLessonSlotsSection({
         </>
       ) : null}
 
-      {privateLessonSlotsLoading || privateLessonReservationsLoading ? (
-        <p>불러오는 중...</p>
-      ) : privateLessonSlots.length === 0 ? (
-        <p style={{ opacity: 0.8 }}>등록된 1:1 수업 시간이 없습니다.</p>
-      ) : (
-        <div className="activity-table">
+      {isAdmin ? (
+        privateLessonSlotsLoading || privateLessonReservationsLoading ? (
+          <p>불러오는 중...</p>
+        ) : privateLessonSlots.length === 0 ? (
+          <p style={{ opacity: 0.8 }}>등록된 1:1 수업 시간이 없습니다.</p>
+        ) : (
+          <div className="activity-table">
           <div
             className="table-head"
             style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
@@ -2334,6 +2363,24 @@ export default function PrivateLessonSlotsSection({
                       }}
                     >
                       대상 수정
+                    </button>
+                  ) : null}
+                  {closedByTeacher ? (
+                    <button
+                      type="button"
+                      onClick={() => reopenPrivateLessonSlot?.(slot)}
+                      disabled={busy}
+                      data-testid="private-slot-reopen-unavailable-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #456034',
+                        background: '#2d4d2d',
+                        color: 'white',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {busy ? '처리 중...' : '수업불가 해제'}
                     </button>
                   ) : null}
                   {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
@@ -2468,8 +2515,9 @@ export default function PrivateLessonSlotsSection({
               </div>
             )
           })}
-        </div>
-      )}
+          </div>
+        )
+      ) : null}
       {fixedPrivateLessonAction ? (
         <FixedPrivateLessonActionModal
           lesson={fixedPrivateLessonAction}
