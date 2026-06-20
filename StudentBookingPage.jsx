@@ -86,6 +86,18 @@ const PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE = PRIVATE_SLOT_BOOKING_OVERRIDE_ENA
 const STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY = 'studentBookingPreferredViewMode'
 const STUDENT_BOOKING_MOBILE_MEDIA_QUERY = '(max-width: 720px)'
 const STUDENT_BOOKING_VIEW_MODE_OPTIONS = new Set(['auto', 'desktop', 'mobile'])
+const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM =
+  'calc(48px + env(safe-area-inset-bottom, 0px))'
+const STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE = {
+  maxWidth: '100vw',
+  overflowX: 'hidden',
+  boxSizing: 'border-box',
+}
+const STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE = {
+  maxWidth: '100%',
+  overflowX: 'hidden',
+  boxSizing: 'border-box',
+}
 
 function getStoredStudentBookingViewMode() {
   if (typeof window === 'undefined') return 'auto'
@@ -419,6 +431,7 @@ function getPrivateSlotCardStyle(status, isMobile = false) {
     borderRadius: isMobile ? 14 : 8,
     padding: isMobile ? 14 : 12,
     background: tone.background,
+    ...(isMobile ? STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE : {}),
   }
 }
 
@@ -443,16 +456,17 @@ function getPrivateSlotViewModeButtonStyle(isSelected, isMobile = false) {
   return {
     flex: isMobile ? 1 : undefined,
     justifyContent: 'center',
-    padding: isMobile ? '12px 10px' : '8px 12px',
-    minHeight: isMobile ? 46 : undefined,
+    padding: isMobile ? '9px 8px' : '8px 12px',
+    minHeight: isMobile ? 38 : undefined,
     borderRadius: isMobile ? 12 : 7,
     border: `1px solid ${isSelected ? '#6ea8ff' : 'transparent'}`,
     background: isSelected ? '#263f67' : 'transparent',
     color: isSelected ? 'white' : '#b6c0d0',
     cursor: 'pointer',
-    fontSize: isMobile ? 14 : 13,
+    fontSize: isMobile ? 12 : 13,
     fontWeight: isSelected ? 800 : 600,
     boxShadow: isSelected ? '0 0 0 1px rgba(110, 168, 255, 0.18) inset' : 'none',
+    minWidth: 0,
   }
 }
 
@@ -591,6 +605,7 @@ export default function StudentBookingPage() {
     computeStudentPrivateCancelAllowance({})
   )
   const [privateCancelAllowanceLoaded, setPrivateCancelAllowanceLoaded] = useState(false)
+  const [privateSlotReserveConfirm, setPrivateSlotReserveConfirm] = useState(null)
   const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
   const groupAccessRefreshTimerRef = useRef(null)
   const groupLessonFetchRequestRef = useRef(0)
@@ -2070,7 +2085,7 @@ export default function StudentBookingPage() {
     }
   }
 
-  async function reservePrivateSlot(slot) {
+  async function reservePrivateSlot(slot, options = {}) {
     if (!PRIVATE_SLOT_BOOKING_ENABLED) {
       alert('1:1 예약 시간은 현재 관리자만 변경할 수 있습니다.')
       return
@@ -2115,7 +2130,12 @@ export default function StudentBookingPage() {
       alert('이미 예약됨')
       return
     }
-    if (!window.confirm(buildPrivateSlotReserveConfirmMessage(privateCancelAllowance))) {
+    if (!options.confirmed) {
+      setPrivateSlotReserveConfirm({
+        slot,
+        reservationId,
+        message: buildPrivateSlotReserveConfirmMessage(privateCancelAllowance),
+      })
       return
     }
 
@@ -2151,6 +2171,18 @@ export default function StudentBookingPage() {
     } finally {
       setBusyPrivateReservationId('')
     }
+  }
+
+  function closePrivateSlotReserveConfirm() {
+    if (busyPrivateReservationId) return
+    setPrivateSlotReserveConfirm(null)
+  }
+
+  async function confirmPrivateSlotReserve() {
+    const slot = privateSlotReserveConfirm?.slot
+    if (!slot) return
+    setPrivateSlotReserveConfirm(null)
+    await reservePrivateSlot(slot, { confirmed: true })
   }
 
   async function cancelReservation(reservation) {
@@ -2497,6 +2529,15 @@ export default function StudentBookingPage() {
     { value: 'desktop', label: 'PC 화면으로 보기' },
     { value: 'mobile', label: '모바일 화면으로 보기' },
   ]
+  const studentBookingMobileOverflowGuardStyle = isMobileStudentBooking
+    ? STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE
+    : {}
+  const studentBookingMobileContentGuardStyle = isMobileStudentBooking
+    ? STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE
+    : {}
+  const privateSlotReserveConfirmMessageLines = String(
+    privateSlotReserveConfirm?.message || ''
+  ).split('\n')
 
   return (
     <div
@@ -2505,11 +2546,21 @@ export default function StudentBookingPage() {
         background:
           'linear-gradient(180deg, rgba(8,18,33,1) 0%, rgba(16,28,45,1) 45%, rgba(22,27,37,1) 100%)',
         color: 'white',
-        padding: isMobileStudentBooking ? '18px 12px 48px' : '32px 20px 60px',
+        padding: isMobileStudentBooking
+          ? `18px 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
+          : '32px 20px 60px',
         boxSizing: 'border-box',
+        ...studentBookingMobileOverflowGuardStyle,
       }}
     >
-      <div style={{ maxWidth: isMobileStudentBooking ? 640 : 960, margin: '0 auto' }}>
+      <div
+        style={{
+          ...studentBookingMobileOverflowGuardStyle,
+          width: '100%',
+          maxWidth: isMobileStudentBooking ? 'min(640px, 100vw)' : 960,
+          margin: '0 auto',
+        }}
+      >
         <header
           style={{
             display: 'flex',
@@ -2545,6 +2596,7 @@ export default function StudentBookingPage() {
               gap: 10,
               justifyItems: isMobileStudentBooking ? 'stretch' : 'end',
               width: isMobileStudentBooking ? '100%' : 'auto',
+              ...studentBookingMobileOverflowGuardStyle,
             }}
           >
             <div
@@ -2557,6 +2609,8 @@ export default function StudentBookingPage() {
                 borderRadius: 999,
                 background: '#101827',
                 flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
+                width: isMobileStudentBooking ? '100%' : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               {studentBookingViewModeButtons.map((option) => {
@@ -2573,12 +2627,13 @@ export default function StudentBookingPage() {
                       borderRadius: 999,
                       background: selected ? '#244166' : 'transparent',
                       color: selected ? 'white' : '#b6c0d0',
-                      padding: isMobileStudentBooking ? '9px 10px' : '7px 10px',
-                      minHeight: isMobileStudentBooking ? 40 : undefined,
+                      padding: isMobileStudentBooking ? '7px 8px' : '7px 10px',
+                      minHeight: isMobileStudentBooking ? 34 : undefined,
                       cursor: 'pointer',
-                      fontSize: isMobileStudentBooking ? 13 : 12,
+                      fontSize: 12,
                       fontWeight: selected ? 800 : 700,
-                      flex: isMobileStudentBooking ? '1 1 120px' : '0 0 auto',
+                      flex: isMobileStudentBooking ? '1 1 0' : '0 0 auto',
+                      minWidth: 0,
                     }}
                   >
                     {option.label}
@@ -2612,6 +2667,7 @@ export default function StudentBookingPage() {
               padding: '8px 0',
               background: 'rgba(8,18,33,0.92)',
               backdropFilter: 'blur(10px)',
+              ...studentBookingMobileOverflowGuardStyle,
             }}
           >
             {studentBookingQuickNavItems.map((item) => (
@@ -2628,6 +2684,7 @@ export default function StudentBookingPage() {
                   fontSize: 12,
                   fontWeight: 800,
                   cursor: 'pointer',
+                  minWidth: 0,
                 }}
               >
                 {item.label}
@@ -2649,7 +2706,13 @@ export default function StudentBookingPage() {
             <p style={{ marginBottom: 0, opacity: 0.78 }}>{pageBlockedReason}</p>
           </div>
 	        ) : (
-	          <div style={{ display: 'grid', gap: isMobileStudentBooking ? 16 : 20 }}>
+	          <div
+              style={{
+                display: 'grid',
+                gap: isMobileStudentBooking ? 16 : 20,
+                ...studentBookingMobileOverflowGuardStyle,
+              }}
+            >
 	            <section
                   id="student-ticket-summary-section"
 	              data-testid="student-ticket-summary-section"
@@ -2659,6 +2722,7 @@ export default function StudentBookingPage() {
 	                background: '#182235',
 	                padding: isMobileStudentBooking ? 16 : 18,
                     order: isMobileStudentBooking ? 1 : undefined,
+                    ...studentBookingMobileOverflowGuardStyle,
 	              }}
 	            >
 	              <h2 style={{ margin: '0 0 8px 0', fontSize: '1.1rem' }}>내 수강권</h2>
@@ -2761,14 +2825,24 @@ export default function StudentBookingPage() {
 	                </div>
 	              )}
 	            </section>
-	            <div style={{ order: isMobileStudentBooking ? 8 : undefined }}>
+	            <div
+                style={{
+                  order: isMobileStudentBooking ? 8 : undefined,
+                  ...studentBookingMobileOverflowGuardStyle,
+                }}
+              >
 	              <TodaySchedulePanel
 	                items={todayScheduleItems}
 	                loading={todayScheduleLoading}
 	                showStudent={false}
 	              />
 	            </div>
-            <div style={{ order: isMobileStudentBooking ? 9 : undefined }}>
+            <div
+              style={{
+                order: isMobileStudentBooking ? 9 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
+              }}
+            >
               <DailyMaterialStudentPanel
                 material={
                   dailyMaterials.find((material) => material.id === todayDailyMaterialId) ||
@@ -2789,6 +2863,7 @@ export default function StudentBookingPage() {
                 background: '#182235',
                 padding: 18,
                 order: isMobileStudentBooking ? 10 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <p style={{ margin: 0, fontSize: 14, opacity: 0.9 }}>
@@ -2804,6 +2879,7 @@ export default function StudentBookingPage() {
                 background: '#151922',
                 padding: isMobileStudentBooking ? 16 : 20,
                 order: isMobileStudentBooking ? 2 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 예정 수업</h2>
@@ -2832,6 +2908,7 @@ export default function StudentBookingPage() {
                         borderRadius: 14,
                         padding: 16,
                         background: '#1a1f2b',
+                        ...studentBookingMobileContentGuardStyle,
                       }}
                     >
                       <div
@@ -2970,6 +3047,7 @@ export default function StudentBookingPage() {
                 background: '#151922',
                 padding: isMobileStudentBooking ? 16 : 20,
                 order: isMobileStudentBooking ? 6 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>단체반 예약</h2>
@@ -3043,6 +3121,7 @@ export default function StudentBookingPage() {
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -3128,6 +3207,7 @@ export default function StudentBookingPage() {
                 background: '#151922',
                 padding: isMobileStudentBooking ? 16 : 20,
                 order: isMobileStudentBooking ? 3 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>1:1 수업 예약</h2>
@@ -3144,6 +3224,7 @@ export default function StudentBookingPage() {
                   borderRadius: isMobileStudentBooking ? 14 : 8,
                   background: '#111722',
                   width: isMobileStudentBooking ? '100%' : undefined,
+                  ...studentBookingMobileOverflowGuardStyle,
                 }}
               >
                 <button
@@ -3182,6 +3263,7 @@ export default function StudentBookingPage() {
                   color: 'white',
                   fontSize: 14,
                   lineHeight: 1.6,
+                  ...studentBookingMobileContentGuardStyle,
                 }}
               >
                 <div>예약은 수업 시작 7시간 전까지만 가능합니다.</div>
@@ -3203,10 +3285,22 @@ export default function StudentBookingPage() {
               ) : (
                 <div
                   data-testid="student-private-calendar"
-                  style={{ display: 'grid', gap: isMobileStudentBooking ? 14 : 18, marginTop: 16 }}
+                  style={{
+                    display: 'grid',
+                    gap: isMobileStudentBooking ? 14 : 18,
+                    marginTop: 16,
+                    ...studentBookingMobileOverflowGuardStyle,
+                  }}
                 >
                   {privateCalendarWeeks.map((week) => (
-                    <div key={week.weekStart} style={{ display: 'grid', gap: 10 }}>
+                    <div
+                      key={week.weekStart}
+                      style={{
+                        display: 'grid',
+                        gap: 10,
+                        ...studentBookingMobileOverflowGuardStyle,
+                      }}
+                    >
                       <div style={{ opacity: 0.76, fontSize: 13, fontWeight: 700 }}>
                         {week.weekStart} - {week.weekEnd}
                       </div>
@@ -3217,6 +3311,7 @@ export default function StudentBookingPage() {
                             ? '1fr'
                             : 'repeat(auto-fit, minmax(150px, 1fr))',
                           gap: isMobileStudentBooking ? 12 : 10,
+                          ...studentBookingMobileOverflowGuardStyle,
                         }}
                       >
                         {week.days.map((day) => (
@@ -3229,6 +3324,7 @@ export default function StudentBookingPage() {
                               padding: isMobileStudentBooking ? 14 : 10,
                               background: '#171c27',
                               minHeight: isMobileStudentBooking ? 0 : 120,
+                              ...studentBookingMobileContentGuardStyle,
                             }}
                           >
                             <div
@@ -3254,7 +3350,13 @@ export default function StudentBookingPage() {
                                 가능한 시간이 없습니다
                               </div>
                             ) : (
-                              <div style={{ display: 'grid', gap: isMobileStudentBooking ? 10 : 8 }}>
+                              <div
+                                style={{
+                                  display: 'grid',
+                                  gap: isMobileStudentBooking ? 10 : 8,
+                                  ...studentBookingMobileContentGuardStyle,
+                                }}
+                              >
                                 {day.slots.map((slot) => {
                                   const reservation = privateReservationBySlotId.get(slot.id) || null
                                   const reservationId = buildPrivateLessonReservationId({
@@ -3430,6 +3532,7 @@ export default function StudentBookingPage() {
                 background: '#151922',
                 padding: isMobileStudentBooking ? 16 : 20,
                 order: isMobileStudentBooking ? 5 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내가 직접 예약한 1:1</h2>
@@ -3468,6 +3571,7 @@ export default function StudentBookingPage() {
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -3526,6 +3630,7 @@ export default function StudentBookingPage() {
                 background: '#151922',
                 padding: isMobileStudentBooking ? 16 : 20,
                 order: isMobileStudentBooking ? 7 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 단체반 예약</h2>
@@ -3568,6 +3673,7 @@ export default function StudentBookingPage() {
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -3630,6 +3736,7 @@ export default function StudentBookingPage() {
                 background: '#151922',
                 padding: isMobileStudentBooking ? 16 : 20,
                 order: isMobileStudentBooking ? 4 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 수업 내역</h2>
@@ -3669,6 +3776,7 @@ export default function StudentBookingPage() {
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -3721,6 +3829,134 @@ export default function StudentBookingPage() {
             </section>
           </div>
         )}
+        {privateSlotReserveConfirm ? (
+          <div
+            role="presentation"
+            data-testid="student-private-slot-reserve-confirm-backdrop"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 40,
+              display: 'grid',
+              placeItems: 'center',
+              padding: isMobileStudentBooking
+                ? `16px 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
+                : 24,
+              background: 'rgba(3, 8, 18, 0.72)',
+              boxSizing: 'border-box',
+              ...studentBookingMobileOverflowGuardStyle,
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="student-private-slot-reserve-confirm-title"
+              data-testid="student-private-slot-reserve-confirm-modal"
+              style={{
+                ...studentBookingMobileOverflowGuardStyle,
+                width: '100%',
+                maxWidth: isMobileStudentBooking ? 'min(420px, 100vw)' : 420,
+                border: '1px solid #435572',
+                borderRadius: isMobileStudentBooking ? 18 : 14,
+                background: '#162033',
+                boxShadow: '0 18px 56px rgba(0, 0, 0, 0.46)',
+                padding: isMobileStudentBooking ? 18 : 20,
+                color: 'white',
+              }}
+            >
+              <h2
+                id="student-private-slot-reserve-confirm-title"
+                style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.15rem' : '1.2rem' }}
+              >
+                1:1 수업을 예약할까요?
+              </h2>
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  border: '1px solid #2d3b53',
+                  borderRadius: 12,
+                  background: '#101827',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                <div>
+                  {[
+                    privateSlotReserveConfirm.slot?.date,
+                    privateSlotReserveConfirm.slot?.time,
+                    privateSlotReserveConfirm.slot?.teacherName ||
+                      privateSlotReserveConfirm.slot?.teacher,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '예약 시간 확인 중'}
+                </div>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  marginTop: 12,
+                  color: '#d7e3f7',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                }}
+              >
+                {privateSlotReserveConfirmMessageLines.map((line, index) => (
+                  <div key={`${index}-${line}`}>{line || ' '}</div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  marginTop: 18,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={closePrivateSlotReserveConfirm}
+                  data-testid="student-private-slot-reserve-confirm-cancel"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #43516a',
+                    background: '#202a3c',
+                    color: '#dbe8ff',
+                    cursor: 'pointer',
+                    fontWeight: 800,
+                    flex: isMobileStudentBooking ? '1 1 120px' : '0 0 auto',
+                  }}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPrivateSlotReserve}
+                  data-testid="student-private-slot-reserve-confirm-submit"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #5b8d5e',
+                    background: '#244b2d',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontWeight: 900,
+                    flex: isMobileStudentBooking ? '1 1 140px' : '0 0 auto',
+                  }}
+                >
+                  예약하기
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   )

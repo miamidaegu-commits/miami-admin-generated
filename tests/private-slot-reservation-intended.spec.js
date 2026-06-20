@@ -1091,6 +1091,10 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain('student-booking-view-mode-toggle');
   expect(source).toContain('PC 화면으로 보기');
   expect(source).toContain('모바일 화면으로 보기');
+  expect(source).toContain('STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM');
+  expect(source).toContain('env(safe-area-inset-bottom, 0px)');
+  expect(source).toContain("maxWidth: '100vw'");
+  expect(source).toContain("overflowX: 'hidden'");
   expect(source).toContain('student-booking-mobile-tabs');
   expect(source).toContain('student-upcoming-private-lessons-section');
   expect(source).toContain('student-private-booking-section');
@@ -1100,6 +1104,11 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain('student-private-slot-card');
   expect(source).toContain('student-private-busy-slot-card');
   expect(source).toContain('student-private-slot-reserve-button');
+  expect(source).toContain('student-private-slot-reserve-confirm-modal');
+  expect(source).toContain('privateSlotReserveConfirm');
+  expect(source).toContain('confirmPrivateSlotReserve');
+  expect(source).not.toContain('window.confirm(buildPrivateSlotReserveConfirmMessage(privateCancelAllowance))');
+  expect(source).toMatch(/setPrivateSlotReserveConfirm[\s\S]*buildPrivateSlotReserveConfirmMessage/);
   expect(source).toMatch(/bookingStatus === 'available'[\s\S]*slot\.isBookable === true[\s\S]*slot\.status === 'open'/);
 });
 
