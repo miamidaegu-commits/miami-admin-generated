@@ -1084,6 +1084,25 @@ test('student booking page passes private slot e2e override to callable actions'
   );
 });
 
+test('student booking page wires mobile friendly private booking layout without changing locators', async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  expect(source).toContain("STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY = 'studentBookingPreferredViewMode'");
+  expect(source).toContain("STUDENT_BOOKING_MOBILE_MEDIA_QUERY = '(max-width: 720px)'");
+  expect(source).toContain('student-booking-view-mode-toggle');
+  expect(source).toContain('PC 화면으로 보기');
+  expect(source).toContain('모바일 화면으로 보기');
+  expect(source).toContain('student-booking-mobile-tabs');
+  expect(source).toContain('student-upcoming-private-lessons-section');
+  expect(source).toContain('student-private-booking-section');
+  expect(source).toContain('student-lesson-history-section');
+  expect(source).toContain("gridTemplateColumns: isMobileStudentBooking");
+  expect(source).toContain('data-booking-status={bookingStatus}');
+  expect(source).toContain('student-private-slot-card');
+  expect(source).toContain('student-private-busy-slot-card');
+  expect(source).toContain('student-private-slot-reserve-button');
+  expect(source).toMatch(/bookingStatus === 'available'[\s\S]*slot\.isBookable === true[\s\S]*slot\.status === 'open'/);
+});
+
 test('weekly private booking window helper is deterministic for Monday-Saturday', async () => {
   const helper = await import('../src/features/booking/privateBookingWindow.js');
   const window = helper.getBookingWindowForPrivateLesson('2026-06-08', '15:00');
