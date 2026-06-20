@@ -83,6 +83,38 @@ const PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE = PRIVATE_SLOT_BOOKING_OVERRIDE_ENA
   ? { privateSlotBooking: 'enabled' }
   : {}
 
+const STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY = 'studentBookingPreferredViewMode'
+const STUDENT_BOOKING_MOBILE_MEDIA_QUERY = '(max-width: 720px)'
+const STUDENT_BOOKING_VIEW_MODE_OPTIONS = new Set(['auto', 'desktop', 'mobile'])
+
+function getStoredStudentBookingViewMode() {
+  if (typeof window === 'undefined') return 'auto'
+  try {
+    const value = window.localStorage.getItem(STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY)
+    return STUDENT_BOOKING_VIEW_MODE_OPTIONS.has(value) ? value : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+function persistStudentBookingViewMode(value) {
+  if (typeof window === 'undefined') return
+  try {
+    if (value === 'auto') {
+      window.localStorage.removeItem(STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY, value)
+  } catch {
+    // Ignore storage errors so booking remains usable in private browsing modes.
+  }
+}
+
+function getStudentBookingAutoMobileMatch() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  return window.matchMedia(STUDENT_BOOKING_MOBILE_MEDIA_QUERY).matches
+}
+
 function applyCallableCancelAllowance(cancelAllowance) {
   return computeStudentPrivateCancelAllowance({
     studentCancelCount: cancelAllowance?.studentCancelCount,
@@ -380,12 +412,12 @@ function getPrivateSlotStatusTone(status) {
   }
 }
 
-function getPrivateSlotCardStyle(status) {
+function getPrivateSlotCardStyle(status, isMobile = false) {
   const tone = getPrivateSlotStatusTone(status)
   return {
     border: `1px solid ${tone.border}`,
-    borderRadius: 8,
-    padding: 12,
+    borderRadius: isMobile ? 14 : 8,
+    padding: isMobile ? 14 : 12,
     background: tone.background,
   }
 }
@@ -407,15 +439,18 @@ function getPrivateSlotBadgeStyle(status) {
   }
 }
 
-function getPrivateSlotViewModeButtonStyle(isSelected) {
+function getPrivateSlotViewModeButtonStyle(isSelected, isMobile = false) {
   return {
-    padding: '8px 12px',
-    borderRadius: 7,
+    flex: isMobile ? 1 : undefined,
+    justifyContent: 'center',
+    padding: isMobile ? '12px 10px' : '8px 12px',
+    minHeight: isMobile ? 46 : undefined,
+    borderRadius: isMobile ? 12 : 7,
     border: `1px solid ${isSelected ? '#6ea8ff' : 'transparent'}`,
     background: isSelected ? '#263f67' : 'transparent',
     color: isSelected ? 'white' : '#b6c0d0',
     cursor: 'pointer',
-    fontSize: 13,
+    fontSize: isMobile ? 14 : 13,
     fontWeight: isSelected ? 800 : 600,
     boxShadow: isSelected ? '0 0 0 1px rgba(110, 168, 255, 0.18) inset' : 'none',
   }
@@ -561,6 +596,12 @@ export default function StudentBookingPage() {
   const groupLessonFetchRequestRef = useRef(0)
   const reservationsRef = useRef([])
   const locallyReservedGroupLessonIdsRef = useRef([])
+  const [studentBookingViewModePreference, setStudentBookingViewModePreference] = useState(
+    getStoredStudentBookingViewMode
+  )
+  const [studentBookingAutoIsMobile, setStudentBookingAutoIsMobile] = useState(
+    getStudentBookingAutoMobileMatch
+  )
 
   const scopedStudentId = String(studentId || currentMembership?.studentId || '').trim()
   const hasOperationalAcademy = isValidOperationalAcademyId(currentAcademyId)
@@ -590,6 +631,37 @@ export default function StudentBookingPage() {
   useEffect(() => {
     locallyReservedGroupLessonIdsRef.current = locallyReservedGroupLessonIds
   }, [locallyReservedGroupLessonIds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined
+    const mediaQuery = window.matchMedia(STUDENT_BOOKING_MOBILE_MEDIA_QUERY)
+    const updateAutoMode = () => setStudentBookingAutoIsMobile(mediaQuery.matches)
+    updateAutoMode()
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updateAutoMode)
+      return () => mediaQuery.removeEventListener('change', updateAutoMode)
+    }
+    mediaQuery.addListener(updateAutoMode)
+    return () => mediaQuery.removeListener(updateAutoMode)
+  }, [])
+
+  const studentBookingViewMode =
+    studentBookingViewModePreference === 'mobile' ||
+    (studentBookingViewModePreference === 'auto' && studentBookingAutoIsMobile)
+      ? 'mobile'
+      : 'desktop'
+  const isMobileStudentBooking = studentBookingViewMode === 'mobile'
+
+  function handleStudentBookingViewModeChange(value) {
+    const nextValue = STUDENT_BOOKING_VIEW_MODE_OPTIONS.has(value) ? value : 'auto'
+    setStudentBookingViewModePreference(nextValue)
+    persistStudentBookingViewMode(nextValue)
+  }
+
+  function scrollToStudentBookingSection(sectionId) {
+    if (typeof document === 'undefined') return
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   function mergeGroupLessonRows(rows, previousLessons = []) {
     const byId = new Map(
@@ -2303,6 +2375,7 @@ export default function StudentBookingPage() {
           alignItems: 'center',
           flexWrap: 'wrap',
           marginTop: 12,
+          width: isMobileStudentBooking ? '100%' : undefined,
         }}
       >
         {unavailableReason ? (
@@ -2318,14 +2391,16 @@ export default function StudentBookingPage() {
           disabled={disabled}
           data-testid={testId}
           style={{
-            padding: '6px 10px',
+            padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
+            minHeight: isMobileStudentBooking ? 44 : undefined,
             borderRadius: 999,
             border: '1px solid #9a3f48',
             background: '#3a1f24',
             color: '#ffd8dc',
             cursor: disabled ? 'not-allowed' : 'pointer',
-            fontSize: 12,
+            fontSize: isMobileStudentBooking ? 14 : 12,
             fontWeight: 800,
+            flex: isMobileStudentBooking ? '1 1 160px' : undefined,
           }}
         >
           {isBusy ? '취소 중...' : '예약 취소'}
@@ -2411,6 +2486,17 @@ export default function StudentBookingPage() {
     !studentPrivateLessonsResolved ||
     studentPrivateLessonsLoading ||
     linkedPrivateStudentLoading
+  const studentBookingQuickNavItems = [
+    { id: 'student-ticket-summary-section', label: '내 수강권' },
+    { id: 'student-upcoming-private-lessons-section', label: '예정 수업' },
+    { id: 'student-private-booking-section', label: '1:1 예약' },
+    { id: 'student-lesson-history-section', label: '수업 내역' },
+  ]
+  const studentBookingViewModeButtons = [
+    { value: 'auto', label: '자동' },
+    { value: 'desktop', label: 'PC 화면으로 보기' },
+    { value: 'mobile', label: '모바일 화면으로 보기' },
+  ]
 
   return (
     <div
@@ -2419,11 +2505,11 @@ export default function StudentBookingPage() {
         background:
           'linear-gradient(180deg, rgba(8,18,33,1) 0%, rgba(16,28,45,1) 45%, rgba(22,27,37,1) 100%)',
         color: 'white',
-        padding: '32px 20px 60px',
+        padding: isMobileStudentBooking ? '18px 12px 48px' : '32px 20px 60px',
         boxSizing: 'border-box',
       }}
     >
-      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+      <div style={{ maxWidth: isMobileStudentBooking ? 640 : 960, margin: '0 auto' }}>
         <header
           style={{
             display: 'flex',
@@ -2431,11 +2517,13 @@ export default function StudentBookingPage() {
             alignItems: 'flex-start',
             gap: 16,
             flexWrap: 'wrap',
-            marginBottom: 24,
+            marginBottom: isMobileStudentBooking ? 16 : 24,
           }}
         >
           <div>
-            <h1 style={{ margin: 0, fontSize: '2rem' }}>수업 예약</h1>
+            <h1 style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.65rem' : '2rem' }}>
+              수업 예약
+            </h1>
             <p
               data-testid="student-booking-identity-line"
               style={{ margin: '8px 0 0 0', opacity: 0.78 }}
@@ -2451,15 +2539,102 @@ export default function StudentBookingPage() {
               </p>
             ) : null}
           </div>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={handleSignOut}
-            style={{ minWidth: 120 }}
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              justifyItems: isMobileStudentBooking ? 'stretch' : 'end',
+              width: isMobileStudentBooking ? '100%' : 'auto',
+            }}
           >
-            로그아웃
-          </button>
+            <div
+              data-testid="student-booking-view-mode-toggle"
+              style={{
+                display: 'flex',
+                gap: 4,
+                padding: 4,
+                border: '1px solid #30384b',
+                borderRadius: 999,
+                background: '#101827',
+                flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
+              }}
+            >
+              {studentBookingViewModeButtons.map((option) => {
+                const selected = studentBookingViewModePreference === option.value
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    data-testid={`student-booking-view-mode-${option.value}`}
+                    onClick={() => handleStudentBookingViewModeChange(option.value)}
+                    aria-pressed={selected}
+                    style={{
+                      border: `1px solid ${selected ? '#6ea8ff' : 'transparent'}`,
+                      borderRadius: 999,
+                      background: selected ? '#244166' : 'transparent',
+                      color: selected ? 'white' : '#b6c0d0',
+                      padding: isMobileStudentBooking ? '9px 10px' : '7px 10px',
+                      minHeight: isMobileStudentBooking ? 40 : undefined,
+                      cursor: 'pointer',
+                      fontSize: isMobileStudentBooking ? 13 : 12,
+                      fontWeight: selected ? 800 : 700,
+                      flex: isMobileStudentBooking ? '1 1 120px' : '0 0 auto',
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSignOut}
+              style={{ minWidth: 120, minHeight: isMobileStudentBooking ? 44 : undefined }}
+            >
+              로그아웃
+            </button>
+          </div>
         </header>
+
+        {isMobileStudentBooking && !pageBlockedReason ? (
+          <nav
+            aria-label="학생 예약 빠른 이동"
+            data-testid="student-booking-mobile-tabs"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+              gap: 6,
+              marginBottom: 16,
+              position: 'sticky',
+              top: 0,
+              zIndex: 3,
+              padding: '8px 0',
+              background: 'rgba(8,18,33,0.92)',
+              backdropFilter: 'blur(10px)',
+            }}
+          >
+            {studentBookingQuickNavItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => scrollToStudentBookingSection(item.id)}
+                style={{
+                  minHeight: 44,
+                  border: '1px solid #33445f',
+                  borderRadius: 12,
+                  background: '#172235',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        ) : null}
 
         {pageBlockedReason ? (
           <div
@@ -2474,14 +2649,16 @@ export default function StudentBookingPage() {
             <p style={{ marginBottom: 0, opacity: 0.78 }}>{pageBlockedReason}</p>
           </div>
 	        ) : (
-	          <div style={{ display: 'grid', gap: 20 }}>
+	          <div style={{ display: 'grid', gap: isMobileStudentBooking ? 16 : 20 }}>
 	            <section
+                  id="student-ticket-summary-section"
 	              data-testid="student-ticket-summary-section"
 	              style={{
 	                border: '1px solid #3b4a66',
-	                borderRadius: 16,
+	                borderRadius: isMobileStudentBooking ? 20 : 16,
 	                background: '#182235',
-	                padding: 18,
+	                padding: isMobileStudentBooking ? 16 : 18,
+                    order: isMobileStudentBooking ? 1 : undefined,
 	              }}
 	            >
 	              <h2 style={{ margin: '0 0 8px 0', fontSize: '1.1rem' }}>내 수강권</h2>
@@ -2584,29 +2761,34 @@ export default function StudentBookingPage() {
 	                </div>
 	              )}
 	            </section>
-	            <TodaySchedulePanel
-	              items={todayScheduleItems}
-	              loading={todayScheduleLoading}
-	              showStudent={false}
-	            />
-            <DailyMaterialStudentPanel
-              material={
-                dailyMaterials.find((material) => material.id === todayDailyMaterialId) ||
-                dailyMaterials[0] ||
-                null
-              }
-              loading={dailyMaterialsLoading}
-            />
-            {dailyMaterialsError ? (
-              <p style={{ color: '#f4a7a7', margin: 0 }}>{dailyMaterialsError}</p>
-            ) : null}
+	            <div style={{ order: isMobileStudentBooking ? 8 : undefined }}>
+	              <TodaySchedulePanel
+	                items={todayScheduleItems}
+	                loading={todayScheduleLoading}
+	                showStudent={false}
+	              />
+	            </div>
+            <div style={{ order: isMobileStudentBooking ? 9 : undefined }}>
+              <DailyMaterialStudentPanel
+                material={
+                  dailyMaterials.find((material) => material.id === todayDailyMaterialId) ||
+                  dailyMaterials[0] ||
+                  null
+                }
+                loading={dailyMaterialsLoading}
+              />
+              {dailyMaterialsError ? (
+                <p style={{ color: '#f4a7a7', margin: '8px 0 0 0' }}>{dailyMaterialsError}</p>
+              ) : null}
+            </div>
 
 	            <section
 	              style={{
                 border: '1px solid #3b4a66',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 18 : 16,
                 background: '#182235',
                 padding: 18,
+                order: isMobileStudentBooking ? 10 : undefined,
               }}
             >
               <p style={{ margin: 0, fontSize: 14, opacity: 0.9 }}>
@@ -2615,11 +2797,13 @@ export default function StudentBookingPage() {
             </section>
 
             <section
+              id="student-upcoming-private-lessons-section"
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 2 : undefined,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 예정 수업</h2>
@@ -2750,13 +2934,14 @@ export default function StudentBookingPage() {
                                   disabled={disabled}
                                   data-testid="student-fixed-private-lesson-cancel-button"
                                   style={{
-                                    padding: '6px 10px',
+                                    padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
+                                    minHeight: isMobileStudentBooking ? 44 : undefined,
                                     borderRadius: 999,
                                     border: '1px solid #9a3f48',
                                     background: '#3a1f24',
                                     color: '#ffd8dc',
                                     cursor: disabled ? 'not-allowed' : 'pointer',
-                                    fontSize: 12,
+                                    fontSize: isMobileStudentBooking ? 14 : 12,
                                     fontWeight: 800,
                                   }}
                                 >
@@ -2781,9 +2966,10 @@ export default function StudentBookingPage() {
             <section
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 6 : undefined,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>단체반 예약</h2>
@@ -2889,12 +3075,14 @@ export default function StudentBookingPage() {
                                 disabled={Boolean(busyReservationId)}
                                 data-testid="student-booking-cancel-button"
                                 style={{
-                                  padding: '10px 14px',
-                                  borderRadius: 10,
+                                  padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                                  minHeight: isMobileStudentBooking ? 46 : undefined,
+                                  borderRadius: isMobileStudentBooking ? 12 : 10,
                                   border: '1px solid #744242',
                                   background: '#4a2a2a',
                                   color: 'white',
                                   cursor: busyReservationId ? 'not-allowed' : 'pointer',
+                                  fontWeight: isMobileStudentBooking ? 800 : undefined,
                                 }}
                               >
                                 {isBusy ? '취소 중...' : '예약 취소'}
@@ -2906,12 +3094,14 @@ export default function StudentBookingPage() {
                                 disabled={!canReserve}
                                 data-testid="student-booking-reserve-button"
                                 style={{
-                                  padding: '10px 14px',
-                                  borderRadius: 10,
+                                  padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                                  minHeight: isMobileStudentBooking ? 46 : undefined,
+                                  borderRadius: isMobileStudentBooking ? 12 : 10,
                                   border: '1px solid #48643a',
                                   background: '#20351f',
                                   color: 'white',
                                   cursor: canReserve ? 'pointer' : 'not-allowed',
+                                  fontWeight: isMobileStudentBooking ? 800 : undefined,
                                 }}
                               >
                                 {isBusy
@@ -2931,11 +3121,13 @@ export default function StudentBookingPage() {
             </section>
 
             <section
+              id="student-private-booking-section"
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 3 : undefined,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>1:1 수업 예약</h2>
@@ -2947,10 +3139,11 @@ export default function StudentBookingPage() {
                   display: 'inline-flex',
                   gap: 4,
                   marginTop: 12,
-                  padding: 4,
+                  padding: isMobileStudentBooking ? 5 : 4,
                   border: '1px solid #30384b',
-                  borderRadius: 8,
+                  borderRadius: isMobileStudentBooking ? 14 : 8,
                   background: '#111722',
+                  width: isMobileStudentBooking ? '100%' : undefined,
                 }}
               >
                 <button
@@ -2958,7 +3151,10 @@ export default function StudentBookingPage() {
                   data-testid="private-slot-view-mode-all"
                   onClick={() => setPrivateSlotViewMode('all')}
                   aria-pressed={privateSlotViewMode === 'all'}
-                  style={getPrivateSlotViewModeButtonStyle(privateSlotViewMode === 'all')}
+                  style={getPrivateSlotViewModeButtonStyle(
+                    privateSlotViewMode === 'all',
+                    isMobileStudentBooking
+                  )}
                 >
                   전체 시간 보기
                 </button>
@@ -2967,7 +3163,10 @@ export default function StudentBookingPage() {
                   data-testid="private-slot-view-mode-available"
                   onClick={() => setPrivateSlotViewMode('available')}
                   aria-pressed={privateSlotViewMode === 'available'}
-                  style={getPrivateSlotViewModeButtonStyle(privateSlotViewMode === 'available')}
+                  style={getPrivateSlotViewModeButtonStyle(
+                    privateSlotViewMode === 'available',
+                    isMobileStudentBooking
+                  )}
                 >
                   예약 가능한 시간만
                 </button>
@@ -3004,18 +3203,20 @@ export default function StudentBookingPage() {
               ) : (
                 <div
                   data-testid="student-private-calendar"
-                  style={{ display: 'grid', gap: 18, marginTop: 16 }}
+                  style={{ display: 'grid', gap: isMobileStudentBooking ? 14 : 18, marginTop: 16 }}
                 >
                   {privateCalendarWeeks.map((week) => (
                     <div key={week.weekStart} style={{ display: 'grid', gap: 10 }}>
-                      <div style={{ opacity: 0.76, fontSize: 13 }}>
+                      <div style={{ opacity: 0.76, fontSize: 13, fontWeight: 700 }}>
                         {week.weekStart} - {week.weekEnd}
                       </div>
                       <div
                         style={{
                           display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-                          gap: 10,
+                          gridTemplateColumns: isMobileStudentBooking
+                            ? '1fr'
+                            : 'repeat(auto-fit, minmax(150px, 1fr))',
+                          gap: isMobileStudentBooking ? 12 : 10,
                         }}
                       >
                         {week.days.map((day) => (
@@ -3024,21 +3225,36 @@ export default function StudentBookingPage() {
                             data-testid="student-private-calendar-day"
                             style={{
                               border: '1px solid #283042',
-                              borderRadius: 8,
-                              padding: 10,
+                              borderRadius: isMobileStudentBooking ? 16 : 8,
+                              padding: isMobileStudentBooking ? 14 : 10,
                               background: '#171c27',
-                              minHeight: 120,
+                              minHeight: isMobileStudentBooking ? 0 : 120,
                             }}
                           >
-                            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>
-                              {day.date}
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                alignItems: 'center',
+                                fontSize: isMobileStudentBooking ? 15 : 13,
+                                fontWeight: 800,
+                                marginBottom: 10,
+                              }}
+                            >
+                              <span>{day.date}</span>
+                              {isMobileStudentBooking ? (
+                                <span style={{ opacity: 0.68, fontSize: 12 }}>
+                                  {day.slots.length}개 시간
+                                </span>
+                              ) : null}
                             </div>
                             {day.slots.length === 0 ? (
-                              <div style={{ opacity: 0.68, fontSize: 13 }}>
+                              <div style={{ opacity: 0.68, fontSize: isMobileStudentBooking ? 14 : 13 }}>
                                 가능한 시간이 없습니다
                               </div>
                             ) : (
-                              <div style={{ display: 'grid', gap: 8 }}>
+                              <div style={{ display: 'grid', gap: isMobileStudentBooking ? 10 : 8 }}>
                                 {day.slots.map((slot) => {
                                   const reservation = privateReservationBySlotId.get(slot.id) || null
                                   const reservationId = buildPrivateLessonReservationId({
@@ -3091,19 +3307,21 @@ export default function StudentBookingPage() {
                                         data-testid="student-private-busy-slot-card"
                                         data-slot-id={slot.id}
                                         style={getPrivateSlotCardStyle(
-                                          isStudentMaskedBusy ? 'busy' : bookingStatus
+                                          isStudentMaskedBusy ? 'busy' : bookingStatus,
+                                          isMobileStudentBooking
                                         )}
                                       >
-                                        <div style={{ display: 'grid', gap: 6 }}>
+                                        <div style={{ display: 'grid', gap: isMobileStudentBooking ? 8 : 6 }}>
                                           <div
                                             style={{
                                               display: 'flex',
                                               alignItems: 'flex-start',
                                               justifyContent: 'space-between',
                                               gap: 8,
+                                              flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
                                             }}
                                           >
-                                            <strong style={{ fontSize: 14 }}>
+                                            <strong style={{ fontSize: isMobileStudentBooking ? 15 : 14 }}>
                                               {slot.teacherName || slot.teacher || '1:1 수업'}
                                             </strong>
                                             <span style={getPrivateSlotBadgeStyle(
@@ -3112,7 +3330,7 @@ export default function StudentBookingPage() {
                                               {statusLabel}
                                             </span>
                                           </div>
-                                          <div style={{ opacity: 0.74, fontSize: 13 }}>
+                                          <div style={{ opacity: 0.74, fontSize: isMobileStudentBooking ? 14 : 13 }}>
                                             {slot.date || day.date} · {slot.time || '-'} ·{' '}
                                             {Number(slot.durationMinutes || 0) || 60}분
                                           </div>
@@ -3126,25 +3344,27 @@ export default function StudentBookingPage() {
                                       key={slot.id}
                                       data-testid="student-private-slot-card"
                                       data-slot-id={slot.id}
-                                      style={getPrivateSlotCardStyle(bookingStatus)}
+                                      data-booking-status={bookingStatus}
+                                      style={getPrivateSlotCardStyle(bookingStatus, isMobileStudentBooking)}
                                     >
-                                      <div style={{ display: 'grid', gap: 6 }}>
+                                      <div style={{ display: 'grid', gap: isMobileStudentBooking ? 8 : 6 }}>
                                         <div
                                           style={{
                                             display: 'flex',
                                             alignItems: 'flex-start',
                                             justifyContent: 'space-between',
                                             gap: 8,
+                                            flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
                                           }}
                                         >
-                                          <strong style={{ fontSize: 14 }}>
+                                          <strong style={{ fontSize: isMobileStudentBooking ? 15 : 14 }}>
                                             {slot.teacherName || slot.teacher || '1:1 수업'}
                                           </strong>
                                           <span style={getPrivateSlotBadgeStyle(bookingStatus)}>
                                             {statusLabel}
                                           </span>
                                         </div>
-                                        <div style={{ opacity: 0.74, fontSize: 13 }}>
+                                        <div style={{ opacity: 0.74, fontSize: isMobileStudentBooking ? 14 : 13 }}>
                                           {slot.date || day.date} · {slot.time || '-'} ·{' '}
                                           {Number(slot.durationMinutes || 0) || 60}분
                                         </div>
@@ -3170,13 +3390,16 @@ export default function StudentBookingPage() {
                                           disabled={!canReserve}
                                           data-testid="student-private-slot-reserve-button"
                                           style={{
-                                            marginTop: 4,
-                                            padding: '9px 10px',
-                                            borderRadius: 8,
+                                            marginTop: isMobileStudentBooking ? 8 : 4,
+                                            padding: isMobileStudentBooking ? '12px 14px' : '9px 10px',
+                                            minHeight: isMobileStudentBooking ? 46 : undefined,
+                                            borderRadius: isMobileStudentBooking ? 12 : 8,
                                             border: '1px solid #48643a',
                                             background: canReserve ? '#20351f' : '#242b3a',
                                             color: 'white',
                                             cursor: canReserve ? 'pointer' : 'not-allowed',
+                                            fontSize: isMobileStudentBooking ? 14 : undefined,
+                                            fontWeight: isMobileStudentBooking ? 800 : undefined,
                                           }}
                                         >
                                           {isBusy
@@ -3203,9 +3426,10 @@ export default function StudentBookingPage() {
             <section
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 5 : undefined,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내가 직접 예약한 1:1</h2>
@@ -3298,9 +3522,10 @@ export default function StudentBookingPage() {
             <section
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 7 : undefined,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 단체반 예약</h2>
@@ -3376,12 +3601,14 @@ export default function StudentBookingPage() {
                               disabled={Boolean(busyReservationId)}
                               data-testid="student-booking-reservation-cancel-button"
                               style={{
-                                padding: '10px 14px',
-                                borderRadius: 10,
+                                padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                                minHeight: isMobileStudentBooking ? 46 : undefined,
+                                borderRadius: isMobileStudentBooking ? 12 : 10,
                                 border: '1px solid #744242',
                                 background: '#4a2a2a',
                                 color: 'white',
                                 cursor: busyReservationId ? 'not-allowed' : 'pointer',
+                                fontWeight: isMobileStudentBooking ? 800 : undefined,
                               }}
                             >
                               {isBusy ? '취소 중...' : '예약 취소'}
@@ -3396,11 +3623,13 @@ export default function StudentBookingPage() {
             </section>
 
             <section
+              id="student-lesson-history-section"
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 4 : undefined,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 수업 내역</h2>
