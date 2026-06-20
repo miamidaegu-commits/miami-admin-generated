@@ -86,15 +86,19 @@ const PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE = PRIVATE_SLOT_BOOKING_OVERRIDE_ENA
 const STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY = 'studentBookingPreferredViewMode'
 const STUDENT_BOOKING_MOBILE_MEDIA_QUERY = '(max-width: 720px)'
 const STUDENT_BOOKING_VIEW_MODE_OPTIONS = new Set(['auto', 'desktop', 'mobile'])
+const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP =
+  'calc(18px + env(safe-area-inset-top, 0px))'
 const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM =
   'calc(48px + env(safe-area-inset-bottom, 0px))'
 const STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE = {
   maxWidth: '100vw',
+  minWidth: 0,
   overflowX: 'hidden',
   boxSizing: 'border-box',
 }
 const STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE = {
   maxWidth: '100%',
+  minWidth: 0,
   overflowX: 'hidden',
   boxSizing: 'border-box',
 }
@@ -606,6 +610,7 @@ export default function StudentBookingPage() {
   )
   const [privateCancelAllowanceLoaded, setPrivateCancelAllowanceLoaded] = useState(false)
   const [privateSlotReserveConfirm, setPrivateSlotReserveConfirm] = useState(null)
+  const [privateSlotCancelConfirm, setPrivateSlotCancelConfirm] = useState(null)
   const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
   const groupAccessRefreshTimerRef = useRef(null)
   const groupLessonFetchRequestRef = useRef(0)
@@ -666,6 +671,18 @@ export default function StudentBookingPage() {
       ? 'mobile'
       : 'desktop'
   const isMobileStudentBooking = studentBookingViewMode === 'mobile'
+
+  useEffect(() => {
+    if (!isMobileStudentBooking || typeof document === 'undefined') return undefined
+    const previousBodyOverflowX = document.body.style.overflowX
+    const previousDocumentOverflowX = document.documentElement.style.overflowX
+    document.body.style.overflowX = 'hidden'
+    document.documentElement.style.overflowX = 'hidden'
+    return () => {
+      document.body.style.overflowX = previousBodyOverflowX
+      document.documentElement.style.overflowX = previousDocumentOverflowX
+    }
+  }, [isMobileStudentBooking])
 
   function handleStudentBookingViewModeChange(value) {
     const nextValue = STUDENT_BOOKING_VIEW_MODE_OPTIONS.has(value) ? value : 'auto'
@@ -2185,6 +2202,22 @@ export default function StudentBookingPage() {
     await reservePrivateSlot(slot, { confirmed: true })
   }
 
+  function closePrivateSlotCancelConfirm() {
+    if (busyPrivateReservationId || busyFixedPrivateLessonId) return
+    setPrivateSlotCancelConfirm(null)
+  }
+
+  async function confirmPrivateSlotCancel() {
+    const pending = privateSlotCancelConfirm
+    if (!pending) return
+    setPrivateSlotCancelConfirm(null)
+    if (pending.kind === 'fixedLesson') {
+      await cancelFixedPrivateLesson(pending.lesson, { confirmed: true })
+      return
+    }
+    await cancelPrivateReservation(pending.reservation, { confirmed: true })
+  }
+
   async function cancelReservation(reservation) {
     if (role !== 'student') {
       alert('학생 계정만 예약을 취소할 수 있습니다.')
@@ -2230,7 +2263,7 @@ export default function StudentBookingPage() {
     }
   }
 
-  async function cancelPrivateReservation(reservation) {
+  async function cancelPrivateReservation(reservation, options = {}) {
     if (!PRIVATE_SLOT_BOOKING_ENABLED) {
       alert('1:1 예약 시간은 현재 관리자만 변경할 수 있습니다.')
       return
@@ -2267,7 +2300,13 @@ export default function StudentBookingPage() {
       alert(cancelConfirmMessage)
       return
     }
-    if (!window.confirm(cancelConfirmMessage)) {
+    if (!options.confirmed) {
+      setPrivateSlotCancelConfirm({
+        kind: 'reservation',
+        reservation,
+        reservationId,
+        message: cancelConfirmMessage,
+      })
       return
     }
 
@@ -2308,7 +2347,7 @@ export default function StudentBookingPage() {
     }
   }
 
-  async function cancelFixedPrivateLesson(lesson) {
+  async function cancelFixedPrivateLesson(lesson, options = {}) {
     const lessonId = String(lesson?.id || '').trim()
     if (!lessonId) return
     const date = getLessonStorageDateString(lesson)
@@ -2322,13 +2361,20 @@ export default function StudentBookingPage() {
       alert('1:1 예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.')
       return
     }
-    if (
-      !window.confirm(
-        '고정 1:1 수업을 취소할까요?\n' +
-          '이 취소는 취소 가능 횟수에 포함됩니다.\n' +
-          '취소 후 같은 시간은 다른 학생에게 예약 가능해집니다.'
-      )
-    ) {
+    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(
+      privateCancelAllowance,
+      { loaded: privateCancelAllowanceLoaded }
+    )
+    if (!options.confirmed) {
+      setPrivateSlotCancelConfirm({
+        kind: 'fixedLesson',
+        lesson,
+        lessonId,
+        message:
+          `고정 1:1 수업을 취소할까요?\n\n` +
+          `${cancelConfirmMessage}\n` +
+          `취소 후 같은 시간은 다른 학생에게 예약 가능해집니다.`,
+      })
       return
     }
 
@@ -2538,6 +2584,9 @@ export default function StudentBookingPage() {
   const privateSlotReserveConfirmMessageLines = String(
     privateSlotReserveConfirm?.message || ''
   ).split('\n')
+  const privateSlotCancelConfirmMessageLines = String(
+    privateSlotCancelConfirm?.message || ''
+  ).split('\n')
 
   return (
     <div
@@ -2547,9 +2596,10 @@ export default function StudentBookingPage() {
           'linear-gradient(180deg, rgba(8,18,33,1) 0%, rgba(16,28,45,1) 45%, rgba(22,27,37,1) 100%)',
         color: 'white',
         padding: isMobileStudentBooking
-          ? `18px 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
+          ? `${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP} 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
           : '32px 20px 60px',
         boxSizing: 'border-box',
+        width: isMobileStudentBooking ? '100vw' : undefined,
         ...studentBookingMobileOverflowGuardStyle,
       }}
     >
@@ -2569,9 +2619,10 @@ export default function StudentBookingPage() {
             gap: 16,
             flexWrap: 'wrap',
             marginBottom: isMobileStudentBooking ? 16 : 24,
+            ...studentBookingMobileOverflowGuardStyle,
           }}
         >
-          <div>
+          <div style={studentBookingMobileContentGuardStyle}>
             <h1 style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.65rem' : '2rem' }}>
               수업 예약
             </h1>
@@ -2632,7 +2683,7 @@ export default function StudentBookingPage() {
                       cursor: 'pointer',
                       fontSize: 12,
                       fontWeight: selected ? 800 : 700,
-                      flex: isMobileStudentBooking ? '1 1 0' : '0 0 auto',
+                      flex: isMobileStudentBooking ? '1 1 112px' : '0 0 auto',
                       minWidth: 0,
                     }}
                   >
@@ -2662,7 +2713,7 @@ export default function StudentBookingPage() {
               gap: 6,
               marginBottom: 16,
               position: 'sticky',
-              top: 0,
+              top: isMobileStudentBooking ? 'env(safe-area-inset-top, 0px)' : 0,
               zIndex: 3,
               padding: '8px 0',
               background: 'rgba(8,18,33,0.92)',
@@ -2685,6 +2736,7 @@ export default function StudentBookingPage() {
                   fontWeight: 800,
                   cursor: 'pointer',
                   minWidth: 0,
+                  overflowWrap: 'anywhere',
                 }}
               >
                 {item.label}
@@ -2914,9 +2966,12 @@ export default function StudentBookingPage() {
                       <div
                         style={{
                           display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))',
+                          gridTemplateColumns: isMobileStudentBooking
+                            ? 'repeat(2, minmax(0, 1fr))'
+                            : 'repeat(auto-fit, minmax(112px, 1fr))',
                           gap: 12,
                           alignItems: 'center',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <span>
@@ -3020,6 +3075,7 @@ export default function StudentBookingPage() {
                                     cursor: disabled ? 'not-allowed' : 'pointer',
                                     fontSize: isMobileStudentBooking ? 14 : 12,
                                     fontWeight: 800,
+                                    flex: isMobileStudentBooking ? '1 1 160px' : undefined,
                                   }}
                                 >
                                   {busyFixedPrivateLessonId === item.sourceId ? '취소 중...' : '고정수업 취소'}
@@ -3855,7 +3911,7 @@ export default function StudentBookingPage() {
               style={{
                 ...studentBookingMobileOverflowGuardStyle,
                 width: '100%',
-                maxWidth: isMobileStudentBooking ? 'min(420px, 100vw)' : 420,
+                maxWidth: isMobileStudentBooking ? 'min(420px, calc(100vw - 24px))' : 420,
                 border: '1px solid #435572',
                 borderRadius: isMobileStudentBooking ? 18 : 14,
                 background: '#162033',
@@ -3952,6 +4008,150 @@ export default function StudentBookingPage() {
                   }}
                 >
                   예약하기
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {privateSlotCancelConfirm ? (
+          <div
+            role="presentation"
+            data-testid="student-private-reservation-cancel-confirm-backdrop"
+            onClick={closePrivateSlotCancelConfirm}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 40,
+              display: 'grid',
+              placeItems: 'center',
+              padding: isMobileStudentBooking
+                ? `16px 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
+                : 24,
+              background: 'rgba(3, 8, 18, 0.72)',
+              boxSizing: 'border-box',
+              ...studentBookingMobileOverflowGuardStyle,
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="student-private-reservation-cancel-confirm-title"
+              data-testid="student-private-reservation-cancel-confirm-modal"
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                ...studentBookingMobileOverflowGuardStyle,
+                width: '100%',
+                maxWidth: isMobileStudentBooking ? 'min(420px, calc(100vw - 24px))' : 420,
+                border: '1px solid #73505a',
+                borderRadius: isMobileStudentBooking ? 18 : 14,
+                background: '#162033',
+                boxShadow: '0 18px 56px rgba(0, 0, 0, 0.46)',
+                padding: isMobileStudentBooking ? 18 : 20,
+                color: 'white',
+              }}
+            >
+              <h2
+                id="student-private-reservation-cancel-confirm-title"
+                style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.15rem' : '1.2rem' }}
+              >
+                1:1 예약을 취소할까요?
+              </h2>
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  border: '1px solid #3b2f40',
+                  borderRadius: 12,
+                  background: '#221826',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                {privateSlotCancelConfirm.kind === 'fixedLesson' ? (
+                  <div>
+                    {[
+                      getLessonStorageDateString(privateSlotCancelConfirm.lesson),
+                      getLessonDisplayTime(privateSlotCancelConfirm.lesson),
+                      privateSlotCancelConfirm.lesson?.teacherName ||
+                        privateSlotCancelConfirm.lesson?.teacher,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '취소할 수업 확인 중'}
+                  </div>
+                ) : (
+                  <div>
+                    {[
+                      privateSlotCancelConfirm.reservation?.date,
+                      privateSlotCancelConfirm.reservation?.time,
+                      privateSlotCancelConfirm.reservation?.teacherName ||
+                        privateSlotCancelConfirm.reservation?.teacher,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '취소할 예약 확인 중'}
+                  </div>
+                )}
+              </div>
+              <div
+                data-testid="student-private-reservation-cancel-confirm-message"
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  marginTop: 12,
+                  color: '#f4d8df',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                }}
+              >
+                {privateSlotCancelConfirmMessageLines.map((line, index) => (
+                  <div key={`${index}-${line}`}>{line || ' '}</div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  marginTop: 18,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={closePrivateSlotCancelConfirm}
+                  data-testid="student-private-reservation-cancel-confirm-cancel"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #43516a',
+                    background: '#202a3c',
+                    color: '#dbe8ff',
+                    cursor: 'pointer',
+                    fontWeight: 800,
+                    flex: isMobileStudentBooking ? '1 1 120px' : '0 0 auto',
+                  }}
+                >
+                  닫기
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPrivateSlotCancel}
+                  data-testid="student-private-reservation-cancel-confirm-submit"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #9a3f48',
+                    background: '#3a1f24',
+                    color: '#ffd8dc',
+                    cursor: 'pointer',
+                    fontWeight: 900,
+                    flex: isMobileStudentBooking ? '1 1 140px' : '0 0 auto',
+                  }}
+                >
+                  예약 취소
                 </button>
               </div>
             </div>

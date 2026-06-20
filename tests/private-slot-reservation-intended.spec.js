@@ -1091,10 +1091,17 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain('student-booking-view-mode-toggle');
   expect(source).toContain('PC 화면으로 보기');
   expect(source).toContain('모바일 화면으로 보기');
+  expect(source).toContain('STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP');
+  expect(source).toContain('env(safe-area-inset-top, 0px)');
   expect(source).toContain('STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM');
   expect(source).toContain('env(safe-area-inset-bottom, 0px)');
   expect(source).toContain("maxWidth: '100vw'");
+  expect(source).toContain('minWidth: 0');
   expect(source).toContain("overflowX: 'hidden'");
+  expect(source).toContain("document.body.style.overflowX = 'hidden'");
+  expect(source).toContain("document.documentElement.style.overflowX = 'hidden'");
+  expect(source).toContain("width: isMobileStudentBooking ? '100vw' : undefined");
+  expect(source).toContain("maxWidth: isMobileStudentBooking ? 'min(420px, calc(100vw - 24px))' : 420");
   expect(source).toContain('student-booking-mobile-tabs');
   expect(source).toContain('student-upcoming-private-lessons-section');
   expect(source).toContain('student-private-booking-section');
@@ -1110,6 +1117,31 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).not.toContain('window.confirm(buildPrivateSlotReserveConfirmMessage(privateCancelAllowance))');
   expect(source).toMatch(/setPrivateSlotReserveConfirm[\s\S]*buildPrivateSlotReserveConfirmMessage/);
   expect(source).toMatch(/bookingStatus === 'available'[\s\S]*slot\.isBookable === true[\s\S]*slot\.status === 'open'/);
+});
+
+test('student booking page uses in-app private cancellation confirm modal', async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  const { buildPrivateReservationCancelConfirmMessage } = await import(
+    '../src/features/booking/studentPrivateCancelAllowance.js'
+  );
+  const message = buildPrivateReservationCancelConfirmMessage(
+    { used: 1, limit: 3, remaining: 2 },
+    { loaded: true }
+  );
+
+  expect(source).not.toContain('window.confirm');
+  expect(source).toContain('privateSlotCancelConfirm');
+  expect(source).toContain('confirmPrivateSlotCancel');
+  expect(source).toContain('closePrivateSlotCancelConfirm');
+  expect(source).toContain('student-private-reservation-cancel-confirm-modal');
+  expect(source).toContain('student-private-reservation-cancel-confirm-message');
+  expect(source).toContain('student-private-reservation-cancel-confirm-cancel');
+  expect(source).toContain('student-private-reservation-cancel-confirm-submit');
+  expect(source).toMatch(/setPrivateSlotCancelConfirm[\s\S]*buildPrivateReservationCancelConfirmMessage/);
+  expect(source).toMatch(/confirmPrivateSlotCancel[\s\S]*cancelPrivateReservation\(pending\.reservation, \{ confirmed: true \}\)/);
+  expect(message).toContain('취소 사용 1/3회');
+  expect(message).toContain('남은 취소 가능 2회');
+  expect(message).toContain('이번 취소 후 남은 취소 가능 1회');
 });
 
 test('weekly private booking window helper is deterministic for Monday-Saturday', async () => {
