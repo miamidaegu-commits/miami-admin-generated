@@ -19,6 +19,8 @@ setGlobalOptions({maxInstances: 10});
 
 const OWNER_EMAIL = "miamidaegu@gmail.com";
 const REGION = "us-central1";
+const PRODUCTION_PROJECT_ID = "daegu-miami-production";
+const E2E_PROJECT_ID = "miami-e2e";
 const STUDENT_PRIVATE_CANCEL_LIMIT = 2;
 const STUDENT_PRIVATE_CANCEL_LIMIT_MAX = 24;
 const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000;
@@ -31,8 +33,8 @@ const DAY_MS = 24 * HOUR_MS;
 const PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE =
   "1:1 예약 기능은 아직 선택된 학생에게만 제공됩니다.";
 const HOSTED_APP_URL_BY_PROJECT_ID = {
-  "daegu-miami-production": "https://daegumiami.com",
-  "miami-e2e": "https://miami-e2e.web.app",
+  [PRODUCTION_PROJECT_ID]: "https://daegumiami.com",
+  [E2E_PROJECT_ID]: "https://miami-e2e.web.app",
 };
 
 function normalizeHostedAppUrl(value) {
@@ -57,6 +59,56 @@ function getRuntimeProjectId() {
   );
 }
 
+function isProductionProject() {
+  return getRuntimeProjectId() === PRODUCTION_PROJECT_ID;
+}
+
+function isE2eProject() {
+  return getRuntimeProjectId() === E2E_PROJECT_ID;
+}
+
+function requireE2eTestProject() {
+  if (isE2eProject()) return;
+  throw new HttpsError(
+      isProductionProject() ? "permission-denied" : "failed-precondition",
+      "This test helper is disabled in production and outside miami-e2e.",
+  );
+}
+
+function requireProductionBootstrapAdminAllowed(callerEmail) {
+  if (!isProductionProject()) return;
+  const normalizedCallerEmail = String(callerEmail || "").trim().toLowerCase();
+  if (
+    normalizedCallerEmail === OWNER_EMAIL &&
+    isEnabledFlag(process.env.ALLOW_PRODUCTION_BOOTSTRAP_ADMIN)
+  ) {
+    return;
+  }
+  throw new HttpsError(
+      "failed-precondition",
+      "Admin bootstrap is disabled in production unless " +
+      "ALLOW_PRODUCTION_BOOTSTRAP_ADMIN=true and the caller is OWNER_EMAIL.",
+  );
+}
+
+function requireProductionSetUserRoleAllowed(auth) {
+  if (!isProductionProject()) return;
+  const callerEmail = String(auth && auth.token && auth.token.email || "")
+      .trim()
+      .toLowerCase();
+  if (
+    callerEmail === OWNER_EMAIL &&
+    isEnabledFlag(process.env.ALLOW_PRODUCTION_SET_USER_ROLE)
+  ) {
+    return;
+  }
+  throw new HttpsError(
+      "failed-precondition",
+      "Setting user roles is disabled in production unless " +
+      "ALLOW_PRODUCTION_SET_USER_ROLE=true and the caller is OWNER_EMAIL.",
+  );
+}
+
 function getHostedAppUrl() {
   const explicitUrl = normalizeHostedAppUrl(process.env.HOSTED_APP_URL);
   if (explicitUrl) return explicitUrl;
@@ -73,7 +125,7 @@ function isEnabledFlag(value) {
 
 function isPrivateSlotBookingE2eOverride(data) {
   return (
-    getRuntimeProjectId() === "miami-e2e" &&
+    isE2eProject() &&
     isEnabledFlag(data && data.privateSlotBooking)
   );
 }
@@ -303,6 +355,32 @@ async function requireAcademyAdmin(db, academyId, uid) {
   return {
     ...membership,
     role,
+  };
+}
+
+async function requireAcademyOwner(db, academyId, uid) {
+  const membershipId = `${academyId}_${uid}`;
+  const membershipSnap = await db
+      .collection("academyMemberships")
+      .doc(membershipId)
+      .get();
+  const membership = membershipSnap.exists ? membershipSnap.data() || {} : null;
+  const role = String((membership && membership.role) || "")
+      .trim()
+      .toLowerCase();
+  const status = String((membership && membership.status) || "")
+      .trim()
+      .toLowerCase();
+  if (!membership || status !== "active" || role !== "owner") {
+    throw new HttpsError(
+        "permission-denied",
+        "Active academy owner membership required.",
+    );
+  }
+  return {
+    ...membership,
+    role,
+    status,
   };
 }
 
@@ -6602,12 +6680,7 @@ exports.runAutoDeductPendingLessonsForTest = onCall(
         if (!request.auth) {
           throw new HttpsError("unauthenticated", "Login required.");
         }
-        if (getRuntimeProjectId() !== "miami-e2e") {
-          throw new HttpsError(
-              "failed-precondition",
-              "Test auto deduction callable is e2e-only.",
-          );
-        }
+        requireE2eTestProject();
         const data = request.data || {};
         const academyId = requireString(data, "academyId");
         validateAcademyId(academyId);
@@ -7208,6 +7281,8 @@ exports.bootstrapAdmin = onCall(
       const callerUid = request.auth.uid;
       const callerEmail = request.auth.token.email || "";
 
+      requireProductionBootstrapAdminAllowed(callerEmail);
+
       if (callerEmail !== OWNER_EMAIL) {
         throw new HttpsError("permission-denied", "Not allowed.");
       }
@@ -7241,37 +7316,81 @@ exports.setUserRole = onCall(
       }
 
       const callerUid = request.auth.uid;
-      const caller = await admin.auth().getUser(callerUid);
-      const callerRole = caller.customClaims ? caller.customClaims.role : null;
-      if (callerRole !== "admin") {
-        throw new HttpsError("permission-denied", "Admins only.");
+      const data = request.data || {};
+      const uid = requireString(data, "uid");
+      const role = normalizeId(requireString(data, "role")).toLowerCase();
+      const academyId = requireString(data, "academyId");
+      const teacherName = optionalString(data, "teacherName");
+      const emailInput = optionalString(data, "email");
+      let email = "";
+      if (emailInput) {
+        try {
+          email = normalizeEmail(emailInput);
+        } catch (error) {
+          throw asHttpsError(error);
+        }
       }
+      const isActive = data.isActive;
 
-      const {uid, role, academyId, teacherName, isActive} = request.data || {};
-
-      if (!uid || !role) {
-        throw new HttpsError("invalid-argument", "uid and role are required.");
+      validateAcademyId(academyId);
+      if (role === "owner") {
+        throw new HttpsError(
+            "failed-precondition",
+            "Owner role changes are not allowed.",
+        );
       }
-
-      if (!["admin", "teacher"].includes(role)) {
+      if (!["admin", "teacher", "student"].includes(role)) {
         throw new HttpsError(
             "invalid-argument",
-            "role must be admin or teacher.",
+            "role must be admin, teacher, or student.",
         );
       }
 
-      await admin.auth().setCustomUserClaims(uid, {role});
+      const auth = admin.auth();
+      const db = admin.firestore();
+      await requireAcademyOwner(db, academyId, callerUid);
+      requireProductionSetUserRoleAllowed(request.auth);
 
-      await admin.firestore().collection("users").doc(uid).set(
-          {
-            role,
-            academyId: academyId || null,
-            teacherName: teacherName || null,
-            isActive: isActive !== false,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          {merge: true},
-      );
+      const targetMembershipSnap = await db
+          .collection("academyMemberships")
+          .doc(`${academyId}_${uid}`)
+          .get();
+      const targetMembership = targetMembershipSnap.exists ?
+        targetMembershipSnap.data() || {} :
+        null;
+      const targetMembershipRole = String(
+          (targetMembership && targetMembership.role) || "",
+      ).trim().toLowerCase();
+      if (targetMembershipRole === "owner") {
+        throw new HttpsError(
+            "failed-precondition",
+            "Owner role changes are not allowed.",
+        );
+      }
+
+      const targetUser = await auth.getUser(uid);
+      const targetClaimsRole = String(
+          (targetUser.customClaims && targetUser.customClaims.role) || "",
+      ).trim().toLowerCase();
+      if (targetClaimsRole === "owner") {
+        throw new HttpsError(
+            "failed-precondition",
+            "Owner role changes are not allowed.",
+        );
+      }
+
+      const userPayload = {
+        role,
+        academyId,
+        teacherName: teacherName || null,
+        isActive: isActive !== false,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (email) userPayload.email = email;
+
+      await auth.setCustomUserClaims(uid, {role});
+
+      await db.collection("users").doc(uid).set(userPayload, {merge: true});
 
       return {
         success: true,

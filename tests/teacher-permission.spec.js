@@ -254,6 +254,48 @@ test('teacher mutation guards are admin-only in source and rules', () => {
   expect(groupClassesRules).not.toContain('validTeacherGroupClassShape');
 });
 
+test('production helper callables are locked down in source', () => {
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+
+  const runtimeProjectGuards = sourceBlock(
+    functionsSource,
+    'const PRODUCTION_PROJECT_ID',
+    'function getHostedAppUrl'
+  );
+  expect(runtimeProjectGuards).toContain('"daegu-miami-production"');
+  expect(runtimeProjectGuards).toContain('"miami-e2e"');
+  expect(runtimeProjectGuards).toContain('function requireE2eTestProject');
+  expect(runtimeProjectGuards).toContain('ALLOW_PRODUCTION_BOOTSTRAP_ADMIN');
+
+  const autoDeductHelper = sourceBlock(
+    functionsSource,
+    'exports.runAutoDeductPendingLessonsForTest',
+    'exports.markPrivateReservationOutcome'
+  );
+  expect(autoDeductHelper).toContain('requireE2eTestProject();');
+
+  const bootstrapAdminHelper = sourceBlock(
+    functionsSource,
+    'exports.bootstrapAdmin',
+    'exports.setUserRole'
+  );
+  expect(bootstrapAdminHelper).toContain('requireProductionBootstrapAdminAllowed(callerEmail);');
+  expect(bootstrapAdminHelper).toContain('callerEmail !== OWNER_EMAIL');
+
+  const setUserRoleHelper = sourceBlock(
+    functionsSource,
+    'exports.setUserRole',
+    'exports.linkStudentAccount'
+  );
+  expect(setUserRoleHelper).toContain('requireAcademyOwner(db, academyId, callerUid);');
+  expect(setUserRoleHelper).toContain('requireProductionSetUserRoleAllowed(request.auth);');
+  expect(setUserRoleHelper).toContain('["admin", "teacher", "student"].includes(role)');
+  expect(setUserRoleHelper).toContain('role === "owner"');
+  expect(setUserRoleHelper).toContain('targetMembershipRole === "owner"');
+  expect(setUserRoleHelper).toContain('targetClaimsRole === "owner"');
+  expect(setUserRoleHelper).not.toContain('callerRole !== "admin"');
+});
+
 async function loginAsDashboardUser(page, email, password) {
   await page.goto(`${BASE_URL}login/`);
 
