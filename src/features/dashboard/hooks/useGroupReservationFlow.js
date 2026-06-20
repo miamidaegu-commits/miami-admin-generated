@@ -82,6 +82,10 @@ export default function useGroupReservationFlow({
   }, [busyGroupReservationId, groupReservationModal])
 
   function canManageGroupReservations() {
+    return userProfile?.role === 'admin'
+  }
+
+  function canViewGroupReservations() {
     return userProfile?.role === 'admin' || userProfile?.role === 'teacher'
   }
 
@@ -102,8 +106,8 @@ export default function useGroupReservationFlow({
       alert('현재 학원 컨텍스트가 없어 예약을 볼 수 없습니다.')
       return
     }
-    if (!canManageGroupReservations()) {
-      alert('예약 관리 권한이 없습니다.')
+    if (!canViewGroupReservations()) {
+      alert('예약 조회 권한이 없습니다.')
       return
     }
     setGroupReservationModal({ type: 'view', lesson })
