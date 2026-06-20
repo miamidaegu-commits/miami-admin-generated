@@ -1984,11 +1984,51 @@ export default function Dashboard() {
         where('academyId', '==', currentAcademyId)
       )
     } else if (role === 'teacher' && teacherName) {
-      ref = query(
-        collection(db, 'privateLessonSlots'),
-        where('academyId', '==', currentAcademyId),
-        where('teacher', '==', teacherName)
+      setPrivateLessonSlotsLoading(true)
+      const teacherUid = String(user?.uid || '').trim()
+      const teacherQuerySpecs = [
+        ['teacher', teacherName],
+        ['teacherName', teacherName],
+        ['teacherKey', teacherName],
+        ['teacherUid', teacherUid],
+        ['teacherUID', teacherUid],
+      ].filter(([, value]) => value)
+      const teacherSnapshotsByKey = new Map()
+      const mergeTeacherRows = () => {
+        if (teacherSnapshotsByKey.size < teacherQuerySpecs.length) return
+        const byId = new Map()
+        Array.from(teacherSnapshotsByKey.values()).forEach((snapshot) => {
+          snapshot.docs.forEach((docItem) => {
+            byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
+          })
+        })
+        const rows = Array.from(byId.values()).sort((a, b) =>
+          `${a.date || ''} ${a.time || ''} ${a.teacher || ''}`.localeCompare(
+            `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`,
+            'ko'
+          )
+        )
+        setPrivateLessonSlots(rows)
+        setPrivateLessonSlotsLoading(false)
+      }
+      const queryBase = [where('academyId', '==', currentAcademyId)]
+      const unsubscribers = teacherQuerySpecs.map(([field, value]) =>
+        onSnapshot(
+          query(collection(db, 'privateLessonSlots'), ...queryBase, where(field, '==', value)),
+          (snapshot) => {
+            teacherSnapshotsByKey.set(`${field}:${value}`, snapshot)
+            mergeTeacherRows()
+          },
+          (error) => {
+            console.error(`privateLessonSlots(${field}) 불러오기 실패:`, error)
+            teacherSnapshotsByKey.set(`${field}:${value}`, { docs: [] })
+            mergeTeacherRows()
+          }
+        )
       )
+      return () => {
+        unsubscribers.forEach((unsubscribe) => unsubscribe())
+      }
     } else {
       setPrivateLessonSlots([])
       setPrivateLessonSlotsLoading(false)
@@ -2023,13 +2063,68 @@ export default function Dashboard() {
 
   useEffect(() => {
     const isAdminProfile = isDashboardAdminProfile(userProfile)
-    if (!isAdminProfile || !isValidOperationalAcademyId(currentAcademyId)) {
+    const isTeacherProfile = isDashboardTeacherProfile(userProfile)
+    const teacherName = normalizeText(userProfile?.teacherName || '')
+    if (
+      !isValidOperationalAcademyId(currentAcademyId) ||
+      (!isAdminProfile && (!isTeacherProfile || !teacherName))
+    ) {
       setPrivateAvailabilityTemplates([])
       setPrivateAvailabilityTemplatesLoading(false)
       return
     }
 
     setPrivateAvailabilityTemplatesLoading(true)
+    if (!isAdminProfile) {
+      const teacherUid = String(user?.uid || '').trim()
+      const teacherQuerySpecs = [
+        ['teacher', teacherName],
+        ['teacherName', teacherName],
+        ['teacherKey', teacherName],
+        ['teacherUid', teacherUid],
+        ['teacherUID', teacherUid],
+      ].filter(([, value]) => value)
+      const teacherSnapshotsByKey = new Map()
+      const mergeTeacherRows = () => {
+        if (teacherSnapshotsByKey.size < teacherQuerySpecs.length) return
+        const byId = new Map()
+        Array.from(teacherSnapshotsByKey.values()).forEach((snapshot) => {
+          snapshot.docs.forEach((docItem) => {
+            byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
+          })
+        })
+        const rows = Array.from(byId.values()).sort((a, b) => {
+          const aKey = `${a.teacher || a.teacherName || ''} ${a.weekday || ''} ${a.time || ''}`
+          const bKey = `${b.teacher || b.teacherName || ''} ${b.weekday || ''} ${b.time || ''}`
+          return aKey.localeCompare(bKey, 'ko')
+        })
+        setPrivateAvailabilityTemplates(rows)
+        setPrivateAvailabilityTemplatesLoading(false)
+      }
+      const queryBase = [where('academyId', '==', currentAcademyId)]
+      const unsubscribers = teacherQuerySpecs.map(([field, value]) =>
+        onSnapshot(
+          query(
+            collection(db, 'privateLessonAvailabilityTemplates'),
+            ...queryBase,
+            where(field, '==', value)
+          ),
+          (snapshot) => {
+            teacherSnapshotsByKey.set(`${field}:${value}`, snapshot)
+            mergeTeacherRows()
+          },
+          (error) => {
+            console.error(`privateLessonAvailabilityTemplates(${field}) 불러오기 실패:`, error)
+            teacherSnapshotsByKey.set(`${field}:${value}`, { docs: [] })
+            mergeTeacherRows()
+          }
+        )
+      )
+      return () => {
+        unsubscribers.forEach((unsubscribe) => unsubscribe())
+      }
+    }
+
     const unsubscribe = onSnapshot(
       query(
         collection(db, 'privateLessonAvailabilityTemplates'),
@@ -2053,7 +2148,7 @@ export default function Dashboard() {
       }
     )
     return () => unsubscribe()
-  }, [currentAcademyId, userProfile])
+  }, [currentAcademyId, user?.uid, userProfile])
 
   useEffect(() => {
     if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
@@ -5160,6 +5255,40 @@ export default function Dashboard() {
     }
   }
 
+  async function reopenPrivateLessonSlot(slot) {
+    if (!isAdmin) {
+      alert('1:1 수업 관리 권한이 없습니다.')
+      return
+    }
+    if (!slot?.id) return
+
+    const label = `${slot.date || ''} ${slot.time || ''} ${slot.teacher || ''}`.trim()
+    if (
+      !window.confirm(
+        `수업불가로 닫힌 시간을 다시 예약 가능하게 열까요?\n${label}\n기존 학생 예약은 자동 복구하지 않습니다.`
+      )
+    ) {
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(slot, scopedAcademyId, '1:1 수업 시간')
+      setBusyPrivateSlotActionId(slot.id)
+      const callable = httpsCallable(firebaseFunctions, 'adminReopenPrivateLessonSlot')
+      await callable({
+        academyId: scopedAcademyId,
+        slotId: slot.id,
+        reason: 'teacher_unavailable_reopened',
+      })
+    } catch (error) {
+      console.error('1:1 수업 시간 수업불가 해제 실패:', error)
+      alert(`1:1 수업 시간 수업불가 해제 실패: ${error.message}`)
+    } finally {
+      setBusyPrivateSlotActionId('')
+    }
+  }
+
   async function cancelPrivateSlotOrReservation(slot, reservation, options = {}) {
     if (!isAdmin) {
       alert('1:1 수업 관리 권한이 없습니다.')
@@ -5590,9 +5719,23 @@ export default function Dashboard() {
     studentPackages,
   ])
 
+  const privateLessonTeacherSelectOptions = isAdmin
+    ? teacherSelectOptions
+    : teacherGroupClassKey
+      ? [
+          {
+            value: String(user?.uid || '').trim() || teacherGroupClassKey,
+            label: userProfile?.teacherName || teacherGroupClassKey,
+            displayName: userProfile?.teacherName || teacherGroupClassKey,
+            teacherKey: teacherGroupClassKey,
+            teacherUid: String(user?.uid || '').trim(),
+          },
+        ]
+      : []
+
   const privateLessonSlotsSectionProps = {
     canManagePrivateSlots: isAdmin,
-    teacherSelectOptions,
+    teacherSelectOptions: privateLessonTeacherSelectOptions,
     privateSlotForm,
     setPrivateSlotForm,
     privateSlotFormErrors,
@@ -5631,6 +5774,7 @@ export default function Dashboard() {
     busyPrivateSlotActionId,
     cancelPrivateSlotOrReservation,
     closePrivateLessonSlot,
+    reopenPrivateLessonSlot,
     privateFixedLessons: lessons,
     busyFixedPrivateLessonCancelId,
     onCancelFixedPrivateLesson: cancelFixedPrivateLessonOccurrence,
@@ -5985,12 +6129,15 @@ export default function Dashboard() {
             <GroupsSection {...groupsSectionProps} />
           ) : null}
           {activeSection === 'teacherPrivateRequests' && canManageOwnGroupClasses ? (
-            <TeacherPrivateLessonRequestsSection
-              currentAcademyId={currentAcademyId}
-              user={user}
-              userProfile={userProfile}
-              privateStudents={privateStudents}
-            />
+            <>
+              <TeacherPrivateLessonRequestsSection
+                currentAcademyId={currentAcademyId}
+                user={user}
+                userProfile={userProfile}
+                privateStudents={privateStudents}
+              />
+              <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
+            </>
           ) : null}
 	          {activeSection === 'privateSlots' && isAdmin ? (
 	            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />

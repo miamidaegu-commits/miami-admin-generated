@@ -762,6 +762,34 @@ test('admin can assign fixed private lessons from a weekly template', async ({
       ),
       'teacher-unavailable fixed slot must not be bookable'
     ).toHaveCount(0, { timeout: 15000 });
+
+    page.once('dialog', async (dialog) => {
+      expect(dialog.message()).toContain('다시 예약 가능하게 열까요');
+      await dialog.accept();
+    });
+    await unavailableRow.getByTestId('private-slot-reopen-unavailable-button').click();
+    await expectReservationStatus(unavailableSlot.id, fixture.studentId, 'cancelled');
+    await expect
+      .poll(async () => {
+        const snap = await getDb().collection('privateLessonSlots').doc(unavailableSlot.id).get();
+        const data = snap.data() || {};
+        return [
+          data.status,
+          data.isBookable === true ? 'bookable' : 'blocked',
+          data.reopenedReason || '',
+        ].join('|');
+      }, { timeout: 30000 })
+      .toBe('open|bookable|teacher_unavailable_reopened');
+    await expect(unavailableRow).toContainText('예약 가능한 시간', { timeout: 30000 });
+
+    await otherStudentPage.goto(`${BASE_URL}student-booking?privateSlotBooking=enabled`);
+    await otherStudentPage.getByTestId('private-slot-view-mode-available').click();
+    await expect(
+      otherStudentPage.locator(
+        `[data-testid="student-private-slot-card"][data-slot-id="${unavailableSlot.id}"]`
+      ),
+      'reopened teacher-unavailable slot should be bookable again'
+    ).toBeVisible({ timeout: 30000 });
   } finally {
     await studentContext?.close().catch(() => {});
     await otherStudentContext?.close().catch(() => {});

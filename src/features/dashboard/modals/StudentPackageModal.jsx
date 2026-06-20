@@ -380,8 +380,8 @@ export default function StudentPackageModal({
                   </div>
                   <div style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.78 }}>
                     {isPrivateRegular
-                      ? '주당 횟수와 등록 주수로 총 횟수를 자동 계산합니다.'
-                      : '총 횟수를 직접 입력합니다.'}
+                      ? '주당 횟수와 기간으로 총 수업 횟수를 자동 계산합니다. 고정 1:1 운영에 적합합니다.'
+                      : '총 횟수를 직접 입력합니다. 자유 예약/보충/비정기 수업에 적합합니다.'}
                   </div>
 
                   {isPrivateRegular ? (
@@ -418,7 +418,7 @@ export default function StudentPackageModal({
                       <label
                         style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
                       >
-                        <span style={{ opacity: 0.85 }}>주당 횟수</span>
+                        <span style={{ opacity: 0.85 }}>주당 수업 횟수</span>
                         <select
                           value={String(studentPackageForm.weeklyFrequency ?? '1')}
                           onChange={(e) =>
@@ -448,7 +448,7 @@ export default function StudentPackageModal({
                       <label
                         style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
                       >
-                        <span style={{ opacity: 0.85 }}>등록 주수</span>
+                        <span style={{ opacity: 0.85 }}>수강 기간 (주)</span>
                         <input
                           type="text"
                           inputMode="numeric"
@@ -483,8 +483,8 @@ export default function StudentPackageModal({
                           opacity: 0.92,
                         }}
                       >
-                        주 {String(studentPackageForm.weeklyFrequency ?? '1')}회 ×{' '}
-                        {String(studentPackageForm.registrationWeeks || '').trim() || '—'}주 ={' '}
+                        주당 {String(studentPackageForm.weeklyFrequency ?? '1')}회 × 기간{' '}
+                        {String(studentPackageForm.registrationWeeks || '').trim() || '—'}주 = 총{' '}
                         {privateRegularComputed || 0}회
                       </div>
                     </>
@@ -526,7 +526,7 @@ export default function StudentPackageModal({
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>
-                  총 횟수 (totalCount)
+                  {isPrivateRegular ? '총 수업 횟수' : '총 횟수'}
                   {isPrivateRegular ? <span style={{ opacity: 0.65 }}> — 자동 계산</span> : null}
                 </span>
                 <input

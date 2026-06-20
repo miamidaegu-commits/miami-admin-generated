@@ -319,10 +319,14 @@ test('private package add modal explains package counts and fixed assignment wor
     await expect(dialog.getByTestId('student-package-private-workflow-guide')).toContainText(
       '3) 주간 시간에 학생 고정 배정: 수강권 횟수를 사용해 선택한 주간 시간에 학생을 고정 배정합니다.'
     );
-    await expect(dialog).toContainText('주당 횟수와 등록 주수로 총 횟수를 자동 계산합니다.');
+    await expect(dialog).toContainText(
+      '주당 횟수와 기간으로 총 수업 횟수를 자동 계산합니다. 고정 1:1 운영에 적합합니다.'
+    );
 
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
-    await expect(dialog).toContainText('총 횟수를 직접 입력합니다.');
+    await expect(dialog).toContainText(
+      '총 횟수를 직접 입력합니다. 자유 예약/보충/비정기 수업에 적합합니다.'
+    );
   } finally {
     if (tempStudent) await cleanupTempStudentData(page, { ...tempStudent, firebaseTaskTimeoutMs: 60000 });
   }

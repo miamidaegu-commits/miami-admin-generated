@@ -412,8 +412,24 @@ service cloud.firestore {
 
     function privateSlotBelongsToTeacher(data) {
       return isAcademyTeacherOrStaff(data.academyId) &&
-        data.teacher is string &&
-        data.teacher == myAcademyTeacherName(data.academyId);
+        (
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherKey is string && data.teacherKey == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherUid is string && data.teacherUid == currentUid()) ||
+          (data.teacherUID is string && data.teacherUID == currentUid())
+        );
+    }
+
+    function privateAvailabilityTemplateBelongsToTeacher(data) {
+      return isAcademyTeacherOrStaff(data.academyId) &&
+        (
+          (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherKey is string && data.teacherKey == myAcademyTeacherName(data.academyId)) ||
+          (data.teacherUid is string && data.teacherUid == currentUid()) ||
+          (data.teacherUID is string && data.teacherUID == currentUid())
+        );
     }
 
     function privateSlotVisibleToCurrentStudent(data, slotId) {
@@ -2001,7 +2017,10 @@ service cloud.firestore {
 
     match /privateLessonAvailabilityTemplates/{templateId} {
       allow read: if sameAcademyOnRead() &&
-        isAcademyAdmin(resource.data.academyId);
+        (
+          isAcademyAdmin(resource.data.academyId) ||
+          privateAvailabilityTemplateBelongsToTeacher(resource.data)
+        );
 
       allow create: if sameAcademyOnCreate() &&
         isAcademyAdmin(request.resource.data.academyId) &&
