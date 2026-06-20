@@ -74,7 +74,6 @@ import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedul
 import GroupsSection from './src/features/dashboard/sections/GroupsSection.jsx'
 import PrivateLessonSlotsSection from './src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'
 import LessonRequestsSection from './src/features/dashboard/sections/LessonRequestsSection.jsx'
-import TeacherPrivateLessonRequestsSection from './src/features/dashboard/sections/TeacherPrivateLessonRequestsSection.jsx'
 import StudentsSection from './src/features/dashboard/sections/StudentsSection.jsx'
 import DailyMaterialsSection from './src/features/dashboard/sections/DailyMaterialsSection.jsx'
 import TeacherManagementSection from './src/features/dashboard/sections/TeacherManagementSection.jsx'
@@ -173,7 +172,7 @@ function isReleasedFixedPrivateSeatLesson(lesson) {
     lesson?.releasedForPrivateBooking === true
   )
 }
-const TEACHER_PRIVATE_LESSON_REQUESTS_LABEL = '내 1:1 관리'
+const TEACHER_PRIVATE_SCHEDULE_LABEL = '내 주간 1:1 시간표'
 
 function isDashboardAdminProfile(profile) {
   return canViewBillingFields(profile)
@@ -1834,15 +1833,15 @@ export default function Dashboard() {
   useEffect(() => {
     const canUseTeacherGroupSection =
       isDashboardTeacherProfile(userProfile) && normalizeText(userProfile?.teacherName || '')
-    const canUseTeacherPrivateRequestsSection = canUseTeacherGroupSection
-    const canUseTeacherPackageCountSection =
-      canUseTeacherGroupSection && userProfile?.canEditStudentPackageCounts === true
+    const canUseTeacherPrivateScheduleSection = canUseTeacherGroupSection
+    const canUseTeacherPackageCountSection = false
     if (
       !isDashboardAdminProfile(userProfile) &&
       ((activeSection === 'students' && !canUseTeacherPackageCountSection) ||
         ['privateSlots', 'lessonRequests', 'teachers', 'dailyMaterials'].includes(activeSection) ||
         (activeSection === 'groups' && !canUseTeacherGroupSection) ||
-        (activeSection === 'teacherPrivateRequests' && !canUseTeacherPrivateRequestsSection))
+        activeSection === 'teacherPrivateRequests' ||
+        (activeSection === 'teacherPrivateSchedule' && !canUseTeacherPrivateScheduleSection))
     ) {
       setActiveSection('calendar')
     }
@@ -2779,7 +2778,7 @@ export default function Dashboard() {
   const canCreateLessonDirectly = isAdmin
   const requiresLessonApproval = userProfile?.requiresLessonApproval === true
   const canUseDirectLessonCreation = canCreateLessonDirectly && !requiresLessonApproval
-  const canManageGroupClasses = isAdmin || canManageOwnGroupClasses
+  const canManageGroupClasses = isAdmin
   const canDeleteGroupClasses = isAdmin
   const showPrivateLessonAddInCalendar = isAdmin
   const busyGroupStudentId = busyRemovingGroupStudentId || busyAddingGroupStudentId
@@ -6028,7 +6027,7 @@ export default function Dashboard() {
     { key: 'calendar', label: '캘린더' },
     ...(isAdmin || canUseStudentPackageCountSection ? [{ key: 'students', label: '학생 관리' }] : []),
     ...(canManageOwnGroupClasses
-      ? [{ key: 'teacherPrivateRequests', label: TEACHER_PRIVATE_LESSON_REQUESTS_LABEL }]
+      ? [{ key: 'teacherPrivateSchedule', label: TEACHER_PRIVATE_SCHEDULE_LABEL }]
       : []),
     ...(isAdmin || canManageOwnGroupClasses
       ? [{ key: 'groups', label: isAdmin ? ADMIN_GROUP_MANAGEMENT_LABEL : TEACHER_GROUP_MANAGEMENT_LABEL }]
@@ -6084,8 +6083,8 @@ export default function Dashboard() {
 	    ? isAdmin
         ? ADMIN_GROUP_MANAGEMENT_LABEL
         : TEACHER_GROUP_MANAGEMENT_LABEL
-      : activeSection === 'teacherPrivateRequests'
-      ? TEACHER_PRIVATE_LESSON_REQUESTS_LABEL
+      : activeSection === 'teacherPrivateSchedule'
+      ? TEACHER_PRIVATE_SCHEDULE_LABEL
 	    : activeSection === 'teachers'
 	    ? '선생님 관리'
 	    : activeSection === 'lessonRequests'
@@ -6128,16 +6127,8 @@ export default function Dashboard() {
           {activeSection === 'groups' && (isAdmin || canManageOwnGroupClasses) ? (
             <GroupsSection {...groupsSectionProps} />
           ) : null}
-          {activeSection === 'teacherPrivateRequests' && canManageOwnGroupClasses ? (
-            <>
-              <TeacherPrivateLessonRequestsSection
-                currentAcademyId={currentAcademyId}
-                user={user}
-                userProfile={userProfile}
-                privateStudents={privateStudents}
-              />
-              <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
-            </>
+          {activeSection === 'teacherPrivateSchedule' && canManageOwnGroupClasses ? (
+            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
           ) : null}
 	          {activeSection === 'privateSlots' && isAdmin ? (
 	            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
@@ -6157,7 +6148,7 @@ export default function Dashboard() {
 	          ) : null}
 
 	        {activeSection !== 'privateSlots' &&
-          activeSection !== 'teacherPrivateRequests' &&
+          activeSection !== 'teacherPrivateSchedule' &&
           activeSection !== 'lessonRequests' &&
           activeSection !== 'dailyMaterials' &&
           activeSection !== 'teachers' ? (
@@ -6191,7 +6182,7 @@ export default function Dashboard() {
         <StudentPackageHistoryModal {...studentPackageHistoryModalProps} />
       ) : null}
 
-      {activeSection === 'groups' && (isAdmin || canManageOwnGroupClasses) && groupModal ? (
+      {activeSection === 'groups' && isAdmin && groupModal ? (
         <GroupModal {...groupModalProps} />
       ) : null}
 

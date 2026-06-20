@@ -179,6 +179,81 @@ test('fixed 1:1 planning: paidLessons가 없으면 슬롯마다 비반복 1회 �
   expect(plans.map((plan) => plan.repeatWeekly)).toEqual([false, false, false]);
 });
 
+function sourceBlock(source, start, end) {
+  const startIndex = source.indexOf(start);
+  expect(startIndex).toBeGreaterThanOrEqual(0);
+  const endIndex = end ? source.indexOf(end, startIndex + start.length) : -1;
+  return source.slice(startIndex, endIndex === -1 ? undefined : endIndex);
+}
+
+test('teacher mutation guards are admin-only in source and rules', () => {
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const rulesSource = fs.readFileSync(path.join(process.cwd(), 'firestore.rules'), 'utf8');
+
+  const groupReservationGuard = sourceBlock(
+    functionsSource,
+    'function canManageGroupReservations',
+    'function canManageGroupAttendance'
+  );
+  expect(groupReservationGuard).toContain('return role === "owner" || role === "admin";');
+  expect(groupReservationGuard).not.toContain('teacher');
+
+  const groupAttendanceGuard = sourceBlock(
+    functionsSource,
+    'function canManageGroupAttendance',
+    'function groupLessonReservationDocId'
+  );
+  expect(groupAttendanceGuard).toContain('return role === "owner" || role === "admin";');
+  expect(groupAttendanceGuard).not.toContain('canManageAttendance === true');
+
+  const fixedPrivateCancel = sourceBlock(
+    functionsSource,
+    'exports.cancelFixedPrivateLessonOccurrence',
+    'exports.adminClosePrivateLessonSlot'
+  );
+  expect(fixedPrivateCancel).toContain('actorRole === "teacher"');
+  expect(fixedPrivateCancel).toContain('Fixed private lesson actions require admin permission.');
+
+  for (const [functionName, nextFunctionName] of [
+    ['exports.adminClosePrivateLessonSlot', 'exports.adminReopenPrivateLessonSlot'],
+    ['exports.adminReopenPrivateLessonSlot', 'exports.adminCancelPrivateLessonReservation'],
+    ['exports.adminCancelPrivateLessonReservation', 'exports.updateStudentPrivateCancelAllowance'],
+    ['exports.updateTeacherStudentPackageCounts', 'exports.reversePrivateReservationOutcome'],
+  ]) {
+    expect(sourceBlock(functionsSource, functionName, nextFunctionName)).toContain('requireAcademyAdmin');
+  }
+  expect(sourceBlock(functionsSource, 'function canMarkPrivateReservationOutcome', 'function canManageGroupReservations')).toContain('requireAcademyAdmin');
+  expect(sourceBlock(functionsSource, 'exports.markPrivateReservationOutcome', 'exports.updateTeacherStudentPackageCounts')).toContain('canMarkPrivateReservationOutcome');
+  expect(sourceBlock(functionsSource, 'exports.reversePrivateReservationOutcome', 'exports.bootstrapAdmin')).toContain('canMarkPrivateReservationOutcome');
+
+  const studentPackagesRules = sourceBlock(
+    rulesSource,
+    'match /studentPackages/{packageId}',
+    'match /creditTransactions/{txId}'
+  );
+  expect(studentPackagesRules).toContain('allow update: if sameAcademyOnUpdate() &&\n        isAcademyAdmin(resource.data.academyId);');
+  expect(studentPackagesRules).not.toContain('canTeacherUpdateStudentPackageUsage');
+  expect(studentPackagesRules).not.toContain('validTeacherStudentPackageCountUpdate');
+
+  const privateSlotsRules = sourceBlock(
+    rulesSource,
+    'match /privateLessonSlots/{slotId}',
+    'match /privateLessonAvailabilityTemplates/{templateId}'
+  );
+  expect(privateSlotsRules).toContain('isAcademyAdmin(request.resource.data.academyId)');
+  expect(privateSlotsRules).toContain('isAcademyAdmin(resource.data.academyId)');
+  expect(privateSlotsRules).not.toContain('privateSlotBelongsToTeacher(request.resource.data)');
+
+  const groupClassesRules = sourceBlock(
+    rulesSource,
+    'match /groupClasses/{groupClassId}',
+    'match /groupStudents/{groupStudentId}'
+  );
+  expect(groupClassesRules).toContain('allow create: if sameAcademyOnCreate() &&\n        isAcademyAdmin(request.resource.data.academyId);');
+  expect(groupClassesRules).toContain('allow update: if sameAcademyOnUpdate() &&\n        isAcademyAdmin(resource.data.academyId);');
+  expect(groupClassesRules).not.toContain('validTeacherGroupClassShape');
+});
+
 async function loginAsDashboardUser(page, email, password) {
   await page.goto(`${BASE_URL}login/`);
 
@@ -382,7 +457,7 @@ async function openTeacherCountEditStudentPackage(page) {
   return { studentDetail, packageCard };
 }
 
-test('teacher 계정은 웹 대시보드에서 캘린더, 내 1:1 관리, 내 단체반 관리만 볼 수 있다', async ({
+test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관리만 볼 수 있다', async ({
   page,
   browserName,
 }) => {
@@ -395,10 +470,11 @@ test('teacher 계정은 웹 대시보드에서 캘린더, 내 1:1 관리, 내 �
   await loginAsTeacher(page);
 
   await expect(page.getByRole('button', { name: '캘린더', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '내 1:1 관리', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '내 단체반 관리', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '캘린더', level: 1 })).toBeVisible();
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '내 1:1 관리', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '단체반 관리', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '1:1 예약 시간 관리', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '1:1 수업 관리', exact: true })).toHaveCount(0);
@@ -409,13 +485,30 @@ test('teacher 계정은 웹 대시보드에서 캘린더, 내 1:1 관리, 내 �
   await expect(page.getByRole('button', { name: '로그인 초대', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '수강권 추가', exact: true })).toHaveCount(0);
 
+  await page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '내 주간 1:1 시간표', level: 1 })).toBeVisible();
+  await expect(page.getByTestId('private-teacher-weekly-board-section')).toBeVisible({
+    timeout: 15000,
+  });
+  await expect(page.getByText('고정 1:1 요청')).toHaveCount(0);
+  await expect(page.getByText('내 1:1 요청 내역')).toHaveCount(0);
+  await expect(page.getByText('유동 1:1 예약 시간')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '고정 1:1 요청하기', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '수업불가로 닫기', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '수업불가 해제', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '예약 취소 후 공개', exact: true })).toHaveCount(0);
+
   const teacherName = await getTeacherNameFromWelcome(page);
   await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
   await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
   await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 2 })).toBeVisible();
   await expect(page.getByText('결제 횟수')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '예약 추가', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '예약 취소', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '출결/차감', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '이후 일정 삭제', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '삭제', exact: true })).toHaveCount(0);
 
   const groupRows = page.getByTestId('group-row');
@@ -510,117 +603,30 @@ test('teacher with count edit permission still cannot edit package counts direct
   }
 });
 
-test('teacher는 내 1:1 관리에서 본인 고정 1:1 요청 내역을 볼 수 있다', async ({
+test('teacher 1:1 화면은 주간 시간표만 읽기 전용으로 보여준다', async ({
   page,
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 Firestore 내역 검증을 실행합니다.');
-
-  const unique = Date.now();
-  const studentName = `E2E 요청내역 학생 ${unique}`;
-  const subject = `E2E 요청내역 과목 ${unique}`;
-  const date = futureYmd(42);
-  const time = `18:${String(unique % 50).padStart(2, '0')}`;
 
   await loginAsTeacher(page);
 
-  const teacherName = await getTeacherNameFromWelcome(page);
-  await createTeacherLessonRequestHistory({
-    requestId: `teacher-history-${unique}`,
-    teacherName,
-    studentName,
-    date,
-    time,
-    subject,
+  await page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '내 주간 1:1 시간표', level: 1 })).toBeVisible();
+  await expect(page.getByTestId('private-teacher-weekly-board-section')).toBeVisible({
+    timeout: 15000,
   });
-  await createTeacherLessonRequestHistory({
-    requestId: `teacher-history-other-${unique}`,
-    teacherName: `다른 선생님 ${unique}`,
-    studentName: `E2E 다른요청 학생 ${unique}`,
-    date,
-    time,
-    subject: `E2E 다른요청 과목 ${unique}`,
-  });
+  await expect(page.getByText('본인에게 연결된 주간 1:1 시간표와 예약 상태를 읽기 전용으로 확인합니다.')).toBeVisible();
+  await expect(page.getByText('이 화면은 읽기 전용입니다. 수업불가 닫기/해제와 예약 조작은 관리자만 할 수 있습니다.')).toBeVisible();
 
-  await page.getByRole('button', { name: '내 1:1 관리', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 1:1 관리', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '내 1:1 요청 내역' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '수업 요청 관리', exact: true })).toHaveCount(0);
-
-  const historyCard = page
-    .getByTestId('teacher-private-request-history-card')
-    .filter({ hasText: subject });
-  await expect(historyCard).toBeVisible({ timeout: 15000 });
-  await expect(historyCard).toContainText(studentName);
-  await expect(historyCard).toContainText(date);
-  await expect(historyCard).toContainText(time);
-  await expect(historyCard).toContainText('매주 반복 · 4주');
-  await expect(historyCard).toContainText('대기');
-  await expect(page.getByText(`E2E 다른요청 과목 ${unique}`)).toHaveCount(0);
-});
-
-test('teacher 고정 1:1 요청은 lessonRequests만 생성한다', async ({ page, browserName }) => {
-  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 Firestore 생성 검증을 실행합니다.');
-
-  const unique = Date.now();
-  const studentName = `E2E 고정요청 학생 ${unique}`;
-  const subject = `E2E 고정1:1 요청 ${unique}`;
-  const date = futureYmd(35);
-  const time = `19:${String(unique % 50).padStart(2, '0')}`;
-  const beforeSlotCount = await countPrivateLessonSlotsByDateTime(date, time);
-
-  await loginAsTeacher(page);
-
-  const teacherName = await getTeacherNameFromWelcome(page);
-  await page.getByRole('button', { name: '내 1:1 관리', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 1:1 관리', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '내 1:1 관리', level: 2 })).toBeVisible();
-  await expect(page.getByText('유동 1:1 예약 시간')).toBeVisible();
-  await expect(page.getByText('현재 관리자 전용입니다')).toBeVisible();
-
-  await page.getByLabel('새 학생 빠른 등록').check();
-  await page.getByLabel('새 학생 이름').fill(studentName);
-  await page.getByLabel('총 수업 수').fill('4');
-  await page.getByLabel('주당 횟수').selectOption('1');
-  await page.getByLabel('날짜 1').fill(date);
-  await page.getByLabel('시간 1').fill(time);
-  await page.getByLabel('과목 1').fill(subject);
-  await page.getByRole('button', { name: '고정 1:1 요청하기', exact: true }).click();
-
-  await expect(page.getByText('수업 요청이 완료되었습니다.')).toBeVisible();
-
-  let createdRequests = [];
-  await expect
-    .poll(
-      async () => {
-        createdRequests = await findLessonRequestsBySubject(subject);
-        return createdRequests.length;
-      },
-      { timeout: 15000 }
-    )
-    .toBe(1);
-
-  expect(createdRequests[0]).toMatchObject({
-    academyId: DEFAULT_E2E_ACADEMY_ID,
-    teacherName,
-    teacher: teacherName,
-    studentName,
-    student: studentName,
-    date,
-    time,
-    subject,
-    repeatWeekly: true,
-    repeatWeeks: 4,
-    approvalStatus: 'pending',
-    rejectionReason: '',
-  });
-  expect(String(createdRequests[0].studentId || '')).toBeTruthy();
-  expect(createdRequests[0].studentID).toBe(createdRequests[0].studentId);
-
-  const afterSlotCount = await countPrivateLessonSlotsByDateTime(date, time);
-  expect(afterSlotCount).toBe(beforeSlotCount);
+  await expect(page.getByRole('button', { name: '내 1:1 관리', exact: true })).toHaveCount(0);
+  await expect(page.getByText('고정 1:1 요청')).toHaveCount(0);
+  await expect(page.getByText('내 1:1 요청 내역')).toHaveCount(0);
+  await expect(page.getByText('유동 1:1 예약 시간')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '고정 1:1 요청하기', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '수업불가로 닫기', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '수업불가 해제', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '예약 취소 후 공개', exact: true })).toHaveCount(0);
 });
 
 test('admin 계정은 전체 단체반 관리를 볼 수 있다', async ({ page, browserName }) => {
@@ -642,99 +648,44 @@ test('admin 계정은 전체 단체반 관리를 볼 수 있다', async ({ page,
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toBeVisible();
 });
 
-test('teacher는 내 단체반 관리에서 본인 반을 생성/수정하고 학생 관리는 볼 수 없다', async ({
+test('teacher는 내 단체반 관리에서 본인 반을 읽기 전용으로만 볼 수 있다', async ({
   page,
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
-  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 Firestore 생성 검증을 실행합니다.');
 
-  const unique = Date.now();
-  const groupName = `E2E teacher own group ${unique}`;
-  const subject = `E2E teacher group subject ${unique}`;
-  const editedSubject = `E2E teacher group edited ${unique}`;
-  const startDate = futureYmd(21);
-  const groupTime = `17:${String(unique % 50).padStart(2, '0')}`;
-  let createdGroupId = '';
-  const dialogMessages = [];
+  await loginAsTeacher(page);
 
-  try {
-    page.on('dialog', async (dialog) => {
-      dialogMessages.push(dialog.message());
-      await dialog.accept();
-    });
+  const teacherName = await getTeacherNameFromWelcome(page);
+  await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
 
-    await loginAsTeacher(page);
+  await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '수정', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '삭제', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '관리', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '제거', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '예약 추가', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '예약 취소', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '출결/차감', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '차감취소', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '차감복구', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '이후 일정 삭제', exact: true })).toHaveCount(0);
 
-    const teacherName = await getTeacherNameFromWelcome(page);
-    await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
-
-    await page.getByRole('button', { name: '정규반 만들기', exact: true }).click();
-    const addDialog = page.getByRole('dialog', { name: '정규반 만들기' });
-    await expect(addDialog).toBeVisible();
-    await addDialog.getByLabel('반 이름').fill(groupName);
-    await expect(addDialog.getByLabel('담당 선생님')).toBeDisabled();
-    await expect(addDialog.getByLabel('담당 선생님')).toHaveValue(teacherName);
-    await addDialog.getByLabel('정원 (명)').fill('5');
-    await addDialog.getByLabel('수업 시작일 (자동 일정 기준)').fill(startDate);
-    await addDialog.getByLabel('기본 시간 (HH:mm)').fill(groupTime);
-    await addDialog.getByLabel('과목').fill(subject);
-    await addDialog.getByRole('button', { name: '월', exact: true }).click();
-
-    await addDialog.getByRole('button', { name: '저장', exact: true }).click();
-
-    let groupDocs = [];
-    await expect
-      .poll(async () => {
-        groupDocs = await findGroupClassesByName(groupName);
-        return groupDocs.length;
-      }, {
-        message: `teacher group create dialog messages: ${dialogMessages.join(' | ') || '(none)'}`,
-        timeout: 15000,
-      })
-      .toBe(1);
-    await expect(addDialog).toBeHidden({ timeout: 15000 });
-    createdGroupId = groupDocs[0].id;
-    expect(groupDocs[0]).toMatchObject({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      name: groupName,
-      teacher: teacherName,
-      teacherName,
-      maxStudents: 5,
-      time: groupTime,
-      subject,
-    });
-
-    const groupRow = page.getByTestId('group-row').filter({ hasText: groupName }).first();
-    await expect(groupRow).toBeVisible({ timeout: 15000 });
-    await expect(groupRow).toContainText(teacherName);
-    await groupRow.getByRole('button', { name: '수정', exact: true }).click();
-
-    const editDialog = page.getByRole('dialog', { name: '반 수정' });
-    await expect(editDialog).toBeVisible();
-    await expect(editDialog.getByLabel('담당 선생님')).toBeDisabled();
-    await expect(editDialog.getByLabel('담당 선생님')).toHaveValue(teacherName);
-    await editDialog.getByLabel('과목').fill(editedSubject);
-    await editDialog.getByRole('button', { name: '저장', exact: true }).click();
-    await expect(editDialog).toBeHidden({ timeout: 15000 });
-
-    await expect
-      .poll(async () => {
-        const snap = await getDb().collection('groupClasses').doc(createdGroupId).get();
-        return snap.exists ? snap.data()?.subject : '';
-      }, { timeout: 15000 })
-      .toBe(editedSubject);
-
-    await groupRow.click();
-    const groupStudentsSection = page.getByTestId('group-students-section');
-    await expect(groupStudentsSection).toBeVisible();
-    await expect(groupStudentsSection).toContainText('학생 등록과 수강권 관리는 관리자에게 요청해 주세요.');
-    await expect(groupStudentsSection.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);
-    await expect(groupStudentsSection.getByRole('button', { name: '관리', exact: true })).toHaveCount(0);
-    await expect(groupStudentsSection.getByRole('button', { name: '제거', exact: true })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
-  } finally {
-    await deleteGroupClassArtifacts(createdGroupId);
+  const groupRows = page.getByTestId('group-row');
+  await expect.poll(async () => groupRows.count(), { timeout: 15000 }).toBeGreaterThan(0);
+  const rowCount = await groupRows.count();
+  for (let i = 0; i < rowCount; i += 1) {
+    await expect(groupRows.nth(i).locator(':scope > span').nth(1)).toContainText(teacherName);
   }
+
+  await groupRows.first().click();
+  const groupStudentsSection = page.getByTestId('group-students-section');
+  await expect(groupStudentsSection).toBeVisible();
+  await expect(groupStudentsSection).toContainText('학생 등록과 수강권 관리는 관리자에게 요청해 주세요.');
+  await expect(groupStudentsSection.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);
+  await expect(groupStudentsSection.getByRole('button', { name: '관리', exact: true })).toHaveCount(0);
+  await expect(groupStudentsSection.getByRole('button', { name: '제거', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
 });

@@ -384,20 +384,12 @@ function requireActiveAcademyMembership(membershipSnap) {
 
 function canManageGroupReservations(membership) {
   const role = String((membership && membership.role) || "").toLowerCase();
-  return role === "owner" || role === "admin" || role === "teacher";
+  return role === "owner" || role === "admin";
 }
 
 function canManageGroupAttendance(membership) {
   const role = String((membership && membership.role) || "").toLowerCase();
-  return (
-    role === "owner" ||
-    role === "admin" ||
-    Boolean(
-        membership &&
-        membership.permissions &&
-        membership.permissions.canManageAttendance === true,
-    )
-  );
+  return role === "owner" || role === "admin";
 }
 
 function parsePackageTotalCount(value) {
