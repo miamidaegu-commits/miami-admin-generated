@@ -91,16 +91,22 @@ const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP =
 const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM =
   'calc(48px + env(safe-area-inset-bottom, 0px))'
 const STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE = {
+  width: '100%',
   maxWidth: '100vw',
   minWidth: 0,
   overflowX: 'hidden',
   boxSizing: 'border-box',
 }
 const STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE = {
+  width: '100%',
   maxWidth: '100%',
   minWidth: 0,
   overflowX: 'hidden',
   boxSizing: 'border-box',
+}
+const STUDENT_BOOKING_MOBILE_TEXT_WRAP_STYLE = {
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
 }
 
 function getStoredStudentBookingViewMode() {
@@ -671,18 +677,6 @@ export default function StudentBookingPage() {
       ? 'mobile'
       : 'desktop'
   const isMobileStudentBooking = studentBookingViewMode === 'mobile'
-
-  useEffect(() => {
-    if (!isMobileStudentBooking || typeof document === 'undefined') return undefined
-    const previousBodyOverflowX = document.body.style.overflowX
-    const previousDocumentOverflowX = document.documentElement.style.overflowX
-    document.body.style.overflowX = 'hidden'
-    document.documentElement.style.overflowX = 'hidden'
-    return () => {
-      document.body.style.overflowX = previousBodyOverflowX
-      document.documentElement.style.overflowX = previousDocumentOverflowX
-    }
-  }, [isMobileStudentBooking])
 
   function handleStudentBookingViewModeChange(value) {
     const nextValue = STUDENT_BOOKING_VIEW_MODE_OPTIONS.has(value) ? value : 'auto'
@@ -2581,6 +2575,9 @@ export default function StudentBookingPage() {
   const studentBookingMobileContentGuardStyle = isMobileStudentBooking
     ? STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE
     : {}
+  const studentBookingMobileTextGuardStyle = isMobileStudentBooking
+    ? STUDENT_BOOKING_MOBILE_TEXT_WRAP_STYLE
+    : {}
   const privateSlotReserveConfirmMessageLines = String(
     privateSlotReserveConfirm?.message || ''
   ).split('\n')
@@ -2590,6 +2587,7 @@ export default function StudentBookingPage() {
 
   return (
     <div
+      className={isMobileStudentBooking ? 'student-booking-mobile-overflow-root' : undefined}
       style={{
         minHeight: '100vh',
         background:
@@ -2599,7 +2597,8 @@ export default function StudentBookingPage() {
           ? `${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP} 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
           : '32px 20px 60px',
         boxSizing: 'border-box',
-        width: isMobileStudentBooking ? '100vw' : undefined,
+        width: isMobileStudentBooking ? '100%' : undefined,
+        maxWidth: isMobileStudentBooking ? '100vw' : undefined,
         ...studentBookingMobileOverflowGuardStyle,
       }}
     >
@@ -2607,7 +2606,7 @@ export default function StudentBookingPage() {
         style={{
           ...studentBookingMobileOverflowGuardStyle,
           width: '100%',
-          maxWidth: isMobileStudentBooking ? 'min(640px, 100vw)' : 960,
+          maxWidth: isMobileStudentBooking ? '100%' : 960,
           margin: '0 auto',
         }}
       >
@@ -2623,19 +2622,34 @@ export default function StudentBookingPage() {
           }}
         >
           <div style={studentBookingMobileContentGuardStyle}>
-            <h1 style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.65rem' : '2rem' }}>
+            <h1
+              style={{
+                margin: 0,
+                fontSize: isMobileStudentBooking ? '1.65rem' : '2rem',
+                ...studentBookingMobileTextGuardStyle,
+              }}
+            >
               수업 예약
             </h1>
             <p
               data-testid="student-booking-identity-line"
-              style={{ margin: '8px 0 0 0', opacity: 0.78 }}
+              style={{
+                margin: '8px 0 0 0',
+                opacity: 0.78,
+                ...studentBookingMobileTextGuardStyle,
+              }}
             >
               {studentIdentityLine}
             </p>
             {scopedStudentId ? (
               <p
                 data-testid="student-booking-linked-student-id"
-                style={{ margin: '4px 0 0 0', opacity: 0.55, fontSize: 12 }}
+                style={{
+                  margin: '4px 0 0 0',
+                  opacity: 0.55,
+                  fontSize: 12,
+                  ...studentBookingMobileTextGuardStyle,
+                }}
               >
                 학생 ID: {scopedStudentId}
               </p>
@@ -2653,11 +2667,14 @@ export default function StudentBookingPage() {
             <div
               data-testid="student-booking-view-mode-toggle"
               style={{
-                display: 'flex',
+                display: isMobileStudentBooking ? 'grid' : 'flex',
+                gridTemplateColumns: isMobileStudentBooking
+                  ? 'repeat(3, minmax(0, 1fr))'
+                  : undefined,
                 gap: 4,
                 padding: 4,
                 border: '1px solid #30384b',
-                borderRadius: 999,
+                borderRadius: isMobileStudentBooking ? 18 : 999,
                 background: '#101827',
                 flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
                 width: isMobileStudentBooking ? '100%' : undefined,
@@ -2685,6 +2702,11 @@ export default function StudentBookingPage() {
                       fontWeight: selected ? 800 : 700,
                       flex: isMobileStudentBooking ? '1 1 112px' : '0 0 auto',
                       minWidth: 0,
+                      width: isMobileStudentBooking ? '100%' : undefined,
+                      boxSizing: 'border-box',
+                      whiteSpace: 'normal',
+                      lineHeight: 1.2,
+                      ...studentBookingMobileTextGuardStyle,
                     }}
                   >
                     {option.label}
@@ -2709,7 +2731,7 @@ export default function StudentBookingPage() {
             data-testid="student-booking-mobile-tabs"
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
               gap: 6,
               marginBottom: 16,
               position: 'sticky',
@@ -2736,7 +2758,11 @@ export default function StudentBookingPage() {
                   fontWeight: 800,
                   cursor: 'pointer',
                   minWidth: 0,
-                  overflowWrap: 'anywhere',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  whiteSpace: 'normal',
+                  lineHeight: 1.2,
+                  ...studentBookingMobileTextGuardStyle,
                 }}
               >
                 {item.label}
@@ -4054,7 +4080,7 @@ export default function StudentBookingPage() {
                 id="student-private-reservation-cancel-confirm-title"
                 style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.15rem' : '1.2rem' }}
               >
-                1:1 예약을 취소할까요?
+                예약을 취소할까요?
               </h2>
               <div
                 style={{
