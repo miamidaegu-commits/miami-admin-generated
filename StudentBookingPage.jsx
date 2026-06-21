@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import {
   collection,
@@ -94,7 +94,7 @@ const STUDENT_BOOKING_MOBILE_CARD_LIST_BOTTOM_SPACER_HEIGHT =
   'calc(96px + env(safe-area-inset-bottom, 0px))'
 const STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE = {
   width: '100%',
-  maxWidth: '100vw',
+  maxWidth: '100%',
   minWidth: 0,
   overflowX: 'hidden',
   boxSizing: 'border-box',
@@ -109,6 +109,9 @@ const STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE = {
   wordBreak: 'break-word',
 }
 const STUDENT_BOOKING_MOBILE_TEXT_WRAP_STYLE = {
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
   overflowWrap: 'anywhere',
   wordBreak: 'break-word',
 }
@@ -139,6 +142,42 @@ function persistStudentBookingViewMode(value) {
 function getStudentBookingAutoMobileMatch() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
   return window.matchMedia(STUDENT_BOOKING_MOBILE_MEDIA_QUERY).matches
+}
+
+function setHorizontalScrollLeftToZero() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return
+  const currentTop = Number.isFinite(window.scrollY) ? window.scrollY : window.pageYOffset || 0
+  try {
+    window.scrollTo({ left: 0, top: currentTop, behavior: 'auto' })
+  } catch {
+    window.scrollTo(0, currentTop)
+  }
+  const scrollContainers = [
+    document.documentElement,
+    document.body,
+    document.scrollingElement,
+    document.getElementById('root'),
+    document.querySelector('.student-booking-mobile-overflow-root'),
+  ].filter(Boolean)
+  scrollContainers.forEach((element) => {
+    element.scrollLeft = 0
+  })
+}
+
+function resetHorizontalScroll() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return undefined
+  setHorizontalScrollLeftToZero()
+  const frameId =
+    typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame(setHorizontalScrollLeftToZero)
+      : null
+  const timeoutId = window.setTimeout(setHorizontalScrollLeftToZero, 80)
+  return () => {
+    if (frameId !== null && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(frameId)
+    }
+    window.clearTimeout(timeoutId)
+  }
 }
 
 function applyCallableCancelAllowance(cancelAllowance) {
@@ -681,6 +720,33 @@ export default function StudentBookingPage() {
       ? 'mobile'
       : 'desktop'
   const isMobileStudentBooking = studentBookingViewMode === 'mobile'
+
+  useLayoutEffect(() => {
+    if (!isMobileStudentBooking) return undefined
+    return resetHorizontalScroll()
+  }, [isMobileStudentBooking, studentBookingViewModePreference])
+
+  useEffect(() => {
+    if (!isMobileStudentBooking || typeof window === 'undefined' || typeof document === 'undefined') {
+      return undefined
+    }
+    const cleanupCallbacks = [resetHorizontalScroll()].filter(Boolean)
+    const runReset = () => {
+      const cleanup = resetHorizontalScroll()
+      if (cleanup) cleanupCallbacks.push(cleanup)
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') runReset()
+    }
+
+    window.addEventListener('pageshow', runReset)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('pageshow', runReset)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      cleanupCallbacks.splice(0).forEach((cleanup) => cleanup())
+    }
+  }, [isMobileStudentBooking])
 
   function handleStudentBookingViewModeChange(value) {
     const nextValue = STUDENT_BOOKING_VIEW_MODE_OPTIONS.has(value) ? value : 'auto'
@@ -2602,7 +2668,7 @@ export default function StudentBookingPage() {
           : '32px 20px 60px',
         boxSizing: 'border-box',
         width: isMobileStudentBooking ? '100%' : undefined,
-        maxWidth: isMobileStudentBooking ? '100vw' : undefined,
+        maxWidth: isMobileStudentBooking ? '100%' : undefined,
         ...studentBookingMobileOverflowGuardStyle,
       }}
     >
@@ -2722,7 +2788,13 @@ export default function StudentBookingPage() {
               type="button"
               className="btn-primary"
               onClick={handleSignOut}
-              style={{ minWidth: 120, minHeight: isMobileStudentBooking ? 44 : undefined }}
+              style={{
+                minWidth: isMobileStudentBooking ? 0 : 120,
+                minHeight: isMobileStudentBooking ? 44 : undefined,
+                width: isMobileStudentBooking ? '100%' : undefined,
+                maxWidth: isMobileStudentBooking ? '100%' : undefined,
+                boxSizing: 'border-box',
+              }}
             >
               로그아웃
             </button>
@@ -2782,6 +2854,7 @@ export default function StudentBookingPage() {
               borderRadius: 16,
               padding: 24,
               background: 'rgba(17, 24, 39, 0.78)',
+              ...studentBookingMobileOverflowGuardStyle,
             }}
           >
             <h2 style={{ marginTop: 0 }}>예약 페이지를 열 수 없습니다.</h2>
@@ -3971,7 +4044,7 @@ export default function StudentBookingPage() {
               style={{
                 ...studentBookingMobileOverflowGuardStyle,
                 width: '100%',
-                maxWidth: isMobileStudentBooking ? 'min(420px, calc(100vw - 24px))' : 420,
+                maxWidth: isMobileStudentBooking ? '100%' : 420,
                 border: '1px solid #435572',
                 borderRadius: isMobileStudentBooking ? 18 : 14,
                 background: '#162033',
@@ -4101,7 +4174,7 @@ export default function StudentBookingPage() {
               style={{
                 ...studentBookingMobileOverflowGuardStyle,
                 width: '100%',
-                maxWidth: isMobileStudentBooking ? 'min(420px, calc(100vw - 24px))' : 420,
+                maxWidth: isMobileStudentBooking ? '100%' : 420,
                 border: '1px solid #73505a',
                 borderRadius: isMobileStudentBooking ? 18 : 14,
                 background: '#162033',
