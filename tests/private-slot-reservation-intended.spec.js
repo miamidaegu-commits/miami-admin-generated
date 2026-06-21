@@ -1114,6 +1114,8 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain('STUDENT_BOOKING_MOBILE_TEXT_WRAP_STYLE');
   expect(source).toContain("overflowWrap: 'anywhere'");
   expect(source).toContain("wordBreak: 'break-word'");
+  expect(source).toContain('STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE');
+  expect(source).toContain('STUDENT_BOOKING_MOBILE_TWO_COLUMN_ACTION_STYLE');
   expect(source).toContain('student-booking-mobile-overflow-root');
   expect(source).toContain("width: isMobileStudentBooking ? '100%' : undefined");
   expect(source).toContain("maxWidth: isMobileStudentBooking ? '100%' : undefined");
@@ -1122,6 +1124,10 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain("display: isMobileStudentBooking ? 'grid' : 'flex'");
   expect(source).toContain("gridTemplateColumns: isMobileStudentBooking");
   expect(source).toContain("'repeat(3, minmax(0, 1fr))'");
+  expect(source).toContain("aria-label={option.label}");
+  expect(source).toContain("title={option.label}");
+  expect(source).toContain("mobileLabel: 'PC'");
+  expect(source).toContain("mobileLabel: '모바일'");
   expect(source).toContain("whiteSpace: 'normal'");
   expect(source).toContain("gridTemplateColumns: 'repeat(2, minmax(0, 1fr))'");
   expect(source).toContain("maxWidth: isMobileStudentBooking ? '100%' : 420");
@@ -1148,6 +1154,10 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).not.toMatch(/window\.confirm\s*\(/);
   expect(source).not.toMatch(/window\.confirm\s*\(\s*buildPrivateSlotReserveConfirmMessage/);
   expect(source).not.toMatch(/window\.confirm\s*\(\s*buildPrivateReservationCancelConfirmMessage/);
+  expect(source).not.toMatch(/minmax\(180px,\s*1fr\)/);
+  expect(source).not.toMatch(/minmax\(160px,\s*1fr\)/);
+  expect(source).not.toMatch(/minWidth:\s*180/);
+  expect(source).not.toMatch(/minWidth:\s*160/);
   expect(source).toMatch(/setPrivateSlotReserveConfirm[\s\S]*buildPrivateSlotReserveConfirmMessage/);
   expect(source).toMatch(/bookingStatus === 'available'[\s\S]*slot\.isBookable === true[\s\S]*slot\.status === 'open'/);
 });
