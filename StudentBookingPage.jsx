@@ -89,7 +89,9 @@ const STUDENT_BOOKING_VIEW_MODE_OPTIONS = new Set(['auto', 'desktop', 'mobile'])
 const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP =
   'calc(18px + env(safe-area-inset-top, 0px))'
 const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM =
-  'calc(48px + env(safe-area-inset-bottom, 0px))'
+  'calc(140px + env(safe-area-inset-bottom, 0px))'
+const STUDENT_BOOKING_MOBILE_CARD_LIST_BOTTOM_SPACER_HEIGHT =
+  'calc(96px + env(safe-area-inset-bottom, 0px))'
 const STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE = {
   width: '100%',
   maxWidth: '100vw',
@@ -103,6 +105,8 @@ const STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE = {
   minWidth: 0,
   overflowX: 'hidden',
   boxSizing: 'border-box',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
 }
 const STUDENT_BOOKING_MOBILE_TEXT_WRAP_STYLE = {
   overflowWrap: 'anywhere',
@@ -3118,6 +3122,16 @@ export default function StudentBookingPage() {
                         : null}
                     </article>
                   ))}
+                  {isMobileStudentBooking ? (
+                    <div
+                      aria-hidden="true"
+                      data-testid="student-upcoming-private-lessons-mobile-spacer"
+                      style={{
+                        height: STUDENT_BOOKING_MOBILE_CARD_LIST_BOTTOM_SPACER_HEIGHT,
+                        ...studentBookingMobileContentGuardStyle,
+                      }}
+                    />
+                  ) : null}
                 </div>
               )}
             </section>
@@ -3701,6 +3715,16 @@ export default function StudentBookingPage() {
                       </article>
                     )
                   })}
+                  {isMobileStudentBooking ? (
+                    <div
+                      aria-hidden="true"
+                      data-testid="student-private-reservations-mobile-spacer"
+                      style={{
+                        height: STUDENT_BOOKING_MOBILE_CARD_LIST_BOTTOM_SPACER_HEIGHT,
+                        ...studentBookingMobileContentGuardStyle,
+                      }}
+                    />
+                  ) : null}
                 </div>
               )}
             </section>
@@ -3909,6 +3933,16 @@ export default function StudentBookingPage() {
                 </div>
               )}
             </section>
+            {isMobileStudentBooking ? (
+              <div
+                aria-hidden="true"
+                data-testid="student-booking-mobile-bottom-spacer"
+                style={{
+                  height: STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM,
+                  ...studentBookingMobileOverflowGuardStyle,
+                }}
+              />
+            ) : null}
           </div>
         )}
         {privateSlotReserveConfirm ? (
