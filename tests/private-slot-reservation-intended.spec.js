@@ -378,6 +378,47 @@ async function loginAsStudentWithPrivateBooking(page, email) {
   );
 }
 
+async function detectStudentBookingViewportOverflow(page) {
+  return page.evaluate(() => {
+    const vw = window.innerWidth;
+
+    const rootOverflow = {
+      innerWidth: vw,
+      documentClientWidth: document.documentElement.clientWidth,
+      documentScrollWidth: document.documentElement.scrollWidth,
+      bodyClientWidth: document.body.clientWidth,
+      bodyScrollWidth: document.body.scrollWidth,
+    };
+
+    const offenders = Array.from(document.querySelectorAll('body *'))
+      .map((el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return {
+          tag: el.tagName,
+          text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 100),
+          left: Math.round(rect.left),
+          right: Math.round(rect.right),
+          width: Math.round(rect.width),
+          overflowX: style.overflowX,
+          display: style.display,
+          position: style.position,
+          minWidth: style.minWidth,
+          widthStyle: style.width,
+          maxWidth: style.maxWidth,
+          paddingLeft: style.paddingLeft,
+          paddingRight: style.paddingRight,
+          boxSizing: style.boxSizing,
+          className: String(el.className || '').slice(0, 100),
+        };
+      })
+      .filter((item) => item.right > vw + 1 || item.left < -1)
+      .slice(0, 40);
+
+    return { rootOverflow, offenders };
+  });
+}
+
 async function createStudentFixture(db, auth, {
   unique,
   roleName,
@@ -1101,7 +1142,8 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain('student-booking-mobile-bottom-spacer');
   expect(source).toContain("maxWidth: '100%'");
   expect(source).toContain('minWidth: 0');
-  expect(source).toContain("overflowX: 'hidden'");
+  expect(source).not.toContain("overflowX: 'hidden'");
+  expect(source).toContain('STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE');
   expect(source).toContain('resetHorizontalScroll');
   expect(source).toContain('requestAnimationFrame');
   expect(source).toContain('scrollLeft = 0');
@@ -1115,7 +1157,7 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain("overflowWrap: 'anywhere'");
   expect(source).toContain("wordBreak: 'break-word'");
   expect(source).toContain('STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE');
-  expect(source).toContain('STUDENT_BOOKING_MOBILE_TWO_COLUMN_ACTION_STYLE');
+  expect(source).toContain('STUDENT_BOOKING_MOBILE_STACKED_ACTION_STYLE');
   expect(source).toContain('student-booking-mobile-overflow-root');
   expect(source).toContain("width: isMobileStudentBooking ? '100%' : undefined");
   expect(source).toContain("maxWidth: isMobileStudentBooking ? '100%' : undefined");
@@ -1130,6 +1172,8 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain("mobileLabel: '모바일'");
   expect(source).toContain("whiteSpace: 'normal'");
   expect(source).toContain("gridTemplateColumns: 'repeat(2, minmax(0, 1fr))'");
+  expect(source).toContain("gridTemplateColumns: '1fr'");
+  expect(source).toContain("gridTemplateColumns: isMobileStudentBooking ? '1fr' : undefined");
   expect(source).toContain("maxWidth: isMobileStudentBooking ? '100%' : 420");
   expect(source).toContain('student-booking-mobile-tabs');
   expect(source).toContain('학생 예약 빠른 이동');
@@ -1160,6 +1204,80 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).not.toMatch(/minWidth:\s*160/);
   expect(source).toMatch(/setPrivateSlotReserveConfirm[\s\S]*buildPrivateSlotReserveConfirmMessage/);
   expect(source).toMatch(/bookingStatus === 'available'[\s\S]*slot\.isBookable === true[\s\S]*slot\.status === 'open'/);
+});
+
+test('student booking page avoids horizontal viewport overflow on mobile', async ({
+  browser,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private reservation setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  let fixture = null;
+  const context = await browser.newContext({
+    viewport: { width: 320, height: 568 },
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3,
+  });
+
+  try {
+    fixture = await createFixture(`${Date.now()}-${testInfo.workerIndex}-mobile-overflow`);
+    const page = await context.newPage();
+    await loginAsStudentWithPrivateBooking(page, fixture.eligibleStudent.email);
+    await page.getByTestId('student-booking-view-mode-mobile').click();
+    await expect(page.getByTestId('student-booking-mobile-tabs')).toBeVisible({ timeout: 15000 });
+    await expect(studentSlotCard(page, fixture.date)).toBeVisible({ timeout: 15000 });
+
+    const overflow = await detectStudentBookingViewportOverflow(page);
+    console.log(JSON.stringify({ state: 'initial', ...overflow }, null, 2));
+
+    expect(overflow.rootOverflow.documentScrollWidth).toBeLessThanOrEqual(
+      overflow.rootOverflow.innerWidth + 1
+    );
+    expect(overflow.rootOverflow.bodyScrollWidth).toBeLessThanOrEqual(
+      overflow.rootOverflow.innerWidth + 1
+    );
+    expect(overflow.offenders).toEqual([]);
+
+    await studentSlotCard(page, fixture.date).getByTestId('student-private-slot-reserve-button').click();
+    await expect(page.getByTestId('student-private-slot-reserve-confirm-modal')).toBeVisible({
+      timeout: 15000,
+    });
+
+    const reserveModalOverflow = await detectStudentBookingViewportOverflow(page);
+    console.log(JSON.stringify({ state: 'reserve-modal', ...reserveModalOverflow }, null, 2));
+
+    expect(reserveModalOverflow.rootOverflow.documentScrollWidth).toBeLessThanOrEqual(
+      reserveModalOverflow.rootOverflow.innerWidth + 1
+    );
+    expect(reserveModalOverflow.rootOverflow.bodyScrollWidth).toBeLessThanOrEqual(
+      reserveModalOverflow.rootOverflow.innerWidth + 1
+    );
+    expect(reserveModalOverflow.offenders).toEqual([]);
+
+    await page.getByTestId('student-private-slot-reserve-confirm-cancel').click();
+    await page.getByTestId('student-booking-view-mode-desktop').click();
+    await expect(page.getByTestId('student-booking-view-mode-desktop')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+
+    const desktopModeOverflow = await detectStudentBookingViewportOverflow(page);
+    console.log(JSON.stringify({ state: 'desktop-mode', ...desktopModeOverflow }, null, 2));
+
+    expect(desktopModeOverflow.rootOverflow.documentScrollWidth).toBeLessThanOrEqual(
+      desktopModeOverflow.rootOverflow.innerWidth + 1
+    );
+    expect(desktopModeOverflow.rootOverflow.bodyScrollWidth).toBeLessThanOrEqual(
+      desktopModeOverflow.rootOverflow.innerWidth + 1
+    );
+    expect(desktopModeOverflow.offenders).toEqual([]);
+  } finally {
+    await context.close().catch(() => {});
+    await cleanupFixture(fixture).catch(() => {});
+  }
 });
 
 test('student booking page uses in-app private cancellation confirm modal', async () => {

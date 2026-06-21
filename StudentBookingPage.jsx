@@ -96,14 +96,12 @@ const STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE = {
   width: '100%',
   maxWidth: '100%',
   minWidth: 0,
-  overflowX: 'hidden',
   boxSizing: 'border-box',
 }
 const STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE = {
   width: '100%',
   maxWidth: '100%',
   minWidth: 0,
-  overflowX: 'hidden',
   boxSizing: 'border-box',
   overflowWrap: 'anywhere',
   wordBreak: 'break-word',
@@ -121,9 +119,15 @@ const STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE = {
   minWidth: 0,
   boxSizing: 'border-box',
 }
-const STUDENT_BOOKING_MOBILE_TWO_COLUMN_ACTION_STYLE = {
+const STUDENT_BOOKING_MOBILE_STACKED_ACTION_STYLE = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gridTemplateColumns: '1fr',
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+}
+const STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE = {
   width: '100%',
   maxWidth: '100%',
   minWidth: 0,
@@ -3182,7 +3186,7 @@ export default function StudentBookingPage() {
                             flexWrap: isMobileStudentBooking ? undefined : 'wrap',
                             marginTop: 12,
                             ...(isMobileStudentBooking
-                              ? STUDENT_BOOKING_MOBILE_TWO_COLUMN_ACTION_STYLE
+                              ? STUDENT_BOOKING_MOBILE_STACKED_ACTION_STYLE
                               : {}),
                           }}
                         >
@@ -3351,9 +3355,12 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
+                          <div style={studentBookingMobileTextGuardStyle}>
                             <strong style={{ fontSize: '1rem' }}>{lesson.subject || '그룹 수업'}</strong>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {[lesson.date, lesson.time].filter(Boolean).join(' · ') || lesson.id}
@@ -3367,7 +3374,16 @@ export default function StudentBookingPage() {
                               {lessonBookingStatusLabel} · {getLessonCapacityLabel(lesson)}
                             </div>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              ...(isMobileStudentBooking
+                                ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                : {}),
+                            }}
+                          >
                             {isReserved ? (
                               <button
                                 type="button"
@@ -3383,6 +3399,9 @@ export default function StudentBookingPage() {
                                   color: 'white',
                                   cursor: busyReservationId ? 'not-allowed' : 'pointer',
                                   fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                  ...(isMobileStudentBooking
+                                    ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                    : {}),
                                 }}
                               >
                                 {isBusy ? '취소 중...' : '예약 취소'}
@@ -3402,6 +3421,9 @@ export default function StudentBookingPage() {
                                   color: 'white',
                                   cursor: canReserve ? 'pointer' : 'not-allowed',
                                   fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                  ...(isMobileStudentBooking
+                                    ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                    : {}),
                                 }}
                               >
                                 {isBusy
@@ -3437,7 +3459,10 @@ export default function StudentBookingPage() {
               </p>
               <div
                 style={{
-                  display: 'inline-flex',
+                  display: isMobileStudentBooking ? 'grid' : 'inline-flex',
+                  gridTemplateColumns: isMobileStudentBooking
+                    ? 'repeat(2, minmax(0, 1fr))'
+                    : undefined,
                   gap: 4,
                   marginTop: 12,
                   padding: isMobileStudentBooking ? 5 : 4,
@@ -3634,7 +3659,15 @@ export default function StudentBookingPage() {
                                           isMobileStudentBooking
                                         )}
                                       >
-                                        <div style={{ display: 'grid', gap: isMobileStudentBooking ? 8 : 6 }}>
+                                        <div
+                                          style={{
+                                            display: 'grid',
+                                            gap: isMobileStudentBooking ? 8 : 6,
+                                            ...(isMobileStudentBooking
+                                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                              : {}),
+                                          }}
+                                        >
                                           <div
                                             style={{
                                               display: 'flex',
@@ -3642,9 +3675,17 @@ export default function StudentBookingPage() {
                                               justifyContent: 'space-between',
                                               gap: 8,
                                               flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
+                                              ...(isMobileStudentBooking
+                                                ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                                : {}),
                                             }}
                                           >
-                                            <strong style={{ fontSize: isMobileStudentBooking ? 15 : 14 }}>
+                                            <strong
+                                              style={{
+                                                fontSize: isMobileStudentBooking ? 15 : 14,
+                                                ...studentBookingMobileTextGuardStyle,
+                                              }}
+                                            >
                                               {slot.teacherName || slot.teacher || '1:1 수업'}
                                             </strong>
                                             <span style={getPrivateSlotBadgeStyle(
@@ -3653,7 +3694,13 @@ export default function StudentBookingPage() {
                                               {statusLabel}
                                             </span>
                                           </div>
-                                          <div style={{ opacity: 0.74, fontSize: isMobileStudentBooking ? 14 : 13 }}>
+                                          <div
+                                            style={{
+                                              opacity: 0.74,
+                                              fontSize: isMobileStudentBooking ? 14 : 13,
+                                              ...studentBookingMobileTextGuardStyle,
+                                            }}
+                                          >
                                             {slot.date || day.date} · {slot.time || '-'} ·{' '}
                                             {Number(slot.durationMinutes || 0) || 60}분
                                           </div>
@@ -3670,7 +3717,15 @@ export default function StudentBookingPage() {
                                       data-booking-status={bookingStatus}
                                       style={getPrivateSlotCardStyle(bookingStatus, isMobileStudentBooking)}
                                     >
-                                      <div style={{ display: 'grid', gap: isMobileStudentBooking ? 8 : 6 }}>
+                                      <div
+                                        style={{
+                                          display: 'grid',
+                                          gap: isMobileStudentBooking ? 8 : 6,
+                                          ...(isMobileStudentBooking
+                                            ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                            : {}),
+                                        }}
+                                      >
                                         <div
                                           style={{
                                             display: 'flex',
@@ -3678,16 +3733,30 @@ export default function StudentBookingPage() {
                                             justifyContent: 'space-between',
                                             gap: 8,
                                             flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
+                                            ...(isMobileStudentBooking
+                                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                              : {}),
                                           }}
                                         >
-                                          <strong style={{ fontSize: isMobileStudentBooking ? 15 : 14 }}>
+                                          <strong
+                                            style={{
+                                              fontSize: isMobileStudentBooking ? 15 : 14,
+                                              ...studentBookingMobileTextGuardStyle,
+                                            }}
+                                          >
                                             {slot.teacherName || slot.teacher || '1:1 수업'}
                                           </strong>
                                           <span style={getPrivateSlotBadgeStyle(bookingStatus)}>
                                             {statusLabel}
                                           </span>
                                         </div>
-                                        <div style={{ opacity: 0.74, fontSize: isMobileStudentBooking ? 14 : 13 }}>
+                                        <div
+                                          style={{
+                                            opacity: 0.74,
+                                            fontSize: isMobileStudentBooking ? 14 : 13,
+                                            ...studentBookingMobileTextGuardStyle,
+                                          }}
+                                        >
                                           {slot.date || day.date} · {slot.time || '-'} ·{' '}
                                           {Number(slot.durationMinutes || 0) || 60}분
                                         </div>
@@ -3723,6 +3792,9 @@ export default function StudentBookingPage() {
                                             cursor: canReserve ? 'pointer' : 'not-allowed',
                                             fontSize: isMobileStudentBooking ? 14 : undefined,
                                             fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                            ...(isMobileStudentBooking
+                                              ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                              : {}),
                                           }}
                                         >
                                           {isBusy
@@ -3801,15 +3873,21 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
+                          <div style={studentBookingMobileTextGuardStyle}>
                             <div
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
                                 gap: 8,
                                 flexWrap: 'wrap',
+                                ...(isMobileStudentBooking
+                                  ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                  : {}),
                               }}
                             >
                               <strong style={{ fontSize: '1rem' }}>
@@ -3913,9 +3991,12 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
+                          <div style={studentBookingMobileTextGuardStyle}>
                             <strong style={{ fontSize: '1rem' }}>
                               {reservationTitle}
                             </strong>
@@ -3946,6 +4027,9 @@ export default function StudentBookingPage() {
                                 color: 'white',
                                 cursor: busyReservationId ? 'not-allowed' : 'pointer',
                                 fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                ...(isMobileStudentBooking
+                                  ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                  : {}),
                               }}
                             >
                               {isBusy ? '취소 중...' : '예약 취소'}
@@ -4016,9 +4100,12 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
+                          <div style={studentBookingMobileTextGuardStyle}>
                             <strong style={{ fontSize: '1rem' }}>{item.title}</strong>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {item.typeLabel}
@@ -4151,9 +4238,7 @@ export default function StudentBookingPage() {
               <div
                 style={{
                   display: isMobileStudentBooking ? 'grid' : 'flex',
-                  gridTemplateColumns: isMobileStudentBooking
-                    ? 'repeat(2, minmax(0, 1fr))'
-                    : undefined,
+                  gridTemplateColumns: isMobileStudentBooking ? '1fr' : undefined,
                   justifyContent: isMobileStudentBooking ? undefined : 'flex-end',
                   gap: 8,
                   flexWrap: isMobileStudentBooking ? undefined : 'wrap',
@@ -4300,9 +4385,7 @@ export default function StudentBookingPage() {
               <div
                 style={{
                   display: isMobileStudentBooking ? 'grid' : 'flex',
-                  gridTemplateColumns: isMobileStudentBooking
-                    ? 'repeat(2, minmax(0, 1fr))'
-                    : undefined,
+                  gridTemplateColumns: isMobileStudentBooking ? '1fr' : undefined,
                   justifyContent: isMobileStudentBooking ? undefined : 'flex-end',
                   gap: 8,
                   flexWrap: isMobileStudentBooking ? undefined : 'wrap',
