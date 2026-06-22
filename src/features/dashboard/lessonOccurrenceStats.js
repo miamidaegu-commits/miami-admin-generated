@@ -216,6 +216,14 @@ function createEmptyStats(range) {
   }
 }
 
+function createStatsAccumulator(range) {
+  return {
+    stats: createEmptyStats(range),
+    seenToday: new Set(),
+    seenMonth: new Set(),
+  }
+}
+
 function addRowToBucket(bucket, row) {
   bucket.total += 1
   if (getOccurrenceKind(row) === 'group') {
@@ -230,6 +238,78 @@ function rowMatchesOptionalTeacherScope(row, teacherScope) {
   return rowMatchesTeacherScope(row, teacherScope)
 }
 
+function getSafeLessonDate(row) {
+  try {
+    return String(getLessonStorageDateString(row) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function getSafeLessonOccurrenceKey(row) {
+  try {
+    return String(getLessonOccurrenceKey(row) || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function addRowToStatsAccumulator(accumulator, row, { date, key, range, todayYmd }) {
+  if (!accumulator || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return
+  const occurrenceKey = key || getSafeLessonOccurrenceKey(row)
+  if (!occurrenceKey) return
+
+  if (date === todayYmd && !accumulator.seenToday.has(occurrenceKey)) {
+    accumulator.seenToday.add(occurrenceKey)
+    addRowToBucket(accumulator.stats.today, row)
+  }
+
+  if (
+    range.endYmd &&
+    date >= range.startYmd &&
+    date <= range.endYmd &&
+    !accumulator.seenMonth.has(occurrenceKey)
+  ) {
+    accumulator.seenMonth.add(occurrenceKey)
+    addRowToBucket(accumulator.stats.month, row)
+  }
+}
+
+function getStatsTeacherIdentityKeys(row) {
+  const stableUidKeys = []
+  const stableTeacherKeys = []
+  const displayKeys = []
+  ;[
+    row?.teacherUid,
+    row?.teacherUID,
+    row?.teacherMembershipUid,
+    row?.uid,
+    row?.teacherId,
+    row?.teacherID,
+    row?.id,
+  ].forEach((value) => {
+    const key = normalizeText(value || '')
+    if (key) stableUidKeys.push(key)
+  })
+  ;[row?.teacherKey, row?.value].forEach((value) => {
+    const key = normalizeText(value || '')
+    if (key) stableTeacherKeys.push(key)
+  })
+  ;[row?.teacher, row?.teacherName, row?.displayName, row?.name, row?.label].forEach((value) => {
+    const key = normalizeText(value || '')
+    if (key) displayKeys.push(key)
+  })
+
+  const seen = new Set()
+  const out = []
+  ;[...stableUidKeys, ...stableTeacherKeys, ...displayKeys].forEach((key) => {
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    out.push(key)
+  })
+  return out
+}
+
 export function buildLessonOccurrenceStats({
   rows = [],
   monthDate = new Date(),
@@ -237,29 +317,22 @@ export function buildLessonOccurrenceStats({
   teacherScope = null,
 } = {}) {
   const range = getLessonStatsMonthRange({ monthDate, todayYmd })
-  const stats = createEmptyStats(range)
-  const seenToday = new Set()
-  const seenMonth = new Set()
+  const accumulator = createStatsAccumulator(range)
 
   ;(Array.isArray(rows) ? rows : []).forEach((row) => {
     if (!rowMatchesOptionalTeacherScope(row, teacherScope)) return
     if (!isCountableLessonOccurrence(row)) return
-    const date = String(getLessonStorageDateString(row) || '').trim()
+    const date = getSafeLessonDate(row)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return
-    const key = getLessonOccurrenceKey(row)
-
-    if (date === todayYmd && !seenToday.has(key)) {
-      seenToday.add(key)
-      addRowToBucket(stats.today, row)
-    }
-
-    if (range.endYmd && date >= range.startYmd && date <= range.endYmd && !seenMonth.has(key)) {
-      seenMonth.add(key)
-      addRowToBucket(stats.month, row)
-    }
+    addRowToStatsAccumulator(accumulator, row, {
+      date,
+      key: getSafeLessonOccurrenceKey(row),
+      range,
+      todayYmd,
+    })
   })
 
-  return stats
+  return accumulator.stats
 }
 
 function getTeacherStatsDisplayName(teacher) {
@@ -279,27 +352,51 @@ export function buildTeacherLessonOccurrenceStats({
   monthDate = new Date(),
   todayYmd = getTodayStorageDateString(),
 } = {}) {
-  const overall = buildLessonOccurrenceStats({ rows, monthDate, todayYmd })
-  const teacherRows = (Array.isArray(teachers) ? teachers : []).map((teacher) => {
+  const range = getLessonStatsMonthRange({ monthDate, todayYmd })
+  const overallAccumulator = createStatsAccumulator(range)
+  const safeTeachers = Array.isArray(teachers) ? teachers : []
+  const teacherAccumulators = safeTeachers.map(() => createStatsAccumulator(range))
+  const teacherIndexesByIdentityKey = new Map()
+
+  const teacherRows = safeTeachers.map((teacher, index) => {
     const teacherScope = getTeacherScopeFromRecord(teacher)
-    const stats = buildLessonOccurrenceStats({
-      rows,
-      monthDate,
-      todayYmd,
-      teacherScope,
+    getStatsTeacherIdentityKeys(teacherScope).forEach((key) => {
+      if (!teacherIndexesByIdentityKey.has(key)) teacherIndexesByIdentityKey.set(key, [])
+      teacherIndexesByIdentityKey.get(key).push(index)
     })
     return {
       teacherId: String(teacher?.id || teacher?.value || teacher?.teacherKey || '').trim(),
       teacherKey: String(teacher?.teacherKey || teacher?.teacherName || teacher?.name || '').trim(),
       teacherName: getTeacherStatsDisplayName(teacher),
-      stats,
+      stats: teacherAccumulators[index].stats,
     }
   })
 
+  ;(Array.isArray(rows) ? rows : []).forEach((row) => {
+    if (!isCountableLessonOccurrence(row)) return
+    const date = getSafeLessonDate(row)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return
+    const key = getSafeLessonOccurrenceKey(row)
+    if (!key) return
+
+    const countableRow = { date, key, range, todayYmd }
+    addRowToStatsAccumulator(overallAccumulator, row, countableRow)
+
+    const matchedTeacherIndexes = new Set()
+    getStatsTeacherIdentityKeys(row).forEach((identityKey) => {
+      ;(teacherIndexesByIdentityKey.get(identityKey) || []).forEach((index) => {
+        matchedTeacherIndexes.add(index)
+      })
+    })
+    matchedTeacherIndexes.forEach((index) => {
+      addRowToStatsAccumulator(teacherAccumulators[index], row, countableRow)
+    })
+  })
+
   return {
-    overall,
+    overall: overallAccumulator.stats,
     teacherRows,
-    range: overall.range,
+    range,
   }
 }
 
