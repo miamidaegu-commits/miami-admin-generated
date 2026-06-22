@@ -229,17 +229,20 @@ async function expectPanelContains(page, text) {
   await expect(page.getByTestId('today-schedule-panel')).toContainText(text, { timeout: 20000 });
 }
 
-async function expectSummaryCount(page, label, count) {
-  const item = page
+function getSummaryItem(page, label) {
+  return page
     .getByTestId('today-schedule-summary-item')
-    .filter({ hasText: label });
+    .filter({ has: page.getByText(label, { exact: true }) })
+    .first();
+}
+
+async function expectSummaryCount(page, label, count) {
+  const item = getSummaryItem(page, label);
   await expect(item).toContainText(String(count), { timeout: 20000 });
 }
 
 async function expectSummaryCountAtLeast(page, label, count) {
-  const item = page
-    .getByTestId('today-schedule-summary-item')
-    .filter({ hasText: label });
+  const item = getSummaryItem(page, label);
   await expect
     .poll(async () => {
       const text = (await item.textContent()) || '';
@@ -672,11 +675,18 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await login(page, ADMIN_EMAIL, ADMIN_PASSWORD, /\/dashboard/);
 
   await expect(page.getByTestId('today-schedule-panel')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('today-schedule-panel')).toContainText('오늘 수업');
+  await expect(page.getByTestId('today-schedule-panel')).toContainText('이번 달 누적 수업');
+  await expect(page.getByTestId('teacher-lesson-count-stats-panel')).toContainText('선생님별 수업 통계');
+  await expect(page.getByTestId('teacher-lesson-count-stats-panel')).toContainText('오늘 수업');
+  await expect(page.getByTestId('teacher-lesson-count-stats-panel')).toContainText('이번 달 누적 수업');
   await expectPanelContains(page, fixture.ownGroupTitle);
   await expectPanelContains(page, fixture.otherGroupTitle);
   await expectPanelContains(page, fixture.ownPrivateTitle);
   await expectPanelContains(page, fixture.ownPrivateReservationTitle);
   await expectPanelContains(page, fixture.today);
+  await expectPanelContains(page, '오늘 수업');
+  await expectPanelContains(page, '이번 달 누적 수업');
   await expectPanelContains(page, '3회차');
   await expect(page.getByTestId('today-schedule-panel')).not.toContainText(fixture.releasedFixedTitle);
   await expect(page.getByTestId('today-schedule-panel')).not.toContainText(
@@ -755,10 +765,14 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
 
   const panel = page.getByTestId('today-schedule-panel');
   await expect(panel).toBeVisible({ timeout: 20000 });
+  await expect(panel).toContainText('오늘 수업');
+  await expect(panel).toContainText('이번 달 누적 수업');
   await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
   await expect(panel).toContainText(fixture.ownPrivateTitle);
   await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
   await expect(panel).toContainText(fixture.today);
+  await expect(panel).toContainText('오늘 수업');
+  await expect(panel).toContainText('이번 달 누적 수업');
   await expect(panel).toContainText('예약 완료');
   await expect(panel).toContainText('3회차');
   await expectSummaryCount(page, '개인 수업', 2);
