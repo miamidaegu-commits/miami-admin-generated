@@ -1,12 +1,17 @@
 export default function TodaySchedulePanel({
   items,
   summary,
+  lessonStats,
   loading = false,
   showStudent = true,
   title = '오늘의 일정',
 }) {
   const rows = Array.isArray(items) ? items : []
   const summaryItems = [
+    ['오늘 수업', lessonStats?.today?.total ?? summary?.todayLessonCount],
+    ['이번 달 누적 수업', lessonStats?.month?.total ?? summary?.monthlyLessonCount],
+    ['이번 달 1:1', lessonStats?.month?.privateCount ?? summary?.monthlyPrivateLessonCount],
+    ['이번 달 단체수업', lessonStats?.month?.groupCount ?? summary?.monthlyGroupLessonCount],
     ['개인 수업', summary?.privateLessonCount],
     ['단체수업', summary?.groupLessonCount],
     ['차감취소', summary?.deductCancelledCount],

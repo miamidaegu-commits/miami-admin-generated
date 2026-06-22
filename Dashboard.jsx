@@ -71,6 +71,7 @@ import {
 } from './src/features/dashboard/dashboardViewUtils.js'
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
 import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedulePanel.jsx'
+import LessonCountStatsPanel from './src/features/dashboard/components/LessonCountStatsPanel.jsx'
 import GroupsSection from './src/features/dashboard/sections/GroupsSection.jsx'
 import PrivateLessonSlotsSection from './src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'
 import LessonRequestsSection from './src/features/dashboard/sections/LessonRequestsSection.jsx'
@@ -147,6 +148,11 @@ import {
   getTeacherScopeFromRecord,
   rowMatchesTeacherScope,
 } from './src/features/dashboard/teacherLessonRosterHelpers.js'
+import {
+  buildLessonOccurrenceStats,
+  buildTeacherLessonOccurrenceStats,
+  formatLessonStatsMonthLabel,
+} from './src/features/dashboard/lessonOccurrenceStats.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -321,6 +327,17 @@ function buildTeacherOptionLabel({ displayName, teacherKey, teacherEmail, teache
     getShortIdentity(teacherUid)
   if (!duplicateName || !identity || identity === base) return base
   return `${base} · ${identity}`
+}
+
+function flattenLessonOccurrenceStats(stats) {
+  return {
+    todayLessonCount: Number(stats?.today?.total || 0),
+    todayPrivateLessonCount: Number(stats?.today?.privateCount || 0),
+    todayGroupLessonCount: Number(stats?.today?.groupCount || 0),
+    monthlyLessonCount: Number(stats?.month?.total || 0),
+    monthlyPrivateLessonCount: Number(stats?.month?.privateCount || 0),
+    monthlyGroupLessonCount: Number(stats?.month?.groupCount || 0),
+  }
 }
 
 function buildPrivateSlotTeacherFields(optionOrValue) {
@@ -3071,32 +3088,10 @@ export default function Dashboard() {
     todayYmd,
   ])
 
-  const todayScheduleSummary = useMemo(() => {
-    const items = Array.isArray(todayScheduleItems) ? todayScheduleItems : []
-    return {
-      privateLessonCount: items.filter(
-        (item) =>
-          item.sourceKind === 'privateLesson' || item.sourceKind === 'privateReservation'
-      ).length,
-      groupLessonCount: items.filter((item) => item.sourceKind === 'groupLesson').length,
-      deductCancelledCount: items.filter((item) => item.isDeductCancelled === true).length,
-      lastLessonCount: items.filter((item) => item.isLastLesson === true).length,
-    }
-  }, [todayScheduleItems])
-
   const todaySchedulePanelItems = useMemo(() => {
     if (activeSection !== 'groups') return todayScheduleItems
     return todayScheduleItems.filter((item) => item.sourceKind === 'groupLesson')
   }, [activeSection, todayScheduleItems])
-
-  const todaySchedulePanelSummary = useMemo(() => {
-    if (activeSection !== 'groups') return todayScheduleSummary
-    return {
-      groupLessonCount: todaySchedulePanelItems.filter(
-        (item) => item.sourceKind === 'groupLesson'
-      ).length,
-    }
-  }, [activeSection, todaySchedulePanelItems, todayScheduleSummary])
 
   const todayScheduleLoading =
     loading ||
@@ -3322,7 +3317,13 @@ export default function Dashboard() {
     [selectedDate]
   )
 
-  const { lessonsCountByDate, lessonsPreviewByDate, displayedLessons } =
+  const {
+    lessonsCountByDate,
+    lessonsPreviewByDate,
+    displayedLessons,
+    calendarCombinedLessons,
+    allCalendarCombinedLessons,
+  } =
     useCalendarSectionViewModel({
       lessons,
       privateLessonReservations,
@@ -3334,6 +3335,74 @@ export default function Dashboard() {
       userProfile,
       selectedCalendarTeacher,
     })
+
+  const lessonCountStats = useMemo(
+    () =>
+      buildLessonOccurrenceStats({
+        rows: calendarCombinedLessons,
+        monthDate: calendarMonth,
+        todayYmd,
+      }),
+    [calendarCombinedLessons, calendarMonth, todayYmd]
+  )
+
+  const teacherLessonCountStats = useMemo(() => {
+    if (!isAdmin) return null
+    return buildTeacherLessonOccurrenceStats({
+      rows: allCalendarCombinedLessons,
+      teachers: calendarTeacherFilterOptions,
+      monthDate: calendarMonth,
+      todayYmd,
+    })
+  }, [allCalendarCombinedLessons, calendarMonth, calendarTeacherFilterOptions, isAdmin, todayYmd])
+
+  const activeLessonCountStats = useMemo(
+    () => flattenLessonOccurrenceStats(lessonCountStats),
+    [lessonCountStats]
+  )
+
+  const totalLessonCountStats = useMemo(
+    () => flattenLessonOccurrenceStats(teacherLessonCountStats?.overall || lessonCountStats),
+    [lessonCountStats, teacherLessonCountStats]
+  )
+
+  const teacherLessonCountStatsRows = useMemo(() => {
+    if (!teacherLessonCountStats) return []
+    return teacherLessonCountStats.teacherRows.map((row) => ({
+      teacherId: row.teacherId || row.teacherKey || row.teacherName,
+      teacherName: row.teacherName,
+      ...flattenLessonOccurrenceStats(row.stats),
+    }))
+  }, [teacherLessonCountStats])
+
+  const lessonCountStatsMonthLabel = useMemo(
+    () => formatLessonStatsMonthLabel(teacherLessonCountStats?.range || lessonCountStats?.range),
+    [lessonCountStats?.range, teacherLessonCountStats?.range]
+  )
+
+  const todayScheduleSummary = useMemo(() => {
+    const items = Array.isArray(todayScheduleItems) ? todayScheduleItems : []
+    return {
+      ...activeLessonCountStats,
+      privateLessonCount: items.filter(
+        (item) =>
+          item.sourceKind === 'privateLesson' || item.sourceKind === 'privateReservation'
+      ).length,
+      groupLessonCount: items.filter((item) => item.sourceKind === 'groupLesson').length,
+      deductCancelledCount: items.filter((item) => item.isDeductCancelled === true).length,
+      lastLessonCount: items.filter((item) => item.isLastLesson === true).length,
+    }
+  }, [activeLessonCountStats, todayScheduleItems])
+
+  const todaySchedulePanelSummary = useMemo(() => {
+    if (activeSection !== 'groups') return todayScheduleSummary
+    return {
+      ...activeLessonCountStats,
+      groupLessonCount: todaySchedulePanelItems.filter(
+        (item) => item.sourceKind === 'groupLesson'
+      ).length,
+    }
+  }, [activeLessonCountStats, activeSection, todaySchedulePanelItems, todayScheduleSummary])
 
   const calendarDays = useMemo(
     () => getCalendarDays(calendarMonth),
@@ -6006,6 +6075,7 @@ export default function Dashboard() {
     privateStudents,
     studentPackages,
     studentPrivateBookingStats,
+    lessonCountStats: teacherLessonCountStats,
     rosterDataLoading:
       loading ||
       privateLessonReservationsLoading ||
@@ -6109,6 +6179,14 @@ export default function Dashboard() {
               showStudent={activeSection !== 'groups'}
               title={activeSection === 'groups' ? '오늘의 단체반 일정' : '오늘의 일정'}
             />
+            {isAdmin && activeSection !== 'teachers' ? (
+              <LessonCountStatsPanel
+                rows={teacherLessonCountStatsRows}
+                totalStats={totalLessonCountStats}
+                monthLabel={lessonCountStatsMonthLabel}
+                loading={todayScheduleLoading}
+              />
+            ) : null}
           </div>
 
           {activeSection === 'calendar' ? (
