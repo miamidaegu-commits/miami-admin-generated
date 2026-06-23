@@ -369,7 +369,6 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     const topUpButton = dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true });
     await expect(topUpButton).toBeEnabled();
     await topUpButton.click();
-    await expect(dialog).toBeHidden({ timeout: 30000 });
 
     await expect
       .poll(async () => {
@@ -390,6 +389,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
         paymentDate: '2026-05-01',
         topUpCount: 1,
       });
+    await expect(dialog).toBeHidden({ timeout: 30000 });
     await maybeDismissPostPrivateLessonScheduleModal(page, {
       expectedText: '기존 개인 수강권에 추가 등록했습니다.',
     });
@@ -503,7 +503,6 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
     const forceNewButton = dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true });
     await expect(forceNewButton).toBeEnabled();
     await forceNewButton.click();
-    await expect(dialog).toBeHidden({ timeout: 30000 });
 
     await expect
       .poll(async () => {
@@ -516,6 +515,7 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
         return snap.docs.length;
       }, { timeout: 30000 })
       .toBe(2);
+    await expect(dialog).toBeHidden({ timeout: 30000 });
     await maybeDismissPostPrivateLessonScheduleModal(page);
   } finally {
     await cleanupFixture(fixture).catch(() => {});

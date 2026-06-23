@@ -517,6 +517,59 @@ export default function useStudentPackageFlow({
     setPostPrivateLessonScheduleErrors({})
   }
 
+  function buildCreditTransactionCreatePayload(payload) {
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    const actorName = String(
+      userProfile?.displayName ||
+        userProfile?.name ||
+        userProfile?.teacherName ||
+        userProfile?.email ||
+        userProfile?.uid ||
+        ''
+    ).trim()
+    const extraFields = {}
+    if (payload.registrationRound != null) {
+      extraFields.registrationRound = Number(payload.registrationRound) || null
+    }
+    if (payload.roundNumber != null) {
+      extraFields.roundNumber = Number(payload.roundNumber) || null
+    }
+    if (payload.paymentDate !== undefined) {
+      extraFields.paymentDate = String(payload.paymentDate ?? '').trim()
+    }
+    if (payload.amountPaid !== undefined) {
+      extraFields.amountPaid = Number(payload.amountPaid ?? 0) || 0
+    }
+    if (payload.registrationLabel !== undefined) {
+      extraFields.registrationLabel = String(payload.registrationLabel ?? '').trim()
+    }
+    if (payload.registrationMemo !== undefined) {
+      extraFields.registrationMemo = String(payload.registrationMemo ?? '').trim()
+    }
+
+    return {
+      academyId: scopedAcademyId,
+      studentId: String(payload.studentId ?? ''),
+      studentName: String(payload.studentName ?? ''),
+      teacher: normalizeText(payload.teacher ?? ''),
+      packageId: String(payload.packageId ?? ''),
+      packageType: String(payload.packageType ?? ''),
+      packageTitle: String(payload.packageTitle ?? ''),
+      groupClassName: String(payload.groupClassName ?? ''),
+      sourceType: String(payload.sourceType ?? ''),
+      sourceId: String(payload.sourceId ?? ''),
+      actionType: String(payload.actionType ?? ''),
+      deltaCount: Number(payload.deltaCount ?? 0),
+      memo: String(payload.memo ?? ''),
+      actorUid: userProfile?.uid || userProfile?.id || '',
+      actorRole: userProfile?.role || '',
+      actorName,
+      reason: String(payload.reason ?? payload.revokeReason ?? payload.memo ?? '').trim(),
+      createdAt: serverTimestamp(),
+      ...extraFields,
+    }
+  }
+
   function mergeKnownStudentForPackage(student) {
     if (!student?.id) return student
     const knownStudent = (Array.isArray(privateStudents) ? privateStudents : []).find(
@@ -911,6 +964,10 @@ export default function useStudentPackageFlow({
       student = await ensureStudentForPackageSubmit(studentPackageModalStudent)
     } catch (error) {
       console.error('학생 정보 확인 실패:', error)
+      setStudentPackageFormErrors((prev) => ({
+        ...prev,
+        submit: `학생 수강권 추가 실패: ${error.message}`,
+      }))
       alert(`학생 수강권 추가 실패: ${error.message}`)
       return
     }
@@ -951,7 +1008,8 @@ export default function useStudentPackageFlow({
           const registrationLabel =
             String(result.registrationLabel || '').trim() || `${registrationRound}회차 등록`
 
-          await updateDoc(doc(db, 'studentPackages', targetPackage.id), {
+          const topUpBatch = writeBatch(db)
+          topUpBatch.update(doc(db, 'studentPackages', targetPackage.id), {
             totalCount: increment(topUpCount),
             remainingCount: increment(topUpCount),
             topUpCount: increment(1),
@@ -961,7 +1019,8 @@ export default function useStudentPackageFlow({
           })
 
           const packageTitle = String(targetPackage.title || '').trim()
-          await addCreditTransaction({
+          const creditTransactionRef = doc(collection(db, 'creditTransactions'))
+          topUpBatch.set(creditTransactionRef, buildCreditTransactionCreatePayload({
             studentId,
             studentName,
             teacher,
@@ -986,7 +1045,8 @@ export default function useStudentPackageFlow({
             ]
               .filter(Boolean)
               .join(' · '),
-          })
+          }))
+          await topUpBatch.commit()
 
           closeStudentPackageModal()
           setPostPrivateLessonScheduleModalData({
@@ -1002,6 +1062,10 @@ export default function useStudentPackageFlow({
           setPostPrivateLessonScheduleErrors({})
         } catch (error) {
           console.error('개인 수강권 추가 등록 실패:', error)
+          setStudentPackageFormErrors((prev) => ({
+            ...prev,
+            submit: `개인 수강권 추가 등록 실패: ${error.message}`,
+          }))
           alert(`개인 수강권 추가 등록 실패: ${error.message}`)
         } finally {
           setBusyStudentPackageSubmit(false)
@@ -1171,8 +1235,8 @@ export default function useStudentPackageFlow({
           packageId: docRef.id,
         })
       }
-      await createBatch.commit()
-      await addCreditTransaction({
+      const creditTransactionRef = doc(collection(db, 'creditTransactions'))
+      createBatch.set(creditTransactionRef, buildCreditTransactionCreatePayload({
         studentId,
         studentName,
         teacher,
@@ -1191,7 +1255,8 @@ export default function useStudentPackageFlow({
         ]
           .filter(Boolean)
           .join(' · '),
-      })
+      }))
+      await createBatch.commit()
       closeStudentPackageModal()
 
       if (result.packageType === 'private') {
@@ -1268,6 +1333,10 @@ export default function useStudentPackageFlow({
       }
     } catch (error) {
       console.error('학생 수강권 추가 실패:', error)
+      setStudentPackageFormErrors((prev) => ({
+        ...prev,
+        submit: `학생 수강권 추가 실패: ${error.message}`,
+      }))
       alert(`학생 수강권 추가 실패: ${error.message}`)
     } finally {
       setBusyStudentPackageSubmit(false)
