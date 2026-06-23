@@ -162,6 +162,64 @@ function countPrivatePackageRegistrationEvents(rows) {
   }).length
 }
 
+function getNormalizedUniqueKeys(values) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => normalizeText(value || ''))
+        .filter(Boolean)
+    )
+  )
+}
+
+function getPrivateTeacherIdentity(row) {
+  const uidKeys = getNormalizedUniqueKeys([
+    row?.teacherUid,
+    row?.teacherUID,
+    row?.teacherId,
+    row?.teacherID,
+  ])
+  const teacherKeys = getNormalizedUniqueKeys([row?.teacherKey])
+  const displayKeys = getNormalizedUniqueKeys([
+    row?.teacher,
+    row?.teacherName,
+    row?.teacherDisplayName,
+    row?.displayName,
+    row?.name,
+    row?.label,
+    row?.selectValue,
+    row?.value,
+    row?.teacherKey,
+  ])
+
+  return {
+    uidKeys,
+    teacherKeys,
+    displayKeys,
+  }
+}
+
+function keysOverlap(a, b) {
+  if (a.length === 0 || b.length === 0) return false
+  const bKeys = new Set(b)
+  return a.some((key) => bKeys.has(key))
+}
+
+function hasStableTeacherIdentity(identity) {
+  return identity.uidKeys.length > 0 || identity.teacherKeys.length > 0
+}
+
+function privatePackageMatchesTeacherSelection(pkg, teacherSelection) {
+  const packageIdentity = getPrivateTeacherIdentity(pkg)
+  const selectionIdentity = getPrivateTeacherIdentity(teacherSelection)
+  if (keysOverlap(packageIdentity.uidKeys, selectionIdentity.uidKeys)) return true
+  if (keysOverlap(packageIdentity.teacherKeys, selectionIdentity.teacherKeys)) return true
+  if (hasStableTeacherIdentity(packageIdentity) && hasStableTeacherIdentity(selectionIdentity)) {
+    return false
+  }
+  return keysOverlap(packageIdentity.displayKeys, selectionIdentity.displayKeys)
+}
+
 export default function useStudentPackageFlow({
   activeSection,
   userProfile,
@@ -296,16 +354,18 @@ export default function useStudentPackageFlow({
 
     let teacherForScope = String(student.teacher || '')
     let groupClassId = ''
+    let selectedPrivateTeacher = null
     if (packageType === 'group' || packageType === 'openGroup') {
       groupClassId = String(studentPackageForm.groupClassId || '').trim()
       if (!groupClassId) return []
       teacherForScope = ''
     } else {
-      teacherForScope = resolvePrivateTeacherSelection(
+      selectedPrivateTeacher = resolvePrivateTeacherSelection(
         teacherSelectOptions,
         studentPackageForm.privateTeacher,
         student
-      ).teacher
+      )
+      teacherForScope = selectedPrivateTeacher.teacher
     }
 
     const scopeKey = buildStudentPackageScopeKey({
@@ -319,6 +379,10 @@ export default function useStudentPackageFlow({
       .filter((pkg) => {
         if (String(pkg.studentId || '').trim() !== studentId) return false
         if (!isStudentPackageRowActive(pkg)) return false
+        if (packageType === 'private') {
+          if (String(pkg.packageType || '').trim() !== 'private') return false
+          return privatePackageMatchesTeacherSelection(pkg, selectedPrivateTeacher)
+        }
         return studentPackageAttentionScope(pkg) === scopeKey
       })
       .map((pkg) => {
@@ -451,6 +515,59 @@ export default function useStudentPackageFlow({
     setPostPrivateLessonScheduleModalData(null)
     setPostPrivateLessonScheduleForm(createDefaultPostPrivateLessonScheduleForm())
     setPostPrivateLessonScheduleErrors({})
+  }
+
+  function buildCreditTransactionCreatePayload(payload) {
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    const actorName = String(
+      userProfile?.displayName ||
+        userProfile?.name ||
+        userProfile?.teacherName ||
+        userProfile?.email ||
+        userProfile?.uid ||
+        ''
+    ).trim()
+    const extraFields = {}
+    if (payload.registrationRound != null) {
+      extraFields.registrationRound = Number(payload.registrationRound) || null
+    }
+    if (payload.roundNumber != null) {
+      extraFields.roundNumber = Number(payload.roundNumber) || null
+    }
+    if (payload.paymentDate !== undefined) {
+      extraFields.paymentDate = String(payload.paymentDate ?? '').trim()
+    }
+    if (payload.amountPaid !== undefined) {
+      extraFields.amountPaid = Number(payload.amountPaid ?? 0) || 0
+    }
+    if (payload.registrationLabel !== undefined) {
+      extraFields.registrationLabel = String(payload.registrationLabel ?? '').trim()
+    }
+    if (payload.registrationMemo !== undefined) {
+      extraFields.registrationMemo = String(payload.registrationMemo ?? '').trim()
+    }
+
+    return {
+      academyId: scopedAcademyId,
+      studentId: String(payload.studentId ?? ''),
+      studentName: String(payload.studentName ?? ''),
+      teacher: normalizeText(payload.teacher ?? ''),
+      packageId: String(payload.packageId ?? ''),
+      packageType: String(payload.packageType ?? ''),
+      packageTitle: String(payload.packageTitle ?? ''),
+      groupClassName: String(payload.groupClassName ?? ''),
+      sourceType: String(payload.sourceType ?? ''),
+      sourceId: String(payload.sourceId ?? ''),
+      actionType: String(payload.actionType ?? ''),
+      deltaCount: Number(payload.deltaCount ?? 0),
+      memo: String(payload.memo ?? ''),
+      actorUid: userProfile?.uid || userProfile?.id || '',
+      actorRole: userProfile?.role || '',
+      actorName,
+      reason: String(payload.reason ?? payload.revokeReason ?? payload.memo ?? '').trim(),
+      createdAt: serverTimestamp(),
+      ...extraFields,
+    }
   }
 
   function mergeKnownStudentForPackage(student) {
@@ -844,10 +961,16 @@ export default function useStudentPackageFlow({
 
     let student
     try {
+      setBusyStudentPackageSubmit(true)
       student = await ensureStudentForPackageSubmit(studentPackageModalStudent)
     } catch (error) {
       console.error('학생 정보 확인 실패:', error)
+      setStudentPackageFormErrors((prev) => ({
+        ...prev,
+        submit: `학생 수강권 추가 실패: ${error.message}`,
+      }))
       alert(`학생 수강권 추가 실패: ${error.message}`)
+      setBusyStudentPackageSubmit(false)
       return
     }
     const studentId = student.id
@@ -887,7 +1010,8 @@ export default function useStudentPackageFlow({
           const registrationLabel =
             String(result.registrationLabel || '').trim() || `${registrationRound}회차 등록`
 
-          await updateDoc(doc(db, 'studentPackages', targetPackage.id), {
+          const topUpBatch = writeBatch(db)
+          topUpBatch.update(doc(db, 'studentPackages', targetPackage.id), {
             totalCount: increment(topUpCount),
             remainingCount: increment(topUpCount),
             topUpCount: increment(1),
@@ -897,7 +1021,8 @@ export default function useStudentPackageFlow({
           })
 
           const packageTitle = String(targetPackage.title || '').trim()
-          await addCreditTransaction({
+          const creditTransactionRef = doc(collection(db, 'creditTransactions'))
+          topUpBatch.set(creditTransactionRef, buildCreditTransactionCreatePayload({
             studentId,
             studentName,
             teacher,
@@ -922,7 +1047,8 @@ export default function useStudentPackageFlow({
             ]
               .filter(Boolean)
               .join(' · '),
-          })
+          }))
+          await topUpBatch.commit()
 
           closeStudentPackageModal()
           setPostPrivateLessonScheduleModalData({
@@ -938,6 +1064,10 @@ export default function useStudentPackageFlow({
           setPostPrivateLessonScheduleErrors({})
         } catch (error) {
           console.error('개인 수강권 추가 등록 실패:', error)
+          setStudentPackageFormErrors((prev) => ({
+            ...prev,
+            submit: `개인 수강권 추가 등록 실패: ${error.message}`,
+          }))
           alert(`개인 수강권 추가 등록 실패: ${error.message}`)
         } finally {
           setBusyStudentPackageSubmit(false)
@@ -956,6 +1086,7 @@ export default function useStudentPackageFlow({
           ...prev,
           groupClassId: '선택한 그룹을 찾을 수 없습니다.',
         }))
+        setBusyStudentPackageSubmit(false)
         return
       }
 
@@ -982,6 +1113,7 @@ export default function useStudentPackageFlow({
           registrationStartDate:
             '선택한 시작일 이후의 그룹 수업 일정이 없어 수강권을 만들 수 없습니다.',
         }))
+        setBusyStudentPackageSubmit(false)
         return
       }
     }
@@ -998,6 +1130,10 @@ export default function useStudentPackageFlow({
     const activeSameScope = studentPackages.filter((pkg) => {
       if (String(pkg.studentId || '').trim() !== studentId) return false
       if (!isStudentPackageRowActive(pkg)) return false
+      if (result.packageType === 'private') {
+        if (String(pkg.packageType || '').trim() !== 'private') return false
+        return privatePackageMatchesTeacherSelection(pkg, result.privateTeacher)
+      }
       return studentPackageAttentionScope(pkg) === scopeKey
     })
     if (activeSameScope.length > 0) {
@@ -1012,7 +1148,10 @@ export default function useStudentPackageFlow({
       const ok = window.confirm(
         confirmMessage
       )
-      if (!ok) return
+      if (!ok) {
+        setBusyStudentPackageSubmit(false)
+        return
+      }
     }
 
     let saveTitle = String(result.title || '').trim()
@@ -1103,8 +1242,8 @@ export default function useStudentPackageFlow({
           packageId: docRef.id,
         })
       }
-      await createBatch.commit()
-      await addCreditTransaction({
+      const creditTransactionRef = doc(collection(db, 'creditTransactions'))
+      createBatch.set(creditTransactionRef, buildCreditTransactionCreatePayload({
         studentId,
         studentName,
         teacher,
@@ -1123,7 +1262,8 @@ export default function useStudentPackageFlow({
         ]
           .filter(Boolean)
           .join(' · '),
-      })
+      }))
+      await createBatch.commit()
       closeStudentPackageModal()
 
       if (result.packageType === 'private') {
@@ -1200,6 +1340,10 @@ export default function useStudentPackageFlow({
       }
     } catch (error) {
       console.error('학생 수강권 추가 실패:', error)
+      setStudentPackageFormErrors((prev) => ({
+        ...prev,
+        submit: `학생 수강권 추가 실패: ${error.message}`,
+      }))
       alert(`학생 수강권 추가 실패: ${error.message}`)
     } finally {
       setBusyStudentPackageSubmit(false)

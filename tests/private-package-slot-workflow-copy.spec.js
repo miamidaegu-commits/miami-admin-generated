@@ -573,59 +573,80 @@ test('admin can create a separate private package for a different teacher', asyn
         .toBe(secondTeacherKey);
     }
     await expect(dialog.getByTestId('student-package-duplicate-guidance')).toHaveCount(0);
+    await expect(dialog).toContainText(`사용 가능 선생님: miketest · ${secondTeacherKey}`);
 
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
-    await dialog.getByLabel('제목').fill(`E2E miketest 수강권 ${unique}`);
+    const newPackageTitle = `E2E miketest 수강권 ${unique}`;
+    await dialog.getByLabel('제목').fill(newPackageTitle);
     await dialog.getByLabel(/총 횟수/).fill('3');
     const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
+    await saveButton.scrollIntoViewIfNeeded();
+    await expect(saveButton).toBeVisible({ timeout: 10000 });
     await expect(saveButton).toBeEnabled({ timeout: 10000 });
     await saveButton.click();
 
+    let secondPackageId = '';
     await expect
       .poll(async () => {
-        const [packages, summary] = await Promise.all([
-          getAdminSeededPrivatePackagesForStudent({
-            academyId: ACADEMY_ID,
-            studentId: tempStudent.studentId,
-          }),
-          getAdminSeededStudentPrivateAccessSummary({
-            academyId: ACADEMY_ID,
-            studentId: tempStudent.studentId,
-          }),
-        ]);
+        const packages = await getAdminSeededPrivatePackagesForStudent({
+          academyId: ACADEMY_ID,
+          studentId: tempStudent.studentId,
+        });
         const secondPackage = packages.find(
-          (pkg) => String(pkg.teacherKey || pkg.teacher || '').trim() === secondTeacherKey
+          (pkg) =>
+            String(pkg.teacherKey || pkg.teacher || '').trim() === secondTeacherKey &&
+            String(pkg.title || '').trim() === newPackageTitle
         );
-        const teacherKeys = summary?.teacherKeys || [];
-        const activePackageIds = summary?.activePackageIds || [];
+        if (secondPackage?.id) secondPackageId = secondPackage.id;
         return {
           teacherKeys: packages
             .map((pkg) => String(pkg.teacherKey || pkg.teacher || '').trim())
             .sort(),
+          secondTitle: String(secondPackage?.title || ''),
+          secondTeacher: String(secondPackage?.teacher || ''),
           secondTeacherKey: String(secondPackage?.teacherKey || ''),
           secondTeacherName: String(secondPackage?.teacherName || ''),
           secondTotalCount: Number(secondPackage?.totalCount || 0),
           secondRemainingCount: Number(secondPackage?.remainingCount || 0),
-          summaryHasDonTeacher: teacherKeys.includes(TEACHER),
-          summaryHasSecondTeacher: teacherKeys.includes(secondTeacherKey),
-          summaryHasExistingPackage: activePackageIds.includes(existingPackage.packageId),
-          summaryHasSecondPackage: secondPackage
-            ? activePackageIds.includes(secondPackage.id)
-            : false,
         };
       }, { timeout: 60000 })
       .toEqual({
         teacherKeys: [TEACHER, secondTeacherKey].sort(),
+        secondTitle: newPackageTitle,
+        secondTeacher: secondTeacherKey,
         secondTeacherKey,
         secondTeacherName: 'miketest',
         secondTotalCount: 3,
         secondRemainingCount: 3,
+      });
+    await expect(dialog).toBeHidden({ timeout: 30000 });
+    await maybeDismissPostPrivateLessonScheduleModal(page, {
+      expectedText: '새 개인 수강권이 발급되었습니다.',
+    });
+
+    await expect
+      .poll(async () => {
+        const summary = await getAdminSeededStudentPrivateAccessSummary({
+          academyId: ACADEMY_ID,
+          studentId: tempStudent.studentId,
+        });
+        const teacherKeys = summary?.teacherKeys || [];
+        const activePackageIds = summary?.activePackageIds || [];
+        return {
+          summaryHasDonTeacher: teacherKeys.includes(TEACHER),
+          summaryHasSecondTeacher: teacherKeys.includes(secondTeacherKey),
+          summaryHasExistingPackage: activePackageIds.includes(existingPackage.packageId),
+          summaryHasSecondPackage: secondPackageId
+            ? activePackageIds.includes(secondPackageId)
+            : false,
+        };
+      }, { timeout: 30000 })
+      .toEqual({
         summaryHasDonTeacher: true,
         summaryHasSecondTeacher: true,
         summaryHasExistingPackage: true,
         summaryHasSecondPackage: true,
       });
-    await maybeDismissPostPrivateLessonScheduleModal(page);
 
     const packages = await getAdminSeededPrivatePackagesForStudent({
       academyId: ACADEMY_ID,

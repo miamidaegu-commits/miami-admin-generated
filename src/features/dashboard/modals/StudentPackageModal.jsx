@@ -840,6 +840,25 @@ export default function StudentPackageModal({
               ) : null}
             </div>
 
+            {studentPackageFormErrors.submit ? (
+              <div
+                role="alert"
+                data-testid="student-package-submit-error"
+                style={{
+                  marginTop: 16,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(240, 128, 128, 0.55)',
+                  background: 'rgba(120, 30, 30, 0.25)',
+                  color: '#f4a7a7',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                {studentPackageFormErrors.submit}
+              </div>
+            ) : null}
+
             {studentPackageModalActiveSameScopeDuplicates.length > 0 ? (
               <div
                 data-testid="student-package-duplicate-guidance"

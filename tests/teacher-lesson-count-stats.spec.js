@@ -195,3 +195,32 @@ test('past month counts the full month while future dates stay out of the curren
   expect(pastStats.month.total).toBe(1);
   expect(futureRange.endYmd).toBe('');
 });
+
+test('teacher stats skip malformed rows without blocking valid rows', () => {
+  const malformedDate = {
+    id: 'malformed-date',
+    teacher: 'Alice',
+    studentName: '깨진 날짜',
+    startAt: {
+      toDate() {
+        throw new Error('broken timestamp');
+      },
+    },
+  };
+  const result = buildTeacherLessonOccurrenceStats({
+    rows: [
+      malformedDate,
+      null,
+      { id: 'valid-row', teacher: 'Alice', studentName: '학생', date: '2026-06-15' },
+    ],
+    teachers,
+    monthDate: new Date('2026-06-01T00:00:00+09:00'),
+    todayYmd: '2026-06-15',
+  });
+  const alice = result.teacherRows.find((row) => row.teacherName === 'Alice');
+
+  expect(result.overall.today.total).toBe(1);
+  expect(result.overall.month.total).toBe(1);
+  expect(alice.stats.today.total).toBe(1);
+  expect(alice.stats.month.total).toBe(1);
+});
