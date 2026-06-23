@@ -961,6 +961,7 @@ export default function useStudentPackageFlow({
 
     let student
     try {
+      setBusyStudentPackageSubmit(true)
       student = await ensureStudentForPackageSubmit(studentPackageModalStudent)
     } catch (error) {
       console.error('학생 정보 확인 실패:', error)
@@ -969,6 +970,7 @@ export default function useStudentPackageFlow({
         submit: `학생 수강권 추가 실패: ${error.message}`,
       }))
       alert(`학생 수강권 추가 실패: ${error.message}`)
+      setBusyStudentPackageSubmit(false)
       return
     }
     const studentId = student.id
@@ -1084,6 +1086,7 @@ export default function useStudentPackageFlow({
           ...prev,
           groupClassId: '선택한 그룹을 찾을 수 없습니다.',
         }))
+        setBusyStudentPackageSubmit(false)
         return
       }
 
@@ -1110,6 +1113,7 @@ export default function useStudentPackageFlow({
           registrationStartDate:
             '선택한 시작일 이후의 그룹 수업 일정이 없어 수강권을 만들 수 없습니다.',
         }))
+        setBusyStudentPackageSubmit(false)
         return
       }
     }
@@ -1144,7 +1148,10 @@ export default function useStudentPackageFlow({
       const ok = window.confirm(
         confirmMessage
       )
-      if (!ok) return
+      if (!ok) {
+        setBusyStudentPackageSubmit(false)
+        return
+      }
     }
 
     let saveTitle = String(result.title || '').trim()

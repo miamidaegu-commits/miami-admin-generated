@@ -489,21 +489,26 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     await dialog.getByTestId('private-package-force-new-button').click();
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
-    await dialog.getByLabel('제목').fill(`E2E 강제 새 수강권 ${unique}`);
+    const newPackageTitle = `E2E 강제 새 수강권 ${unique}`;
+    await dialog.getByLabel('제목').fill(newPackageTitle);
     await dialog.getByLabel(/총 횟수/).fill('2');
 
-    page.once('dialog', async (nativeDialog) => {
-      expect(nativeDialog.message()).toContain('같은 선생님 수강권이 이미 있습니다.');
-      expect(nativeDialog.message()).toContain(
-        '일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.'
-      );
-      expect(nativeDialog.message()).toContain('정말 별도 수강권으로 발급할까요?');
-      await nativeDialog.accept();
-    });
     const forceNewButton = dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true });
+    await forceNewButton.scrollIntoViewIfNeeded();
+    await expect(forceNewButton).toBeVisible();
     await expect(forceNewButton).toBeEnabled();
-    await forceNewButton.click();
+    const nativeDialogPromise = page.waitForEvent('dialog', { timeout: 10000 });
+    const forceNewClickPromise = forceNewButton.click();
+    const nativeDialog = await nativeDialogPromise;
+    expect(nativeDialog.message()).toContain('같은 선생님 수강권이 이미 있습니다.');
+    expect(nativeDialog.message()).toContain(
+      '일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.'
+    );
+    expect(nativeDialog.message()).toContain('정말 별도 수강권으로 발급할까요?');
+    await nativeDialog.accept();
+    await forceNewClickPromise;
 
+    let newPackageId = '';
     await expect
       .poll(async () => {
         const snap = await getDb()
@@ -512,11 +517,36 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
           .where('studentId', '==', student.studentId)
           .where('teacher', '==', teacherKey)
           .get();
-        return snap.docs.length;
-      }, { timeout: 30000 })
-      .toBe(2);
+        const rows = snap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        const existing = rows.find((row) => row.id === existingPackage.packageId) || {};
+        const created = rows.find(
+          (row) => row.id !== existingPackage.packageId && row.title === newPackageTitle
+        ) || {};
+        if (created.id) newPackageId = created.id;
+        return {
+          packageCount: rows.length,
+          existingTotalCount: Number(existing.totalCount || 0),
+          existingRemainingCount: Number(existing.remainingCount || 0),
+          created: Boolean(created.id),
+          createdTitle: String(created.title || ''),
+          createdTotalCount: Number(created.totalCount || 0),
+          createdRemainingCount: Number(created.remainingCount || 0),
+        };
+      }, { timeout: 60000 })
+      .toEqual({
+        packageCount: 2,
+        existingTotalCount: 4,
+        existingRemainingCount: 4,
+        created: true,
+        createdTitle: newPackageTitle,
+        createdTotalCount: 2,
+        createdRemainingCount: 2,
+      });
+    if (newPackageId) fixture.packageIds.push(newPackageId);
     await expect(dialog).toBeHidden({ timeout: 30000 });
-    await maybeDismissPostPrivateLessonScheduleModal(page);
+    await maybeDismissPostPrivateLessonScheduleModal(page, {
+      expectedText: '새 개인 수강권이 발급되었습니다.',
+    });
   } finally {
     await cleanupFixture(fixture).catch(() => {});
   }
