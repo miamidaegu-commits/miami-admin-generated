@@ -162,6 +162,64 @@ function countPrivatePackageRegistrationEvents(rows) {
   }).length
 }
 
+function getNormalizedUniqueKeys(values) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => normalizeText(value || ''))
+        .filter(Boolean)
+    )
+  )
+}
+
+function getPrivateTeacherIdentity(row) {
+  const uidKeys = getNormalizedUniqueKeys([
+    row?.teacherUid,
+    row?.teacherUID,
+    row?.teacherId,
+    row?.teacherID,
+  ])
+  const teacherKeys = getNormalizedUniqueKeys([row?.teacherKey])
+  const displayKeys = getNormalizedUniqueKeys([
+    row?.teacher,
+    row?.teacherName,
+    row?.teacherDisplayName,
+    row?.displayName,
+    row?.name,
+    row?.label,
+    row?.selectValue,
+    row?.value,
+    row?.teacherKey,
+  ])
+
+  return {
+    uidKeys,
+    teacherKeys,
+    displayKeys,
+  }
+}
+
+function keysOverlap(a, b) {
+  if (a.length === 0 || b.length === 0) return false
+  const bKeys = new Set(b)
+  return a.some((key) => bKeys.has(key))
+}
+
+function hasStableTeacherIdentity(identity) {
+  return identity.uidKeys.length > 0 || identity.teacherKeys.length > 0
+}
+
+function privatePackageMatchesTeacherSelection(pkg, teacherSelection) {
+  const packageIdentity = getPrivateTeacherIdentity(pkg)
+  const selectionIdentity = getPrivateTeacherIdentity(teacherSelection)
+  if (keysOverlap(packageIdentity.uidKeys, selectionIdentity.uidKeys)) return true
+  if (keysOverlap(packageIdentity.teacherKeys, selectionIdentity.teacherKeys)) return true
+  if (hasStableTeacherIdentity(packageIdentity) && hasStableTeacherIdentity(selectionIdentity)) {
+    return false
+  }
+  return keysOverlap(packageIdentity.displayKeys, selectionIdentity.displayKeys)
+}
+
 export default function useStudentPackageFlow({
   activeSection,
   userProfile,
@@ -296,16 +354,18 @@ export default function useStudentPackageFlow({
 
     let teacherForScope = String(student.teacher || '')
     let groupClassId = ''
+    let selectedPrivateTeacher = null
     if (packageType === 'group' || packageType === 'openGroup') {
       groupClassId = String(studentPackageForm.groupClassId || '').trim()
       if (!groupClassId) return []
       teacherForScope = ''
     } else {
-      teacherForScope = resolvePrivateTeacherSelection(
+      selectedPrivateTeacher = resolvePrivateTeacherSelection(
         teacherSelectOptions,
         studentPackageForm.privateTeacher,
         student
-      ).teacher
+      )
+      teacherForScope = selectedPrivateTeacher.teacher
     }
 
     const scopeKey = buildStudentPackageScopeKey({
@@ -319,6 +379,10 @@ export default function useStudentPackageFlow({
       .filter((pkg) => {
         if (String(pkg.studentId || '').trim() !== studentId) return false
         if (!isStudentPackageRowActive(pkg)) return false
+        if (packageType === 'private') {
+          if (String(pkg.packageType || '').trim() !== 'private') return false
+          return privatePackageMatchesTeacherSelection(pkg, selectedPrivateTeacher)
+        }
         return studentPackageAttentionScope(pkg) === scopeKey
       })
       .map((pkg) => {
@@ -998,6 +1062,10 @@ export default function useStudentPackageFlow({
     const activeSameScope = studentPackages.filter((pkg) => {
       if (String(pkg.studentId || '').trim() !== studentId) return false
       if (!isStudentPackageRowActive(pkg)) return false
+      if (result.packageType === 'private') {
+        if (String(pkg.packageType || '').trim() !== 'private') return false
+        return privatePackageMatchesTeacherSelection(pkg, result.privateTeacher)
+      }
       return studentPackageAttentionScope(pkg) === scopeKey
     })
     if (activeSameScope.length > 0) {

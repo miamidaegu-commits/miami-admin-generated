@@ -366,7 +366,10 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await dialog.getByTestId('private-package-top-up-amount-input').fill('300000');
     await dialog.getByTestId('private-package-top-up-memo-input').fill(memo);
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
-    await dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true }).click();
+    const topUpButton = dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true });
+    await expect(topUpButton).toBeEnabled();
+    await topUpButton.click();
+    await expect(dialog).toBeHidden({ timeout: 30000 });
 
     await expect
       .poll(async () => {
@@ -497,7 +500,10 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
       expect(nativeDialog.message()).toContain('정말 별도 수강권으로 발급할까요?');
       await nativeDialog.accept();
     });
-    await dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true }).click();
+    const forceNewButton = dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true });
+    await expect(forceNewButton).toBeEnabled();
+    await forceNewButton.click();
+    await expect(dialog).toBeHidden({ timeout: 30000 });
 
     await expect
       .poll(async () => {
@@ -557,7 +563,10 @@ test('different teacher scope still creates a separate private package', async (
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     await dialog.getByLabel('제목').fill(`E2E 현재 선생님 신규 ${unique}`);
     await dialog.getByLabel(/총 횟수/).fill('3');
-    await dialog.getByRole('button', { name: '저장', exact: true }).click();
+    const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(dialog).toBeHidden({ timeout: 30000 });
 
     await expect
       .poll(async () => {
