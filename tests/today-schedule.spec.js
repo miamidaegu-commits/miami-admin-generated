@@ -236,9 +236,19 @@ function getSummaryItem(page, label) {
     .first();
 }
 
+function getSummaryItemsByLabel(page, label) {
+  return page
+    .getByTestId('today-schedule-summary-item')
+    .filter({ has: page.getByText(label, { exact: true }) });
+}
+
 async function expectSummaryCount(page, label, count) {
   const item = getSummaryItem(page, label);
   await expect(item).toContainText(String(count), { timeout: 20000 });
+}
+
+async function expectSummaryLabelHidden(page, label) {
+  await expect(getSummaryItemsByLabel(page, label)).toHaveCount(0);
 }
 
 async function expectSummaryCountAtLeast(page, label, count) {
@@ -765,17 +775,20 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
 
   const panel = page.getByTestId('today-schedule-panel');
   await expect(panel).toBeVisible({ timeout: 20000 });
-  await expect(panel).toContainText('오늘 수업');
-  await expect(panel).toContainText('이번 달 누적 수업');
+  await expectSummaryCount(page, '오늘 1:1', 2);
+  await expectSummaryCountAtLeast(page, '이번 달 1:1 누적', 2);
+  await expectSummaryLabelHidden(page, '오늘 수업');
+  await expectSummaryLabelHidden(page, '이번 달 누적 수업');
+  await expectSummaryLabelHidden(page, '이번 달 1:1');
+  await expectSummaryLabelHidden(page, '이번 달 단체수업');
+  await expectSummaryLabelHidden(page, '개인 수업');
+  await expectSummaryLabelHidden(page, '단체수업');
   await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
   await expect(panel).toContainText(fixture.ownPrivateTitle);
   await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
   await expect(panel).toContainText(fixture.today);
-  await expect(panel).toContainText('오늘 수업');
-  await expect(panel).toContainText('이번 달 누적 수업');
   await expect(panel).toContainText('예약 완료');
   await expect(panel).toContainText('3회차');
-  await expectSummaryCount(page, '개인 수업', 2);
   await expect(panel).toContainText(fixture.teacherName);
   await expect(panel).not.toContainText(fixture.releasedFixedTitle);
   await expect(panel).not.toContainText(fixture.cancelledReleasedReservationTitle);

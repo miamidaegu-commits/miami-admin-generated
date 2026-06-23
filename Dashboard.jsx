@@ -6177,6 +6177,7 @@ export default function Dashboard() {
               summary={todaySchedulePanelSummary}
               loading={todayScheduleLoading}
               showStudent={activeSection !== 'groups'}
+              summaryVariant={isAdmin ? 'default' : 'teacherPrivate'}
               title={activeSection === 'groups' ? '오늘의 단체반 일정' : '오늘의 일정'}
             />
             {isAdmin && activeSection !== 'teachers' ? (
