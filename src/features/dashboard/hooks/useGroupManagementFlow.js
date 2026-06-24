@@ -1,5 +1,14 @@
 import { useEffect, useState } from 'react'
-import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore'
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from 'firebase/firestore'
 import { db } from '../../../../firebase'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
@@ -9,27 +18,15 @@ import {
   GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS,
   normalizeGroupWeekdaysFromDoc,
   normalizeText,
-  parseRequiredMinOneIntField,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
+import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
 import {
-  DEFAULT_GROUP_COURSE_TYPE,
-  normalizeGroupCourseType,
-} from '../../group-booking/groupCourseTypes.js'
-
-const DEFAULT_GROUP_FORM = {
-  name: '',
-  teacher: '',
-  maxStudents: '1',
-  startDate: '',
-  time: '',
-  subject: '',
-  groupCourseType: DEFAULT_GROUP_COURSE_TYPE,
-  weekdays: [],
-  recurrenceMode: 'fixedWeekdays',
-  rebuildFutureLessons: false,
-  rebuildFromDate: '',
-}
+  countActiveGroupFixedMembers,
+  createDefaultGroupForm,
+  groupMaxStudentsToFormString,
+  validateGroupFormFields,
+} from '../groupClassRoomUtils.js'
 
 function resolveStateUpdater(updater, prev) {
   return typeof updater === 'function' ? updater(prev) : updater
@@ -51,101 +48,21 @@ function isGroupEditScheduleAffected(group, validated) {
   return false
 }
 
-function groupMaxStudentsToFormString(value) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '1'
-  const i = Math.trunc(n)
-  return String(Math.max(1, i))
-}
-
-function createDefaultGroupForm(overrides = {}) {
-  return {
-    ...DEFAULT_GROUP_FORM,
-    ...overrides,
-  }
-}
-
-function validateGroupFormFields(form, options = {}) {
-  const { forNewClass, forEdit } = options
-  const errors = {}
-  const name = String(form?.name || '').trim()
-  const teacher = String(form?.teacher || '').trim()
-  if (!name) errors.name = '이름을 입력해주세요.'
-  if (!teacher) errors.teacher = '선생님 이름을 입력해주세요.'
-
-  const maxStudents = parseRequiredMinOneIntField(form?.maxStudents)
-  if (!maxStudents.ok) errors.maxStudents = '1 이상의 정수를 입력해주세요.'
-
-  let startDate = ''
-  if (forNewClass) {
-    startDate = String(form?.startDate || '').trim()
-    if (!startDate) {
-      errors.startDate = '시작일을 선택해주세요.'
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
-      errors.startDate = '시작일 형식이 올바르지 않습니다.'
-    } else if (!parseYmdToLocalDate(startDate)) {
-      errors.startDate = '유효한 시작일을 선택해주세요.'
-    }
-  }
-
-  const time = String(form?.time || '').trim()
-  if (!time) {
-    errors.time = '시간을 입력해주세요.'
-  } else if (!/^\d{2}:\d{2}$/.test(time)) {
-    errors.time = 'HH:mm 형식으로 입력해주세요.'
-  } else {
-    const [h, m] = time.split(':').map(Number)
-    if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
-      errors.time = '유효한 시간을 입력해주세요.'
-    }
-  }
-
-  const subject = String(form?.subject || '').trim()
-  if (!subject) errors.subject = '과목을 입력해주세요.'
-  const normalizedGroupCourseType = normalizeGroupCourseType(form?.groupCourseType)
-  const groupCourseType = normalizedGroupCourseType || (forNewClass ? DEFAULT_GROUP_COURSE_TYPE : '')
-
-  const weekdays = normalizeGroupWeekdaysFromDoc(
-    Array.isArray(form?.weekdays) ? form.weekdays : []
+export async function countActiveGroupFixedMembersFromDb({ academyId, groupClassId }) {
+  const scopedAcademyId = requireCurrentAcademyId(academyId)
+  const gid = String(groupClassId || '').trim()
+  if (!gid) return 0
+  const snap = await getDocs(
+    query(
+      collection(db, 'groupStudents'),
+      where('academyId', '==', scopedAcademyId),
+      where('groupClassId', '==', gid)
+    )
   )
-  if (weekdays.length === 0) {
-    errors.weekdays = '요일을 1개 이상 선택해주세요.'
-  }
-
-  const recurrenceMode =
-    form?.recurrenceMode === 'fixedWeekdays' ? 'fixedWeekdays' : 'fixedWeekdays'
-
-  let rebuildFutureLessons = false
-  let rebuildFromDate = ''
-  if (forEdit) {
-    rebuildFutureLessons = Boolean(form?.rebuildFutureLessons)
-    if (rebuildFutureLessons) {
-      rebuildFromDate = String(form?.rebuildFromDate || '').trim()
-      if (!rebuildFromDate) {
-        errors.rebuildFromDate = '변경 적용 시작일을 선택해주세요.'
-      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(rebuildFromDate)) {
-        errors.rebuildFromDate = '날짜 형식이 올바르지 않습니다.'
-      } else if (!parseYmdToLocalDate(rebuildFromDate)) {
-        errors.rebuildFromDate = '유효한 날짜를 선택해주세요.'
-      }
-    }
-  }
-
-  return {
-    valid: Object.keys(errors).length === 0,
-    errors,
-    name,
-    teacher,
-    maxStudents: maxStudents.ok ? maxStudents.value : 1,
-    startDate: forNewClass ? startDate : '',
-    time,
-    subject,
-    groupCourseType,
-    weekdays,
-    recurrenceMode,
-    rebuildFutureLessons,
-    rebuildFromDate,
-  }
+  return countActiveGroupFixedMembers(
+    snap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })),
+    gid
+  )
 }
 
 function isAdminProfile(profile) {
@@ -180,6 +97,7 @@ export default function useGroupManagementFlow({
   groupLessons,
   createGroupLessonsInDateRange,
   openPostGroupScheduleRebuildModal,
+  groupStudents = [],
 }) {
   const [groupModal, setGroupModal] = useState(null)
   const [groupForm, setGroupFormState] = useState(createDefaultGroupForm())
@@ -232,6 +150,7 @@ export default function useGroupManagementFlow({
       createDefaultGroupForm({
         startDate: formatLocalDateToYmd(new Date()),
         teacher: teacherKey || '',
+        status: 'active',
       })
     )
     setGroupFormErrors({})
@@ -260,6 +179,7 @@ export default function useGroupManagementFlow({
         name: group.name || '',
         teacher: teacherKey || group.teacher || group.teacherName || '',
         maxStudents: groupMaxStudentsToFormString(group.maxStudents),
+        status: String(group.status || 'active').trim() === 'inactive' ? 'inactive' : 'active',
         time: String(group.time || '').trim(),
         subject: String(group.subject || '').trim(),
         groupCourseType: normalizeGroupCourseType(group.groupCourseType),
@@ -277,6 +197,10 @@ export default function useGroupManagementFlow({
     const result = validateGroupFormFields(groupForm, {
       forNewClass: groupModal.type === 'add',
       forEdit: groupModal.type === 'edit',
+      activeFixedMemberCount:
+        groupModal.type === 'edit'
+          ? countActiveGroupFixedMembers(groupStudents, groupModal.group?.id)
+          : 0,
     })
     setGroupFormErrors(result.errors)
     if (!result.valid) return
@@ -301,6 +225,7 @@ export default function useGroupManagementFlow({
           teacher: teacherKey,
           teacherName: teacherKey,
           maxStudents: result.maxStudents,
+          status: result.status,
           time: result.time,
           subject: result.subject,
           groupCourseType: result.groupCourseType,
@@ -364,11 +289,24 @@ export default function useGroupManagementFlow({
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(group, scopedAcademyId, '그룹')
       setBusyGroupId(group.id)
+      const activeFixedMemberCount = await countActiveGroupFixedMembersFromDb({
+        academyId: scopedAcademyId,
+        groupClassId: group.id,
+      })
+      if (activeFixedMemberCount > result.maxStudents) {
+        setGroupFormErrors((prev) => ({
+          ...prev,
+          maxStudents: `현재 고정 학생 ${activeFixedMemberCount}명보다 정원을 작게 설정할 수 없습니다.`,
+        }))
+        setBusyGroupId(null)
+        return
+      }
       await updateDoc(doc(db, 'groupClasses', group.id), {
         name: result.name,
         teacher: teacherKey,
         teacherName: teacherKey,
         maxStudents: result.maxStudents,
+        status: result.status,
         time: result.time,
         subject: result.subject,
         groupCourseType: result.groupCourseType,

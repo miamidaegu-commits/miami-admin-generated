@@ -179,6 +179,26 @@ export default function GroupModal({
                   </span>
                 ) : null}
               </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>상태</span>
+                <select
+                  value={groupForm.status || 'active'}
+                  onChange={(e) =>
+                    setGroupForm((prev) => ({ ...prev, status: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                >
+                  <option value="active">active</option>
+                  <option value="inactive">inactive</option>
+                </select>
+              </label>
             </div>
           </div>
 

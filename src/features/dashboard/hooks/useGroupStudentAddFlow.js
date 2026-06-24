@@ -14,6 +14,8 @@ import {
 
 const DEFAULT_GROUP_STUDENT_FORM = {
   packageId: '',
+  studentId: '',
+  studentSearch: '',
   startDate: '',
 }
 
@@ -28,13 +30,14 @@ function createDefaultGroupStudentForm(overrides = {}) {
   }
 }
 
-function validateGroupStudentFormFields(form, options = {}) {
+export function validateGroupStudentFormFields(form, options = {}) {
   const { isAdmin = false } = options
   const errors = {}
   const packageId = String(form?.packageId || '').trim()
-  if (!packageId) {
-    errors.packageId = isAdmin
-      ? '사용할 그룹 수강권을 선택해주세요.'
+  const studentId = String(form?.studentId || '').trim()
+  if (!packageId && !studentId) {
+    errors.studentId = isAdmin
+      ? '고정 학생을 선택하거나 사용할 그룹 수강권을 선택해주세요.'
       : '사용할 등록을 선택해주세요.'
   }
 
@@ -65,6 +68,7 @@ function validateGroupStudentFormFields(form, options = {}) {
     valid: Object.keys(errors).length === 0,
     errors,
     packageId,
+    studentId,
     startDate: startTimestamp,
   }
 }
@@ -74,6 +78,7 @@ export default function useGroupStudentAddFlow({
   userProfile,
   currentAcademyId,
   selectedGroupClass,
+  privateStudents = [],
   studentPackages,
   groupStudents,
   groupLessons,
@@ -131,11 +136,85 @@ export default function useGroupStudentAddFlow({
       })
   }, [studentPackages, selectedGroupClass?.id])
 
+  const activeFixedMemberCount = useMemo(() => {
+    const groupId = String(selectedGroupClass?.id || '').trim()
+    if (!groupId) return 0
+    return groupStudents.filter((groupStudent) => {
+      if (String(groupStudent.groupClassId || groupStudent.classID || '') !== groupId) return false
+      return String(groupStudent.status || 'active') === 'active'
+    }).length
+  }, [groupStudents, selectedGroupClass?.id])
+
+  const selectedGroupCapacity = useMemo(() => {
+    const value = Number(selectedGroupClass?.maxStudents ?? 4)
+    if (!Number.isFinite(value)) return 4
+    return Math.max(1, Math.trunc(value))
+  }, [selectedGroupClass?.maxStudents])
+
+  const isGroupAtCapacity = activeFixedMemberCount >= selectedGroupCapacity
+
+  const groupStudentCandidateStudents = useMemo(() => {
+    const groupId = String(selectedGroupClass?.id || '').trim()
+    if (!groupId) return []
+    const activeStudentIds = new Set(
+      groupStudents
+        .filter((groupStudent) => {
+          if (String(groupStudent.groupClassId || groupStudent.classID || '') !== groupId) {
+            return false
+          }
+          return String(groupStudent.status || 'active') === 'active'
+        })
+        .map((groupStudent) => String(groupStudent.studentId || '').trim())
+        .filter(Boolean)
+    )
+    const search = normalizeText(groupStudentForm.studentSearch || '')
+    return privateStudents
+      .filter((student) => {
+        const studentId = String(student.id || student.studentId || '').trim()
+        if (!studentId || activeStudentIds.has(studentId)) return false
+        const status = String(student.status || 'active').trim()
+        if (status === 'inactive' || status === 'deleted' || status === 'cancelled') return false
+        if (!search) return true
+        const haystack = normalizeText(
+          [
+            student.name,
+            student.studentName,
+            student.phone,
+            student.teacher,
+            student.teacherName,
+          ].filter(Boolean).join(' ')
+        )
+        return haystack.includes(search)
+      })
+      .sort((a, b) =>
+        String(a.name || a.studentName || '').localeCompare(
+          String(b.name || b.studentName || ''),
+          'ko'
+        )
+      )
+      .slice(0, 80)
+  }, [
+    groupStudentForm.studentSearch,
+    groupStudents,
+    privateStudents,
+    selectedGroupClass?.id,
+  ])
+
   const groupStudentSelectedPackagePreview = useMemo(() => {
     return groupStudentForm.packageId
       ? studentPackages.find((pkg) => pkg.id === groupStudentForm.packageId) || null
       : null
   }, [groupStudentForm.packageId, studentPackages])
+
+  const groupStudentSelectedStudentPreview = useMemo(() => {
+    const studentId = String(groupStudentForm.studentId || '').trim()
+    if (!studentId) return null
+    return (
+      privateStudents.find(
+        (student) => String(student.id || student.studentId || '').trim() === studentId
+      ) || null
+    )
+  }, [groupStudentForm.studentId, privateStudents])
 
   const isGroupStudentModalSubmitting = busyGroupStudentId === '__add__'
 
@@ -171,8 +250,18 @@ export default function useGroupStudentAddFlow({
     setGroupStudentFormErrors(result.errors)
     if (!result.valid || !result.startDate) return
 
-    const selectedPackage = studentPackages.find((pkg) => pkg.id === result.packageId)
-    if (!selectedPackage) {
+    if (isGroupAtCapacity) {
+      setGroupStudentFormErrors((prev) => ({
+        ...prev,
+        submit: `정원 ${selectedGroupCapacity}명을 초과할 수 없습니다.`,
+      }))
+      return
+    }
+
+    const selectedPackage = result.packageId
+      ? studentPackages.find((pkg) => pkg.id === result.packageId)
+      : null
+    if (result.packageId && !selectedPackage) {
       alert(
         isAdmin
           ? '등록된 수강권을 찾을 수 없습니다.'
@@ -181,9 +270,10 @@ export default function useGroupStudentAddFlow({
       return
     }
     if (
-      selectedPackage.packageType !== 'group' ||
-      String(selectedPackage.groupClassId || '') !== String(selectedGroupClass.id) ||
-      selectedPackage.status !== 'active'
+      selectedPackage &&
+      (selectedPackage.packageType !== 'group' ||
+        String(selectedPackage.groupClassId || '') !== String(selectedGroupClass.id) ||
+        selectedPackage.status !== 'active')
     ) {
       alert(
         isAdmin
@@ -193,12 +283,23 @@ export default function useGroupStudentAddFlow({
       return
     }
 
-    if (Number(selectedPackage.remainingCount || 0) <= 0) {
+    if (selectedPackage && Number(selectedPackage.remainingCount || 0) <= 0) {
       alert(isAdmin ? '남은 횟수가 없는 수강권입니다.' : '남은 횟수가 없습니다.')
       return
     }
 
-    const studentId = String(selectedPackage.studentId || '').trim()
+    const selectedStudent = result.studentId
+      ? privateStudents.find(
+          (student) => String(student.id || student.studentId || '').trim() === result.studentId
+        )
+      : null
+    if (!selectedPackage && !selectedStudent) {
+      alert('선택한 학생을 찾을 수 없습니다.')
+      return
+    }
+    const studentId = String(
+      selectedPackage?.studentId || selectedStudent?.id || result.studentId || ''
+    ).trim()
     if (!studentId) {
       alert(
         isAdmin ? '수강권에 연결된 학생이 없습니다.' : '등록에 학생 연결이 없습니다.'
@@ -219,7 +320,7 @@ export default function useGroupStudentAddFlow({
     }
 
     const dateStrYmd = String(groupStudentForm.startDate || '').trim()
-    const packageRegistrationYmd = String(selectedPackage.registrationStartDate || '').trim()
+    const packageRegistrationYmd = String(selectedPackage?.registrationStartDate || '').trim()
     const extraStartErrors = {}
     if (/^\d{4}-\d{2}-\d{2}$/.test(packageRegistrationYmd) && dateStrYmd < packageRegistrationYmd) {
       extraStartErrors.startDate =
@@ -241,15 +342,21 @@ export default function useGroupStudentAddFlow({
       return
     }
 
-    const studentName = String(selectedPackage.studentName || '').trim() || '-'
+    const studentName = String(
+      selectedPackage?.studentName ||
+        selectedStudent?.name ||
+        selectedStudent?.studentName ||
+        ''
+    ).trim() || '-'
     const teacher = normalizeText(
-      selectedGroupClass.teacher || selectedPackage.teacher || ''
+      selectedGroupClass.teacher || selectedPackage?.teacher || selectedStudent?.teacher || ''
     )
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(selectedGroupClass, scopedAcademyId, '그룹')
-      assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
+      if (selectedPackage) assertSameAcademy(selectedPackage, scopedAcademyId, '수강권')
+      if (selectedStudent) assertSameAcademy(selectedStudent, scopedAcademyId, '학생')
       setBusyGroupStudentId('__add__')
       const groupStudentRef = doc(collection(db, 'groupStudents'))
       const batch = writeBatch(db)
@@ -261,13 +368,14 @@ export default function useGroupStudentAddFlow({
         studentName,
         name: studentName,
         teacher,
-        packageId: selectedPackage.id,
-        packageType: selectedPackage.packageType,
-        paidLessons: Number(selectedPackage.totalCount || 0),
-        attendanceCount: Number(selectedPackage.usedCount || 0),
+        packageId: selectedPackage?.id || '',
+        packageType: selectedPackage?.packageType || '',
+        paidLessons: Number(selectedPackage?.totalCount || 0),
+        attendanceCount: Number(selectedPackage?.usedCount || 0),
         startDate: result.startDate,
         status: 'active',
         studentStatus: 'active',
+        fixedMember: true,
         excludedDates: [],
         breakStartDate: '',
         breakEndDate: '',
@@ -301,6 +409,11 @@ export default function useGroupStudentAddFlow({
     busyGroupStudentId,
     groupStudentEligiblePackages,
     groupStudentSelectedPackagePreview,
+    groupStudentCandidateStudents,
+    groupStudentSelectedStudentPreview,
+    activeFixedMemberCount,
+    selectedGroupCapacity,
+    isGroupAtCapacity,
     openGroupStudentAddModal,
     closeGroupStudentAddModal,
     submitGroupStudentAdd,
