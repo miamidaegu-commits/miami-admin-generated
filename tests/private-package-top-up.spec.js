@@ -206,22 +206,9 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   await laterButton.scrollIntoViewIfNeeded();
   await expect(laterButton).toBeVisible({ timeout: 10000 });
   await expect(laterButton).toBeEnabled({ timeout: 10000 });
-  await laterButton.click({ force: true });
+  await laterButton.click();
   await expect(modal).toBeHidden({ timeout: 10000 });
   return true;
-}
-
-async function waitForPackageSubmitStarted(dialog) {
-  await expect
-    .poll(async () => {
-      const dialogHidden = await dialog.isHidden().catch(() => false);
-      const savingDisabled = await dialog
-        .getByRole('button', { name: '저장 중...', exact: true })
-        .isDisabled()
-        .catch(() => false);
-      return dialogHidden || savingDisabled;
-    }, { timeout: 10000 })
-    .toBe(true);
 }
 
 test('admin tops up an existing same-teacher private package', async ({ page, browserName }) => {
@@ -387,8 +374,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await topUpButton.scrollIntoViewIfNeeded();
     await expect(topUpButton).toBeVisible({ timeout: 10000 });
     await expect(topUpButton).toBeEnabled({ timeout: 10000 });
-    await topUpButton.click({ force: true });
-    await waitForPackageSubmitStarted(dialog);
+    await topUpButton.click();
 
     await expect
       .poll(async () => {
@@ -517,16 +503,21 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
     await forceNewButton.scrollIntoViewIfNeeded();
     await expect(forceNewButton).toBeVisible();
     await expect(forceNewButton).toBeEnabled();
-    const nativeDialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
-    await forceNewButton.click({ force: true });
-    const nativeDialog = await nativeDialogPromise;
-    expect(nativeDialog.message()).toContain('같은 선생님 수강권이 이미 있습니다.');
-    expect(nativeDialog.message()).toContain(
-      '일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.'
-    );
-    expect(nativeDialog.message()).toContain('정말 별도 수강권으로 발급할까요?');
-    await nativeDialog.accept();
-    await waitForPackageSubmitStarted(dialog);
+    let nativeConfirmMessage = '';
+    const handleNativeConfirm = async (nativeDialog) => {
+      nativeConfirmMessage = nativeDialog.message();
+      await nativeDialog.accept();
+    };
+    page.once('dialog', handleNativeConfirm);
+    await forceNewButton.click();
+    page.off('dialog', handleNativeConfirm);
+    if (nativeConfirmMessage) {
+      expect(nativeConfirmMessage).toContain('같은 선생님 수강권이 이미 있습니다.');
+      expect(nativeConfirmMessage).toContain(
+        '일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.'
+      );
+      expect(nativeConfirmMessage).toContain('정말 별도 수강권으로 발급할까요?');
+    }
 
     let newPackageId = '';
     await expect

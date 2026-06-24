@@ -81,22 +81,9 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   await laterButton.scrollIntoViewIfNeeded();
   await expect(laterButton).toBeVisible({ timeout: 10000 });
   await expect(laterButton).toBeEnabled({ timeout: 10000 });
-  await laterButton.click({ force: true });
+  await laterButton.click();
   await expect(modal).toBeHidden({ timeout: 10000 });
   return true;
-}
-
-async function waitForPackageSubmitStarted(dialog) {
-  await expect
-    .poll(async () => {
-      const dialogHidden = await dialog.isHidden().catch(() => false);
-      const savingDisabled = await dialog
-        .getByRole('button', { name: '저장 중...', exact: true })
-        .isDisabled()
-        .catch(() => false);
-      return dialogHidden || savingDisabled;
-    }, { timeout: 10000 })
-    .toBe(true);
 }
 
 async function closeDialogBestEffort(page, dialog) {
@@ -610,8 +597,7 @@ test('admin can create a separate private package for a different teacher', asyn
     await saveButton.scrollIntoViewIfNeeded();
     await expect(saveButton).toBeVisible({ timeout: 10000 });
     await expect(saveButton).toBeEnabled({ timeout: 10000 });
-    await saveButton.click({ force: true });
-    await waitForPackageSubmitStarted(dialog);
+    await saveButton.click();
 
     let secondPackageId = '';
     await expect
