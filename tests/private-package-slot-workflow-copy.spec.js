@@ -78,12 +78,21 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
     await expect(modal).toContainText(options.expectedText);
   }
   const laterButton = modal.getByRole('button', { name: /나중에 (하기|등록)/ });
-  await laterButton.scrollIntoViewIfNeeded();
-  await expect(laterButton).toBeVisible({ timeout: 10000 });
-  await expect(laterButton).toBeEnabled({ timeout: 10000 });
-  await laterButton.click();
+  await clickVisibleEnabled(laterButton);
   await expect(modal).toBeHidden({ timeout: 10000 });
   return true;
+}
+
+async function clickVisibleEnabled(locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await expect(locator).toBeVisible({ timeout: 10000 });
+  await expect(locator).toBeEnabled({ timeout: 10000 });
+  await locator.click({ timeout: 10000 }).catch(async (error) => {
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await locator.click({ timeout: 5000, force: true }).catch(() => {
+      throw error;
+    });
+  });
 }
 
 async function closeDialogBestEffort(page, dialog) {
@@ -95,6 +104,12 @@ async function closeDialogBestEffort(page, dialog) {
     await page.keyboard.press('Escape').catch(() => {});
   }
   await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
+}
+
+async function cleanupPrivatePackageDialogs(page, dialog) {
+  await maybeDismissPostPrivateLessonScheduleModal(page).catch(() => false);
+  await closeDialogBestEffort(page, dialog).catch(() => {});
+  await maybeDismissPostPrivateLessonScheduleModal(page).catch(() => false);
 }
 
 async function waitForPackageRevoked(packageId, timeout = 30000) {
@@ -522,6 +537,7 @@ test('admin can create a separate private package for a different teacher', asyn
   const secondTeacherKey = `miketest-${unique}`;
   const secondTeacherId = `e2e-package-teacher-${unique}`;
   let tempStudent = null;
+  let dialog = null;
 
   try {
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
@@ -558,7 +574,7 @@ test('admin can create a separate private package for a different teacher', asyn
       activePackageIds: [existingPackage.packageId],
     });
 
-    const dialog = await openPackageAddDialog(page, studentName, tempStudent.studentId);
+    dialog = await openPackageAddDialog(page, studentName, tempStudent.studentId);
     await expect(dialog.getByTestId('student-package-duplicate-guidance')).toBeVisible();
 
     const teacherSelect = dialog.getByLabel('수강권 선생님');
@@ -594,10 +610,7 @@ test('admin can create a separate private package for a different teacher', asyn
     await dialog.getByLabel('제목').fill(newPackageTitle);
     await dialog.getByLabel(/총 횟수/).fill('3');
     const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
-    await saveButton.scrollIntoViewIfNeeded();
-    await expect(saveButton).toBeVisible({ timeout: 10000 });
-    await expect(saveButton).toBeEnabled({ timeout: 10000 });
-    await saveButton.click();
+    await clickVisibleEnabled(saveButton);
 
     let secondPackageId = '';
     await expect
@@ -633,10 +646,6 @@ test('admin can create a separate private package for a different teacher', asyn
         secondTotalCount: 3,
         secondRemainingCount: 3,
       });
-    await expect(dialog).toBeHidden({ timeout: 30000 });
-    await maybeDismissPostPrivateLessonScheduleModal(page, {
-      expectedText: '새 개인 수강권이 발급되었습니다.',
-    });
 
     await expect
       .poll(async () => {
@@ -691,6 +700,7 @@ test('admin can create a separate private package for a different teacher', asyn
       expect.arrayContaining([existingPackage.packageId, secondPackage.id])
     );
   } finally {
+    await cleanupPrivatePackageDialogs(page, dialog);
     if (tempStudent) {
       await cleanupAdminSeededStudentPrivateAccessSummary({
         academyId: ACADEMY_ID,

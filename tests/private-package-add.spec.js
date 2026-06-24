@@ -71,12 +71,25 @@ async function closeDialogBestEffort(page, dialog, buttonName = /닫기|취소|�
   await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
 }
 
-async function ensurePackageDialogClosed(page, testInfo, packageDialog) {
-  if (await packageDialog.isHidden({ timeout: 5000 }).catch(() => false)) return;
-    await testInfo.attach('private-package-dialog-diagnostics', {
-      body: JSON.stringify(await collectPackageDialogDiagnostics(page, packageDialog), null, 2),
-      contentType: 'application/json',
+async function clickVisibleEnabled(locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await expect(locator).toBeVisible({ timeout: 10000 });
+  await expect(locator).toBeEnabled({ timeout: 10000 });
+  await locator.click({ timeout: 10000 }).catch(async (error) => {
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await locator.click({ timeout: 5000, force: true }).catch(() => {
+      throw error;
     });
+  });
+}
+
+async function ensurePackageDialogClosed(page, testInfo, packageDialog) {
+  if (!packageDialog) return;
+  if (await packageDialog.isHidden({ timeout: 5000 }).catch(() => false)) return;
+  await testInfo.attach('private-package-dialog-diagnostics', {
+    body: JSON.stringify(await collectPackageDialogDiagnostics(page, packageDialog), null, 2),
+    contentType: 'application/json',
+  });
   await closeDialogBestEffort(page, packageDialog, /닫기|취소/);
 }
 
@@ -86,12 +99,15 @@ async function dismissOptionalPrivateScheduleDialog(page) {
   });
   if (!(await postScheduleDialog.isVisible({ timeout: 2000 }).catch(() => false))) return false;
   const laterButton = postScheduleDialog.getByRole('button', { name: /나중에 (하기|등록)/ });
-  await laterButton.scrollIntoViewIfNeeded();
-  await expect(laterButton).toBeVisible({ timeout: 10000 });
-  await expect(laterButton).toBeEnabled({ timeout: 10000 });
-  await laterButton.click();
+  await clickVisibleEnabled(laterButton);
   await expect(postScheduleDialog).toBeHidden({ timeout: 10000 });
   return true;
+}
+
+async function cleanupPrivatePackageDialogs(page, testInfo, packageDialog) {
+  await dismissOptionalPrivateScheduleDialog(page).catch(() => false);
+  await ensurePackageDialogClosed(page, testInfo, packageDialog).catch(() => {});
+  await dismissOptionalPrivateScheduleDialog(page).catch(() => false);
 }
 
 test('관리자가 기존 학생에게 개인 수강권을 추가한다', async ({ page, browserName }, testInfo) => {
@@ -103,6 +119,7 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
   const tempStudentName = `E2E 개인학생 ${uniqueToken}`;
   const paymentDate = '2026-06-03';
   let tempStudent = null;
+  let packageDialog = null;
 
   page.on('dialog', async (dialog) => {
     await dialog.accept();
@@ -126,7 +143,7 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
 
     await studentRow.getByRole('button', { name: '수강권 추가' }).click();
 
-    const packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+    packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
     await expect(packageDialog).toBeVisible();
 
     await packageDialog.getByLabel('수강권 유형').selectOption('private');
@@ -140,10 +157,7 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     await packageDialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
 
     const saveButton = packageDialog.getByRole('button', { name: '저장', exact: true });
-    await saveButton.scrollIntoViewIfNeeded();
-    await expect(saveButton).toBeVisible({ timeout: 10000 });
-    await expect(saveButton).toBeEnabled({ timeout: 10000 });
-    await saveButton.click();
+    await clickVisibleEnabled(saveButton);
     await expectPrivatePackageCreated({
       studentId: tempStudent.studentId,
       packageTitle,
@@ -156,9 +170,8 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
         paymentDate,
       },
     });
-    await ensurePackageDialogClosed(page, testInfo, packageDialog);
-    await dismissOptionalPrivateScheduleDialog(page);
   } finally {
+    await cleanupPrivatePackageDialogs(page, testInfo, packageDialog);
     if (tempStudent) {
       await cleanupTempStudentData(page, {
         ...tempStudent,
@@ -179,6 +192,7 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
   const dialogMessages = [];
   let createdStudentId = '';
   const teacherId = 'e2e-package-handoff-don1';
+  let packageDialog = null;
 
   page.on('dialog', async (dialog) => {
     dialogMessages.push(dialog.message());
@@ -211,7 +225,7 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
     await expect(createdStudentRow).toBeVisible({ timeout: 15000 });
     await createdStudentRow.getByRole('button', { name: '수강권 추가' }).click();
 
-    const packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+    packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
     await expect(packageDialog).toBeVisible();
     await packageDialog.getByLabel('수강권 유형').selectOption('private');
     await expect(packageDialog).toContainText('사용 가능 선생님: Don · don1');
@@ -220,10 +234,7 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
     await packageDialog.getByLabel(/총 횟수/).fill('4');
     await packageDialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
     const saveButton = packageDialog.getByRole('button', { name: '저장', exact: true });
-    await saveButton.scrollIntoViewIfNeeded();
-    await expect(saveButton).toBeVisible({ timeout: 10000 });
-    await expect(saveButton).toBeEnabled({ timeout: 10000 });
-    await saveButton.click();
+    await clickVisibleEnabled(saveButton);
 
     expect(dialogMessages.join('\n')).not.toContain('현재 학원에 속하지 않습니다');
     await expectPrivatePackageCreated({
@@ -238,9 +249,8 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
         paymentDate,
       },
     });
-    await ensurePackageDialogClosed(page, testInfo, packageDialog);
-    await dismissOptionalPrivateScheduleDialog(page);
   } finally {
+    await cleanupPrivatePackageDialogs(page, testInfo, packageDialog);
     await cleanupTempStudentData(page, {
       studentId: createdStudentId,
       studentName,

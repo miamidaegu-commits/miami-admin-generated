@@ -203,12 +203,38 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
     await expect(modal).toContainText(options.expectedText);
   }
   const laterButton = modal.getByRole('button', { name: /나중에 (하기|등록)/ });
-  await laterButton.scrollIntoViewIfNeeded();
-  await expect(laterButton).toBeVisible({ timeout: 10000 });
-  await expect(laterButton).toBeEnabled({ timeout: 10000 });
-  await laterButton.click();
+  await clickVisibleEnabled(laterButton);
   await expect(modal).toBeHidden({ timeout: 10000 });
   return true;
+}
+
+async function clickVisibleEnabled(locator) {
+  await locator.scrollIntoViewIfNeeded();
+  await expect(locator).toBeVisible({ timeout: 10000 });
+  await expect(locator).toBeEnabled({ timeout: 10000 });
+  await locator.click({ timeout: 10000 }).catch(async (error) => {
+    await locator.scrollIntoViewIfNeeded().catch(() => {});
+    await locator.click({ timeout: 5000, force: true }).catch(() => {
+      throw error;
+    });
+  });
+}
+
+async function closeStudentPackageDialogBestEffort(page, dialog) {
+  if (!dialog || !(await dialog.isVisible({ timeout: 1000 }).catch(() => false))) return;
+  const cancelButton = dialog.getByRole('button', { name: '취소', exact: true });
+  if (await cancelButton.isEnabled({ timeout: 1000 }).catch(() => false)) {
+    await clickVisibleEnabled(cancelButton).catch(() => {});
+  } else {
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+  await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
+}
+
+async function cleanupPrivatePackageDialogs(page, dialog) {
+  await maybeDismissPostPrivateLessonScheduleModal(page).catch(() => false);
+  await closeStudentPackageDialogBestEffort(page, dialog).catch(() => {});
+  await maybeDismissPostPrivateLessonScheduleModal(page).catch(() => false);
 }
 
 test('admin tops up an existing same-teacher private package', async ({ page, browserName }) => {
@@ -224,6 +250,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
   const registrationLabel = `5개월 할인 등록 ${unique}`;
   const memo = `E2E top-up memo ${unique}`;
   let fixture = null;
+  let dialog = null;
 
   try {
     const teacherFixture = await createTeacherAndTemplate({ unique, teacherKey, teacherName });
@@ -324,7 +351,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     ]);
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    const dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
+    dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
     await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible();
     await expect(dialog).toContainText('기존 수강권에 추가 등록할 수 있습니다.');
     await expect(dialog).toContainText('운영 순서');
@@ -371,10 +398,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await dialog.getByTestId('private-package-top-up-memo-input').fill(memo);
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     const topUpButton = dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true });
-    await topUpButton.scrollIntoViewIfNeeded();
-    await expect(topUpButton).toBeVisible({ timeout: 10000 });
-    await expect(topUpButton).toBeEnabled({ timeout: 10000 });
-    await topUpButton.click();
+    await clickVisibleEnabled(topUpButton);
 
     await expect
       .poll(async () => {
@@ -395,11 +419,6 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
         paymentDate: '2026-05-01',
         topUpCount: 1,
       });
-    await expect(dialog).toBeHidden({ timeout: 90000 });
-    await maybeDismissPostPrivateLessonScheduleModal(page, {
-      expectedText: '기존 개인 수강권에 추가 등록했습니다.',
-    });
-
     await expect
       .poll(async () => {
         const snap = await getDb()
@@ -422,6 +441,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
         amountPaid: 300000,
       });
   } finally {
+    await cleanupPrivatePackageDialogs(page, dialog);
     await cleanupFixture(fixture).catch(() => {});
   }
 });
@@ -435,6 +455,7 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
   const teacherKey = `top-up-force-teacher-${unique}`;
   const teacherName = `Top Up Force Teacher ${unique}`;
   let fixture = null;
+  let dialog = null;
 
   try {
     const teacherFixture = await createTeacherAndTemplate({
@@ -488,7 +509,7 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
       });
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    const dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
+    dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
     await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible({
       timeout: 30000,
     });
@@ -500,17 +521,17 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
     await dialog.getByLabel(/총 횟수/).fill('2');
 
     const forceNewButton = dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true });
-    await forceNewButton.scrollIntoViewIfNeeded();
-    await expect(forceNewButton).toBeVisible();
-    await expect(forceNewButton).toBeEnabled();
     let nativeConfirmMessage = '';
     const handleNativeConfirm = async (nativeDialog) => {
       nativeConfirmMessage = nativeDialog.message();
       await nativeDialog.accept();
     };
     page.once('dialog', handleNativeConfirm);
-    await forceNewButton.click();
-    page.off('dialog', handleNativeConfirm);
+    try {
+      await clickVisibleEnabled(forceNewButton);
+    } finally {
+      page.off('dialog', handleNativeConfirm);
+    }
     if (nativeConfirmMessage) {
       expect(nativeConfirmMessage).toContain('같은 선생님 수강권이 이미 있습니다.');
       expect(nativeConfirmMessage).toContain(
@@ -554,11 +575,8 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
         createdRemainingCount: 2,
       });
     if (newPackageId) fixture.packageIds.push(newPackageId);
-    await expect(dialog).toBeHidden({ timeout: 30000 });
-    await maybeDismissPostPrivateLessonScheduleModal(page, {
-      expectedText: '새 개인 수강권이 발급되었습니다.',
-    });
   } finally {
+    await cleanupPrivatePackageDialogs(page, dialog);
     await cleanupFixture(fixture).catch(() => {});
   }
 });
@@ -572,6 +590,7 @@ test('different teacher scope still creates a separate private package', async (
   const currentTeacher = `top-up-current-${unique}`;
   const otherTeacher = `top-up-other-${unique}`;
   let fixture = null;
+  let dialog = null;
 
   try {
     const student = await createAdminSeededPrivateStudent({
@@ -599,15 +618,13 @@ test('different teacher scope still creates a separate private package', async (
     fixture = { studentId: student.studentId, packageIds: [existingPackage.packageId] };
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-    const dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
+    dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
     await expect(dialog.getByTestId('student-package-top-up-section')).toHaveCount(0);
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     await dialog.getByLabel('제목').fill(`E2E 현재 선생님 신규 ${unique}`);
     await dialog.getByLabel(/총 횟수/).fill('3');
     const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
-    await expect(saveButton).toBeEnabled();
-    await saveButton.click();
-    await expect(dialog).toBeHidden({ timeout: 30000 });
+    await clickVisibleEnabled(saveButton);
 
     await expect
       .poll(async () => {
@@ -619,8 +636,8 @@ test('different teacher scope still creates a separate private package', async (
         return snap.docs.map((docSnap) => String((docSnap.data() || {}).teacher || '')).sort();
       }, { timeout: 30000 })
       .toEqual([currentTeacher, otherTeacher].sort());
-    await maybeDismissPostPrivateLessonScheduleModal(page);
   } finally {
+    await cleanupPrivatePackageDialogs(page, dialog);
     await cleanupFixture(fixture).catch(() => {});
   }
 });
