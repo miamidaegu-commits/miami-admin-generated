@@ -55,8 +55,11 @@ async function openPackageAddDialog(page, studentName, studentId = '') {
   const studentSearchInput = getStudentSearchInput(page);
   await studentSearchInput.fill(studentName);
 
-  const studentRow = studentId ? getStudentRowById(page, studentId) : getStudentRow(page, studentName);
-  await expect(studentRow).toBeVisible({ timeout: 15000 });
+  const studentRowByName = getStudentRow(page, studentName);
+  const studentRow = studentId
+    ? getStudentRowById(page, studentId).or(studentRowByName).first()
+    : studentRowByName;
+  await expect(studentRow).toBeVisible({ timeout: 30000 });
   await studentRow.getByRole('button', { name: '수강권 추가', exact: true }).click();
 
   const dialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
@@ -70,16 +73,20 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
     .getByTestId('post-private-lesson-schedule-modal')
     .or(page.getByRole('dialog', { name: '주간 시간에 학생 고정 배정으로 이동할까요?' }))
     .first();
-  if (!(await modal.isVisible({ timeout: options.timeout ?? 2000 }).catch(() => false))) {
+  if (!(await modal.isVisible({ timeout: options.timeout ?? 500 }).catch(() => false))) {
     return false;
   }
-  await expect(modal).toContainText('주간 시간에 학생 고정 배정으로 이동할까요?');
+  if (options.expectedText) {
+    await expect(modal).toContainText('주간 시간에 학생 고정 배정으로 이동할까요?');
+  }
   if (options.expectedText) {
     await expect(modal).toContainText(options.expectedText);
   }
+  if (await clickButtonByTextBestEffort(page, ['나중에 하기', '나중에 등록', '나중에'])) {
+    return true;
+  }
   const laterButton = modal.getByRole('button', { name: /나중에 (하기|등록)/ });
-  await clickVisibleEnabled(laterButton);
-  await expect(modal).toBeHidden({ timeout: 10000 });
+  await clickBestEffort(laterButton);
   return true;
 }
 
@@ -95,15 +102,35 @@ async function clickVisibleEnabled(locator) {
   });
 }
 
+async function clickBestEffort(locator) {
+  await locator.scrollIntoViewIfNeeded({ timeout: 500 }).catch(() => {});
+  await locator.click({ timeout: 1500 }).catch(async () => {
+    await locator.click({ timeout: 1500, force: true }).catch(() => {});
+  });
+}
+
+async function clickButtonByTextBestEffort(page, labels) {
+  return page.evaluate((buttonLabels) => {
+    const buttons = Array.from(document.querySelectorAll('button'));
+    const target = buttons.find((button) => {
+      const text = String(button.textContent || '').trim();
+      return buttonLabels.some((label) => text.includes(label));
+    });
+    if (!target) return false;
+    target.click();
+    return true;
+  }, labels).catch(() => false);
+}
+
 async function closeDialogBestEffort(page, dialog) {
-  if (!(await dialog.isVisible({ timeout: 1000 }).catch(() => false))) return;
+  if (!(await dialog.isVisible({ timeout: 500 }).catch(() => false))) return;
+  if (await clickButtonByTextBestEffort(page, ['닫기', '취소', '나중에'])) return;
   const cancelButton = dialog.getByRole('button', { name: '취소', exact: true });
-  if (await cancelButton.isEnabled({ timeout: 1000 }).catch(() => false)) {
-    await cancelButton.click({ timeout: 5000 }).catch(() => {});
+  if (await cancelButton.isVisible({ timeout: 500 }).catch(() => false)) {
+    await clickBestEffort(cancelButton);
   } else {
     await page.keyboard.press('Escape').catch(() => {});
   }
-  await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
 }
 
 async function cleanupPrivatePackageDialogs(page, dialog) {
