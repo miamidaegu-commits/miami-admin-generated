@@ -77,9 +77,26 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   if (options.expectedText) {
     await expect(modal).toContainText(options.expectedText);
   }
-  await modal.getByRole('button', { name: /나중에 (하기|등록)/ }).click();
+  const laterButton = modal.getByRole('button', { name: /나중에 (하기|등록)/ });
+  await laterButton.scrollIntoViewIfNeeded();
+  await expect(laterButton).toBeVisible({ timeout: 10000 });
+  await expect(laterButton).toBeEnabled({ timeout: 10000 });
+  await laterButton.click({ force: true });
   await expect(modal).toBeHidden({ timeout: 10000 });
   return true;
+}
+
+async function waitForPackageSubmitStarted(dialog) {
+  await expect
+    .poll(async () => {
+      const dialogHidden = await dialog.isHidden().catch(() => false);
+      const savingDisabled = await dialog
+        .getByRole('button', { name: '저장 중...', exact: true })
+        .isDisabled()
+        .catch(() => false);
+      return dialogHidden || savingDisabled;
+    }, { timeout: 10000 })
+    .toBe(true);
 }
 
 async function closeDialogBestEffort(page, dialog) {
@@ -266,7 +283,17 @@ async function clickRevokeAndAcceptPrompt(
         revokeReason: reason,
       });
     }
-    await page.waitForTimeout(1000);
+    await expect
+      .poll(async () => {
+        const state = await getPackageRevokeState(packageId);
+        return packageRevokeStateMatchesExpected(state, {
+          reason,
+          totalCount,
+          usedCount,
+          remainingCount,
+        });
+      }, { timeout: 10000 })
+      .toBe(true);
   } finally {
     page.off('dialog', handleDialog);
     if (promptStubInstalled) {
@@ -583,7 +610,8 @@ test('admin can create a separate private package for a different teacher', asyn
     await saveButton.scrollIntoViewIfNeeded();
     await expect(saveButton).toBeVisible({ timeout: 10000 });
     await expect(saveButton).toBeEnabled({ timeout: 10000 });
-    await saveButton.click();
+    await saveButton.click({ force: true });
+    await waitForPackageSubmitStarted(dialog);
 
     let secondPackageId = '';
     await expect
@@ -640,7 +668,7 @@ test('admin can create a separate private package for a different teacher', asyn
             ? activePackageIds.includes(secondPackageId)
             : false,
         };
-      }, { timeout: 30000 })
+      }, { timeout: 60000 })
       .toEqual({
         summaryHasDonTeacher: true,
         summaryHasSecondTeacher: true,

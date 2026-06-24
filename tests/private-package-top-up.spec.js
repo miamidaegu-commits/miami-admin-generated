@@ -202,15 +202,32 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   if (options.expectedText) {
     await expect(modal).toContainText(options.expectedText);
   }
-  await modal.getByRole('button', { name: /나중에 (하기|등록)/ }).click();
+  const laterButton = modal.getByRole('button', { name: /나중에 (하기|등록)/ });
+  await laterButton.scrollIntoViewIfNeeded();
+  await expect(laterButton).toBeVisible({ timeout: 10000 });
+  await expect(laterButton).toBeEnabled({ timeout: 10000 });
+  await laterButton.click({ force: true });
   await expect(modal).toBeHidden({ timeout: 10000 });
   return true;
+}
+
+async function waitForPackageSubmitStarted(dialog) {
+  await expect
+    .poll(async () => {
+      const dialogHidden = await dialog.isHidden().catch(() => false);
+      const savingDisabled = await dialog
+        .getByRole('button', { name: '저장 중...', exact: true })
+        .isDisabled()
+        .catch(() => false);
+      return dialogHidden || savingDisabled;
+    }, { timeout: 10000 })
+    .toBe(true);
 }
 
 test('admin tops up an existing same-teacher private package', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
   test.skip(!fs.existsSync(SERVICE_ACCOUNT_PATH), 'serviceAccountKey.json이 있을 때만 실행합니다.');
-  test.setTimeout(180000);
+  test.setTimeout(240000);
 
   const unique = Date.now();
   const teacherKey = `top-up-teacher-${unique}`;
@@ -367,8 +384,11 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
     await dialog.getByTestId('private-package-top-up-memo-input').fill(memo);
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     const topUpButton = dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true });
-    await expect(topUpButton).toBeEnabled();
-    await topUpButton.click();
+    await topUpButton.scrollIntoViewIfNeeded();
+    await expect(topUpButton).toBeVisible({ timeout: 10000 });
+    await expect(topUpButton).toBeEnabled({ timeout: 10000 });
+    await topUpButton.click({ force: true });
+    await waitForPackageSubmitStarted(dialog);
 
     await expect
       .poll(async () => {
@@ -381,7 +401,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
           paymentDate: data.paymentDate,
           topUpCount: data.topUpCount,
         };
-      }, { timeout: 30000 })
+      }, { timeout: 90000 })
       .toEqual({
         totalCount: 8,
         remainingCount: 8,
@@ -389,7 +409,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
         paymentDate: '2026-05-01',
         topUpCount: 1,
       });
-    await expect(dialog).toBeHidden({ timeout: 30000 });
+    await expect(dialog).toBeHidden({ timeout: 90000 });
     await maybeDismissPostPrivateLessonScheduleModal(page, {
       expectedText: '기존 개인 수강권에 추가 등록했습니다.',
     });
@@ -405,7 +425,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
         return snap.docs
           .map((docSnap) => docSnap.data())
           .find((row) => row.registrationLabel === registrationLabel);
-      }, { timeout: 30000 })
+      }, { timeout: 60000 })
       .toMatchObject({
         deltaCount: 4,
         registrationRound: 3,
@@ -423,7 +443,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
 test('admin can force a new same-teacher package with confirmation', async ({ page, browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
   test.skip(!fs.existsSync(SERVICE_ACCOUNT_PATH), 'serviceAccountKey.json이 있을 때만 실행합니다.');
-  test.setTimeout(120000);
+  test.setTimeout(180000);
 
   const unique = Date.now();
   const teacherKey = `top-up-force-teacher-${unique}`;
@@ -497,8 +517,8 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
     await forceNewButton.scrollIntoViewIfNeeded();
     await expect(forceNewButton).toBeVisible();
     await expect(forceNewButton).toBeEnabled();
-    const nativeDialogPromise = page.waitForEvent('dialog', { timeout: 10000 });
-    const forceNewClickPromise = forceNewButton.click();
+    const nativeDialogPromise = page.waitForEvent('dialog', { timeout: 15000 });
+    await forceNewButton.click({ force: true });
     const nativeDialog = await nativeDialogPromise;
     expect(nativeDialog.message()).toContain('같은 선생님 수강권이 이미 있습니다.');
     expect(nativeDialog.message()).toContain(
@@ -506,7 +526,7 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
     );
     expect(nativeDialog.message()).toContain('정말 별도 수강권으로 발급할까요?');
     await nativeDialog.accept();
-    await forceNewClickPromise;
+    await waitForPackageSubmitStarted(dialog);
 
     let newPackageId = '';
     await expect

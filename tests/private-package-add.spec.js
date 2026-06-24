@@ -85,9 +85,26 @@ async function dismissOptionalPrivateScheduleDialog(page) {
     name: '주간 시간에 학생 고정 배정으로 이동할까요?',
   });
   if (!(await postScheduleDialog.isVisible({ timeout: 2000 }).catch(() => false))) return false;
-  await postScheduleDialog.getByRole('button', { name: /나중에 (하기|등록)/ }).click();
+  const laterButton = postScheduleDialog.getByRole('button', { name: /나중에 (하기|등록)/ });
+  await laterButton.scrollIntoViewIfNeeded();
+  await expect(laterButton).toBeVisible({ timeout: 10000 });
+  await expect(laterButton).toBeEnabled({ timeout: 10000 });
+  await laterButton.click({ force: true });
   await expect(postScheduleDialog).toBeHidden({ timeout: 10000 });
   return true;
+}
+
+async function waitForPackageSubmitStarted(packageDialog) {
+  await expect
+    .poll(async () => {
+      const dialogHidden = await packageDialog.isHidden().catch(() => false);
+      const savingDisabled = await packageDialog
+        .getByRole('button', { name: '저장 중...', exact: true })
+        .isDisabled()
+        .catch(() => false);
+      return dialogHidden || savingDisabled;
+    }, { timeout: 10000 })
+    .toBe(true);
 }
 
 test('관리자가 기존 학생에게 개인 수강권을 추가한다', async ({ page, browserName }, testInfo) => {
@@ -135,7 +152,12 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     await packageDialog.getByLabel(/총 횟수/).fill('8');
     await packageDialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
 
-    await packageDialog.getByRole('button', { name: '저장' }).click();
+    const saveButton = packageDialog.getByRole('button', { name: '저장', exact: true });
+    await saveButton.scrollIntoViewIfNeeded();
+    await expect(saveButton).toBeVisible({ timeout: 10000 });
+    await expect(saveButton).toBeEnabled({ timeout: 10000 });
+    await saveButton.click({ force: true });
+    await waitForPackageSubmitStarted(packageDialog);
     await expectPrivatePackageCreated({
       studentId: tempStudent.studentId,
       packageTitle,
@@ -211,7 +233,12 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
     await packageDialog.getByLabel('제목').fill(packageTitle);
     await packageDialog.getByLabel(/총 횟수/).fill('4');
     await packageDialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
-    await packageDialog.getByRole('button', { name: '저장', exact: true }).click();
+    const saveButton = packageDialog.getByRole('button', { name: '저장', exact: true });
+    await saveButton.scrollIntoViewIfNeeded();
+    await expect(saveButton).toBeVisible({ timeout: 10000 });
+    await expect(saveButton).toBeEnabled({ timeout: 10000 });
+    await saveButton.click({ force: true });
+    await waitForPackageSubmitStarted(packageDialog);
 
     expect(dialogMessages.join('\n')).not.toContain('현재 학원에 속하지 않습니다');
     await expectPrivatePackageCreated({
