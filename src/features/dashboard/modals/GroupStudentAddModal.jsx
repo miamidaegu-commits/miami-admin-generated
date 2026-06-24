@@ -9,6 +9,11 @@ export default function GroupStudentAddModal({
   groupStudentFormErrors,
   groupStudentEligiblePackages,
   groupStudentSelectedPackagePreview,
+  groupStudentCandidateStudents,
+  groupStudentSelectedStudentPreview,
+  activeFixedMemberCount,
+  selectedGroupCapacity,
+  isGroupAtCapacity,
   closeGroupStudentAddModal,
   submitGroupStudentAdd,
   isGroupStudentModalSubmitting,
@@ -54,11 +59,121 @@ export default function GroupStudentAddModal({
         <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
           {selectedGroupClass.name || '-'}
         </p>
+        <p style={{ margin: '-8px 0 16px 0', fontSize: 12, opacity: 0.78 }}>
+          고정 학생 {activeFixedMemberCount ?? 0} / 정원 {selectedGroupCapacity ?? 4}명
+        </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {isGroupAtCapacity ? (
+            <div
+              role="alert"
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid #7a3d3d',
+                background: '#3a1f1f',
+                color: '#ffd4d4',
+                fontSize: 12,
+                lineHeight: 1.45,
+              }}
+            >
+              정원이 가득 차서 고정 학생을 더 추가할 수 없습니다.
+            </div>
+          ) : null}
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+            <span style={{ opacity: 0.85 }}>고정 학생 검색</span>
+            <input
+              type="text"
+              value={groupStudentForm.studentSearch || ''}
+              onChange={(e) =>
+                setGroupStudentForm((prev) => ({
+                  ...prev,
+                  studentSearch: e.target.value,
+                }))
+              }
+              placeholder="학생 이름/전화번호 검색"
+              disabled={isGroupStudentModalSubmitting || isGroupAtCapacity}
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid #444',
+                background: '#1f1f1f',
+                color: 'white',
+              }}
+            />
+          </label>
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+            <span style={{ opacity: 0.85 }}>고정 학생 선택</span>
+            <select
+              value={groupStudentForm.studentId || ''}
+              onChange={(e) =>
+                setGroupStudentForm((prev) => ({
+                  ...prev,
+                  studentId: e.target.value,
+                  packageId: e.target.value ? '' : prev.packageId,
+                }))
+              }
+              disabled={isGroupStudentModalSubmitting || isGroupAtCapacity}
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid #444',
+                background: '#1f1f1f',
+                color: 'white',
+              }}
+            >
+              <option value="">학생을 선택하세요</option>
+              {(groupStudentCandidateStudents || []).map((student) => {
+                const studentId = String(student.id || student.studentId || '').trim()
+                return (
+                  <option key={studentId} value={studentId}>
+                    {student.name || student.studentName || '-'}
+                  </option>
+                )
+              })}
+            </select>
+            {groupStudentFormErrors.studentId ? (
+              <span style={{ color: '#f08080', fontSize: 12 }}>
+                {groupStudentFormErrors.studentId}
+              </span>
+            ) : null}
+          </label>
+
+          {groupStudentSelectedStudentPreview ? (
+            <div
+              style={{
+                fontSize: 13,
+                lineHeight: 1.5,
+                padding: 12,
+                borderRadius: 8,
+                border: '1px solid #333',
+                background: '#1a1d26',
+                opacity: 0.95,
+              }}
+            >
+              <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>
+                고정 학생 정보 (읽기 전용)
+              </div>
+              <div>
+                studentName:{' '}
+                {groupStudentSelectedStudentPreview.name ??
+                  groupStudentSelectedStudentPreview.studentName ??
+                  '-'}
+              </div>
+              <div>
+                teacher:{' '}
+                {groupStudentSelectedStudentPreview.teacher ??
+                  groupStudentSelectedStudentPreview.teacherName ??
+                  '-'}
+              </div>
+            </div>
+          ) : null}
+
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
             <span style={{ opacity: 0.85 }}>
-              {isAdmin ? '이 반에서 사용할 수강권을 선택' : '이 반에서 사용할 등록을 선택'}
+              {isAdmin ? '이 반에서 사용할 수강권을 선택 (선택)' : '이 반에서 사용할 등록을 선택'}
             </span>
             <select
               value={groupStudentForm.packageId}
@@ -66,8 +181,10 @@ export default function GroupStudentAddModal({
                 setGroupStudentForm((prev) => ({
                   ...prev,
                   packageId: e.target.value,
+                  studentId: e.target.value ? '' : prev.studentId,
                 }))
               }
+              disabled={isGroupStudentModalSubmitting || isGroupAtCapacity}
               style={{
                 padding: '10px 12px',
                 borderRadius: 8,
@@ -77,7 +194,7 @@ export default function GroupStudentAddModal({
               }}
             >
               <option value="">
-                {isAdmin ? '사용할 수강권을 선택하세요' : '등록을 선택하세요'}
+                {isAdmin ? '수강권 없이 고정 학생으로 추가' : '등록을 선택하세요'}
               </option>
               {groupStudentEligiblePackages.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -145,6 +262,7 @@ export default function GroupStudentAddModal({
                   startDate: e.target.value,
                 }))
               }
+              disabled={isGroupStudentModalSubmitting || isGroupAtCapacity}
               style={{
                 padding: '10px 12px',
                 borderRadius: 8,
@@ -159,6 +277,11 @@ export default function GroupStudentAddModal({
               </span>
             ) : null}
           </label>
+          {groupStudentFormErrors.submit ? (
+            <span style={{ color: '#f08080', fontSize: 12 }}>
+              {groupStudentFormErrors.submit}
+            </span>
+          ) : null}
         </div>
 
         <div
@@ -188,14 +311,14 @@ export default function GroupStudentAddModal({
           <button
             type="button"
             onClick={submitGroupStudentAdd}
-            disabled={isGroupStudentModalSubmitting}
+            disabled={isGroupStudentModalSubmitting || isGroupAtCapacity}
             style={{
               padding: '10px 16px',
               borderRadius: 8,
               border: '1px solid #4a6fff55',
               background: '#1f2a44',
               color: 'white',
-              cursor: isGroupStudentModalSubmitting ? 'not-allowed' : 'pointer',
+              cursor: isGroupStudentModalSubmitting || isGroupAtCapacity ? 'not-allowed' : 'pointer',
             }}
           >
             {isGroupStudentModalSubmitting ? '저장 중...' : '저장'}

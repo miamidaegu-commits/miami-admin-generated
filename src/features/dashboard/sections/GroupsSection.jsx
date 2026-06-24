@@ -45,6 +45,20 @@ function getReservationSourceLabel(source) {
   return source === 'student' ? '학생 예약' : '관리자 예약'
 }
 
+function getGroupClassStatusLabel(status) {
+  const value = String(status || 'active').trim()
+  if (value === 'active') return 'active'
+  if (value === 'inactive') return 'inactive'
+  if (value === 'closed') return 'closed'
+  return value || 'active'
+}
+
+function countActiveGroupStudents(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(
+    (row) => String(row?.status || 'active').trim() === 'active'
+  ).length
+}
+
 export default function GroupsSection({
   sectionTitle = '단체반 관리',
   canManageGroupClasses,
@@ -113,6 +127,7 @@ export default function GroupsSection({
   const modalActiveStudentIds = new Set(
     modalLessonActiveReservations.map((reservation) => String(reservation.studentId || '').trim())
   )
+  const activeFixedStudentCount = countActiveGroupStudents(sortedGroupStudentsForSelectedClass)
   const modalCandidateGroupStudents = Array.isArray(sortedGroupStudentsForSelectedClass)
     ? sortedGroupStudentsForSelectedClass.filter((row) => {
         const studentId = getGroupStudentStudentId(row)
@@ -170,13 +185,14 @@ export default function GroupsSection({
           <div
             className="table-head"
             style={{
-              gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr minmax(140px, auto)',
+              gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr 0.8fr minmax(140px, auto)',
             }}
           >
             <span>이름</span>
             <span>선생님</span>
             <span>코스 유형</span>
             <span>최대 인원</span>
+            <span>상태</span>
             <span>작업</span>
           </div>
 
@@ -200,7 +216,7 @@ export default function GroupsSection({
                   }
                 }}
                 style={{
-                  gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr minmax(140px, auto)',
+                  gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr 0.8fr minmax(140px, auto)',
                   cursor: 'pointer',
                   outline: isSelected ? '2px solid #6b8cff' : undefined,
                   outlineOffset: -2,
@@ -210,6 +226,7 @@ export default function GroupsSection({
                 <span>{group.teacher || group.teacherName || '-'}</span>
                 <span>{getGroupCourseTypeLabel(group.groupCourseType) || '-'}</span>
                 <span>{group.maxStudents ?? '-'}</span>
+                <span>{getGroupClassStatusLabel(group.status)}</span>
                 <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {canManageGroupClasses ? (
                     <button
@@ -279,7 +296,8 @@ export default function GroupsSection({
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
               담당 선생님 {selectedGroupClass.teacher || '-'} · 정원{' '}
-              {selectedGroupClass.maxStudents ?? '-'}명
+              {activeFixedStudentCount} / {selectedGroupClass.maxStudents ?? '-'}명 · 상태{' '}
+              {getGroupClassStatusLabel(selectedGroupClass.status)}
             </p>
             <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
               기본 시간 {selectedGroupClass.time || '—'} · 과목{' '}
