@@ -5,6 +5,46 @@ import admin from 'firebase-admin';
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
 const EXPECTED_PROJECT_ID = 'miami-e2e';
 const DEFAULT_E2E_ACADEMY_ID = 'academy_e2e_default';
+const DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES = [
+  'E2E 개인학생',
+  'E2E 개인 수강권',
+  'E2E 즉시수강권',
+  'E2E 즉시 개인 수강권',
+  'E2E 수강권설명',
+  'E2E 수강권중복',
+  'E2E 다선생수강권',
+  'E2E don1 기존 수강권',
+  'E2E miketest 수강권',
+  'E2E 사용이력회수',
+  'E2E 사용 이력 회수',
+  'E2E 수강권회수',
+  'E2E 추가등록',
+  'E2E 새발급',
+  'E2E 기존 새발급',
+  'E2E 강제 새 수강권',
+  'E2E 다른선생님',
+  'E2E 다른 선생님 기존',
+  'E2E 현재 선생님 신규',
+  'E2E top-up',
+  'top-up-',
+  'miketest-',
+  'miketest ',
+  'e2e-top-up-',
+  'e2e-package-',
+  'e2e-immediate-package-student-',
+  'e2e-used-history-revoke-student-',
+  'e2e-revoke-student-',
+];
+
+export function hasE2EAdminServiceAccount() {
+  if (!fs.existsSync(SERVICE_ACCOUNT_PATH)) return false;
+  try {
+    const serviceAccount = JSON.parse(fs.readFileSync(SERVICE_ACCOUNT_PATH, 'utf8'));
+    return serviceAccount.project_id === EXPECTED_PROJECT_ID;
+  } catch {
+    return false;
+  }
+}
 
 function getAdminApp() {
   const existing = admin.apps.find((app) => app?.name === 'e2e-admin-helper');
@@ -74,6 +114,53 @@ function logAdminCleanupWarnings(label, results) {
   });
 }
 
+function normalizePrefixList(prefixes = DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES) {
+  return Array.from(
+    new Set(
+      (Array.isArray(prefixes) ? prefixes : [prefixes])
+        .map((prefix) => String(prefix || '').trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function startsWithAnyPrefix(value, prefixes) {
+  const text = String(value || '').trim();
+  return text && prefixes.some((prefix) => text.startsWith(prefix));
+}
+
+function rowMatchesAnyPrefix(row, docId, fields, prefixes) {
+  if (startsWithAnyPrefix(docId, prefixes)) return true;
+  return fields.some((field) => startsWithAnyPrefix(row?.[field], prefixes));
+}
+
+async function getAcademyScopedDocs(db, collectionName, academyId) {
+  const snap = await db
+    .collection(collectionName)
+    .where('academyId', '==', String(academyId || '').trim())
+    .get();
+  return snap.docs;
+}
+
+function addIfPresent(set, value) {
+  const text = String(value || '').trim();
+  if (text) set.add(text);
+}
+
+function addPrefixedIdentity(set, values, prefixes) {
+  values.forEach((value) => {
+    if (startsWithAnyPrefix(value, prefixes)) addIfPresent(set, value);
+  });
+}
+
+function chunk(items, size = 100) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
 async function cleanupKnownAcademyDocs(label, db, collectionName, docIds, academyId) {
   const ids = Array.from(
     new Set(
@@ -87,6 +174,123 @@ async function cleanupKnownAcademyDocs(label, db, collectionName, docIds, academ
   );
   logAdminCleanupWarnings(label, results);
   return results;
+}
+
+export async function cleanupAdminPrivatePackageE2EFixtures({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  prefixes = DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES,
+} = {}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const scopedPrefixes = normalizePrefixList(prefixes);
+  const collectionFieldMap = {
+    privateStudents: ['name', 'studentName', 'note', 'learningPurpose'],
+    studentPackages: [
+      'title',
+      'packageTitle',
+      'studentName',
+      'teacher',
+      'teacherKey',
+      'teacherName',
+      'memo',
+      'registrationLabel',
+      'registrationMemo',
+    ],
+    lessons: ['studentName', 'teacher', 'teacherKey', 'teacherName', 'packageTitle', 'title', 'className'],
+    privateLessonReservations: [
+      'studentName',
+      'teacher',
+      'teacherKey',
+      'teacherName',
+      'packageTitle',
+      'slotTitle',
+    ],
+    privateLessonSlots: ['studentName', 'teacher', 'teacherKey', 'teacherName', 'packageTitle', 'title'],
+    privateLessonAvailabilityTemplates: ['teacher', 'teacherKey', 'teacherName', 'teacherEmail'],
+    creditTransactions: [
+      'studentName',
+      'teacher',
+      'teacherKey',
+      'teacherName',
+      'packageTitle',
+      'memo',
+      'registrationLabel',
+      'registrationMemo',
+    ],
+    teachers: ['name', 'teacherName', 'teacherKey', 'teacherEmail'],
+    studentPrivateAccessSummary: ['studentId'],
+  };
+  const collectionDocs = {};
+  const studentIds = new Set();
+  const packageIds = new Set();
+  const teacherKeys = new Set();
+  const refsByPath = new Map();
+
+  await Promise.all(
+    Object.keys(collectionFieldMap).map(async (collectionName) => {
+      collectionDocs[collectionName] = await getAcademyScopedDocs(
+        db,
+        collectionName,
+        scopedAcademyId
+      ).catch(() => []);
+    })
+  );
+
+  function mark(docSnap) {
+    refsByPath.set(docSnap.ref.path, docSnap.ref);
+  }
+
+  for (const [collectionName, fields] of Object.entries(collectionFieldMap)) {
+    for (const docSnap of collectionDocs[collectionName] || []) {
+      const row = docSnap.data() || {};
+      if (!rowMatchesAnyPrefix(row, docSnap.id, fields, scopedPrefixes)) continue;
+      mark(docSnap);
+      addIfPresent(studentIds, row.studentId);
+      addIfPresent(packageIds, row.packageId);
+      if (collectionName === 'studentPackages') addIfPresent(packageIds, docSnap.id);
+      if (collectionName === 'privateStudents') addIfPresent(studentIds, docSnap.id);
+      if (collectionName === 'teachers') {
+        addPrefixedIdentity(teacherKeys, [docSnap.id, row.teacherKey, row.teacherName, row.name], scopedPrefixes);
+      } else {
+        addPrefixedIdentity(teacherKeys, [row.teacher, row.teacherKey, row.teacherName], scopedPrefixes);
+      }
+    }
+  }
+
+  for (const [collectionName, docs] of Object.entries(collectionDocs)) {
+    for (const docSnap of docs || []) {
+      const row = docSnap.data() || {};
+      const relatedToStudent = studentIds.has(String(row.studentId || '').trim());
+      const relatedToPackage =
+        packageIds.has(String(row.packageId || '').trim()) ||
+        (collectionName === 'studentPackages' && packageIds.has(docSnap.id));
+      const relatedToTeacher =
+        teacherKeys.has(String(row.teacher || '').trim()) ||
+        teacherKeys.has(String(row.teacherKey || '').trim()) ||
+        teacherKeys.has(String(row.teacherName || '').trim());
+      const relatedSummary =
+        collectionName === 'studentPrivateAccessSummary' &&
+        (studentIds.has(String(row.studentId || '').trim()) ||
+          Array.from(studentIds).some((studentId) => docSnap.id.endsWith(`__${studentId}`)));
+
+      if (relatedToStudent || relatedToPackage || relatedToTeacher || relatedSummary) {
+        mark(docSnap);
+      }
+    }
+  }
+
+  const refs = Array.from(refsByPath.values());
+  for (const refsChunk of chunk(refs)) {
+    const results = await Promise.allSettled(refsChunk.map((ref) => ref.delete()));
+    logAdminCleanupWarnings('cleanupAdminPrivatePackageE2EFixtures', results);
+  }
+
+  return {
+    deletedCount: refs.length,
+    studentIds: Array.from(studentIds),
+    packageIds: Array.from(packageIds),
+    teacherKeys: Array.from(teacherKeys),
+  };
 }
 
 export async function createAdminSeededPrivateStudent(params = {}) {

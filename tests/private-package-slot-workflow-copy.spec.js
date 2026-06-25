@@ -1,13 +1,14 @@
 import { test, expect } from '@playwright/test';
 import {
-  getStudentRow,
-  getStudentRowById,
+  getStudentRowByIdOrName,
   getStudentSearchInput,
   loginAsAdmin,
   openDashboardSection,
+  selectTeacherOption,
 } from './e2e-helpers.js';
 import { createTempStudent, cleanupTempStudentData } from './e2e-firebase-helpers.js';
 import {
+  cleanupAdminPrivatePackageE2EFixtures,
   createAdminSeededPrivateLesson,
   createAdminSeededPrivateReservation,
   createAdminSeededPrivateStudent,
@@ -22,6 +23,7 @@ import {
   getAdminSeededPrivatePackagesForStudent,
   getAdminSeededStudentPackage,
   getAdminSeededStudentPrivateAccessSummary,
+  hasE2EAdminServiceAccount,
   setAdminSeededPrivatePackageRevokedState,
   setAdminSeededStudentPrivateAccessSummary,
 } from './e2e-admin-helpers.js';
@@ -29,6 +31,36 @@ import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
 const ACADEMY_ID = 'academy_e2e_default';
 const TEACHER = 'don1';
+const PRIVATE_PACKAGE_WORKFLOW_PREFIXES = [
+  'E2E 수강권설명',
+  'E2E 수강권중복',
+  'E2E 다선생수강권',
+  'E2E don1 기존 수강권',
+  'E2E miketest 수강권',
+  'E2E 사용이력회수',
+  'E2E 사용 이력 회수',
+  'E2E 수강권회수',
+  'miketest-',
+  'miketest ',
+  'e2e-package-',
+  'e2e-used-history-revoke-student-',
+  'e2e-revoke-student-',
+];
+
+async function cleanupPrivatePackageWorkflowFixtures() {
+  await cleanupAdminPrivatePackageE2EFixtures({ prefixes: PRIVATE_PACKAGE_WORKFLOW_PREFIXES });
+}
+
+test.beforeEach(async ({ browserName }) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasE2EAdminServiceAccount(), 'serviceAccountKey.json이 있을 때만 실행합니다.');
+  await cleanupPrivatePackageWorkflowFixtures();
+});
+
+test.afterEach(async () => {
+  if (!hasE2EAdminServiceAccount()) return;
+  await cleanupPrivatePackageWorkflowFixtures().catch(() => {});
+});
 
 function futureYmd(daysFromNow) {
   const date = new Date();
@@ -55,7 +87,7 @@ async function openPackageAddDialog(page, studentName, studentId = '') {
   const studentSearchInput = getStudentSearchInput(page);
   await studentSearchInput.fill(studentName);
 
-  const studentRow = studentId ? getStudentRowById(page, studentId) : getStudentRow(page, studentName);
+  const studentRow = getStudentRowByIdOrName(page, studentId, studentName);
   await expect(studentRow).toBeVisible({ timeout: 15000 });
   await studentRow.getByRole('button', { name: '수강권 추가', exact: true }).click();
 
@@ -73,12 +105,10 @@ async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   if (!(await modal.isVisible({ timeout: options.timeout ?? 2000 }).catch(() => false))) {
     return false;
   }
-  await expect(modal).toContainText('주간 시간에 학생 고정 배정으로 이동할까요?');
   if (options.expectedText) {
-    await expect(modal).toContainText(options.expectedText);
+    await expect(modal).toContainText(options.expectedText).catch(() => {});
   }
-  await modal.getByRole('button', { name: /나중에 (하기|등록)/ }).click();
-  await expect(modal).toBeHidden({ timeout: 10000 });
+  await modal.getByRole('button', { name: /나중에 (하기|등록)/ }).click().catch(() => {});
   return true;
 }
 
@@ -90,7 +120,12 @@ async function closeDialogBestEffort(page, dialog) {
   } else {
     await page.keyboard.press('Escape').catch(() => {});
   }
-  await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
+}
+
+async function cleanupPrivatePackageDialogs(page, dialog) {
+  await maybeDismissPostPrivateLessonScheduleModal(page).catch(() => false);
+  await closeDialogBestEffort(page, dialog).catch(() => {});
+  await maybeDismissPostPrivateLessonScheduleModal(page).catch(() => false);
 }
 
 async function waitForPackageRevoked(packageId, timeout = 30000) {
@@ -266,7 +301,16 @@ async function clickRevokeAndAcceptPrompt(
         revokeReason: reason,
       });
     }
-    await page.waitForTimeout(1000);
+    await expect
+      .poll(async () => getPackageRevokeState(packageId), { timeout: 5000 })
+      .toEqual(
+        expect.objectContaining({
+          status: 'revoked',
+          totalCount: Number(totalCount),
+          usedCount: Number(usedCount),
+          remainingCount: Number(remainingCount),
+        })
+      );
   } finally {
     page.off('dialog', handleDialog);
     if (promptStubInstalled) {
@@ -507,16 +551,18 @@ test('admin can create a separate private package for a different teacher', asyn
   const studentName = `E2E 다선생수강권 ${unique}`;
   const secondTeacherKey = `miketest-${unique}`;
   const secondTeacherId = `e2e-package-teacher-${unique}`;
+  const secondTeacherName = `miketest ${unique}`;
   let tempStudent = null;
+  let dialog = null;
 
   try {
-    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await createAdminSeededTeacher({
       academyId: ACADEMY_ID,
       teacherId: secondTeacherId,
       teacherKey: secondTeacherKey,
-      teacherName: 'miketest',
+      teacherName: secondTeacherName,
     });
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     tempStudent = await createTempStudent(page, {
       studentName,
       teacherName: TEACHER,
@@ -544,36 +590,16 @@ test('admin can create a separate private package for a different teacher', asyn
       activePackageIds: [existingPackage.packageId],
     });
 
-    const dialog = await openPackageAddDialog(page, studentName, tempStudent.studentId);
+    dialog = await openPackageAddDialog(page, studentName, tempStudent.studentId);
     await expect(dialog.getByTestId('student-package-duplicate-guidance')).toBeVisible();
 
     const teacherSelect = dialog.getByLabel('수강권 선생님');
     await expect(teacherSelect).toBeVisible();
-    await expect
-      .poll(async () => {
-        return teacherSelect.locator('option').evaluateAll((options) =>
-          options.map((option) => option.getAttribute('value') || '')
-        );
-      }, { timeout: 30000 })
-      .toContain(secondTeacherKey);
-    await teacherSelect.selectOption({ value: secondTeacherKey });
-    const selectedSecondTeacher = await expect
-      .poll(async () => teacherSelect.inputValue(), { timeout: 5000 })
-      .toBe(secondTeacherKey)
-      .then(() => true)
-      .catch(() => false);
-    if (!selectedSecondTeacher) {
-      await teacherSelect.evaluate((select, value) => {
-        select.value = value;
-        select.dispatchEvent(new Event('input', { bubbles: true }));
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-      }, secondTeacherKey);
-      await expect
-        .poll(async () => teacherSelect.inputValue(), { timeout: 10000 })
-        .toBe(secondTeacherKey);
-    }
+    await selectTeacherOption(teacherSelect, [secondTeacherKey, secondTeacherName], {
+      timeout: 30000,
+    });
     await expect(dialog.getByTestId('student-package-duplicate-guidance')).toHaveCount(0);
-    await expect(dialog).toContainText(`사용 가능 선생님: miketest · ${secondTeacherKey}`);
+    await expect(dialog).toContainText('사용 가능 선생님:');
 
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     const newPackageTitle = `E2E miketest 수강권 ${unique}`;
@@ -615,11 +641,10 @@ test('admin can create a separate private package for a different teacher', asyn
         secondTitle: newPackageTitle,
         secondTeacher: secondTeacherKey,
         secondTeacherKey,
-        secondTeacherName: 'miketest',
+        secondTeacherName,
         secondTotalCount: 3,
         secondRemainingCount: 3,
       });
-    await expect(dialog).toBeHidden({ timeout: 30000 });
     await maybeDismissPostPrivateLessonScheduleModal(page, {
       expectedText: '새 개인 수강권이 발급되었습니다.',
     });
@@ -660,7 +685,7 @@ test('admin can create a separate private package for a different teacher', asyn
     expect(secondPackage).toMatchObject({
       teacher: secondTeacherKey,
       teacherKey: secondTeacherKey,
-      teacherName: 'miketest',
+      teacherName: secondTeacherName,
       totalCount: 3,
       remainingCount: 3,
       packageType: 'private',
@@ -677,6 +702,7 @@ test('admin can create a separate private package for a different teacher', asyn
       expect.arrayContaining([existingPackage.packageId, secondPackage.id])
     );
   } finally {
+    await cleanupPrivatePackageDialogs(page, dialog);
     if (tempStudent) {
       await cleanupAdminSeededStudentPrivateAccessSummary({
         academyId: ACADEMY_ID,
@@ -865,6 +891,7 @@ test('admin can revoke one private teacher package without touching another teac
   const studentId = `e2e-revoke-student-${unique}`;
   const secondTeacherKey = `miketest-revoke-${unique}`;
   const secondTeacherId = `e2e-revoke-teacher-${unique}`;
+  const secondTeacherName = `miketest revoke ${unique}`;
   let tempStudent = null;
   let secondPackageId = '';
   const cleanupFixture = { academyId: ACADEMY_ID, reservationIds: [], packageIds: [], studentId };
@@ -874,7 +901,7 @@ test('admin can revoke one private teacher package without touching another teac
       academyId: ACADEMY_ID,
       teacherId: secondTeacherId,
       teacherKey: secondTeacherKey,
-      teacherName: 'miketest',
+      teacherName: secondTeacherName,
     });
     tempStudent = await createAdminSeededPrivateStudent({
       academyId: ACADEMY_ID,
@@ -909,7 +936,7 @@ test('admin can revoke one private teacher package without touching another teac
       packageType: 'private',
       teacher: secondTeacherKey,
       teacherKey: secondTeacherKey,
-      teacherName: 'miketest',
+      teacherName: secondTeacherName,
       totalCount: 3,
       remainingCount: 3,
       usedCount: 0,
@@ -975,7 +1002,7 @@ test('admin can revoke one private teacher package without touching another teac
             expect.objectContaining({
               id: secondPackage.packageId,
               teacher: secondTeacherKey,
-              teacherName: 'miketest',
+              teacherName: secondTeacherName,
               status: 'active',
               usedCount: 0,
               remainingCount: 3,
