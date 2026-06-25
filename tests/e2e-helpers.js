@@ -252,10 +252,16 @@ export async function clickStudentRowButtonByIdOrName(
 
 export async function fillVisibleField(locator, value, options = {}) {
   const timeout = options.timeout ?? 10000;
-  await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-  await expect(locator).toBeVisible({ timeout });
-  await expect(locator).toBeEnabled({ timeout });
-  await locator.fill(String(value ?? ''), { timeout });
+  const nextValue = String(value ?? '');
+
+  await expect(async () => {
+    await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await expect(locator).toBeVisible({ timeout: 2000 });
+    await expect(locator).toBeEnabled({ timeout: 2000 });
+    await expect(locator).toBeEditable({ timeout: 2000 });
+    await locator.fill(nextValue, { timeout: 2000 });
+    await expect(locator).toHaveValue(nextValue, { timeout: 2000 });
+  }).toPass({ timeout });
 }
 
 export function getGroupRow(page, groupName) {
