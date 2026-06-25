@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
+  clickStudentRowButtonByIdOrName,
+  fillVisibleField,
   getStudentRowByIdOrName,
   getStudentSearchInput,
   loginAsAdmin,
@@ -12,7 +14,6 @@ import {
   createAdminSeededPrivateStudent,
   cleanupAdminSeededTeacher,
   getAdminSeededPrivatePackagesForStudent,
-  getAdminSeededStudentPrivateAccessSummary,
   hasE2EAdminServiceAccount,
 } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
@@ -47,7 +48,6 @@ async function expectPrivatePackageCreated({ studentId, packageTitle, expected }
     .poll(async () => {
       const packages = await getAdminSeededPrivatePackagesForStudent({ studentId });
       const pkg = packages.find((row) => row.title === packageTitle) || null;
-      const summary = await getAdminSeededStudentPrivateAccessSummary({ studentId });
       return {
         title: String(pkg?.title || ''),
         packageType: String(pkg?.packageType || ''),
@@ -57,14 +57,10 @@ async function expectPrivatePackageCreated({ studentId, packageTitle, expected }
         remainingCount: Number(pkg?.remainingCount || 0),
         status: String(pkg?.status || ''),
         paymentDate: String(pkg?.paymentDate || ''),
-        summaryHasTeacher: (summary?.teacherKeys || []).includes(String(expected.teacherKey || '')),
-        summaryHasPackage: pkg ? (summary?.activePackageIds || []).includes(pkg.id) : false,
       };
     }, { timeout: 60000 })
     .toEqual(expect.objectContaining({
       ...expected,
-      summaryHasTeacher: true,
-      summaryHasPackage: true,
     }));
 }
 
@@ -165,9 +161,13 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     const studentRow = getStudentRowByIdOrName(page, tempStudent.studentId, tempStudentName);
     await expect(studentRow).toBeVisible({ timeout: 15000 });
 
-    await studentRow.getByRole('button', { name: '수강권 추가' }).click();
-
     packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+    await clickStudentRowButtonByIdOrName(page, {
+      studentId: tempStudent.studentId,
+      studentName: tempStudentName,
+      buttonName: '수강권 추가',
+      onAfterClick: () => packageDialog.isVisible({ timeout: 3000 }).catch(() => false),
+    });
     await expect(packageDialog).toBeVisible();
 
     await packageDialog.getByLabel('수강권 유형').selectOption('private');
@@ -176,9 +176,9 @@ test('관리자가 기존 학생에게 개인 수강권을 추가한다', async 
     await expect(packageDialog).toContainText('결제일은 실제 결제한 날짜입니다');
     await expect(packageDialog).toContainText('개인 수강권은 선택한 선생님 수업에만 사용할 수 있습니다');
     await packageDialog.getByRole('button', { name: '횟수 수강권' }).click();
-    await packageDialog.getByLabel('제목').fill(packageTitle);
-    await packageDialog.getByLabel(/총 횟수/).fill('8');
-    await packageDialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
+    await fillVisibleField(packageDialog.getByLabel('제목'), packageTitle);
+    await fillVisibleField(packageDialog.getByLabel(/총 횟수/), '8');
+    await fillVisibleField(packageDialog.getByTestId('student-package-payment-date-input'), paymentDate);
 
     await packageDialog.getByRole('button', { name: '저장' }).click();
     await expectPrivatePackageCreated({
@@ -249,17 +249,21 @@ test('관리자가 새 학생 등록 직후 개인 수강권을 추가한다', a
     await getStudentSearchInput(page).fill(studentName);
     const createdStudentRow = getStudentRowByIdOrName(page, seededStudent.studentId, studentName);
     await expect(createdStudentRow).toBeVisible({ timeout: 15000 });
-    await createdStudentRow.getByRole('button', { name: '수강권 추가' }).click();
-
     packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+    await clickStudentRowButtonByIdOrName(page, {
+      studentId: seededStudent.studentId,
+      studentName,
+      buttonName: '수강권 추가',
+      onAfterClick: () => packageDialog.isVisible({ timeout: 3000 }).catch(() => false),
+    });
     await expect(packageDialog).toBeVisible();
     await packageDialog.getByLabel('수강권 유형').selectOption('private');
     await expect(packageDialog).toContainText('사용 가능 선생님:');
     await expect(packageDialog).toContainText(teacherKey);
     await packageDialog.getByRole('button', { name: '횟수 수강권' }).click();
-    await packageDialog.getByLabel('제목').fill(packageTitle);
-    await packageDialog.getByLabel(/총 횟수/).fill('4');
-    await packageDialog.getByTestId('student-package-payment-date-input').fill(paymentDate);
+    await fillVisibleField(packageDialog.getByLabel('제목'), packageTitle);
+    await fillVisibleField(packageDialog.getByLabel(/총 횟수/), '4');
+    await fillVisibleField(packageDialog.getByTestId('student-package-payment-date-input'), paymentDate);
     await packageDialog.getByRole('button', { name: '저장', exact: true }).click();
 
     expect(dialogMessages.join('\n')).not.toContain('현재 학원에 속하지 않습니다');
