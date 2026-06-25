@@ -210,6 +210,54 @@ export function getStudentRowByIdOrName(page, studentId, studentName) {
   return studentId ? getStudentRowById(page, studentId).or(byName).first() : byName;
 }
 
+export async function clickStudentRowButtonByIdOrName(
+  page,
+  {
+    studentId = '',
+    studentName,
+    buttonName = '수강권 추가',
+    exact = true,
+    timeout = 30000,
+    onAfterClick,
+  } = {}
+) {
+  const startedAt = Date.now();
+  let lastError = null;
+
+  while (Date.now() - startedAt < timeout) {
+    const remaining = Math.max(1000, timeout - (Date.now() - startedAt));
+    const row = getStudentRowByIdOrName(page, studentId, studentName);
+    try {
+      await expect(row).toBeVisible({ timeout: Math.min(remaining, 5000) });
+      const button = row.getByRole('button', { name: buttonName, exact });
+      await button.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+      await expect(button).toBeVisible({ timeout: Math.min(remaining, 5000) });
+      await expect(button).toBeEnabled({ timeout: Math.min(remaining, 5000) });
+      await button.click({ timeout: Math.min(remaining, 5000) });
+      if (!onAfterClick) return;
+      const done = await onAfterClick();
+      if (done !== false) return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw new Error(
+    [
+      `Could not click ${buttonName} for student ${studentName || studentId} within ${timeout}ms.`,
+      `Original error: ${lastError?.message || String(lastError || '')}`,
+    ].join('\n')
+  );
+}
+
+export async function fillVisibleField(locator, value, options = {}) {
+  const timeout = options.timeout ?? 10000;
+  await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+  await expect(locator).toBeVisible({ timeout });
+  await expect(locator).toBeEnabled({ timeout });
+  await locator.fill(String(value ?? ''), { timeout });
+}
+
 export function getGroupRow(page, groupName) {
   return page.locator(`[data-testid="group-row"][data-group-name="${groupName}"]`).first();
 }
