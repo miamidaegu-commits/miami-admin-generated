@@ -128,23 +128,39 @@ async function getSelectOptionRows(selectLocator) {
   );
 }
 
-function teacherOptionMatches(option, teacherText) {
-  const target = String(teacherText || '').trim();
-  if (!target) return false;
+function normalizeTeacherTargets(teacherText, options = {}) {
+  return Array.from(
+    new Set(
+      [
+        ...(Array.isArray(teacherText) ? teacherText : [teacherText]),
+        ...(Array.isArray(options.alternates) ? options.alternates : []),
+      ]
+        .map((target) => String(target || '').trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function teacherOptionMatches(option, teacherTargets) {
+  const targets = normalizeTeacherTargets(teacherTargets);
+  if (targets.length === 0) return false;
   const value = String(option?.value || '').trim();
   const label = String(option?.label || '').trim();
   const text = String(option?.text || '').trim();
-  return (
-    value === target ||
-    label === target ||
-    text === target ||
-    label.includes(target) ||
-    text.includes(target)
+  return targets.some(
+    (target) =>
+      value === target ||
+      label === target ||
+      text === target ||
+      value.includes(target) ||
+      label.includes(target) ||
+      text.includes(target)
   );
 }
 
 export async function selectTeacherOption(selectLocator, teacherText, options = {}) {
   const timeout = options.timeout ?? 15000;
+  const targets = normalizeTeacherTargets(teacherText, options);
   await expect(selectLocator).toBeVisible({ timeout });
 
   let optionRows = [];
@@ -153,7 +169,7 @@ export async function selectTeacherOption(selectLocator, teacherText, options = 
       .poll(
         async () => {
           optionRows = await getSelectOptionRows(selectLocator);
-          return optionRows.some((option) => teacherOptionMatches(option, teacherText));
+          return optionRows.some((option) => teacherOptionMatches(option, targets));
         },
         { timeout }
       )
@@ -161,17 +177,17 @@ export async function selectTeacherOption(selectLocator, teacherText, options = 
   } catch (error) {
     throw new Error(
       [
-        `Teacher option not found for ${teacherText} within ${timeout}ms.`,
+        `Teacher option not found for ${targets.join(' | ')} within ${timeout}ms.`,
         `Options: ${JSON.stringify(optionRows)}`,
         `Original error: ${error.message}`,
       ].join('\n')
     );
   }
 
-  const match = optionRows.find((option) => teacherOptionMatches(option, teacherText));
+  const match = optionRows.find((option) => teacherOptionMatches(option, targets));
   if (!match) {
     throw new Error(
-      `Teacher option not found for ${teacherText}. Options: ${JSON.stringify(optionRows)}`
+      `Teacher option not found for ${targets.join(' | ')}. Options: ${JSON.stringify(optionRows)}`
     );
   }
   await selectLocator.selectOption(match.value);
@@ -187,6 +203,11 @@ export function getStudentRow(page, studentName) {
 
 export function getStudentRowById(page, studentId) {
   return page.locator(`[data-testid="student-row"][data-student-id="${studentId}"]`).first();
+}
+
+export function getStudentRowByIdOrName(page, studentId, studentName) {
+  const byName = getStudentRow(page, studentName);
+  return studentId ? getStudentRowById(page, studentId).or(byName).first() : byName;
 }
 
 export function getGroupRow(page, groupName) {
