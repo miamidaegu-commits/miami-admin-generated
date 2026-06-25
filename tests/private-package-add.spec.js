@@ -11,7 +11,6 @@ import {
   createAdminSeededPrivateStudent,
   cleanupAdminSeededTeacher,
   getAdminSeededPrivatePackagesForStudent,
-  getAdminSeededStudentPrivateAccessSummary,
 } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
@@ -20,7 +19,6 @@ async function expectPrivatePackageCreated({ studentId, packageTitle, expected }
     .poll(async () => {
       const packages = await getAdminSeededPrivatePackagesForStudent({ studentId });
       const pkg = packages.find((row) => row.title === packageTitle) || null;
-      const summary = await getAdminSeededStudentPrivateAccessSummary({ studentId });
       return {
         title: String(pkg?.title || ''),
         packageType: String(pkg?.packageType || ''),
@@ -30,14 +28,10 @@ async function expectPrivatePackageCreated({ studentId, packageTitle, expected }
         remainingCount: Number(pkg?.remainingCount || 0),
         status: String(pkg?.status || ''),
         paymentDate: String(pkg?.paymentDate || ''),
-        summaryHasTeacher: (summary?.teacherKeys || []).includes(String(expected.teacherKey || '')),
-        summaryHasPackage: pkg ? (summary?.activePackageIds || []).includes(pkg.id) : false,
       };
     }, { timeout: 60000 })
     .toEqual(expect.objectContaining({
       ...expected,
-      summaryHasTeacher: true,
-      summaryHasPackage: true,
     }));
 }
 

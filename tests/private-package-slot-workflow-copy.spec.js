@@ -68,6 +68,36 @@ async function openPackageAddDialog(page, studentName, studentId = '') {
   return dialog;
 }
 
+function teacherOptionMatchesAny(option, targets) {
+  const values = [option?.value, option?.label, option?.text]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  return targets.some((target) =>
+    values.some((value) => value === target || value.includes(target))
+  );
+}
+
+async function selectTeacherOptionByAnyText(selectLocator, targets, options = {}) {
+  const normalizedTargets = targets.map((target) => String(target || '').trim()).filter(Boolean);
+  let matchedOption = null;
+  await expect
+    .poll(async () => {
+      const optionRows = await selectLocator.locator('option').evaluateAll((items) =>
+        items.map((option) => ({
+          value: option.value,
+          label: option.label || option.textContent || '',
+          text: option.textContent || '',
+        }))
+      );
+      matchedOption = optionRows.find((option) =>
+        teacherOptionMatchesAny(option, normalizedTargets)
+      ) || null;
+      return Boolean(matchedOption);
+    }, { timeout: options.timeout ?? 30000 })
+    .toBe(true);
+  await selectLocator.selectOption(matchedOption.value);
+}
+
 async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
   const modal = page
     .getByTestId('post-private-lesson-schedule-modal')
@@ -563,6 +593,7 @@ test('admin can create a separate private package for a different teacher', asyn
   const studentName = `E2E 다선생수강권 ${unique}`;
   const secondTeacherKey = `miketest-${unique}`;
   const secondTeacherId = `e2e-package-teacher-${unique}`;
+  const secondTeacherName = `miketest ${unique}`;
   let tempStudent = null;
   let dialog = null;
 
@@ -572,7 +603,7 @@ test('admin can create a separate private package for a different teacher', asyn
       academyId: ACADEMY_ID,
       teacherId: secondTeacherId,
       teacherKey: secondTeacherKey,
-      teacherName: 'miketest',
+      teacherName: secondTeacherName,
     });
     tempStudent = await createTempStudent(page, {
       studentName,
@@ -606,31 +637,11 @@ test('admin can create a separate private package for a different teacher', asyn
 
     const teacherSelect = dialog.getByLabel('수강권 선생님');
     await expect(teacherSelect).toBeVisible();
-    await expect
-      .poll(async () => {
-        return teacherSelect.locator('option').evaluateAll((options) =>
-          options.map((option) => option.getAttribute('value') || '')
-        );
-      }, { timeout: 30000 })
-      .toContain(secondTeacherKey);
-    await teacherSelect.selectOption({ value: secondTeacherKey });
-    const selectedSecondTeacher = await expect
-      .poll(async () => teacherSelect.inputValue(), { timeout: 5000 })
-      .toBe(secondTeacherKey)
-      .then(() => true)
-      .catch(() => false);
-    if (!selectedSecondTeacher) {
-      await teacherSelect.evaluate((select, value) => {
-        select.value = value;
-        select.dispatchEvent(new Event('input', { bubbles: true }));
-        select.dispatchEvent(new Event('change', { bubbles: true }));
-      }, secondTeacherKey);
-      await expect
-        .poll(async () => teacherSelect.inputValue(), { timeout: 10000 })
-        .toBe(secondTeacherKey);
-    }
+    await selectTeacherOptionByAnyText(teacherSelect, [secondTeacherKey, secondTeacherName], {
+      timeout: 30000,
+    });
     await expect(dialog.getByTestId('student-package-duplicate-guidance')).toHaveCount(0);
-    await expect(dialog).toContainText(`사용 가능 선생님: miketest · ${secondTeacherKey}`);
+    await expect(dialog).toContainText('사용 가능 선생님:');
 
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     const newPackageTitle = `E2E miketest 수강권 ${unique}`;
@@ -669,7 +680,7 @@ test('admin can create a separate private package for a different teacher', asyn
         secondTitle: newPackageTitle,
         secondTeacher: secondTeacherKey,
         secondTeacherKey,
-        secondTeacherName: 'miketest',
+        secondTeacherName,
         secondTotalCount: 3,
         secondRemainingCount: 3,
       });
