@@ -1,16 +1,17 @@
 import { test, expect } from '@playwright/test';
 import {
-  clickStudentRowButtonByIdOrName,
   fillVisibleField,
-  getStudentRowByIdOrName,
-  getStudentSearchInput,
   loginAsAdmin,
-  openDashboardSection,
+  openPrivateStudentPackageAddDialog,
   selectTeacherOption,
+  waitForPrivatePackageDuplicateGuidanceReady,
+  waitForPrivatePackageTopUpSectionReady,
+  waitForStudentPackageNewPackageFormReady,
 } from './e2e-helpers.js';
 import { cleanupTempStudentData } from './e2e-firebase-helpers.js';
 import {
   cleanupAdminPrivatePackageE2EFixtures,
+  cleanupAdminPrivatePackageE2ESuiteFixtures,
   createAdminSeededPrivateLesson,
   createAdminSeededPrivateReservation,
   createAdminSeededPrivateStudent,
@@ -28,6 +29,9 @@ import {
   hasE2EAdminServiceAccount,
   setAdminSeededPrivatePackageRevokedState,
   setAdminSeededStudentPrivateAccessSummary,
+  waitForAdminSeededPrivateAccessSummaryReady,
+  waitForAdminSeededPrivateStudentReady,
+  waitForAdminSeededStudentPackageReady,
 } from './e2e-admin-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from './fixtures/test-data.js';
 
@@ -59,23 +63,13 @@ async function waitForStudentPrivateAccessSummary({
   activePackageIds = [],
   timeout = 30000,
 }) {
-  await expect
-    .poll(async () => {
-      const summary = await getAdminSeededStudentPrivateAccessSummary({
-        academyId: ACADEMY_ID,
-        studentId,
-      });
-      const summaryTeacherKeys = summary?.teacherKeys || [];
-      const summaryPackageIds = summary?.activePackageIds || [];
-      return {
-        teacherKeysReady: teacherKeys.every((teacherKey) => summaryTeacherKeys.includes(teacherKey)),
-        packageIdsReady: activePackageIds.every((packageId) => summaryPackageIds.includes(packageId)),
-      };
-    }, { timeout })
-    .toEqual({
-      teacherKeysReady: true,
-      packageIdsReady: true,
-    });
+  await waitForAdminSeededPrivateAccessSummaryReady({
+    academyId: ACADEMY_ID,
+    studentId,
+    teacherKeys,
+    activePackageIds,
+    timeout,
+  });
 }
 
 async function waitForSeededPrivatePackage({
@@ -86,28 +80,33 @@ async function waitForSeededPrivatePackage({
   remainingCount,
   timeout = 30000,
 }) {
-  await expect
-    .poll(async () => {
-      const pkg = await getAdminSeededStudentPackage({
-        academyId: ACADEMY_ID,
-        packageId,
-      });
-      return {
-        id: pkg?.id || '',
-        studentId: pkg?.studentId || '',
-        teacherKey: pkg?.teacherKey || pkg?.teacher || '',
-        totalCount: Number(pkg?.totalCount || 0),
-        remainingCount: Number(pkg?.remainingCount || 0),
-      };
-    }, { timeout })
-    .toEqual({
-      id: packageId,
-      studentId,
-      teacherKey,
-      totalCount,
-      remainingCount,
-    });
+  await waitForAdminSeededStudentPackageReady({
+    academyId: ACADEMY_ID,
+    packageId,
+    studentId,
+    teacherKey,
+    status: 'active',
+    totalCount,
+    remainingCount,
+    timeout,
+  });
 }
+
+async function openPackageAddDialog(page, studentName, studentId = '') {
+  if (studentId) {
+    await waitForAdminSeededPrivateStudentReady({
+      academyId: ACADEMY_ID,
+      studentId,
+      name: studentName,
+    });
+  }
+  return openPrivateStudentPackageAddDialog(page, { studentId, studentName });
+}
+
+test.beforeAll(async () => {
+  if (!hasE2EAdminServiceAccount()) return;
+  await cleanupAdminPrivatePackageE2ESuiteFixtures();
+});
 
 test.beforeEach(async ({ browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
@@ -127,37 +126,6 @@ function futureYmd(daysFromNow) {
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
-}
-
-async function openPackageAddDialog(page, studentName, studentId = '') {
-  if (studentId) {
-    await expect
-      .poll(async () => {
-        const student = await getAdminSeededPrivateStudent({
-          academyId: ACADEMY_ID,
-          studentId,
-        });
-        return String(student?.name || '').trim();
-      }, { timeout: 15000 })
-      .toBe(studentName);
-  }
-  await openDashboardSection(page, '학생 관리');
-  const studentSearchInput = getStudentSearchInput(page);
-  await studentSearchInput.fill(studentName);
-
-  const studentRow = getStudentRowByIdOrName(page, studentId, studentName);
-  await expect(studentRow).toBeVisible({ timeout: 15000 });
-
-  const dialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
-  await clickStudentRowButtonByIdOrName(page, {
-    studentId,
-    studentName,
-    buttonName: '수강권 추가',
-    onAfterClick: () => dialog.isVisible({ timeout: 3000 }).catch(() => false),
-  });
-  await expect(dialog).toBeVisible();
-  await dialog.getByLabel('수강권 유형').selectOption('private');
-  return dialog;
 }
 
 async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
@@ -413,8 +381,16 @@ test('private package add modal explains package counts and fixed assignment wor
       name: studentName,
       studentName,
       teacher: teacherKey,
+      teacherKey,
       teacherName,
       note: 'E2E private package workflow copy test',
+    });
+    await waitForAdminSeededPrivateStudentReady({
+      academyId: ACADEMY_ID,
+      studentId: tempStudent.studentId,
+      name: studentName,
+      teacher: teacherKey,
+      teacherKey,
     });
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
 
@@ -488,8 +464,16 @@ test('duplicate private package warning shows actionable capacity details and re
       name: studentName,
       studentName,
       teacher: teacherKey,
+      teacherKey,
       teacherName,
       note: 'E2E private package duplicate copy test',
+    });
+    await waitForAdminSeededPrivateStudentReady({
+      academyId: ACADEMY_ID,
+      studentId: tempStudent.studentId,
+      name: studentName,
+      teacher: teacherKey,
+      teacherKey,
     });
 
     const packageSeed = await createAdminSeededStudentPackage({
@@ -584,11 +568,10 @@ test('duplicate private package warning shows actionable capacity details and re
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     const dialog = await openPackageAddDialog(page, studentName, tempStudent.studentId);
-    const guidance = dialog.getByTestId('student-package-duplicate-guidance');
-    await expect(guidance).toBeVisible({ timeout: 30000 });
+    const guidance = await waitForPrivatePackageDuplicateGuidanceReady(dialog);
     await expect(guidance).toContainText('이미 사용 중인 개인 수강권이 있습니다.');
     await expect(guidance).toContainText('기존 수강권에 추가 등록할 수 있습니다.');
-    await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible();
+    await waitForPrivatePackageTopUpSectionReady(dialog);
     await expect(guidance).toContainText(existingPackageTitle);
     await expect(guidance).toContainText('총 4회 · 사용 0회 · 남은 4회');
     await expect(guidance).toContainText('고정 예정 3회 · 예약 1회 · 새 배정 가능 0회');
@@ -685,8 +668,16 @@ test('admin can create a separate private package for a different teacher', asyn
       name: studentName,
       studentName,
       teacher: primaryTeacherKey,
+      teacherKey: primaryTeacherKey,
       teacherName: primaryTeacherName,
       note: 'E2E private package different teacher test',
+    });
+    await waitForAdminSeededPrivateStudentReady({
+      academyId: ACADEMY_ID,
+      studentId: tempStudent.studentId,
+      name: studentName,
+      teacher: primaryTeacherKey,
+      teacherKey: primaryTeacherKey,
     });
 
     const existingPackage = await createAdminSeededStudentPackage({
@@ -725,9 +716,7 @@ test('admin can create a separate private package for a different teacher', asyn
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     dialog = await openPackageAddDialog(page, studentName, tempStudent.studentId);
-    await expect(dialog.getByTestId('student-package-duplicate-guidance')).toBeVisible({
-      timeout: 30000,
-    });
+    await waitForPrivatePackageDuplicateGuidanceReady(dialog);
 
     const teacherSelect = dialog.getByLabel('수강권 선생님');
     await expect(teacherSelect).toBeVisible();
@@ -739,8 +728,9 @@ test('admin can create a separate private package for a different teacher', asyn
 
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     const newPackageTitle = `E2E miketest 수강권 ${unique}`;
-    await fillVisibleField(dialog.getByLabel('제목'), newPackageTitle);
-    await fillVisibleField(dialog.getByLabel(/총 횟수/), '3');
+    const { titleInput, countInput } = await waitForStudentPackageNewPackageFormReady(dialog);
+    await fillVisibleField(titleInput, newPackageTitle, { description: '제목' });
+    await fillVisibleField(countInput, '3', { description: '총 횟수' });
     const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
     await saveButton.scrollIntoViewIfNeeded();
     await expect(saveButton).toBeVisible({ timeout: 10000 });

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { expect } from '@playwright/test';
 import admin from 'firebase-admin';
 
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
@@ -26,15 +27,31 @@ const DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES = [
   'E2E 다른 선생님 기존',
   'E2E 현재 선생님 신규',
   'E2E top-up',
+  'E2E 개인진행',
+  'E2E 개인수정',
+  'E2E 수업학생',
+  'E2E 예약학생',
+  'E2E 요청학생',
   'top-up-',
   'miketest-',
   'miketest ',
+  'e2e-',
   'e2e-top-up-',
   'e2e-package-',
+  'e2e-private-',
+  'e2e-slot-',
+  'e2e-immediate-',
   'e2e-immediate-package-student-',
   'e2e-used-history-revoke-student-',
   'e2e-revoke-student-',
+  'e2e_lesson_student_',
+  'e2e_reservation_student_',
+  'e2e_request_student_',
+  'e2e-teacher-',
+  'private-slot',
 ];
+
+export const PRIVATE_PACKAGE_E2E_SUITE_PREFIXES = DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES;
 
 export function hasE2EAdminServiceAccount() {
   if (!fs.existsSync(SERVICE_ACCOUNT_PATH)) return false;
@@ -134,6 +151,30 @@ function rowMatchesAnyPrefix(row, docId, fields, prefixes) {
   return fields.some((field) => startsWithAnyPrefix(row?.[field], prefixes));
 }
 
+function isE2EFixtureIdentity(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return (
+    text.startsWith('e2e-') ||
+    text.startsWith('E2E') ||
+    lower.includes('e2e') ||
+    text.startsWith('top-up-') ||
+    text.startsWith('miketest-') ||
+    text.startsWith('miketest ') ||
+    text.startsWith('private-slot')
+  );
+}
+
+function rowMatchesE2EFixture(row, docId, fields, prefixes) {
+  if (rowMatchesAnyPrefix(row, docId, fields, prefixes)) return true;
+  if (isE2EFixtureIdentity(docId)) return true;
+  if (isE2EFixtureIdentity(row?.studentId)) return true;
+  if (isE2EFixtureIdentity(row?.packageId)) return true;
+  if (isE2EFixtureIdentity(row?.teacherKey)) return true;
+  return fields.some((field) => isE2EFixtureIdentity(row?.[field]));
+}
+
 async function getAcademyScopedDocs(db, collectionName, academyId) {
   const snap = await db
     .collection(collectionName)
@@ -174,6 +215,13 @@ async function cleanupKnownAcademyDocs(label, db, collectionName, docIds, academ
   );
   logAdminCleanupWarnings(label, results);
   return results;
+}
+
+export async function cleanupAdminPrivatePackageE2ESuiteFixtures({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  prefixes = PRIVATE_PACKAGE_E2E_SUITE_PREFIXES,
+} = {}) {
+  return cleanupAdminPrivatePackageE2EFixtures({ academyId, prefixes });
 }
 
 export async function cleanupAdminPrivatePackageE2EFixtures({
@@ -243,7 +291,7 @@ export async function cleanupAdminPrivatePackageE2EFixtures({
   for (const [collectionName, fields] of Object.entries(collectionFieldMap)) {
     for (const docSnap of collectionDocs[collectionName] || []) {
       const row = docSnap.data() || {};
-      if (!rowMatchesAnyPrefix(row, docSnap.id, fields, scopedPrefixes)) continue;
+      if (!rowMatchesE2EFixture(row, docSnap.id, fields, scopedPrefixes)) continue;
       mark(docSnap);
       addIfPresent(studentIds, row.studentId);
       addIfPresent(packageIds, row.packageId);
@@ -302,14 +350,22 @@ export async function createAdminSeededPrivateStudent(params = {}) {
   const now = timestampNow();
   const name = String(params.name || `E2E 개인진행 학생 ${Date.now()}`).trim();
   const teacher = String(params.teacher || 'teacher').trim();
+  const teacherKey = String(params.teacherKey || teacher).trim();
+  const teacherName = String(params.teacherName || teacher).trim();
+  const studentIdValue = studentRef.id;
 
   await studentRef.set({
     academyId,
+    id: studentIdValue,
+    studentId: studentIdValue,
     name,
     studentName: String(params.studentName || name).trim(),
     teacher,
-    teacherName: String(params.teacherName || teacher).trim(),
+    teacherKey,
+    teacherName,
     status: String(params.status || 'active').trim(),
+    isActive: params.isActive !== false,
+    deleted: params.deleted === true,
     phone: String(params.phone || '010-9999-0000').trim(),
     carNumber: String(params.carNumber || '').trim(),
     learningPurpose: String(params.learningPurpose || 'E2E private progress').trim(),
@@ -328,10 +384,151 @@ export async function createAdminSeededPrivateStudent(params = {}) {
   });
 
   return {
-    studentId: studentRef.id,
+    studentId: studentIdValue,
     studentName: name,
     teacher,
+    teacherKey,
+    teacherName,
   };
+}
+
+function buildPrivateStudentReadiness(student, { academyId, name, teacher, teacherKey } = {}) {
+  if (!student) return { ready: false, reason: 'missing-doc' };
+  if (String(student.academyId || '').trim() !== String(academyId || DEFAULT_E2E_ACADEMY_ID).trim()) {
+    return { ready: false, reason: 'academyId-mismatch' };
+  }
+  if (String(student.id || '').trim() !== String(student.studentId || '').trim()) {
+    return { ready: false, reason: 'studentId-field-mismatch' };
+  }
+  if (name && String(student.name || '').trim() !== String(name).trim()) {
+    return { ready: false, reason: 'name-mismatch', actualName: String(student.name || '') };
+  }
+  if (teacher && String(student.teacher || '').trim() !== String(teacher).trim()) {
+    return { ready: false, reason: 'teacher-mismatch', actualTeacher: String(student.teacher || '') };
+  }
+  if (teacherKey && String(student.teacherKey || student.teacher || '').trim() !== String(teacherKey).trim()) {
+    return {
+      ready: false,
+      reason: 'teacherKey-mismatch',
+      actualTeacherKey: String(student.teacherKey || student.teacher || ''),
+    };
+  }
+  if (String(student.status || '').trim() !== 'active') {
+    return { ready: false, reason: 'status-not-active', actualStatus: String(student.status || '') };
+  }
+  if (student.isActive === false) return { ready: false, reason: 'isActive-false' };
+  if (student.deleted === true) return { ready: false, reason: 'deleted-true' };
+  return { ready: true };
+}
+
+export async function waitForAdminSeededPrivateStudentReady({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  name = '',
+  teacher = '',
+  teacherKey = '',
+  timeout = 30000,
+} = {}) {
+  const id = String(studentId || '').trim();
+  if (!id) {
+    throw new Error('waitForAdminSeededPrivateStudentReady requires studentId.');
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const student = await getAdminSeededPrivateStudent({ academyId, studentId: id });
+        return buildPrivateStudentReadiness(student, { academyId, name, teacher, teacherKey });
+      },
+      { timeout }
+    )
+    .toMatchObject({ ready: true });
+}
+
+export async function waitForAdminSeededStudentPackageReady({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+  studentId = '',
+  teacher = '',
+  teacherKey = '',
+  status = 'active',
+  totalCount,
+  remainingCount,
+  timeout = 30000,
+} = {}) {
+  const id = String(packageId || '').trim();
+  if (!id) {
+    throw new Error('waitForAdminSeededStudentPackageReady requires packageId.');
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const pkg = await getAdminSeededStudentPackage({ academyId, packageId: id });
+        if (!pkg) {
+          return { exists: false };
+        }
+        const actualTeacher = String(pkg.teacherKey || pkg.teacher || '').trim();
+        return {
+          exists: true,
+          studentIdMatches:
+            !studentId || String(pkg.studentId || '').trim() === String(studentId).trim(),
+          teacherMatches: !teacher || actualTeacher === String(teacher).trim(),
+          teacherKeyMatches: !teacherKey || actualTeacher === String(teacherKey).trim(),
+          statusMatches: String(pkg.status || 'active').trim() === String(status).trim(),
+          totalCountMatches:
+            totalCount == null || Number(pkg.totalCount || 0) === Number(totalCount),
+          remainingCountMatches:
+            remainingCount == null || Number(pkg.remainingCount || 0) === Number(remainingCount),
+        };
+      },
+      { timeout }
+    )
+    .toEqual(
+      expect.objectContaining({
+        exists: true,
+        studentIdMatches: true,
+        teacherMatches: true,
+        teacherKeyMatches: true,
+        statusMatches: true,
+        totalCountMatches: true,
+        remainingCountMatches: true,
+      })
+    );
+}
+
+export async function waitForAdminSeededPrivateAccessSummaryReady({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  teacherKeys = [],
+  activePackageIds = [],
+  timeout = 30000,
+} = {}) {
+  const id = String(studentId || '').trim();
+  if (!id) {
+    throw new Error('waitForAdminSeededPrivateAccessSummaryReady requires studentId.');
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const summary = await getAdminSeededStudentPrivateAccessSummary({ academyId, studentId: id });
+        if (!summary) return { exists: false };
+        const summaryTeacherKeys = summary?.teacherKeys || [];
+        const summaryPackageIds = summary?.activePackageIds || [];
+        return {
+          exists: true,
+          teacherKeysReady: teacherKeys.every((teacherKey) => summaryTeacherKeys.includes(teacherKey)),
+          packageIdsReady: activePackageIds.every((packageId) => summaryPackageIds.includes(packageId)),
+        };
+      },
+      { timeout }
+    )
+    .toEqual({
+      exists: true,
+      teacherKeysReady: true,
+      packageIdsReady: true,
+    });
 }
 
 export async function getAdminSeededPrivateStudent({
