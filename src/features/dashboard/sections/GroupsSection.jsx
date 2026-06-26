@@ -1,9 +1,11 @@
 import {
   formatGroupStudentStartDate,
   formatGroupWeekdaysDisplay,
+  isGroupStudentOperationallyEligibleOnYmd,
   isNoDeductionCancelledGroupLesson,
 } from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+import { getGroupClassBookingCapacitySummary } from '../groupClassRoomUtils.js'
 
 function getLessonReservationStatusLabel(lesson, seatAvailability) {
   if (isNoDeductionCancelledGroupLesson(lesson)) return '휴강'
@@ -128,6 +130,28 @@ export default function GroupsSection({
     modalLessonActiveReservations.map((reservation) => String(reservation.studentId || '').trim())
   )
   const activeFixedStudentCount = countActiveGroupStudents(sortedGroupStudentsForSelectedClass)
+  const selectedGroupCapacitySummary = selectedGroupClass
+    ? getGroupClassBookingCapacitySummary({
+        maxStudents: selectedGroupClass.maxStudents,
+        activeFixedMemberCount: activeFixedStudentCount,
+      })
+    : null
+  const modalLessonDate = String(modalLesson?.date || '').trim()
+  const modalFixedMemberStudentIds = new Set(
+    Array.isArray(sortedGroupStudentsForSelectedClass)
+      ? sortedGroupStudentsForSelectedClass
+          .filter((row) => {
+            const studentId = getGroupStudentStudentId(row)
+            return (
+              studentId &&
+              String(row.status || 'active') === 'active' &&
+              getGroupStudentGroupId(row) === selectedGroupClass?.id &&
+              isGroupStudentOperationallyEligibleOnYmd(row, modalLessonDate)
+            )
+          })
+          .map((row) => getGroupStudentStudentId(row))
+      : []
+  )
   const modalCandidateGroupStudents = Array.isArray(sortedGroupStudentsForSelectedClass)
     ? sortedGroupStudentsForSelectedClass.filter((row) => {
         const studentId = getGroupStudentStudentId(row)
@@ -135,7 +159,8 @@ export default function GroupsSection({
           studentId &&
           String(row.status || 'active') === 'active' &&
           getGroupStudentGroupId(row) === selectedGroupClass?.id &&
-          !modalActiveStudentIds.has(studentId)
+          !modalActiveStudentIds.has(studentId) &&
+          !modalFixedMemberStudentIds.has(studentId)
         )
       })
     : []
@@ -296,7 +321,9 @@ export default function GroupsSection({
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
               담당 선생님 {selectedGroupClass.teacher || '-'} · 정원{' '}
-              {activeFixedStudentCount} / {selectedGroupClass.maxStudents ?? '-'}명 · 상태{' '}
+              {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 고정{' '}
+              {selectedGroupCapacitySummary?.fixedMemberCount ?? activeFixedStudentCount}명 · 선착순 가능{' '}
+              {selectedGroupCapacitySummary?.fcfsRemainingSeats ?? '-'}명 · 상태{' '}
               {getGroupClassStatusLabel(selectedGroupClass.status)}
             </p>
             <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>

@@ -32,7 +32,15 @@ function ensureReservationInputs({ lesson, groupStudentRow, currentAcademyId }) 
   }
 }
 
-function validateLessonBookingState(lesson, mode) {
+function validateLessonBookingState(lesson, mode, seatAvailability = null) {
+  if (seatAvailability) {
+    if (mode === 'reserve') {
+      if (lesson?.isBookable !== true) throw new Error('예약 불가 수업입니다.')
+      if (Number(seatAvailability.remainingSeats || 0) <= 0) throw new Error('정원 마감')
+    }
+    return
+  }
+
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
 
@@ -59,6 +67,7 @@ export default function useGroupReservationFlow({
   activeSection,
   userProfile,
   currentAcademyId,
+  groupLessonSeatAvailabilityById = {},
 }) {
   const [groupReservationModal, setGroupReservationModal] = useState(null)
   const [busyGroupReservationId, setBusyGroupReservationId] = useState(null)
@@ -129,7 +138,11 @@ export default function useGroupReservationFlow({
       groupStudentRow,
       currentAcademyId,
     })
-    validateLessonBookingState(lesson, 'reserve')
+    validateLessonBookingState(
+      lesson,
+      'reserve',
+      groupLessonSeatAvailabilityById[lesson.id] || null
+    )
     const busyKey = `${lesson.id}__${studentId}__reserve`
 
     try {

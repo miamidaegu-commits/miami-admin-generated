@@ -213,6 +213,13 @@ function chunkValues(values, size) {
   return out
 }
 
+function getFixedMemberLessonStatusLabel(lesson) {
+  if (lesson?.memberStatusLabel) return lesson.memberStatusLabel
+  const today = getTodayStorageDateString()
+  const lessonDate = String(lesson?.date || '').trim()
+  return lessonDate && lessonDate >= today ? '고정 등록 예정' : '고정 등록됨'
+}
+
 function validateLessonBookingState(lesson, mode) {
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
@@ -638,6 +645,7 @@ export default function StudentBookingPage() {
   const [accessResolved, setAccessResolved] = useState(false)
   const [accessError, setAccessError] = useState('')
   const [lessons, setLessons] = useState([])
+  const [fixedMemberLessons, setFixedMemberLessons] = useState([])
   const [lessonsLoading, setLessonsLoading] = useState(false)
   const [lessonsError, setLessonsError] = useState('')
   const [reservations, setReservations] = useState([])
@@ -869,14 +877,6 @@ export default function StudentBookingPage() {
         console.error('studentGroupAccessSummary server read 실패:', error)
       }
 
-      if (classIds.length === 0 && courseTypes.length === 0) {
-        hasGroupLessonRowsRef.current = false
-        setLessons([])
-        setLessonsLoading(false)
-        setLessonsError('')
-        return
-      }
-
       const requestId = groupLessonFetchRequestRef.current + 1
       groupLessonFetchRequestRef.current = requestId
       setLessonsLoading(!hasGroupLessonRowsRef.current)
@@ -892,13 +892,18 @@ export default function StudentBookingPage() {
         })
         if (requestId !== groupLessonFetchRequestRef.current) return
         const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        const fixedRows = Array.isArray(result.data?.fixedMemberLessons)
+          ? result.data.fixedMemberLessons
+          : []
         setLessons((previous) => mergeGroupLessonRows(rows, previous))
-        hasGroupLessonRowsRef.current = rows.length > 0
+        setFixedMemberLessons(fixedRows)
+        hasGroupLessonRowsRef.current = rows.length > 0 || fixedRows.length > 0
       } catch (error) {
         if (requestId !== groupLessonFetchRequestRef.current) return
         console.error('student groupLessons 불러오기 실패:', error)
         setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
         setLessons([])
+        setFixedMemberLessons([])
         hasGroupLessonRowsRef.current = false
       } finally {
         if (requestId === groupLessonFetchRequestRef.current) {
@@ -1186,8 +1191,12 @@ export default function StudentBookingPage() {
         })
         if (cancelled) return
         const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        const fixedRows = Array.isArray(result.data?.fixedMemberLessons)
+          ? result.data.fixedMemberLessons
+          : []
         setLessons((previous) => mergeGroupLessonRows(rows, previous))
-        hasGroupLessonRowsRef.current = rows.length > 0
+        setFixedMemberLessons(fixedRows)
+        hasGroupLessonRowsRef.current = rows.length > 0 || fixedRows.length > 0
       } catch (error) {
         if (cancelled) return
         console.error('student groupLessons reservation refresh 실패:', error)
@@ -1820,6 +1829,33 @@ export default function StudentBookingPage() {
       return aKey.localeCompare(bKey, 'ko')
     })
   }, [lessons])
+
+  const sortedGroupBookingLessons = useMemo(() => {
+    const byId = new Map()
+    fixedMemberLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (!lessonId) return
+      byId.set(lessonId, {
+        ...lesson,
+        enrollmentType: 'fixed',
+        isFixedMemberLesson: true,
+      })
+    })
+    sortedLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (!lessonId || byId.has(lessonId)) return
+      byId.set(lessonId, {
+        ...lesson,
+        enrollmentType: lesson.enrollmentType || 'guest',
+        isFixedMemberLesson: false,
+      })
+    })
+    return Array.from(byId.values()).sort((a, b) => {
+      const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
+      const bKey = `${b.date || ''} ${b.time || ''} ${b.subject || ''}`
+      return aKey.localeCompare(bKey, 'ko')
+    })
+  }, [fixedMemberLessons, sortedLessons])
 
   const sortedReservations = useMemo(() => {
     return [...reservations].sort((a, b) => {
@@ -3284,18 +3320,21 @@ export default function StudentBookingPage() {
               {lessonsError ? <p style={{ color: '#f4a7a7' }}>{lessonsError}</p> : null}
               {!accessResolved || accessLoading || lessonsLoading ? (
                 <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
-              ) : sortedLessons.length === 0 ? (
+              ) : sortedGroupBookingLessons.length === 0 ? (
                 <p style={{ opacity: 0.78, marginBottom: 0 }}>
                   지금 예약 가능한 단체반 수업이 없습니다. 학원 안내 후 다시 확인해 주세요.
                 </p>
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-                  {sortedLessons.map((lesson) => {
+                  {sortedGroupBookingLessons.map((lesson) => {
+                    const isFixedMemberLesson =
+                      lesson.isFixedMemberLesson === true || lesson.enrollmentType === 'fixed'
                     const lessonId = String(lesson.id || '').trim()
                     const reservation = reservationByLessonId.get(lesson.id) || null
                     const isReserved =
-                      reservation?.status === 'active' ||
-                      locallyReservedGroupLessonIds.includes(lessonId)
+                      !isFixedMemberLesson &&
+                      (reservation?.status === 'active' ||
+                        locallyReservedGroupLessonIds.includes(lessonId))
                     const reservationId = buildGroupLessonReservationId({
                       academyId: currentAcademyId,
                       lessonId: lesson.id,
@@ -3308,7 +3347,9 @@ export default function StudentBookingPage() {
                     const hasRemainingSeats = Number.isFinite(remainingSeats)
                       ? remainingSeats > 0
                       : Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
-                    const lessonBookingStatusLabel = isReserved
+                    const lessonBookingStatusLabel = isFixedMemberLesson
+                      ? getFixedMemberLessonStatusLabel(lesson)
+                      : isReserved
                       ? '예약 완료'
                       : lesson.groupTicketStatusLabel
                         ? lesson.groupTicketStatusLabel
@@ -3330,6 +3371,7 @@ export default function StudentBookingPage() {
                         ? lesson.groupTicketStatusLabel
                         : '마감'
                     const canReserve =
+                      !isFixedMemberLesson &&
                       !isReserved &&
                       !busyReservationId &&
                       lesson.isBookable === true &&
@@ -3339,8 +3381,13 @@ export default function StudentBookingPage() {
                     return (
                       <article
                         key={lesson.id}
-                        data-testid="student-booking-lesson-card"
+                        data-testid={
+                          isFixedMemberLesson
+                            ? 'student-booking-fixed-lesson-card'
+                            : 'student-booking-lesson-card'
+                        }
                         data-lesson-id={lesson.id}
+                        data-enrollment-type={isFixedMemberLesson ? 'fixed' : 'guest'}
                         style={{
                           border: '1px solid #283042',
                           borderRadius: 14,
@@ -3371,7 +3418,10 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {lessonBookingStatusLabel} · {getLessonCapacityLabel(lesson)}
+                              {lessonBookingStatusLabel}
+                              {!isFixedMemberLesson
+                                ? ` · ${getLessonCapacityLabel(lesson)}`
+                                : ''}
                             </div>
                           </div>
                           <div
@@ -3384,7 +3434,22 @@ export default function StudentBookingPage() {
                                 : {}),
                             }}
                           >
-                            {isReserved ? (
+                            {isFixedMemberLesson ? (
+                              <span
+                                data-testid="student-booking-fixed-member-status"
+                                style={{
+                                  padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                                  borderRadius: isMobileStudentBooking ? 12 : 10,
+                                  border: '1px solid #3a4a66',
+                                  background: '#1f2940',
+                                  color: '#c8d4ef',
+                                  fontWeight: isMobileStudentBooking ? 800 : 600,
+                                  fontSize: 13,
+                                }}
+                              >
+                                {lessonBookingStatusLabel}
+                              </span>
+                            ) : isReserved ? (
                               <button
                                 type="button"
                                 onClick={() => cancelReservation(reservation)}
