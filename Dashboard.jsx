@@ -2740,21 +2740,6 @@ export default function Dashboard() {
   })
 
   const {
-    groupReservationModal,
-    busyGroupReservationId,
-    canManageGroupReservations,
-    openGroupLessonReservationAddModal,
-    openGroupLessonReservationViewModal,
-    closeGroupLessonReservationModal,
-    reserveGroupLessonSeat,
-    cancelGroupLessonSeat,
-  } = useGroupReservationFlow({
-    activeSection,
-    userProfile,
-    currentAcademyId,
-  })
-
-  const {
     sortedGroupClasses,
     sortedGroupStudentsForSelectedClass,
     sortedGroupLessonsForSelectedClass,
@@ -2772,6 +2757,22 @@ export default function Dashboard() {
     groupLessonSeriesModalOpen,
     groupLessonAttendanceModal,
     groupLessonReservations,
+  })
+
+  const {
+    groupReservationModal,
+    busyGroupReservationId,
+    canManageGroupReservations,
+    openGroupLessonReservationAddModal,
+    openGroupLessonReservationViewModal,
+    closeGroupLessonReservationModal,
+    reserveGroupLessonSeat,
+    cancelGroupLessonSeat,
+  } = useGroupReservationFlow({
+    activeSection,
+    userProfile,
+    currentAcademyId,
+    groupLessonSeatAvailabilityById,
   })
 
   const studentsSectionViewModel = useStudentsSectionViewModel({

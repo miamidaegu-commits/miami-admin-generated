@@ -683,6 +683,36 @@ function sanitizeGroupLessonForStudent(docSnap, availability, ticketInfo = {}) {
     groupTicketStatusLabel: ticketInfo.statusLabel || "",
     groupTicketAvailableToBook: Number(ticketInfo.availableToBook || 0),
     groupTicketId: ticketInfo.ticketId || "",
+    enrollmentType: "guest",
+    isFixedMemberLesson: false,
+    canReserve: true,
+  };
+}
+
+function getFixedMemberLessonStatusLabel(lesson) {
+  const lessonDate = normalizeId(lesson && lesson.date);
+  const today = getSeoulTodayDateString();
+  if (lessonDate && lessonDate >= today) return "고정 등록 예정";
+  return "고정 등록됨";
+}
+
+function sanitizeFixedMemberLessonForStudent(docSnap) {
+  const lesson = docSnap.data() || {};
+  return {
+    id: docSnap.id,
+    academyId: normalizeId(lesson.academyId),
+    groupClassId: getGroupLessonGroupId(lesson),
+    groupClassName: normalizeId(lesson.groupClassName),
+    groupCourseType: normalizeId(lesson.groupCourseType),
+    teacher: normalizeId(lesson.teacher || lesson.teacherName),
+    date: normalizeId(lesson.date),
+    time: normalizeId(lesson.time),
+    subject: normalizeId(lesson.subject),
+    isBookable: lesson.isBookable === true,
+    enrollmentType: "fixed",
+    isFixedMemberLesson: true,
+    memberStatusLabel: getFixedMemberLessonStatusLabel(lesson),
+    canReserve: false,
   };
 }
 
@@ -4260,7 +4290,29 @@ exports.listGroupLessonAvailability = onCall(
               return aKey.localeCompare(bKey, "ko");
             });
 
-        return {lessons};
+        const fixedMemberLessons = lessonSnap.docs
+            .filter((docSnap) => {
+              const lesson = docSnap.data() || {};
+              const lessonGroupId = getGroupLessonGroupId(lesson);
+              return lesson.isBookable === true &&
+                !isCancelledOrDeletedGroupLesson(lesson) &&
+                lessonGroupId &&
+                activeGroupClassIds.has(lessonGroupId);
+            })
+            .filter((docSnap) => {
+              const lesson = {id: docSnap.id, ...docSnap.data()};
+              return getFixedMembersForLesson(groupStudents, lesson).some(
+                  (member) => normalizeId(member.studentId) === studentId,
+              );
+            })
+            .map((docSnap) => sanitizeFixedMemberLessonForStudent(docSnap))
+            .sort((a, b) => {
+              const aKey = `${a.date || ""} ${a.time || ""} ${a.subject || ""}`;
+              const bKey = `${b.date || ""} ${b.time || ""} ${b.subject || ""}`;
+              return aKey.localeCompare(bKey, "ko");
+            });
+
+        return {lessons, fixedMemberLessons};
       } catch (error) {
         throw asHttpsError(error);
       }

@@ -47,6 +47,23 @@ export function countActiveGroupFixedMembers(groupStudents, groupClassId) {
   }).length
 }
 
+export function getGroupClassBookingCapacitySummary({
+  maxStudents,
+  activeFixedMemberCount,
+} = {}) {
+  const capacity = Math.max(
+    1,
+    Math.floor(Number.isFinite(Number(maxStudents)) ? Number(maxStudents) : 4)
+  )
+  const fixedMemberCount = Math.max(0, Math.floor(Number(activeFixedMemberCount || 0)))
+  const fcfsRemainingSeats = Math.max(0, capacity - fixedMemberCount)
+  return {
+    capacity,
+    fixedMemberCount,
+    fcfsRemainingSeats,
+  }
+}
+
 export function validateGroupFormFields(form, options = {}) {
   const { forNewClass, forEdit, activeFixedMemberCount = 0 } = options
   const errors = {}
