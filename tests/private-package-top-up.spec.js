@@ -6,6 +6,8 @@ import {
   fillVisibleField,
   loginAsAdmin,
   openPrivateStudentPackageAddDialog,
+  waitForPrivatePackageTopUpSectionReady,
+  waitForStudentPackageNewPackageFormReady,
 } from './e2e-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, DEFAULT_E2E_ACADEMY_ID } from './fixtures/test-data.js';
 import {
@@ -14,6 +16,7 @@ import {
   createAdminSeededPrivateStudent,
   createAdminSeededStudentPackage,
   cleanupAdminPrivatePackageE2EFixtures,
+  cleanupAdminPrivatePackageE2ESuiteFixtures,
   hasE2EAdminServiceAccount,
   setAdminSeededStudentPrivateAccessSummary,
   waitForAdminSeededPrivateAccessSummaryReady,
@@ -39,6 +42,11 @@ const PRIVATE_PACKAGE_TOP_UP_PREFIXES = [
 async function cleanupPrivatePackageTopUpFixtures() {
   await cleanupAdminPrivatePackageE2EFixtures({ prefixes: PRIVATE_PACKAGE_TOP_UP_PREFIXES });
 }
+
+test.beforeAll(async () => {
+  if (!hasE2EAdminServiceAccount()) return;
+  await cleanupAdminPrivatePackageE2ESuiteFixtures();
+});
 
 test.beforeEach(async ({ browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
@@ -413,7 +421,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
-    await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible();
+    const topUpSection = await waitForPrivatePackageTopUpSectionReady(dialog);
     await expect(dialog).toContainText('기존 수강권에 추가 등록할 수 있습니다.');
     await expect(dialog).toContainText('운영 순서');
     await expect(dialog).toContainText(
@@ -446,19 +454,27 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
       /[23]회차 등록/
     );
 
-    const topUpSection = dialog.getByTestId('student-package-top-up-section');
-    await fillVisibleField(topUpSection.getByTestId('private-package-top-up-count-input'), '4');
+    await fillVisibleField(topUpSection.getByTestId('private-package-top-up-count-input'), '4', {
+      description: 'private-package-top-up-count-input',
+    });
     const preview = topUpSection.getByTestId('private-package-top-up-preview');
     await expect(preview).toContainText('이번 추가: +4회');
     await expect(preview).toContainText('저장 후 총 횟수: 8회');
     await expect(preview).toContainText('저장 후 새 배정 가능: 4회');
     await fillVisibleField(
       topUpSection.getByTestId('private-package-top-up-registration-label-input'),
-      registrationLabel
+      registrationLabel,
+      { description: 'private-package-top-up-registration-label-input' }
     );
-    await fillVisibleField(topUpSection.getByTestId('student-package-payment-date-input'), paymentDate);
-    await fillVisibleField(topUpSection.getByTestId('private-package-top-up-amount-input'), '300000');
-    await fillVisibleField(topUpSection.getByTestId('private-package-top-up-memo-input'), memo);
+    await fillVisibleField(topUpSection.getByTestId('student-package-payment-date-input'), paymentDate, {
+      description: 'student-package-payment-date-input',
+    });
+    await fillVisibleField(topUpSection.getByTestId('private-package-top-up-amount-input'), '300000', {
+      description: 'private-package-top-up-amount-input',
+    });
+    await fillVisibleField(topUpSection.getByTestId('private-package-top-up-memo-input'), memo, {
+      description: 'private-package-top-up-memo-input',
+    });
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     const topUpButton = dialog.getByRole('button', { name: '기존 수강권에 추가 등록', exact: true });
     await expect(topUpButton).toBeEnabled();
@@ -590,15 +606,14 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
-    await expect(dialog.getByTestId('student-package-top-up-section')).toBeVisible({
-      timeout: 30000,
-    });
+    await waitForPrivatePackageTopUpSectionReady(dialog);
     await expect(dialog.getByTestId('private-package-other-options')).toContainText('기타 옵션');
     await dialog.getByTestId('private-package-force-new-button').click();
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
     const newPackageTitle = `E2E 강제 새 수강권 ${unique}`;
-    await fillVisibleField(dialog.getByLabel('제목'), newPackageTitle);
-    await fillVisibleField(dialog.getByLabel(/총 횟수/), '2');
+    const { titleInput, countInput } = await waitForStudentPackageNewPackageFormReady(dialog);
+    await fillVisibleField(titleInput, newPackageTitle, { description: '제목' });
+    await fillVisibleField(countInput, '2', { description: '총 횟수' });
 
     const forceNewButton = dialog.getByRole('button', { name: '새 수강권으로 발급', exact: true });
     await forceNewButton.scrollIntoViewIfNeeded();
@@ -736,8 +751,9 @@ test('different teacher scope still creates a separate private package', async (
     dialog = await openPrivatePackageAddDialog(page, student.studentName, student.studentId);
     await expect(dialog.getByTestId('student-package-top-up-section')).toHaveCount(0);
     await dialog.getByRole('button', { name: '횟수 수강권', exact: true }).click();
-    await fillVisibleField(dialog.getByLabel('제목'), `E2E 현재 선생님 신규 ${unique}`);
-    await fillVisibleField(dialog.getByLabel(/총 횟수/), '3');
+    const { titleInput, countInput } = await waitForStudentPackageNewPackageFormReady(dialog);
+    await fillVisibleField(titleInput, `E2E 현재 선생님 신규 ${unique}`, { description: '제목' });
+    await fillVisibleField(countInput, '3', { description: '총 횟수' });
     const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
     await expect(saveButton).toBeEnabled();
     await saveButton.click();

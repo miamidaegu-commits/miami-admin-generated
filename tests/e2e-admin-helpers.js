@@ -27,15 +27,31 @@ const DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES = [
   'E2E 다른 선생님 기존',
   'E2E 현재 선생님 신규',
   'E2E top-up',
+  'E2E 개인진행',
+  'E2E 개인수정',
+  'E2E 수업학생',
+  'E2E 예약학생',
+  'E2E 요청학생',
   'top-up-',
   'miketest-',
   'miketest ',
+  'e2e-',
   'e2e-top-up-',
   'e2e-package-',
+  'e2e-private-',
+  'e2e-slot-',
+  'e2e-immediate-',
   'e2e-immediate-package-student-',
   'e2e-used-history-revoke-student-',
   'e2e-revoke-student-',
+  'e2e_lesson_student_',
+  'e2e_reservation_student_',
+  'e2e_request_student_',
+  'e2e-teacher-',
+  'private-slot',
 ];
+
+export const PRIVATE_PACKAGE_E2E_SUITE_PREFIXES = DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES;
 
 export function hasE2EAdminServiceAccount() {
   if (!fs.existsSync(SERVICE_ACCOUNT_PATH)) return false;
@@ -135,6 +151,30 @@ function rowMatchesAnyPrefix(row, docId, fields, prefixes) {
   return fields.some((field) => startsWithAnyPrefix(row?.[field], prefixes));
 }
 
+function isE2EFixtureIdentity(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return (
+    text.startsWith('e2e-') ||
+    text.startsWith('E2E') ||
+    lower.includes('e2e') ||
+    text.startsWith('top-up-') ||
+    text.startsWith('miketest-') ||
+    text.startsWith('miketest ') ||
+    text.startsWith('private-slot')
+  );
+}
+
+function rowMatchesE2EFixture(row, docId, fields, prefixes) {
+  if (rowMatchesAnyPrefix(row, docId, fields, prefixes)) return true;
+  if (isE2EFixtureIdentity(docId)) return true;
+  if (isE2EFixtureIdentity(row?.studentId)) return true;
+  if (isE2EFixtureIdentity(row?.packageId)) return true;
+  if (isE2EFixtureIdentity(row?.teacherKey)) return true;
+  return fields.some((field) => isE2EFixtureIdentity(row?.[field]));
+}
+
 async function getAcademyScopedDocs(db, collectionName, academyId) {
   const snap = await db
     .collection(collectionName)
@@ -175,6 +215,13 @@ async function cleanupKnownAcademyDocs(label, db, collectionName, docIds, academ
   );
   logAdminCleanupWarnings(label, results);
   return results;
+}
+
+export async function cleanupAdminPrivatePackageE2ESuiteFixtures({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  prefixes = PRIVATE_PACKAGE_E2E_SUITE_PREFIXES,
+} = {}) {
+  return cleanupAdminPrivatePackageE2EFixtures({ academyId, prefixes });
 }
 
 export async function cleanupAdminPrivatePackageE2EFixtures({
@@ -244,7 +291,7 @@ export async function cleanupAdminPrivatePackageE2EFixtures({
   for (const [collectionName, fields] of Object.entries(collectionFieldMap)) {
     for (const docSnap of collectionDocs[collectionName] || []) {
       const row = docSnap.data() || {};
-      if (!rowMatchesAnyPrefix(row, docSnap.id, fields, scopedPrefixes)) continue;
+      if (!rowMatchesE2EFixture(row, docSnap.id, fields, scopedPrefixes)) continue;
       mark(docSnap);
       addIfPresent(studentIds, row.studentId);
       addIfPresent(packageIds, row.packageId);

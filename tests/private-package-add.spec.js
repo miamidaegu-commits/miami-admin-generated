@@ -7,6 +7,7 @@ import {
 import { cleanupTempStudentData } from './e2e-firebase-helpers.js';
 import {
   cleanupAdminPrivatePackageE2EFixtures,
+  cleanupAdminPrivatePackageE2ESuiteFixtures,
   createAdminSeededTeacher,
   createAdminSeededPrivateStudent,
   cleanupAdminSeededTeacher,
@@ -29,6 +30,11 @@ const PRIVATE_PACKAGE_ADD_PREFIXES = [
 async function cleanupPrivatePackageAddFixtures() {
   await cleanupAdminPrivatePackageE2EFixtures({ prefixes: PRIVATE_PACKAGE_ADD_PREFIXES });
 }
+
+test.beforeAll(async () => {
+  if (!hasE2EAdminServiceAccount()) return;
+  await cleanupAdminPrivatePackageE2ESuiteFixtures();
+});
 
 test.beforeEach(async ({ browserName }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
