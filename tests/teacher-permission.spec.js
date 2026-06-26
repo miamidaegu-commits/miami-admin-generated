@@ -701,6 +701,13 @@ test('teacher는 내 단체반 관리에서 본인 반을 읽기 전용으로만
   const teacherName = await getTeacherNameFromWelcome(page);
   await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
   await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
+  const todaySchedulePanel = page.getByTestId('today-schedule-panel');
+  await expect(
+    todaySchedulePanel.getByRole('heading', { name: '오늘의 단체반 일정', exact: true })
+  ).toBeVisible();
+  await expect(todaySchedulePanel.getByTestId('today-schedule-summary')).toHaveCount(0);
+  await expect(todaySchedulePanel.getByText('오늘 1:1', { exact: true })).toHaveCount(0);
+  await expect(todaySchedulePanel.getByText('이번 달 1:1 누적', { exact: true })).toHaveCount(0);
 
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);

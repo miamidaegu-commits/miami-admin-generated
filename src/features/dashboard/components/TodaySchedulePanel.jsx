@@ -8,8 +8,11 @@ export default function TodaySchedulePanel({
   title = '오늘의 일정',
 }) {
   const rows = Array.isArray(items) ? items : []
+  const hideSummary = summaryVariant === 'hidden'
   const isTeacherPrivateSummary = summaryVariant === 'teacherPrivate'
-  const summaryItems = (isTeacherPrivateSummary
+  const summaryItems = (hideSummary
+    ? []
+    : isTeacherPrivateSummary
     ? [
         ['오늘 1:1', lessonStats?.today?.privateCount ?? summary?.todayPrivateLessonCount],
         ['이번 달 1:1 누적', lessonStats?.month?.privateCount ?? summary?.monthlyPrivateLessonCount],
