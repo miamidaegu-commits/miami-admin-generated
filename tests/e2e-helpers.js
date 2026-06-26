@@ -210,6 +210,43 @@ export function getStudentRowByIdOrName(page, studentId, studentName) {
   return studentId ? getStudentRowById(page, studentId).or(byName).first() : byName;
 }
 
+async function collectVisibleStudentRowSnapshots(page, limit = 20) {
+  return page
+    .locator('[data-testid="student-row"]')
+    .evaluateAll((rows, maxRows) =>
+      rows.slice(0, maxRows).map((row) => ({
+        id: row.getAttribute('data-student-id') || '',
+        name: row.getAttribute('data-student-name') || '',
+        text: String(row.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+      })),
+      limit
+    )
+    .catch(() => []);
+}
+
+export async function prepareStudentManagementForSearch(
+  page,
+  { searchTerm = '', timeout = 30000, reload = false } = {}
+) {
+  if (reload) {
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toBeVisible({
+      timeout: 15000,
+    });
+  }
+
+  await expect(async () => {
+    await openDashboardSection(page, '학생 관리');
+    const searchInput = getStudentSearchInput(page);
+    await expect(searchInput).toBeVisible({ timeout: 5000 });
+    await expect(searchInput).toBeEnabled({ timeout: 5000 });
+    if (searchTerm) {
+      await fillVisibleField(searchInput, searchTerm, { timeout: 15000 });
+      await expect(searchInput).toHaveValue(searchTerm, { timeout: 5000 });
+    }
+  }).toPass({ timeout });
+}
+
 export async function clickStudentRowButtonByIdOrName(
   page,
   {
@@ -217,50 +254,89 @@ export async function clickStudentRowButtonByIdOrName(
     studentName,
     buttonName = '수강권 추가',
     exact = true,
-    timeout = 30000,
-    onAfterClick,
+    timeout = 60000,
+    searchTerm = '',
   } = {}
 ) {
-  const startedAt = Date.now();
-  let lastError = null;
+  const resolvedSearchTerm = String(searchTerm || studentName || '').trim();
+  const packageDialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+  let reloadCount = 0;
+  let lastVisibleRows = [];
+  let lastSearchValue = '';
 
-  while (Date.now() - startedAt < timeout) {
-    const remaining = Math.max(1000, timeout - (Date.now() - startedAt));
-    const row = getStudentRowByIdOrName(page, studentId, studentName);
-    try {
-      await expect(row).toBeVisible({ timeout: Math.min(remaining, 5000) });
+  try {
+    await expect(async () => {
+      await prepareStudentManagementForSearch(page, {
+        searchTerm: resolvedSearchTerm,
+        timeout: Math.min(timeout, 30000),
+        reload: reloadCount === 1,
+      });
+
+      const searchInput = getStudentSearchInput(page);
+      lastSearchValue = (await searchInput.inputValue().catch(() => '')) || resolvedSearchTerm;
+
+      const row = getStudentRowByIdOrName(page, studentId, studentName);
+      const rowVisible = await row.isVisible().catch(() => false);
+      if (!rowVisible) {
+        lastVisibleRows = await collectVisibleStudentRowSnapshots(page);
+        if (reloadCount === 0) {
+          reloadCount = 1;
+          throw new Error('Student row not visible yet; reloading page and retrying search.');
+        }
+        throw new Error('Student row still not visible after reload.');
+      }
+
       const button = row.getByRole('button', { name: buttonName, exact });
-      await button.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-      await expect(button).toBeVisible({ timeout: Math.min(remaining, 5000) });
-      await expect(button).toBeEnabled({ timeout: Math.min(remaining, 5000) });
-      await button.click({ timeout: Math.min(remaining, 5000) });
-      if (!onAfterClick) return;
-      const done = await onAfterClick();
-      if (done !== false) return;
-    } catch (error) {
-      lastError = error;
-    }
+      await button.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+      await expect(button).toBeVisible({ timeout: 5000 });
+      await expect(button).toBeEnabled({ timeout: 5000 });
+      await button.click({ timeout: 5000 });
+      await expect(packageDialog).toBeVisible({ timeout: 5000 });
+    }).toPass({ timeout });
+  } catch (error) {
+    lastVisibleRows =
+      lastVisibleRows.length > 0 ? lastVisibleRows : await collectVisibleStudentRowSnapshots(page);
+    throw new Error(
+      [
+        `Could not click ${buttonName} for student ${studentName || studentId} within ${timeout}ms.`,
+        `Search term: ${resolvedSearchTerm || '-'}`,
+        `Search input value: ${lastSearchValue || '-'}`,
+        `Visible student rows: ${JSON.stringify(lastVisibleRows)}`,
+        `Original error: ${error?.message || String(error || '')}`,
+      ].join('\n')
+    );
   }
+}
 
-  throw new Error(
-    [
-      `Could not click ${buttonName} for student ${studentName || studentId} within ${timeout}ms.`,
-      `Original error: ${lastError?.message || String(lastError || '')}`,
-    ].join('\n')
-  );
+export async function openPrivateStudentPackageAddDialog(
+  page,
+  { studentId = '', studentName, timeout = 60000 } = {}
+) {
+  await clickStudentRowButtonByIdOrName(page, {
+    studentId,
+    studentName,
+    buttonName: '수강권 추가',
+    timeout,
+    searchTerm: studentName,
+  });
+  const dialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
+  await expect(dialog).toBeVisible({ timeout: 15000 });
+  await dialog.getByLabel('수강권 유형').selectOption('private');
+  return dialog;
 }
 
 export async function fillVisibleField(locator, value, options = {}) {
-  const timeout = options.timeout ?? 10000;
+  const timeout = options.timeout ?? 30000;
   const nextValue = String(value ?? '');
+  const stepTimeout = options.stepTimeout ?? 5000;
 
   await expect(async () => {
-    await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
-    await expect(locator).toBeVisible({ timeout: 2000 });
-    await expect(locator).toBeEnabled({ timeout: 2000 });
-    await expect(locator).toBeEditable({ timeout: 2000 });
-    await locator.fill(nextValue, { timeout: 2000 });
-    await expect(locator).toHaveValue(nextValue, { timeout: 2000 });
+    await locator.scrollIntoViewIfNeeded({ timeout: stepTimeout }).catch(() => {});
+    await expect(locator).toBeVisible({ timeout: stepTimeout });
+    await expect(locator).toBeEnabled({ timeout: stepTimeout });
+    await expect(locator).toBeEditable({ timeout: stepTimeout });
+    await locator.fill(nextValue, { timeout: stepTimeout });
+    await expect(locator).toHaveValue(nextValue, { timeout: stepTimeout });
   }).toPass({ timeout });
 }
 

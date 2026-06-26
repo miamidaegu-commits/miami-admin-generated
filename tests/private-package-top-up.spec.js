@@ -3,12 +3,9 @@ import path from 'node:path';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
 import {
-  clickStudentRowButtonByIdOrName,
   fillVisibleField,
-  getStudentRowByIdOrName,
-  getStudentSearchInput,
   loginAsAdmin,
-  openDashboardSection,
+  openPrivateStudentPackageAddDialog,
 } from './e2e-helpers.js';
 import { ADMIN_EMAIL, ADMIN_PASSWORD, DEFAULT_E2E_ACADEMY_ID } from './fixtures/test-data.js';
 import {
@@ -17,9 +14,11 @@ import {
   createAdminSeededPrivateStudent,
   createAdminSeededStudentPackage,
   cleanupAdminPrivatePackageE2EFixtures,
-  getAdminSeededStudentPrivateAccessSummary,
   hasE2EAdminServiceAccount,
   setAdminSeededStudentPrivateAccessSummary,
+  waitForAdminSeededPrivateAccessSummaryReady,
+  waitForAdminSeededPrivateStudentReady,
+  waitForAdminSeededStudentPackageReady,
 } from './e2e-admin-helpers.js';
 
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
@@ -171,23 +170,17 @@ async function waitForPrivateAccessSummary({
   activePackageIds = [],
   timeout = 30000,
 }) {
-  await expect
-    .poll(async () => {
-      const summary = await getAdminSeededStudentPrivateAccessSummary({
-        academyId: DEFAULT_E2E_ACADEMY_ID,
-        studentId,
-      });
-      const summaryTeacherKeys = summary?.teacherKeys || [];
-      const summaryPackageIds = summary?.activePackageIds || [];
-      return {
-        teacherKeysReady: teacherKeys.every((teacherKey) => summaryTeacherKeys.includes(teacherKey)),
-        packageIdsReady: activePackageIds.every((packageId) => summaryPackageIds.includes(packageId)),
-      };
-    }, { timeout })
-    .toEqual({
-      teacherKeysReady: true,
-      packageIdsReady: true,
-    });
+  await waitForAdminSeededPrivateAccessSummaryReady({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    studentId,
+    teacherKeys,
+    activePackageIds,
+    timeout,
+  });
+}
+
+async function openPrivatePackageAddDialog(page, studentName, studentId = '') {
+  return openPrivateStudentPackageAddDialog(page, { studentId, studentName });
 }
 
 async function cleanupFixture(fixture) {
@@ -241,23 +234,6 @@ async function cleanupFixture(fixture) {
   }
 
   await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
-}
-
-async function openPrivatePackageAddDialog(page, studentName, studentId = '') {
-  await openDashboardSection(page, '학생 관리');
-  await getStudentSearchInput(page).fill(studentName);
-  const studentRow = getStudentRowByIdOrName(page, studentId, studentName);
-  await expect(studentRow).toBeVisible({ timeout: 15000 });
-  const dialog = page.getByRole('dialog', { name: '학생 수강권 추가' });
-  await clickStudentRowButtonByIdOrName(page, {
-    studentId,
-    studentName,
-    buttonName: '수강권 추가',
-    onAfterClick: () => dialog.isVisible({ timeout: 3000 }).catch(() => false),
-  });
-  await expect(dialog).toBeVisible();
-  await dialog.getByLabel('수강권 유형').selectOption('private');
-  return dialog;
 }
 
 async function maybeDismissPostPrivateLessonScheduleModal(page, options = {}) {
@@ -316,6 +292,7 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
       name: `E2E 추가등록 학생 ${unique}`,
       studentName: `E2E 추가등록 학생 ${unique}`,
       teacher: teacherKey,
+      teacherKey,
       teacherName,
     });
     const studentPackage = await createAdminSeededStudentPackage({
@@ -339,6 +316,23 @@ test('admin tops up an existing same-teacher private package', async ({ page, br
       studentId: student.studentId,
       packageIds: [studentPackage.packageId],
     };
+    await waitForAdminSeededPrivateStudentReady({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: student.studentId,
+      name: student.studentName,
+      teacher: teacherKey,
+      teacherKey,
+    });
+    await waitForAdminSeededStudentPackageReady({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      packageId: studentPackage.packageId,
+      studentId: student.studentId,
+      teacher: teacherKey,
+      teacherKey,
+      status: 'active',
+      totalCount: 4,
+      remainingCount: 4,
+    });
     await createCreditTransaction({
       packageId: studentPackage.packageId,
       studentId: student.studentId,
@@ -543,6 +537,7 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
       name: `E2E 새발급 학생 ${unique}`,
       studentName: `E2E 새발급 학생 ${unique}`,
       teacher: teacherKey,
+      teacherKey,
       teacherName,
     });
     const existingPackage = await createAdminSeededStudentPackage({
@@ -570,23 +565,23 @@ test('admin can force a new same-teacher package with confirmation', async ({ pa
       teacherKeys: [teacherKey],
       activePackageIds: [existingPackage.packageId],
     });
-    await expect
-      .poll(async () => {
-        const snap = await getDb().collection('studentPackages').doc(existingPackage.packageId).get();
-        const row = snap.exists ? snap.data() || {} : {};
-        return {
-          id: snap.exists ? snap.id : '',
-          studentId: String(row.studentId || ''),
-          teacher: String(row.teacher || row.teacherKey || ''),
-          status: String(row.status || ''),
-        };
-      }, { timeout: 30000 })
-      .toEqual({
-        id: existingPackage.packageId,
-        studentId: student.studentId,
-        teacher: teacherKey,
-        status: 'active',
-      });
+    await waitForAdminSeededPrivateStudentReady({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: student.studentId,
+      name: student.studentName,
+      teacher: teacherKey,
+      teacherKey,
+    });
+    await waitForAdminSeededStudentPackageReady({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      packageId: existingPackage.packageId,
+      studentId: student.studentId,
+      teacher: teacherKey,
+      teacherKey,
+      status: 'active',
+      totalCount: 4,
+      remainingCount: 4,
+    });
     await waitForPrivateAccessSummary({
       studentId: student.studentId,
       teacherKeys: [teacherKey],
@@ -690,6 +685,7 @@ test('different teacher scope still creates a separate private package', async (
       name: `E2E 다른선생님 학생 ${unique}`,
       studentName: `E2E 다른선생님 학생 ${unique}`,
       teacher: currentTeacher,
+      teacherKey: currentTeacher,
       teacherName: currentTeacher,
     });
     const existingPackage = await createAdminSeededStudentPackage({
@@ -707,6 +703,23 @@ test('different teacher scope still creates a separate private package', async (
       status: 'active',
     });
     fixture = { studentId: student.studentId, packageIds: [existingPackage.packageId] };
+    await waitForAdminSeededPrivateStudentReady({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: student.studentId,
+      name: student.studentName,
+      teacher: currentTeacher,
+      teacherKey: currentTeacher,
+    });
+    await waitForAdminSeededStudentPackageReady({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      packageId: existingPackage.packageId,
+      studentId: student.studentId,
+      teacher: otherTeacher,
+      teacherKey: otherTeacher,
+      status: 'active',
+      totalCount: 4,
+      remainingCount: 4,
+    });
     await setAdminSeededStudentPrivateAccessSummary({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       studentId: student.studentId,
