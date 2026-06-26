@@ -459,7 +459,7 @@ export default function useStudentPackageAdminFlow({
           const data = d.data()
           if (String(data.status || 'active') !== 'active') return
           batch.update(doc(db, 'groupStudents', d.id), {
-            status: 'ended',
+            status: 'inactive',
             updatedAt: serverTimestamp(),
           })
           updateStudentGroupAccessBatch(
@@ -467,7 +467,7 @@ export default function useStudentPackageAdminFlow({
             db,
             buildStudentGroupAccessPayloadFromGroupStudent(
               { id: d.id, ...data },
-              { status: 'ended' }
+              { status: 'inactive' }
             )
           )
         })

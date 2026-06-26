@@ -692,8 +692,8 @@ function sanitizeGroupLessonForStudent(docSnap, availability, ticketInfo = {}) {
 function getFixedMemberLessonStatusLabel(lesson) {
   const lessonDate = normalizeId(lesson && lesson.date);
   const today = getSeoulTodayDateString();
-  if (lessonDate && lessonDate >= today) return "고정 등록 예정";
-  return "고정 등록됨";
+  if (lessonDate && lessonDate >= today) return "반 등록 예정";
+  return "반 등록됨";
 }
 
 function sanitizeFixedMemberLessonForStudent(docSnap) {
@@ -4489,7 +4489,7 @@ exports.reserveGroupLessonSeat = onCall(
               )) {
             throw new HttpsError(
                 "failed-precondition",
-                "고정 등록 학생은 추가 예약 대상이 아닙니다.",
+                "반 등록 학생은 추가 예약 대상이 아닙니다.",
             );
           }
           const availability = getGroupSeatAvailability({
@@ -4824,7 +4824,7 @@ exports.restoreGroupLessonFixedSeat = onCall(
           if (!studentId || !releasedIds.includes(studentId)) {
             throw new HttpsError(
                 "failed-precondition",
-                "차감취소된 고정 좌석이 아닙니다.",
+                "차감취소된 등록 좌석이 아닙니다.",
             );
           }
 

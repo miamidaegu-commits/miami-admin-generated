@@ -75,7 +75,7 @@ export function validateGroupFormFields(form, options = {}) {
   const maxStudents = parseRequiredMinOneIntField(form?.maxStudents)
   if (!maxStudents.ok) errors.maxStudents = '1 이상의 정수를 입력해주세요.'
   else if (Number(activeFixedMemberCount || 0) > maxStudents.value) {
-    errors.maxStudents = `현재 고정 학생 ${Number(activeFixedMemberCount)}명보다 정원을 작게 설정할 수 없습니다.`
+    errors.maxStudents = `현재 반 등록 학생 ${Number(activeFixedMemberCount)}명보다 정원을 작게 설정할 수 없습니다.`
   }
 
   const status = String(form?.status || 'active').trim() === 'inactive' ? 'inactive' : 'active'

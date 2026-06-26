@@ -321,7 +321,7 @@ export default function GroupsSection({
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
               담당 선생님 {selectedGroupClass.teacher || '-'} · 정원{' '}
-              {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 고정{' '}
+              {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 등록{' '}
               {selectedGroupCapacitySummary?.fixedMemberCount ?? activeFixedStudentCount}명 · 선착순 가능{' '}
               {selectedGroupCapacitySummary?.fcfsRemainingSeats ?? '-'}명 · 상태{' '}
               {getGroupClassStatusLabel(selectedGroupClass.status)}
@@ -473,6 +473,9 @@ export default function GroupsSection({
               {canUseDirectLessonCreation
                 ? '특별 수업 추가: 보강·특강 등 날짜 한 건 · 추가 일정 생성: 관리자용으로 기간을 정해 같은 규칙으로 일정을 더 만듭니다.'
                 : '학생 등록과 수강권 관리는 관리자에게 요청해 주세요.'}
+              {canAddStudent
+                ? ' · 반 등록 학생은 단체반 수강권 발급으로 자동 등록됩니다. 아래 학생 등록은 예외 처리용입니다.'
+                : ''}
               {isAdmin ? ' · 이후 일정 삭제: 폐강·일정 정리 시 기준일 이후 일정만 일괄 삭제(관리자).' : ''}
             </p>
 
@@ -627,10 +630,10 @@ export default function GroupsSection({
                         >
                           <span>정원 {seatAvailability?.capacity ?? Number(gl.capacity ?? 0)}명</span>
                           <span data-testid="group-lesson-fixed-attending-count">
-                            고정 참석 예정 {seatAvailability?.fixedAttendingCount ?? '-'}명
+                            등록 참석 예정 {seatAvailability?.fixedAttendingCount ?? '-'}명
                           </span>
                           <span data-testid="group-lesson-released-seat-count">
-                            고정 결석/차감취소 {seatAvailability?.releasedFixedSeatCount ?? '-'}명
+                            등록 결석/차감취소 {seatAvailability?.releasedFixedSeatCount ?? '-'}명
                           </span>
                           <span data-testid="group-lesson-guest-reserved-count">
                             추가 예약 {seatAvailability?.guestReservedCount ?? Number(gl.bookedCount ?? 0)}명

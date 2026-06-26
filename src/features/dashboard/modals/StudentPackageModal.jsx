@@ -259,8 +259,8 @@ export default function StudentPackageModal({
                   }}
                 >
                   <option value="private">개인 (private)</option>
-                  <option value="group">그룹 (group)</option>
-                  <option value="openGroup">오픈 그룹 (openGroup)</option>
+                  <option value="group">반 등록 단체반 (group)</option>
+                  <option value="openGroup">자유 예약 단체반 (openGroup)</option>
                 </select>
               </label>
 
@@ -553,11 +553,11 @@ export default function StudentPackageModal({
                 ) : null}
               </label>
 
-              {studentPackageForm.packageType === 'group' ||
-              studentPackageForm.packageType === 'openGroup' ? (
+              {studentPackageForm.packageType === 'group' ? (
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                  <span style={{ opacity: 0.85 }}>그룹 수업</span>
+                  <span style={{ opacity: 0.85 }}>등록할 반 선택</span>
                   <select
+                    aria-label="등록할 반 선택"
                     value={studentPackageForm.groupClassId}
                     onChange={(e) => {
                       const nextGid = String(e.target.value || '').trim()
@@ -583,7 +583,7 @@ export default function StudentPackageModal({
                       color: 'white',
                     }}
                   >
-                    <option value="">그룹을 선택하세요</option>
+                    <option value="">반을 선택하세요</option>
                     {sortedGroupClasses.map((g) => (
                       <option key={g.id} value={g.id}>
                         {g.name || '-'} ({g.teacher || '-'})
@@ -599,6 +599,13 @@ export default function StudentPackageModal({
                     </span>
                   ) : null}
                 </label>
+              ) : null}
+
+              {studentPackageForm.packageType === 'openGroup' ? (
+                <p style={{ margin: 0, fontSize: 12, opacity: 0.78, lineHeight: 1.5 }}>
+                  특정 반을 연결하지 않는 자유 예약 수강권입니다. 코스 유형 기준으로 남은 좌석에
+                  선착순 예약할 수 있습니다.
+                </p>
               ) : null}
 
               {isGroupPackage ? (
@@ -692,6 +699,36 @@ export default function StudentPackageModal({
                     ) : null}
                   </label>
 
+                  {studentPackageForm.packageType === 'openGroup' ? (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                      <span style={{ opacity: 0.85 }}>총 횟수</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={studentPackageForm.totalCount}
+                        onChange={(e) =>
+                          setStudentPackageForm((prev) => ({
+                            ...prev,
+                            totalCount: e.target.value,
+                          }))
+                        }
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          border: '1px solid #444',
+                          background: '#1f1f1f',
+                          color: 'white',
+                        }}
+                      />
+                      {studentPackageFormErrors.totalCount ? (
+                        <span style={{ color: '#f08080', fontSize: 12 }}>
+                          {studentPackageFormErrors.totalCount}
+                        </span>
+                      ) : null}
+                    </label>
+                  ) : null}
+
+                  {studentPackageForm.packageType === 'group' ? (
                   <div
                     style={{
                       padding: '10px 12px',
@@ -733,6 +770,7 @@ export default function StudentPackageModal({
                       </div>
                     ) : null}
                   </div>
+                  ) : null}
                 </>
               ) : null}
 
