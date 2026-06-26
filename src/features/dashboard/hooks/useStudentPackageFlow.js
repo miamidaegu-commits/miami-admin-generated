@@ -32,14 +32,11 @@ import {
   studentPackageAttentionScope,
 } from '../dashboardViewUtils.js'
 import {
-  buildStudentGroupAccessPayloadFromGroupStudent,
-  setStudentGroupAccessBatch,
-} from '../../group-booking/studentGroupAccessClient.js'
-import {
   DEFAULT_GROUP_COURSE_TYPE,
   normalizeGroupCourseType,
 } from '../../group-booking/groupCourseTypes.js'
 import { syncStudentGroupCourseTypeAccessSummary } from '../../group-booking/studentGroupAccessSummaryClient.js'
+import { enrollStudentInGroupClassFromPackage } from '../../group-booking/groupClassEnrollmentClient.js'
 import { addStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 import { computePrivateTeacherPackageUsage } from '../privatePackageHelpers.js'
 
@@ -355,9 +352,11 @@ export default function useStudentPackageFlow({
     let teacherForScope = String(student.teacher || '')
     let groupClassId = ''
     let selectedPrivateTeacher = null
-    if (packageType === 'group' || packageType === 'openGroup') {
+    if (packageType === 'group') {
       groupClassId = String(studentPackageForm.groupClassId || '').trim()
       if (!groupClassId) return []
+      teacherForScope = ''
+    } else if (packageType === 'openGroup') {
       teacherForScope = ''
     } else {
       selectedPrivateTeacher = resolvePrivateTeacherSelection(
@@ -372,6 +371,10 @@ export default function useStudentPackageFlow({
       packageType,
       teacher: teacherForScope,
       groupClassId,
+      groupCourseType:
+        packageType === 'openGroup'
+          ? normalizeGroupCourseType(studentPackageForm.groupCourseType)
+          : '',
     })
     const studentId = String(student.id).trim()
 
@@ -812,7 +815,12 @@ export default function useStudentPackageFlow({
     }
 
     const totalParsed = parseRequiredMinOneIntField(form.totalCount)
-    if (!isPrivateRegular && !totalParsed.ok) {
+    if (
+      !isPrivateRegular &&
+      packageTypeEarly !== 'group' &&
+      packageTypeEarly !== 'openGroup' &&
+      !totalParsed.ok
+    ) {
       errors.totalCount = '1 이상의 정수를 입력해주세요.'
     }
 
@@ -824,8 +832,8 @@ export default function useStudentPackageFlow({
     let groupCourseType = ''
     let outgoingTotalCount = totalParsed.ok ? totalParsed.value : 1
 
-    if (packageType === 'group' || packageType === 'openGroup') {
-      if (!groupClassId) errors.groupClassId = '그룹을 선택해주세요.'
+    if (packageType === 'group') {
+      if (!groupClassId) errors.groupClassId = '등록할 반을 선택해주세요.'
       groupCourseType = normalizeGroupCourseType(form.groupCourseType)
       if (!groupCourseType) errors.groupCourseType = '코스 유형을 선택해주세요.'
       registrationStartDate = String(form.registrationStartDate || '').trim()
@@ -842,6 +850,21 @@ export default function useStudentPackageFlow({
         errors.registrationWeeks = '등록 주수는 1 이상의 정수여야 합니다.'
       } else {
         registrationWeeks = weeksParsed.value
+      }
+    } else if (packageType === 'openGroup') {
+      groupClassId = ''
+      groupCourseType = normalizeGroupCourseType(form.groupCourseType)
+      if (!groupCourseType) errors.groupCourseType = '코스 유형을 선택해주세요.'
+      if (!totalParsed.ok) {
+        errors.totalCount = '1 이상의 정수를 입력해주세요.'
+      } else {
+        outgoingTotalCount = totalParsed.value
+      }
+      registrationStartDate = String(form.registrationStartDate || '').trim()
+      if (registrationStartDate && !/^\d{4}-\d{2}-\d{2}$/.test(registrationStartDate)) {
+        errors.registrationStartDate = '수강권 시작일 형식이 올바르지 않습니다.'
+      } else if (registrationStartDate && !parseYmdToLocalDate(registrationStartDate)) {
+        errors.registrationStartDate = '유효한 날짜를 선택해주세요.'
       }
     } else if (packageType === 'private' && privatePackageMode === 'regular') {
       groupClassId = ''
@@ -1079,12 +1102,12 @@ export default function useStudentPackageFlow({
         registrationStartDateForSave = String(result.registrationStartDate || '').trim()
         registrationWeeksForSave = Number(result.registrationWeeks || 0)
       }
-    } else if (result.packageType === 'group' || result.packageType === 'openGroup') {
+    } else if (result.packageType === 'group') {
       const groupClass = groupClasses.find((gc) => gc.id === result.groupClassId)
       if (!groupClass) {
         setStudentPackageFormErrors((prev) => ({
           ...prev,
-          groupClassId: '선택한 그룹을 찾을 수 없습니다.',
+          groupClassId: '선택한 반을 찾을 수 없습니다.',
         }))
         setBusyStudentPackageSubmit(false)
         return
@@ -1116,6 +1139,14 @@ export default function useStudentPackageFlow({
         setBusyStudentPackageSubmit(false)
         return
       }
+    } else if (result.packageType === 'openGroup') {
+      groupClassId = null
+      groupClassName = null
+      groupCourseType = normalizeGroupCourseType(result.groupCourseType)
+      computedTotalCount = Number(result.totalCount || 0)
+      registrationStartDateForSave = String(result.registrationStartDate || '').trim()
+      registrationWeeksForSave = null
+      coverageEndDate = ''
     }
 
     const scopeKey = buildStudentPackageScopeKey({
@@ -1126,6 +1157,10 @@ export default function useStudentPackageFlow({
           : '',
       groupClassId:
         result.packageType === 'private' ? '' : String(groupClassId || '').trim(),
+      groupCourseType:
+        result.packageType === 'openGroup'
+          ? normalizeGroupCourseType(result.groupCourseType)
+          : '',
     })
     const activeSameScope = studentPackages.filter((pkg) => {
       if (String(pkg.studentId || '').trim() !== studentId) return false
@@ -1297,10 +1332,7 @@ export default function useStudentPackageFlow({
         setPostPrivateLessonScheduleErrors({})
       }
 
-      if (
-        (result.packageType === 'group' || result.packageType === 'openGroup') &&
-        groupClassId
-      ) {
+      if (result.packageType === 'group' && groupClassId) {
         const todayYmd = getTodayStorageDateString()
         const nextStartYmd =
           getEarliestFutureGroupLessonYmdFromLessons({
@@ -1308,29 +1340,28 @@ export default function useStudentPackageFlow({
             groupLessons: studentSummaryGroupLessons,
             todayYmd,
           }) || todayYmd
-        const defaultPostGroupReEnrollStartDate =
+        const enrollmentStartDate =
           /^\d{4}-\d{2}-\d{2}$/.test(nextStartYmd) &&
           nextStartYmd > registrationStartDateForSave
             ? nextStartYmd
             : registrationStartDateForSave
-        setPostGroupReEnrollModalData({
-          newPackageId: docRef.id,
-          newPackageType: result.packageType,
-          isReenrollFlow: false,
+
+        await enrollStudentInGroupClassFromPackage({
+          db,
+          academyId: scopedAcademyId,
           studentId,
           studentName,
           teacher,
           groupClassId,
-          groupClassName,
-          totalCount: computedTotalCount,
-          usedCount: 0,
-          showNextLessonAutoHint:
-            defaultPostGroupReEnrollStartDate === nextStartYmd &&
-            nextStartYmd !== todayYmd,
-          packageRegistrationStartDate: registrationStartDateForSave,
+          packageId: docRef.id,
+          packageType: result.packageType,
+          startDateYmd: enrollmentStartDate,
+          paidLessons: computedTotalCount,
+          attendanceCount: 0,
         })
-        setPostGroupReEnrollStartDate(defaultPostGroupReEnrollStartDate)
-        setPostGroupReEnrollErrors({})
+      }
+
+      if (result.packageType === 'group' || result.packageType === 'openGroup') {
         void syncStudentGroupCourseTypeAccessSummary(db, {
           academyId: scopedAcademyId,
           studentId,
@@ -1403,8 +1434,6 @@ export default function useStudentPackageFlow({
     setPostGroupReEnrollErrors(errors)
     if (Object.keys(errors).length > 0) return
 
-    const [y, mo, d] = dateStr.split('-').map(Number)
-    const startTimestamp = Timestamp.fromDate(new Date(y, mo - 1, d))
     const enrollStudentId = String(data.studentId || '').trim()
     const teacherNorm = normalizeText(data.teacher || '')
 
@@ -1412,58 +1441,20 @@ export default function useStudentPackageFlow({
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       setBusyPostGroupReEnroll(true)
 
-      const snap = await getDocs(
-        query(
-          collection(db, 'groupStudents'),
-          where('academyId', '==', scopedAcademyId),
-          where('studentId', '==', enrollStudentId)
-        )
-      )
-
-      const batch = writeBatch(db)
-      snap.forEach((docItem) => {
-        const row = docItem.data()
-        if (String(row.groupClassId || '') !== groupClassId) return
-        if (String(row.status || 'active') !== 'active') return
-        batch.update(doc(db, 'groupStudents', docItem.id), {
-          status: 'ended',
-          updatedAt: serverTimestamp(),
-        })
-      })
-
-      const newGroupStudentRef = doc(collection(db, 'groupStudents'))
-      const newGroupStudentPayload = {
+      await enrollStudentInGroupClassFromPackage({
+        db,
         academyId: scopedAcademyId,
-        groupClassId,
-        classID: groupClassId,
         studentId: enrollStudentId,
         studentName: String(data.studentName || '').trim() || '-',
-        name: String(data.studentName || '').trim() || '-',
         teacher: teacherNorm,
+        groupClassId,
         packageId: data.newPackageId,
-        packageType: data.newPackageType,
+        packageType: String(data.newPackageType || 'group'),
+        startDateYmd: dateStr,
         paidLessons: Number(data.totalCount ?? 0),
-        attendanceCount: 0,
-        startDate: startTimestamp,
-        status: 'active',
-        studentStatus: 'active',
-        excludedDates: [],
-        breakStartDate: '',
-        breakEndDate: '',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }
-      batch.set(newGroupStudentRef, newGroupStudentPayload)
-      setStudentGroupAccessBatch(
-        batch,
-        db,
-        buildStudentGroupAccessPayloadFromGroupStudent(
-          { id: newGroupStudentRef.id, ...newGroupStudentPayload },
-          { groupStudentId: newGroupStudentRef.id }
-        )
-      )
+        attendanceCount: Number(data.usedCount ?? 0),
+      })
 
-      await batch.commit()
       await addCreditTransaction({
         studentId: enrollStudentId,
         studentName: String(data.studentName || '').trim() || '-',

@@ -5,7 +5,7 @@ import {
   validateGroupFormFields,
 } from '../src/features/dashboard/groupClassRoomUtils.js';
 
-test('단체반 방 기본 정원은 4명이고 정원은 고정 학생 수보다 작을 수 없다', () => {
+test('단체반 방 기본 정원은 4명이고 정원은 반 등록 학생 수보다 작을 수 없다', () => {
   expect(createDefaultGroupForm().maxStudents).toBe('4');
   expect(
     countActiveGroupFixedMembers(
@@ -33,5 +33,5 @@ test('단체반 방 기본 정원은 4명이고 정원은 고정 학생 수보�
   );
 
   expect(result.valid).toBe(false);
-  expect(result.errors.maxStudents).toContain('현재 고정 학생 2명');
+  expect(result.errors.maxStudents).toContain('현재 반 등록 학생 2명');
 });

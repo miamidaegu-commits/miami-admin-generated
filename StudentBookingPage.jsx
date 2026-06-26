@@ -217,7 +217,7 @@ function getFixedMemberLessonStatusLabel(lesson) {
   if (lesson?.memberStatusLabel) return lesson.memberStatusLabel
   const today = getTodayStorageDateString()
   const lessonDate = String(lesson?.date || '').trim()
-  return lessonDate && lessonDate >= today ? '고정 등록 예정' : '고정 등록됨'
+  return lessonDate && lessonDate >= today ? '반 등록 예정' : '반 등록됨'
 }
 
 function validateLessonBookingState(lesson, mode) {

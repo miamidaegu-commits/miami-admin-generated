@@ -37,7 +37,7 @@ export function validateGroupStudentFormFields(form, options = {}) {
   const studentId = String(form?.studentId || '').trim()
   if (!packageId && !studentId) {
     errors.studentId = isAdmin
-      ? '고정 학생을 선택하거나 사용할 그룹 수강권을 선택해주세요.'
+      ? '반 등록 학생을 선택하거나 사용할 그룹 수강권을 선택해주세요.'
       : '사용할 등록을 선택해주세요.'
   }
 

@@ -85,10 +85,10 @@ export default function GroupLessonAttendanceModal({
           >
             <span>정원 {groupLessonSeatAvailability.capacity}명</span>
             <span data-testid="group-lesson-fixed-attending-count">
-              고정 참석 예정 {groupLessonSeatAvailability.fixedAttendingCount}명
+              등록 참석 예정 {groupLessonSeatAvailability.fixedAttendingCount}명
             </span>
             <span data-testid="group-lesson-released-seat-count">
-              고정 결석/차감취소 {groupLessonSeatAvailability.releasedFixedSeatCount}명
+              등록 결석/차감취소 {groupLessonSeatAvailability.releasedFixedSeatCount}명
             </span>
             <span data-testid="group-lesson-guest-reserved-count">
               추가 예약 {groupLessonSeatAvailability.guestReservedCount}명

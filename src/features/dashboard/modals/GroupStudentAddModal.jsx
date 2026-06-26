@@ -60,7 +60,7 @@ export default function GroupStudentAddModal({
           {selectedGroupClass.name || '-'}
         </p>
         <p style={{ margin: '-8px 0 16px 0', fontSize: 12, opacity: 0.78 }}>
-          고정 학생 {activeFixedMemberCount ?? 0} / 정원 {selectedGroupCapacity ?? 4}명
+          반 등록 학생 {activeFixedMemberCount ?? 0} / 정원 {selectedGroupCapacity ?? 4}명
         </p>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -77,12 +77,12 @@ export default function GroupStudentAddModal({
                 lineHeight: 1.45,
               }}
             >
-              정원이 가득 차서 고정 학생을 더 추가할 수 없습니다.
+              정원이 가득 차서 반 등록 학생을 더 추가할 수 없습니다.
             </div>
           ) : null}
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-            <span style={{ opacity: 0.85 }}>고정 학생 검색</span>
+            <span style={{ opacity: 0.85 }}>반 등록 학생 검색</span>
             <input
               type="text"
               value={groupStudentForm.studentSearch || ''}
@@ -105,7 +105,7 @@ export default function GroupStudentAddModal({
           </label>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-            <span style={{ opacity: 0.85 }}>고정 학생 선택</span>
+            <span style={{ opacity: 0.85 }}>반 등록 학생 선택</span>
             <select
               value={groupStudentForm.studentId || ''}
               onChange={(e) =>
@@ -154,7 +154,7 @@ export default function GroupStudentAddModal({
               }}
             >
               <div style={{ fontWeight: 600, marginBottom: 6, opacity: 0.9 }}>
-                고정 학생 정보 (읽기 전용)
+                반 등록 학생 정보 (읽기 전용)
               </div>
               <div>
                 studentName:{' '}
@@ -194,7 +194,7 @@ export default function GroupStudentAddModal({
               }}
             >
               <option value="">
-                {isAdmin ? '수강권 없이 고정 학생으로 추가' : '등록을 선택하세요'}
+                {isAdmin ? '수강권 없이 반 등록 학생으로 추가 (비권장)' : '등록을 선택하세요'}
               </option>
               {groupStudentEligiblePackages.map((p) => (
                 <option key={p.id} value={p.id}>

@@ -22,33 +22,7 @@ function futureYmd(daysAhead = 14) {
   return date.toISOString().slice(0, 10);
 }
 
-async function expectPostEnrollDialog(page, packageDialog, dialogMessages) {
-  try {
-    await expect(packageDialog).toBeHidden({ timeout: 30000 });
-    const postEnrollDialog = page.getByRole('dialog', { name: '이 반에 바로 등록할까요?' });
-    await expect(postEnrollDialog).toBeVisible({ timeout: 15000 });
-    return postEnrollDialog;
-  } catch (error) {
-    const [bodyText, packageDialogVisible] = await Promise.all([
-      page.locator('body').innerText().catch(() => ''),
-      packageDialog.isVisible().catch(() => false),
-    ]);
-    throw new Error(
-      [
-        'Post-enroll dialog did not appear after group package save.',
-        `Package dialog still visible: ${packageDialogVisible}`,
-        `Browser dialog messages: ${dialogMessages.join(' | ') || '-'}`,
-        `Current URL: ${page.url()}`,
-        'Visible page text:',
-        bodyText.slice(0, 1500),
-        '',
-        `Original error: ${error.message}`,
-      ].join('\n')
-    );
-  }
-}
-
-test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 등록 모달을 확인한다', async ({
+test('관리자가 반 등록 단체반 수강권 발급 시 학생이 자동으로 반에 등록된다', async ({
   page,
   browserName,
 }) => {
@@ -98,7 +72,7 @@ test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 �
 
     await packageDialog.getByLabel('수강권 유형').selectOption('group');
 
-    const groupSelect = packageDialog.getByLabel('그룹 수업');
+    const groupSelect = packageDialog.getByLabel('등록할 반 선택');
     const getFixtureGroupValue = () =>
       groupSelect.locator('option').evaluateAll((options, { groupClassId, groupName }) => {
           const exactValue = options.find((option) => option.getAttribute('value') === groupClassId);
@@ -121,13 +95,24 @@ test('관리자가 기존 학생에게 그룹 수강권을 추가하고 후속 �
     await packageDialog.getByLabel('등록 주수').fill('4');
 
     await packageDialog.getByRole('button', { name: '저장' }).click();
+    await expect(packageDialog).toBeHidden({ timeout: 30000 });
+    await expect(
+      page.getByRole('dialog', { name: '이 반에 바로 등록할까요?' })
+    ).toHaveCount(0);
 
-    const postEnrollDialog = await expectPostEnrollDialog(page, packageDialog, dialogMessages);
-    await expect(postEnrollDialog).toContainText(tempStudentName);
-    await expect(postEnrollDialog).toContainText(groupName);
+    await openDashboardSection(page, '단체반 관리');
+    await page.getByRole('row', { name: new RegExp(groupName) }).click();
+    const enrolledStudentsSection = page.getByTestId('group-students-section');
+    await expect(
+      enrolledStudentsSection.locator(
+        `[data-testid="group-student-row"][data-student-name="${tempStudentName}"]`
+      ).first()
+    ).toBeVisible({ timeout: 15000 });
 
-    await postEnrollDialog.getByRole('button', { name: '나중에 등록' }).click();
-    await expect(postEnrollDialog).toBeHidden();
+    expect(
+      dialogMessages.every((message) => !message.includes('실패')),
+      `Unexpected dialog messages: ${dialogMessages.join(' | ')}`
+    ).toBe(true);
   } finally {
     if (tempStudent) {
       await cleanupTempStudentData(page, {

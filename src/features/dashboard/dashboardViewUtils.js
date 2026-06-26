@@ -1,3 +1,5 @@
+import { normalizeGroupCourseType } from '../group-booking/groupCourseTypes.js'
+
 export const SCHOOL_TIME_ZONE = 'Asia/Seoul'
 export function normalizeText(value = '') {
   return String(value).trim().toLowerCase()
@@ -652,7 +654,7 @@ export function studentPackageAttentionScope(pkg) {
     return `group:${String(pkg.groupClassId ?? '').trim()}`
   }
   if (pt === 'openGroup') {
-    return `openGroup:${String(pkg.groupClassId ?? '').trim()}`
+    return `openGroup:${normalizeGroupCourseType(pkg.groupCourseType)}`
   }
   return `other:${pt || 'na'}:${String(pkg?.id || '')}`
 }
@@ -666,11 +668,17 @@ export function isStudentPackageRowActive(pkg) {
   return s === 'active'
 }
 
-export function buildStudentPackageScopeKey({ packageType, teacher, groupClassId }) {
+export function buildStudentPackageScopeKey({
+  packageType,
+  teacher,
+  groupClassId,
+  groupCourseType,
+}) {
   return studentPackageAttentionScope({
     packageType,
     teacher,
     groupClassId,
+    groupCourseType,
   })
 }
 

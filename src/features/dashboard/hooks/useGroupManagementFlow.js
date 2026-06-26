@@ -296,7 +296,7 @@ export default function useGroupManagementFlow({
       if (activeFixedMemberCount > result.maxStudents) {
         setGroupFormErrors((prev) => ({
           ...prev,
-          maxStudents: `현재 고정 학생 ${activeFixedMemberCount}명보다 정원을 작게 설정할 수 없습니다.`,
+          maxStudents: `현재 반 등록 학생 ${activeFixedMemberCount}명보다 정원을 작게 설정할 수 없습니다.`,
         }))
         setBusyGroupId(null)
         return
