@@ -13,13 +13,16 @@ import {
 
 function getLessonReservationStatusLabel(lesson, seatAvailability) {
   if (isNoDeductionCancelledGroupLesson(lesson)) return '휴강'
-  if (lesson?.isBookable !== true) return '예약 비활성'
   if (seatAvailability) return seatAvailability.isFull ? '마감' : '예약 가능'
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
-  if (!Number.isFinite(capacity) || capacity <= 0) return '비활성'
+  if (!Number.isFinite(capacity) || capacity <= 0) return '마감'
   if (Number.isFinite(bookedCount) && bookedCount >= capacity) return '마감'
   return '예약 가능'
+}
+
+function getLessonBookableBadgeLabel(lesson) {
+  return lesson?.isBookable === true ? '학생 예약 가능' : '예약 비활성'
 }
 
 function getLessonCapacityLabel(lesson, seatAvailability) {
@@ -91,6 +94,7 @@ export default function GroupsSection({
   canViewPaymentFields = false,
   openGroupLessonPurgeModal,
   busyGroupLessonPurge,
+  teacherSelectOptions = [],
   sortedGroupStudentsForSelectedClass,
   handleRemoveGroupStudent,
   sortedGroupLessonsForSelectedClass,
@@ -252,7 +256,7 @@ export default function GroupsSection({
                 }}
               >
                 <span>{group.name || '-'}</span>
-                <span>{formatTeacherDisplayName(group)}</span>
+                <span>{formatTeacherDisplayName(group, '선생님 선택 필요', teacherSelectOptions)}</span>
                 <span>{getGroupCourseTypeLabel(group.groupCourseType) || '-'}</span>
                 <span>{group.maxStudents ?? '-'}</span>
                 <span>{getGroupClassStatusLabel(group.status)}</span>
@@ -324,7 +328,11 @@ export default function GroupsSection({
               등록 학생 — {selectedGroupClass.name || '-'}
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
-              담당 선생님 {formatTeacherDisplayName(selectedGroupClass)} · 정원{' '}
+              담당 선생님 {formatTeacherDisplayName(
+                selectedGroupClass,
+                '선생님 선택 필요',
+                teacherSelectOptions
+              )} · 정원{' '}
               {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 등록{' '}
               {selectedGroupCapacitySummary?.fixedMemberCount ?? activeFixedStudentCount}명 · 선착순 가능{' '}
               {selectedGroupCapacitySummary?.fcfsRemainingSeats ?? '-'}명 · 상태{' '}
@@ -612,6 +620,7 @@ export default function GroupsSection({
                     const isNoDeductionCancelled = isNoDeductionCancelledGroupLesson(gl)
                     const seatAvailability = groupLessonSeatAvailabilityById[gl.id] || null
                     const reservationStatusLabel = getLessonReservationStatusLabel(gl, seatAvailability)
+                    const bookableBadgeLabel = getLessonBookableBadgeLabel(gl)
                     const lessonSubject = resolveGroupLessonSubject({
                       subject: gl.subject,
                       groupClassName: gl.groupClassName || selectedGroupClass.name,
@@ -657,6 +666,27 @@ export default function GroupsSection({
                         </span>
                         <span style={{ display: 'grid', gap: 3 }}>
                           <span>{reservationStatusLabel}</span>
+                          <span
+                            data-testid="group-lesson-bookable-badge"
+                            style={{
+                              width: 'fit-content',
+                              padding: '2px 7px',
+                              borderRadius: 999,
+                              border:
+                                gl.isBookable === true
+                                  ? '1px solid #4c7a5c'
+                                  : '1px solid #665044',
+                              background:
+                                gl.isBookable === true
+                                  ? 'rgba(52, 110, 70, 0.28)'
+                                  : 'rgba(90, 65, 45, 0.28)',
+                              color: gl.isBookable === true ? '#bde8c7' : '#f0c7a8',
+                              fontSize: 12,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {bookableBadgeLabel}
+                          </span>
                           {isNoDeductionCancelled ? (
                             <span style={{ fontSize: 12, color: '#f1d38a', fontWeight: 700 }}>
                               차감 없음
@@ -671,6 +701,7 @@ export default function GroupsSection({
                               disabled={
                                 rowBusy ||
                                 busyGroupReservationId?.startsWith(`${gl.id}__`) ||
+                                gl.isBookable !== true ||
                                 reservationStatusLabel !== '예약 가능' ||
                                 groupLessonReservationsLoading ||
                                 busyGroupLessonId === '__add__' ||
