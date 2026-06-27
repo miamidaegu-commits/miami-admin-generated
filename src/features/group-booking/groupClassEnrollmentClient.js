@@ -61,11 +61,21 @@ export async function enrollStudentInGroupClassFromPackage({
   )
 
   const batch = writeBatch(db)
+  const existingActive = snap.docs.find((docItem) => {
+    const row = docItem.data() || {}
+    return (
+      String(row.groupClassId || row.classID || '').trim() === scopedGroupClassId &&
+      String(row.status || 'active').trim() === 'active' &&
+      String(row.packageId || '').trim() === scopedPackageId
+    )
+  })
+
   if (endPreviousActiveEnrollments) {
     snap.forEach((docItem) => {
       const row = docItem.data() || {}
       if (String(row.groupClassId || row.classID || '').trim() !== scopedGroupClassId) return
       if (String(row.status || 'active').trim() !== 'active') return
+      if (existingActive && docItem.id === existingActive.id) return
       batch.update(doc(db, 'groupStudents', docItem.id), {
         status: 'inactive',
         updatedAt: serverTimestamp(),
@@ -81,15 +91,6 @@ export async function enrollStudentInGroupClassFromPackage({
     })
   }
 
-  const existingActive = snap.docs.find((docItem) => {
-    const row = docItem.data() || {}
-    return (
-      String(row.groupClassId || row.classID || '').trim() === scopedGroupClassId &&
-      String(row.status || 'active').trim() === 'active' &&
-      String(row.packageId || '').trim() === scopedPackageId
-    )
-  })
-
   if (existingActive) {
     batch.update(doc(db, 'groupStudents', existingActive.id), {
       studentName: String(studentName || '').trim() || '-',
@@ -100,6 +101,7 @@ export async function enrollStudentInGroupClassFromPackage({
       paidLessons: Number(paidLessons || 0),
       attendanceCount: Number(attendanceCount || 0),
       startDate: startTimestamp,
+      status: 'active',
       studentStatus: 'active',
       updatedAt: serverTimestamp(),
     })
