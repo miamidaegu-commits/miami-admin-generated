@@ -835,7 +835,9 @@ export default function useStudentPackageFlow({
     if (packageType === 'group') {
       if (!groupClassId) errors.groupClassId = '등록할 반을 선택해주세요.'
       groupCourseType = normalizeGroupCourseType(form.groupCourseType)
-      if (!groupCourseType) errors.groupCourseType = '코스 유형을 선택해주세요.'
+      if (!groupCourseType) {
+        errors.groupCourseType = '선택한 반에 유효한 코스 유형이 없습니다. 반 설정을 확인해주세요.'
+      }
       registrationStartDate = String(form.registrationStartDate || '').trim()
       if (!registrationStartDate) {
         errors.registrationStartDate = '수강권 시작일을 선택해주세요.'
@@ -1117,8 +1119,16 @@ export default function useStudentPackageFlow({
       groupClassId = groupClass.id
       groupClassName = groupClass.name || null
       groupCourseType =
-        normalizeGroupCourseType(result.groupCourseType) ||
-        normalizeGroupCourseType(groupClass.groupCourseType)
+        normalizeGroupCourseType(groupClass.groupCourseType) ||
+        normalizeGroupCourseType(result.groupCourseType)
+      if (!groupCourseType) {
+        setStudentPackageFormErrors((prev) => ({
+          ...prev,
+          groupCourseType: '선택한 반에 유효한 코스 유형이 없습니다. 반 설정을 확인해주세요.',
+        }))
+        setBusyStudentPackageSubmit(false)
+        return
+      }
       const coverage = buildGroupPackageCoverageLessons({
         groupClassId: groupClass.id,
         registrationStartDate: result.registrationStartDate,

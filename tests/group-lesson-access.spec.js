@@ -88,7 +88,7 @@ test('course type access can come from linked group class metadata', () => {
       { groupClassId: 'free-class' },
       groupClassById
     )
-  ).toEqual(['free_talking'])
+  ).toEqual(['일반 영어회화'])
 
   expect(
     hasGroupLessonAccess({

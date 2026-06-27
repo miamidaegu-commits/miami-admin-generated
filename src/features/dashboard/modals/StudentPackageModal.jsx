@@ -3,6 +3,7 @@ import {
   buildAutoPrivateStudentPackageTitle,
   computePrivateRegularTotalCount,
   formatGroupStudentStartDate,
+  formatTeacherDisplayName,
 } from '../dashboardViewUtils.js'
 import {
   DEFAULT_GROUP_COURSE_TYPE,
@@ -12,10 +13,7 @@ import {
 } from '../../group-booking/groupCourseTypes.js'
 
 function formatTeacherScopeLabel(row) {
-  const display = String(row?.teacherName || row?.teacherDisplayName || '').trim()
-  const key = String(row?.teacherKey || row?.teacher || '').trim()
-  if (display && key && display !== key) return `${display} · ${key}`
-  return display || key || '-'
+  return formatTeacherDisplayName(row)
 }
 
 export default function StudentPackageModal({
@@ -232,18 +230,26 @@ export default function StudentPackageModal({
                       ...prev,
                       packageType,
                       groupClassId:
-                        packageType === 'private' ? '' : prev.groupClassId,
+                        packageType === 'private' || packageType === 'openGroup'
+                          ? ''
+                          : prev.groupClassId,
                       groupCourseType:
                         packageType === 'private'
                           ? ''
-                          : normalizeGroupCourseType(prev.groupCourseType) ||
-                            DEFAULT_GROUP_COURSE_TYPE,
+                          : packageType === 'openGroup'
+                            ? normalizeGroupCourseType(prev.groupCourseType) ||
+                              DEFAULT_GROUP_COURSE_TYPE
+                            : '',
                       registrationStartDate:
                         packageType === 'private'
                           ? ''
                           : prev.registrationStartDate,
                       registrationWeeks:
-                        packageType === 'private' ? '4' : prev.registrationWeeks,
+                        packageType === 'private'
+                          ? '4'
+                          : packageType === 'openGroup'
+                            ? ''
+                            : prev.registrationWeeks,
                       weeklyFrequency: packageType === 'private' ? '1' : prev.weeklyFrequency,
                       privatePackageMode:
                         packageType === 'private' ? 'regular' : prev.privatePackageMode,
@@ -568,9 +574,7 @@ export default function StudentPackageModal({
                         ...prev,
                         groupClassId: nextGid,
                         groupCourseType:
-                          normalizeGroupCourseType(selectedGroup?.groupCourseType) ||
-                          normalizeGroupCourseType(prev.groupCourseType) ||
-                          DEFAULT_GROUP_COURSE_TYPE,
+                          normalizeGroupCourseType(selectedGroup?.groupCourseType) || '',
                         registrationStartDate: nextGid ? nextStartDate || '' : '',
                         registrationWeeks: prev.registrationWeeks || '4',
                       }))
@@ -586,7 +590,7 @@ export default function StudentPackageModal({
                     <option value="">반을 선택하세요</option>
                     {sortedGroupClasses.map((g) => (
                       <option key={g.id} value={g.id}>
-                        {g.name || '-'} ({g.teacher || '-'})
+                        {g.name || '-'} ({formatTeacherDisplayName(g)})
                         {getGroupCourseTypeLabel(g.groupCourseType)
                           ? ` · ${getGroupCourseTypeLabel(g.groupCourseType)}`
                           : ''}
@@ -608,11 +612,12 @@ export default function StudentPackageModal({
                 </p>
               ) : null}
 
-              {isGroupPackage ? (
+              {studentPackageForm.packageType === 'openGroup' ? (
                 <>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                     <span style={{ opacity: 0.85 }}>코스 유형</span>
                     <select
+                      aria-label="코스 유형"
                       value={
                         normalizeGroupCourseType(studentPackageForm.groupCourseType) ||
                         DEFAULT_GROUP_COURSE_TYPE
@@ -637,6 +642,90 @@ export default function StudentPackageModal({
                         </option>
                       ))}
                     </select>
+                    {studentPackageFormErrors.groupCourseType ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.groupCourseType}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>수강권 시작일 (선택)</span>
+                    <input
+                      type="date"
+                      aria-label="수강권 시작일"
+                      data-testid="student-package-start-date-input"
+                      value={studentPackageForm.registrationStartDate}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          registrationStartDate: e.target.value,
+                        }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {studentPackageFormErrors.registrationStartDate ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.registrationStartDate}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>총 횟수</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={studentPackageForm.totalCount}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          totalCount: e.target.value,
+                        }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {studentPackageFormErrors.totalCount ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.totalCount}
+                      </span>
+                    ) : null}
+                  </label>
+                </>
+              ) : null}
+
+              {studentPackageForm.packageType === 'group' ? (
+                <>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>코스 유형</span>
+                    <div
+                      aria-label="코스 유형"
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#252525',
+                        color: 'rgba(255,255,255,0.92)',
+                        fontSize: 13,
+                      }}
+                    >
+                      {studentPackageForm.groupClassId
+                        ? getGroupCourseTypeLabel(studentPackageForm.groupCourseType) ||
+                          '반을 선택하면 코스 유형이 자동 설정됩니다.'
+                        : '등록할 반을 선택하면 코스 유형이 자동 설정됩니다.'}
+                    </div>
                     {studentPackageFormErrors.groupCourseType ? (
                       <span style={{ color: '#f08080', fontSize: 12 }}>
                         {studentPackageFormErrors.groupCourseType}
@@ -699,36 +788,6 @@ export default function StudentPackageModal({
                     ) : null}
                   </label>
 
-                  {studentPackageForm.packageType === 'openGroup' ? (
-                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                      <span style={{ opacity: 0.85 }}>총 횟수</span>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={studentPackageForm.totalCount}
-                        onChange={(e) =>
-                          setStudentPackageForm((prev) => ({
-                            ...prev,
-                            totalCount: e.target.value,
-                          }))
-                        }
-                        style={{
-                          padding: '10px 12px',
-                          borderRadius: 8,
-                          border: '1px solid #444',
-                          background: '#1f1f1f',
-                          color: 'white',
-                        }}
-                      />
-                      {studentPackageFormErrors.totalCount ? (
-                        <span style={{ color: '#f08080', fontSize: 12 }}>
-                          {studentPackageFormErrors.totalCount}
-                        </span>
-                      ) : null}
-                    </label>
-                  ) : null}
-
-                  {studentPackageForm.packageType === 'group' ? (
                   <div
                     style={{
                       padding: '10px 12px',
@@ -770,7 +829,6 @@ export default function StudentPackageModal({
                       </div>
                     ) : null}
                   </div>
-                  ) : null}
                 </>
               ) : null}
 
