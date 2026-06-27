@@ -97,7 +97,21 @@ export function getStudentName(lesson) {
 }
 
 export function getTeacherName(lesson) {
-  return lesson.teacherName || lesson.teacher || '-'
+  return formatTeacherDisplayName(lesson)
+}
+
+export function formatTeacherDisplayName(row, fallback = '-') {
+  const display = String(
+    row?.teacherName || row?.teacherDisplayName || row?.displayName || ''
+  ).trim()
+  const key = String(row?.teacherKey || row?.teacher || '').trim()
+  const looksLikeUid = (value) =>
+    /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
+    !/\s/.test(String(value || '').trim())
+
+  if (display && !looksLikeUid(display)) return display
+  if (key && !looksLikeUid(key)) return key
+  return display || key || fallback
 }
 
 export function formatLessonSessionNumber(lesson) {

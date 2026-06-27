@@ -1,3 +1,5 @@
+import { groupCourseTypesMatch, normalizeGroupCourseType } from './groupCourseTypes.js'
+
 function normalizeId(value) {
   return String(value || '').trim()
 }
@@ -15,6 +17,13 @@ function normalizeIdList(value) {
   return out
 }
 
+function addCourseType(types, value) {
+  const raw = normalizeId(value)
+  if (!raw) return
+  const canonical = normalizeGroupCourseType(raw) || raw
+  types.add(canonical)
+}
+
 export function getGroupLessonGroupId(data) {
   return normalizeId(data && (data.groupClassId || data.groupClassID || data.classID))
 }
@@ -30,16 +39,14 @@ export function getLessonGroupClassIds(lesson) {
 
 export function getEffectiveLessonCourseTypes(lesson, groupClassById = null) {
   const types = new Set()
-  const fromLesson = normalizeId(lesson && lesson.groupCourseType)
-  if (fromLesson) types.add(fromLesson)
+  addCourseType(types, lesson && lesson.groupCourseType)
 
   getLessonGroupClassIds(lesson).forEach((classId) => {
     const groupClass =
       groupClassById instanceof Map
         ? groupClassById.get(classId)
         : groupClassById && groupClassById[classId]
-    const fromClass = normalizeId(groupClass && groupClass.groupCourseType)
-    if (fromClass) types.add(fromClass)
+    addCourseType(types, groupClass && groupClass.groupCourseType)
   })
 
   return Array.from(types.values())
@@ -47,7 +54,9 @@ export function getEffectiveLessonCourseTypes(lesson, groupClassById = null) {
 
 export function hasGroupLessonAccess({ summary, lesson, groupClassById = null } = {}) {
   const accessClassIds = normalizeIdList(summary && summary.groupClassIds)
-  const accessCourseTypes = normalizeIdList(summary && summary.groupCourseTypes)
+  const accessCourseTypes = normalizeIdList(summary && summary.groupCourseTypes).map(
+    (courseType) => normalizeGroupCourseType(courseType) || courseType
+  )
 
   const lessonClassIds = getLessonGroupClassIds(lesson)
   if (lessonClassIds.some((classId) => accessClassIds.includes(classId))) {
@@ -55,5 +64,9 @@ export function hasGroupLessonAccess({ summary, lesson, groupClassById = null } 
   }
 
   const lessonCourseTypes = getEffectiveLessonCourseTypes(lesson, groupClassById)
-  return lessonCourseTypes.some((courseType) => accessCourseTypes.includes(courseType))
+  return lessonCourseTypes.some((lessonCourseType) =>
+    accessCourseTypes.some((accessCourseType) =>
+      groupCourseTypesMatch(lessonCourseType, accessCourseType)
+    )
+  )
 }

@@ -5,6 +5,7 @@ import {
   isNoDeductionCancelledGroupLesson,
 } from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+import { formatTeacherDisplayName } from '../dashboardViewUtils.js'
 import { getGroupClassBookingCapacitySummary } from '../groupClassRoomUtils.js'
 
 function getLessonReservationStatusLabel(lesson, seatAvailability) {
@@ -248,7 +249,7 @@ export default function GroupsSection({
                 }}
               >
                 <span>{group.name || '-'}</span>
-                <span>{group.teacher || group.teacherName || '-'}</span>
+                <span>{formatTeacherDisplayName(group)}</span>
                 <span>{getGroupCourseTypeLabel(group.groupCourseType) || '-'}</span>
                 <span>{group.maxStudents ?? '-'}</span>
                 <span>{getGroupClassStatusLabel(group.status)}</span>
@@ -320,7 +321,7 @@ export default function GroupsSection({
               등록 학생 — {selectedGroupClass.name || '-'}
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
-              담당 선생님 {selectedGroupClass.teacher || '-'} · 정원{' '}
+              담당 선생님 {formatTeacherDisplayName(selectedGroupClass)} · 정원{' '}
               {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 등록{' '}
               {selectedGroupCapacitySummary?.fixedMemberCount ?? activeFixedStudentCount}명 · 선착순 가능{' '}
               {selectedGroupCapacitySummary?.fcfsRemainingSeats ?? '-'}명 · 상태{' '}

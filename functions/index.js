@@ -28,6 +28,33 @@ const PRIVATE_SLOT_BOOKING_CUTOFF_MS = 7 * 60 * 60 * 1000;
 const PRIVATE_SLOT_AVAILABILITY_LIMIT = 100;
 const PRIVATE_SLOT_QUERY_CHUNK_SIZE = 10;
 const PRIVATE_TEMPLATE_SLOT_PREFIX = "template";
+
+const GROUP_COURSE_TYPE_CANONICAL = [
+  "일반 영어회화",
+  "초급 영어회화",
+  "중급 영어회화",
+  "고급 영어회화",
+  "시험/특강",
+];
+
+const LEGACY_GROUP_COURSE_TYPE_TO_CANONICAL = {
+  "general_conversation": "일반 영어회화",
+  "beginner_conversation": "초급 영어회화",
+  "intermediate_conversation": "중급 영어회화",
+  "free_talking": "일반 영어회화",
+  "프리토킹": "일반 영어회화",
+};
+
+function normalizeGroupCourseTypeValue(value) {
+  const normalized = normalizeId(value);
+  if (GROUP_COURSE_TYPE_CANONICAL.includes(normalized)) return normalized;
+  return LEGACY_GROUP_COURSE_TYPE_TO_CANONICAL[normalized] || normalized;
+}
+
+function groupCourseTypesEqual(left, right) {
+  return normalizeGroupCourseTypeValue(left) ===
+    normalizeGroupCourseTypeValue(right);
+}
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 const PRIVATE_SLOT_BOOKING_NOT_READY_MESSAGE =
@@ -2081,7 +2108,10 @@ async function findGroupPackageForAutoDeduction({
         const pkgCourseType = normalizeId(pkg.groupCourseType);
         return (
           (groupClassId && pkgGroupId === groupClassId) ||
-          (groupCourseType && pkgCourseType === groupCourseType)
+          (
+            groupCourseType &&
+            groupCourseTypesEqual(pkgCourseType, groupCourseType)
+          )
         );
       })
       .sort((a, b) => {
@@ -2126,7 +2156,10 @@ function groupTicketMatchesScope(ticket, lesson) {
       lesson && (lesson.groupCourseType || lesson.courseType),
   );
   return Boolean(
-      lessonCourseType && ticketCourseTypes.includes(lessonCourseType),
+      lessonCourseType &&
+      ticketCourseTypes.some((ticketCourseType) =>
+        groupCourseTypesEqual(ticketCourseType, lessonCourseType),
+      ),
   );
 }
 

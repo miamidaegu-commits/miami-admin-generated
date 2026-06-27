@@ -5,6 +5,7 @@ import {
   formatGroupStudentStartDate,
   formatStudentPackageDetailStatusLabel,
   formatStudentPackageDetailTypeLabel,
+  formatTeacherDisplayName,
   parseYmdToLocalDate,
 } from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
@@ -60,10 +61,7 @@ function formatPaymentDate(pkg) {
 }
 
 function formatTeacherScope(pkg) {
-  const display = String(pkg?.teacherName || '').trim()
-  const key = String(pkg?.teacherKey || pkg?.teacher || '').trim()
-  if (display && key && display !== key) return `${display} · ${key}`
-  return display || key || '-'
+  return formatTeacherDisplayName(pkg)
 }
 
 function formatHistoryActionLabel(row) {
