@@ -17,7 +17,7 @@ export default function GroupModal({
   const hasTeacherOption = teacherSelectOptions.some((opt) => opt.value === normalizedTeacher)
   const mergedTeacherOptions =
     normalizedTeacher && !hasTeacherOption
-      ? [{ value: normalizedTeacher, label: `기존 값: ${normalizedTeacher}` }, ...teacherSelectOptions]
+      ? [{ value: normalizedTeacher, label: '선생님 선택 필요 (기존 값 보존)' }, ...teacherSelectOptions]
       : teacherSelectOptions
   const validationMessages = Object.values(groupFormErrors || {}).filter(Boolean)
 
@@ -256,10 +256,11 @@ export default function GroupModal({
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>과목</span>
+                <span style={{ opacity: 0.85 }}>수업 표시명 (선택)</span>
                 <input
                   type="text"
                   value={groupForm.subject}
+                  placeholder="비워두면 반 이름 또는 코스 유형으로 표시됩니다"
                   onChange={(e) =>
                     setGroupForm((prev) => ({ ...prev, subject: e.target.value }))
                   }
@@ -300,6 +301,11 @@ export default function GroupModal({
                     </option>
                   ))}
                 </select>
+                {groupFormErrors.groupCourseType ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {groupFormErrors.groupCourseType}
+                  </span>
+                ) : null}
               </label>
             </div>
           </div>

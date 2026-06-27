@@ -2124,6 +2124,20 @@ function groupTicketMatchesScope(ticket, lesson) {
   );
 }
 
+function withGroupClassCourseTypeFallback(lesson, groupClass) {
+  const lessonCourseType = normalizeId(
+      lesson && (lesson.groupCourseType || lesson.courseType),
+  );
+  const groupClassCourseType = normalizeId(
+      groupClass && groupClass.groupCourseType,
+  );
+  if (lessonCourseType || !groupClassCourseType) return lesson;
+  return {
+    ...lesson,
+    groupCourseType: groupClassCourseType,
+  };
+}
+
 function getGroupTicketPackageType(ticket) {
   return normalizeId(ticket && ticket.packageType).toLowerCase();
 }
@@ -4216,6 +4230,12 @@ exports.listGroupLessonAvailability = onCall(
                 .filter((docSnap) => isActiveGroupClass(docSnap.data() || {}))
                 .map((docSnap) => docSnap.id),
         );
+        const groupClassById = new Map(
+            groupClassesSnap.docs.map((docSnap) => [
+              docSnap.id,
+              {id: docSnap.id, ...docSnap.data()},
+            ]),
+        );
         const allGroupLessons = lessonSnap.docs.map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
@@ -4230,16 +4250,27 @@ exports.listGroupLessonAvailability = onCall(
             .filter((docSnap) => {
               const lesson = docSnap.data() || {};
               const lessonGroupId = getGroupLessonGroupId(lesson);
+              const groupClass = groupClassById.get(lessonGroupId) || null;
+              const scopedLesson = withGroupClassCourseTypeFallback(
+                  lesson,
+                  groupClass,
+              );
               return lesson.isBookable === true &&
                 !isCancelledOrDeletedGroupLesson(lesson) &&
                 lessonGroupId &&
                 activeGroupClassIds.has(lessonGroupId) &&
                 studentGroupTickets.some((ticket) =>
-                  groupTicketMatchesFreeBookingScope(ticket, lesson),
+                  groupTicketMatchesFreeBookingScope(ticket, scopedLesson),
                 );
             })
             .map((docSnap) => {
               const lesson = {id: docSnap.id, ...docSnap.data()};
+              const lessonGroupId = getGroupLessonGroupId(lesson);
+              const groupClass = groupClassById.get(lessonGroupId) || null;
+              const scopedLesson = withGroupClassCourseTypeFallback(
+                  lesson,
+                  groupClass,
+              );
               const fixedMembers = getFixedMembersForLesson(
                   groupStudents,
                   lesson,
@@ -4257,9 +4288,10 @@ exports.listGroupLessonAvailability = onCall(
                 fixedMembers,
                 reservations: lessonReservations,
               });
+              if (availability.remainingSeats <= 0) return null;
               const ticketCandidates = studentGroupTickets
                   .filter((ticket) =>
-                    groupTicketMatchesFreeBookingScope(ticket, lesson),
+                    groupTicketMatchesFreeBookingScope(ticket, scopedLesson),
                   )
                   .sort((a, b) => {
                     const aRemaining = Number(a.remainingCount || 0);
@@ -4280,6 +4312,9 @@ exports.listGroupLessonAvailability = onCall(
                 studentId,
               });
               const ambiguous = ticketCandidates.length > 1;
+              if (ambiguous || Number(balance.availableToBook || 0) <= 0) {
+                return null;
+              }
               const status = !ticket ?
                 (studentGroupTickets.length > 0 ?
                   "scope_missing" :
@@ -4308,8 +4343,7 @@ exports.listGroupLessonAvailability = onCall(
             .filter((docSnap) => {
               const lesson = docSnap.data() || {};
               const lessonGroupId = getGroupLessonGroupId(lesson);
-              return lesson.isBookable === true &&
-                !isCancelledOrDeletedGroupLesson(lesson) &&
+              return !isCancelledOrDeletedGroupLesson(lesson) &&
                 lessonGroupId &&
                 activeGroupClassIds.has(lessonGroupId);
             })
@@ -4392,6 +4426,10 @@ exports.reserveGroupLessonSeat = onCall(
                 "삭제되었거나 비활성화된 반의 수업입니다.",
             );
           }
+          const lessonForTicketScope = withGroupClassCourseTypeFallback(
+              lesson,
+              groupClassSnap.data() || {},
+          );
           let studentId = "";
           let source = "student";
           let studentName = "";
@@ -4498,7 +4536,7 @@ exports.reserveGroupLessonSeat = onCall(
             db,
             academyId,
             studentId,
-            lesson,
+            lesson: lessonForTicketScope,
             groupLessons,
             groupStudents,
             groupReservations: allReservations,
