@@ -164,6 +164,17 @@ function getGroupCourseScopeValues(row) {
   ])
 }
 
+function getGroupTicketPackageType(ticket) {
+  return normalizeId(ticket?.packageType).toLowerCase()
+}
+
+export function isGroupTicketFreeBookingAllowed(ticket) {
+  const packageType = getGroupTicketPackageType(ticket)
+  if (packageType === 'opengroup') return true
+  if (packageType !== 'group') return false
+  return ticket?.allowGroupFreeBooking === true || ticket?.allowStudentGroupBooking === true
+}
+
 function privateRowMatchesTicketScope({
   row,
   ticket,
@@ -242,7 +253,13 @@ function groupRowMatchesTicketScope({
   return false
 }
 
-function getTicketLabels({ ticket, remainingCount, availableToBook, ambiguousLegacyMatch = false }) {
+function getTicketLabels({
+  ticket,
+  remainingCount,
+  availableToBook,
+  ambiguousLegacyMatch = false,
+  availableLabel = '예약 가능',
+}) {
   if (!ticket) {
     return {
       statusLabel: ambiguousLegacyMatch ? '수강권 연결 필요' : '수강권 등록 필요',
@@ -254,11 +271,11 @@ function getTicketLabels({ ticket, remainingCount, availableToBook, ambiguousLeg
   }
   if (remainingCount <= 0) return { statusLabel: '소진', actionLabel: '소진' }
   if (availableToBook <= 0) {
-    return { statusLabel: '보충 가능 0회', actionLabel: '선택예약 가능 0회' }
+    return { statusLabel: `${availableLabel} 0회`, actionLabel: `${availableLabel} 0회` }
   }
   return {
-    statusLabel: `보충 가능 ${availableToBook}회`,
-    actionLabel: `선택예약 가능 ${availableToBook}회`,
+    statusLabel: `${availableLabel} ${availableToBook}회`,
+    actionLabel: `${availableLabel} ${availableToBook}회`,
   }
 }
 
@@ -272,6 +289,7 @@ function buildBalanceResult({
   rowMatchesTicketScope,
   isReleasedFromDeduction = isNoDeductionLesson,
   ambiguousLegacyMatch = false,
+  availableLabel = '예약 가능',
 }) {
   if (!ticket) {
     const labels = getTicketLabels({
@@ -279,6 +297,7 @@ function buildBalanceResult({
       remainingCount: 0,
       availableToBook: 0,
       ambiguousLegacyMatch,
+      availableLabel,
     })
     return {
       totalCount: 0,
@@ -332,6 +351,7 @@ function buildBalanceResult({
     remainingCount,
     availableToBook,
     ambiguousLegacyMatch,
+    availableLabel,
   })
 
   return {
@@ -368,6 +388,7 @@ export function computePrivateTicketBalance({
     now,
     ambiguousLegacyMatch,
     isReleasedFromDeduction: isPrivateLessonReleasedFromDeduction,
+    availableLabel: '직접 예약 가능',
     rowMatchesTicketScope: (row, packageIdFields = ['packageId']) =>
       privateRowMatchesTicketScope({
         row,
@@ -390,7 +411,7 @@ export function computeGroupTicketBalance({
   now = Date.now(),
   ambiguousLegacyMatch = false,
 }) {
-  return buildBalanceResult({
+  const balance = buildBalanceResult({
     ticket,
     fixedLessons: fixedGroupLessons,
     reservations: groupReservations,
@@ -398,6 +419,7 @@ export function computeGroupTicketBalance({
     studentId,
     now,
     ambiguousLegacyMatch,
+    availableLabel: '자유 예약 가능',
     rowMatchesTicketScope: (row, packageIdFields = ['packageId']) =>
       groupRowMatchesTicketScope({
         row,
@@ -408,4 +430,21 @@ export function computeGroupTicketBalance({
         packageIdFields,
       }),
   })
+  if (!ticket) return balance
+  if (isGroupTicketFreeBookingAllowed(ticket)) {
+    return {
+      ...balance,
+      availableFreeBookingCount: balance.availableToBook,
+    }
+  }
+  const noPermissionLabel =
+    balance.remainingCount <= 0 ? '소진' : '반 등록 수업만 가능'
+  return {
+    ...balance,
+    availableToBook: 0,
+    availableFreeBookingCount: 0,
+    makeupAvailableCount: 0,
+    statusLabel: noPermissionLabel,
+    actionLabel: noPermissionLabel,
+  }
 }

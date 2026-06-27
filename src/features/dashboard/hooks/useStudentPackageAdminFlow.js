@@ -37,6 +37,7 @@ const DEFAULT_STUDENT_PACKAGE_EDIT_FORM = {
   paymentDate: '',
   amountPaid: '',
   memo: '',
+  allowGroupFreeBooking: false,
 }
 
 function createDefaultStudentPackageEditForm(overrides = {}) {
@@ -201,6 +202,7 @@ export default function useStudentPackageAdminFlow({
             ? String(pkg.amountPaid)
             : '',
         memo: String(pkg.memo || ''),
+        allowGroupFreeBooking: pkg.allowGroupFreeBooking === true,
       })
     )
     setStudentPackageEditFormErrors({})
@@ -276,6 +278,7 @@ export default function useStudentPackageAdminFlow({
       paymentDateClear,
       amountPaid,
       memo: String(form.memo || '').trim(),
+      allowGroupFreeBooking: form.allowGroupFreeBooking === true,
     }
   }
 
@@ -325,6 +328,9 @@ export default function useStudentPackageAdminFlow({
         status,
         amountPaid: result.amountPaid,
         memo: result.memo,
+        ...(String(pkg.packageType || '').trim() === 'group'
+          ? { allowGroupFreeBooking: result.allowGroupFreeBooking === true }
+          : {}),
         updatedAt: serverTimestamp(),
       }
       if (result.paymentDateClear) {
@@ -372,6 +378,10 @@ export default function useStudentPackageAdminFlow({
       const ptype = String(pkg.packageType || '')
       const ptitle = String(result.title || '').trim()
       const gname = pkg.groupClassName ? String(pkg.groupClassName).trim() : ''
+      const allowChanged =
+        String(pkg.packageType || '').trim() === 'group' &&
+        (pkg.allowGroupFreeBooking === true) !==
+          (result.allowGroupFreeBooking === true)
 
       if (diff !== 0) {
         await addCreditTransaction({
@@ -390,13 +400,21 @@ export default function useStudentPackageAdminFlow({
             .filter(Boolean)
             .join(' · '),
         })
-      } else if (titleChanged || amountChanged || expiresChanged || paymentDateChanged || memoChanged) {
+      } else if (
+        titleChanged ||
+        amountChanged ||
+        expiresChanged ||
+        paymentDateChanged ||
+        memoChanged ||
+        allowChanged
+      ) {
         const parts = []
         if (titleChanged) parts.push('제목')
         if (amountChanged) parts.push('금액')
         if (paymentDateChanged) parts.push('결제일')
         if (expiresChanged) parts.push('만료일')
         if (memoChanged) parts.push('메모')
+        if (allowChanged) parts.push('단체반 자유 예약 권한')
         await addCreditTransaction({
           studentId: sid,
           studentName: sname,

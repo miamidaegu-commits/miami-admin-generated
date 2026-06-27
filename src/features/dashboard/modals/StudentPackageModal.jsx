@@ -260,6 +260,8 @@ export default function StudentPackageModal({
                             ? normalizeGroupCourseType(prev.groupCourseType) ||
                               DEFAULT_GROUP_COURSE_TYPE
                             : '',
+                      allowGroupFreeBooking:
+                        packageType === 'group' ? prev.allowGroupFreeBooking === true : false,
                       registrationStartDate:
                         packageType === 'private'
                           ? ''
@@ -747,6 +749,36 @@ export default function StudentPackageModal({
                         {studentPackageFormErrors.groupCourseType}
                       </span>
                     ) : null}
+                  </label>
+
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                      fontSize: 13,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={studentPackageForm.allowGroupFreeBooking === true}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          allowGroupFreeBooking: e.target.checked,
+                        }))
+                      }
+                      style={{ marginTop: 2 }}
+                    />
+                    <span>
+                      반 등록 수업 외 남은 횟수로 자유 예약 허용
+                      <br />
+                      <span style={{ opacity: 0.72 }}>
+                        켜면 반 등록 수업에 배정되지 않은 남은 횟수로 같은 코스 유형 수업을
+                        선착순 예약할 수 있습니다.
+                      </span>
+                    </span>
                   </label>
 
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>

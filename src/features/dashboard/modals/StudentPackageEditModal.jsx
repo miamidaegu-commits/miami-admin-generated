@@ -16,6 +16,8 @@ export default function StudentPackageEditModal({
   const countOnly = studentPackageEditMode === 'teacherCount'
   const showAdminFields = !countOnly
   const showBillingFields = showAdminFields && canViewPaymentFields
+  const packageType = String(studentPackageEditModalPackage.packageType || '').trim()
+  const showGroupFreeBookingField = showAdminFields && packageType === 'group'
 
   return (
         <div
@@ -164,6 +166,38 @@ export default function StudentPackageEditModal({
                   </span>
                 ) : null}
               </label>
+
+              {showGroupFreeBookingField ? (
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={studentPackageEditForm.allowGroupFreeBooking === true}
+                    onChange={(e) =>
+                      setStudentPackageEditForm((prev) => ({
+                        ...prev,
+                        allowGroupFreeBooking: e.target.checked,
+                      }))
+                    }
+                    style={{ marginTop: 2 }}
+                  />
+                  <span>
+                    반 등록 수업 외 남은 횟수로 자유 예약 허용
+                    <br />
+                    <span style={{ opacity: 0.72 }}>
+                      켜면 반 등록 수업에 배정되지 않은 남은 횟수로 같은 코스 유형 수업을
+                      선착순 예약할 수 있습니다.
+                    </span>
+                  </span>
+                </label>
+              ) : null}
 
               {showAdminFields ? (
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>

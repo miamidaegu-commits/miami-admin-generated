@@ -719,7 +719,7 @@ test('student self-booking only shows eligible lessons and supports reserve/canc
     await expect(fullCard).toContainText('마감');
 
     const bookableCard = getLessonCard(page, 'Bookable');
-    await expect(bookableCard).toContainText('선택예약 가능');
+    await expect(bookableCard).toContainText('자유 예약 가능');
     await expect(bookableCard).toContainText('남은 자리 1명');
     await expect(bookableCard.getByTestId('student-booking-reserve-button')).toHaveText('단체반 예약');
     await expect(page.locator('body')).not.toContainText('고정학생 1');

@@ -5,6 +5,7 @@ import {
   buildStudentPrivateTicketSummaries,
   buildStudentPrivateTicketSummariesFromCallablePackages,
   buildStudentTicketSummaryViewModel,
+  formatGroupTicketScheduleSummary,
   formatPrivateTicketScheduleSummary,
   formatStudentBookingIdentityLine,
   resolveLinkedStudentDisplayName,
@@ -104,7 +105,7 @@ test('student ticket summary helpers match admin-style private labels', () => {
   expect(beforeBooking[0]).toMatchObject({
     teacherLabel: 'don1',
     usageText: '총 4회 · 사용 0회 · 남은 4회',
-    scheduleText: '고정 예정 3회 · 보충 가능 1회',
+    scheduleText: '주간 배정 3회 · 직접 예약 가능 1회',
     registrationSummaryText: '등록 내역: 1회차 +4회, 5개월 할인 등록 +5회',
   });
 
@@ -115,7 +116,7 @@ test('student ticket summary helpers match admin-style private labels', () => {
     academyId: ACADEMY_ID,
     studentId: STUDENT_ID,
   });
-  expect(afterBooking[0].scheduleText).toBe('고정 예정 3회 · 보충 예약 1회 · 예약 가능 0회');
+  expect(afterBooking[0].scheduleText).toBe('주간 배정 3회 · 직접 예약 1회');
 
   const afterCancel = buildStudentPrivateTicketSummaries({
     packages: [ticket],
@@ -124,10 +125,10 @@ test('student ticket summary helpers match admin-style private labels', () => {
     academyId: ACADEMY_ID,
     studentId: STUDENT_ID,
   });
-  expect(afterCancel[0].scheduleText).toBe('고정 예정 3회 · 보충 가능 1회');
+  expect(afterCancel[0].scheduleText).toBe('주간 배정 3회 · 직접 예약 가능 1회');
 });
 
-test('general unused private package shows 예약 가능 not 보충 가능', () => {
+test('general unused private package shows direct booking availability', () => {
   const ticket = {
     id: 'open-private',
     academyId: ACADEMY_ID,
@@ -147,13 +148,13 @@ test('general unused private package shows 예약 가능 not 보충 가능', () 
     academyId: ACADEMY_ID,
     studentId: STUDENT_ID,
   });
-  expect(viewModel.privateSummaries[0].scheduleText).toBe('고정 예정 0회 · 예약 가능 8회');
+  expect(viewModel.privateSummaries[0].scheduleText).toBe('직접 예약 가능 8회');
   expect(formatPrivateTicketScheduleSummary({
     futureFixedAllocatedCount: 0,
     activeFutureReservationCount: 0,
     noDeductionReleasedCount: 0,
     makeupAvailableCount: 8,
-  })).toBe('고정 예정 0회 · 예약 가능 8회');
+  })).toBe('직접 예약 가능 8회');
 });
 
 test('revoked private package is not shown as reservable or exhausted in student summary', () => {
@@ -207,14 +208,35 @@ test('private ticket summary copy separates fixed assignments from remaining bal
     activeFutureReservationCount: 0,
     noDeductionReleasedCount: 0,
     makeupAvailableCount: 3,
-  })).toBe('고정 예정 2회 · 예약 가능 3회');
+  })).toBe('주간 배정 2회 · 직접 예약 가능 3회');
 
   expect(formatPrivateTicketScheduleSummary({
     futureFixedAllocatedCount: 2,
     activeFutureReservationCount: 1,
     noDeductionReleasedCount: 2,
     makeupAvailableCount: 2,
-  })).toBe('고정 예정 2회 · 보충 예약 1회 · 보충 가능 2회');
+  })).toBe('주간 배정 2회 · 직접 예약 1회 · 직접 예약 가능 2회');
+});
+
+test('group ticket summary wording separates registered and free booking permissions', () => {
+  expect(formatGroupTicketScheduleSummary({
+    futureFixedAllocatedCount: 2,
+    availableFreeBookingCount: 6,
+    makeupAvailableCount: 6,
+  }, { packageType: 'group', allowGroupFreeBooking: true })).toBe(
+    '반 등록 수업 2회 · 자유 예약 가능 6회'
+  );
+
+  expect(formatGroupTicketScheduleSummary({
+    futureFixedAllocatedCount: 2,
+    availableFreeBookingCount: 6,
+    makeupAvailableCount: 6,
+  }, { packageType: 'group' })).toBe('반 등록 수업 2회');
+
+  expect(formatGroupTicketScheduleSummary({
+    availableFreeBookingCount: 4,
+    makeupAvailableCount: 4,
+  }, { packageType: 'openGroup' })).toBe('자유 예약 가능 4회');
 });
 
 test('empty ticket summary shows registration needed labels', () => {
