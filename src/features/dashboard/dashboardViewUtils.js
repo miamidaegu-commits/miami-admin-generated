@@ -100,7 +100,11 @@ export function getTeacherName(lesson) {
   return formatTeacherDisplayName(lesson)
 }
 
-export function formatTeacherDisplayName(row, fallback = '선생님 미지정') {
+function isLegacyTeacherPlaceholder(value) {
+  return String(value || '').trim() === '기존 선생님'
+}
+
+export function formatTeacherDisplayName(row, fallback = '선생님 선택 필요') {
   const looksLikeUid = (value) =>
     /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
     !/\s/.test(String(value || '').trim())
@@ -110,9 +114,8 @@ export function formatTeacherDisplayName(row, fallback = '선생님 미지정') 
   ).trim()
   const key = String(row?.teacherKey || row?.teacher || '').trim()
 
-  if (display && !looksLikeUid(display)) return display
-  if (key && !looksLikeUid(key)) return key
-  if (looksLikeUid(display) || looksLikeUid(key)) return '기존 선생님'
+  if (display && !looksLikeUid(display) && !isLegacyTeacherPlaceholder(display)) return display
+  if (key && !looksLikeUid(key) && !isLegacyTeacherPlaceholder(key)) return key
   return fallback
 }
 
@@ -130,13 +133,13 @@ export function resolveTeacherIdentityFields(selectedValue, teacherSelectOptions
     !/\s/.test(String(value || '').trim())
 
   const teacherName =
-    displayName && !looksLikeUid(displayName)
+    displayName && !looksLikeUid(displayName) && !isLegacyTeacherPlaceholder(displayName)
       ? displayName
-      : teacherKey && !looksLikeUid(teacherKey)
+      : teacherKey && !looksLikeUid(teacherKey) && !isLegacyTeacherPlaceholder(teacherKey)
         ? teacherKey
-        : looksLikeUid(rawValue)
-          ? '기존 선생님'
-          : rawValue || '선생님 미지정'
+        : looksLikeUid(rawValue) || isLegacyTeacherPlaceholder(rawValue)
+          ? ''
+          : rawValue || ''
 
   return {
     teacher: teacherKey || rawValue,
@@ -227,7 +230,8 @@ export function lessonTimeInputValue(lesson) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export function validateLessonDateTimeSubject(form) {
+export function validateLessonDateTimeSubject(form, options = {}) {
+  const requireSubject = options.requireSubject !== false
   const errors = {}
   const date = String(form.date || '').trim()
   const time = String(form.time || '').trim()
@@ -237,7 +241,7 @@ export function validateLessonDateTimeSubject(form) {
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.date = '날짜 형식이 올바르지 않습니다.'
   if (!time) errors.time = '시간을 선택해주세요.'
   if (time && !/^\d{2}:\d{2}$/.test(time)) errors.time = '시간 형식이 올바르지 않습니다.'
-  if (!subject) errors.subject = '과목을 입력해주세요.'
+  if (requireSubject && !subject) errors.subject = '과목을 입력해주세요.'
 
   return {
     valid: Object.keys(errors).length === 0,

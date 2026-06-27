@@ -17,6 +17,7 @@ import {
   findPrivatePackageForTeacherContext,
   findStudentPrivatePackageContexts,
 } from '../privatePackageHelpers.js'
+import { resolveGroupLessonSubject } from '../groupClassRoomUtils.js'
 import { rowMatchesTeacherScope } from '../teacherLessonRosterHelpers.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 
@@ -1199,7 +1200,13 @@ export default function CalendarSection(props) {
                   lesson,
                   lessonDate,
                   studentName: getStudentName(lesson),
-                  subject: lesson.subject || '-',
+                  subject: isGroupRow
+                    ? resolveGroupLessonSubject({
+                        subject: lesson.subject,
+                        groupClassName: lesson.groupClassDisplayName || lesson.groupClassName,
+                        groupCourseType: lesson.groupCourseType,
+                      })
+                    : lesson.subject || '-',
                   statusLabel,
                   remainingLessons,
                   actionReason,
@@ -1270,7 +1277,15 @@ export default function CalendarSection(props) {
                 </span>
                 <span>{sessionLabel || '-'}</span>
                 <span>{getTeacherName(lesson)}</span>
-                <span>{lesson.subject || '-'}</span>
+                <span>
+                  {isGroupRow
+                    ? resolveGroupLessonSubject({
+                        subject: lesson.subject,
+                        groupClassName: lesson.groupClassDisplayName || lesson.groupClassName,
+                        groupCourseType: lesson.groupCourseType,
+                      })
+                    : lesson.subject || '-'}
+                </span>
                 <span>{remainingLessons}</span>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span>{statusLabel}</span>

@@ -18,6 +18,7 @@ import {
   validateLessonDateTimeSubject,
 } from '../dashboardViewUtils.js'
 import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
+import { resolveGroupLessonSubject } from '../groupClassRoomUtils.js'
 
 const DEFAULT_GROUP_LESSON_FORM = {
   date: '',
@@ -53,7 +54,7 @@ function resetGroupLessonPurgeState(setGroupLessonPurgeModalOpen, setGroupLesson
 }
 
 export function validateGroupLessonFormFields(form) {
-  const base = validateLessonDateTimeSubject(form)
+  const base = validateLessonDateTimeSubject(form, { requireSubject: false })
   const errors = { ...base.errors }
   const capacityRaw = String(form.capacity ?? '').trim()
   const capacity = Number(capacityRaw)
@@ -194,6 +195,11 @@ export default function useGroupLessonManagementFlow({
     setGroupLessonForm(
       createDefaultGroupLessonForm({
         capacity: String(selectedGroupClass?.maxStudents ?? 0),
+        subject: resolveGroupLessonSubject({
+          subject: selectedGroupClass?.subject,
+          groupClassName: selectedGroupClass?.name,
+          groupCourseType: selectedGroupClass?.groupCourseType,
+        }),
         isBookable: false,
       })
     )
@@ -237,6 +243,11 @@ export default function useGroupLessonManagementFlow({
     const result = validateGroupLessonFormFields(groupLessonForm)
     setGroupLessonFormErrors(result.errors)
     if (!result.valid) return
+    const resolvedSubject = resolveGroupLessonSubject({
+      subject: result.subject,
+      groupClassName: selectedGroupClass.name,
+      groupCourseType: selectedGroupClass.groupCourseType,
+    })
 
     if (groupLessonModal.type === 'add') {
       try {
@@ -250,7 +261,7 @@ export default function useGroupLessonManagementFlow({
           teacher: normalizeText(selectedGroupClass.teacher || ''),
           date: result.date,
           time: result.time,
-          subject: result.subject,
+          subject: resolvedSubject,
           ...(() => {
             const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
             return groupCourseType ? { groupCourseType } : {}
@@ -296,7 +307,7 @@ export default function useGroupLessonManagementFlow({
         teacher: normalizeText(selectedGroupClass.teacher || ''),
         date: result.date,
         time: result.time,
-        subject: result.subject,
+        subject: resolvedSubject,
         ...(() => {
           const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
           return groupCourseType ? { groupCourseType } : {}
@@ -333,10 +344,10 @@ export default function useGroupLessonManagementFlow({
 
     const wd = normalizeGroupWeekdaysFromDoc(selectedGroupClass.weekdays)
     const timeStr = String(selectedGroupClass.time || '').trim()
-    const subjectStr = String(selectedGroupClass.subject || '').trim()
-    if (wd.length === 0 || !timeStr || !subjectStr) {
+    const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
+    if (wd.length === 0 || !timeStr || !groupCourseType) {
       alert(
-        '반에 요일(weekdays)·시간(time)·과목(subject)이 모두 설정되어 있어야 수업 일정을 만들 수 있습니다.'
+        '반에 요일(weekdays)·시간(time)·코스 유형이 모두 설정되어 있어야 수업 일정을 만들 수 있습니다.'
       )
       return
     }
@@ -364,9 +375,9 @@ export default function useGroupLessonManagementFlow({
     const gc = selectedGroupClass
     const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(gc.weekdays))
     const timeStr = String(gc.time || '').trim()
-    const subjectStr = String(gc.subject || '').trim()
-    if (weekdaySet.size === 0 || !timeStr || !subjectStr) {
-      alert('반 설정(요일·시간·과목)을 확인해주세요.')
+    const groupCourseType = normalizeGroupCourseType(gc.groupCourseType)
+    if (weekdaySet.size === 0 || !timeStr || !groupCourseType) {
+      alert('반 설정(요일·시간·코스 유형)을 확인해주세요.')
       return
     }
 
@@ -381,7 +392,11 @@ export default function useGroupLessonManagementFlow({
         groupClassName: gc.name || '',
         teacher: gc.teacher,
         time: gc.time,
-        subject: gc.subject,
+        subject: resolveGroupLessonSubject({
+          subject: gc.subject,
+          groupClassName: gc.name,
+          groupCourseType,
+        }),
         groupCourseType: gc.groupCourseType,
         weekdays: gc.weekdays,
         maxStudents: gc.maxStudents,

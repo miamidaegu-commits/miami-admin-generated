@@ -273,6 +273,15 @@ function getLessonTeacherLabel(lesson) {
   return formatTeacherDisplayName(lesson)
 }
 
+function getGroupLessonDisplaySubject(lesson) {
+  return (
+    String(lesson?.subject || '').trim() ||
+    String(lesson?.groupClassName || lesson?.groupClassDisplayName || '').trim() ||
+    getGroupCourseTypeLabel(lesson?.groupCourseType) ||
+    '단체반 수업'
+  )
+}
+
 function getLessonSubjectLabel(lesson) {
   return String(lesson?.subject || '').trim() || '1:1 수업'
 }
@@ -3409,7 +3418,9 @@ export default function StudentBookingPage() {
                           }}
                         >
                           <div style={studentBookingMobileTextGuardStyle}>
-                            <strong style={{ fontSize: '1rem' }}>{lesson.subject || '그룹 수업'}</strong>
+                            <strong style={{ fontSize: '1rem' }}>
+                              {getGroupLessonDisplaySubject(lesson)}
+                            </strong>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {[lesson.date, lesson.time].filter(Boolean).join(' · ') || lesson.id}
                             </div>

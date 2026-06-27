@@ -33,6 +33,7 @@ import {
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
   formatDate,
+  formatTeacherDisplayName,
   formatLessonSessionNumber,
   formatGroupStudentStartDate,
   formatStudentPackageDetailAmountPaid,
@@ -69,6 +70,7 @@ import {
   privateLessonNextSortKey,
   sanitizePhoneForTel,
 } from './src/features/dashboard/dashboardViewUtils.js'
+import { resolveGroupLessonSubject } from './src/features/dashboard/groupClassRoomUtils.js'
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
 import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedulePanel.jsx'
 import LessonCountStatsPanel from './src/features/dashboard/components/LessonCountStatsPanel.jsx'
@@ -634,8 +636,12 @@ async function createGroupLessonsInDateRange({
   const scopedAcademyId = requireCurrentAcademyId(academyId)
   const weekdaySet = new Set(normalizeGroupWeekdaysFromDoc(weekdays))
   const timeStr = String(time || '').trim()
-  const subjectStr = String(subject || '').trim()
   const courseType = normalizeGroupCourseType(groupCourseType)
+  const subjectStr = resolveGroupLessonSubject({
+    subject,
+    groupClassName,
+    groupCourseType: courseType,
+  })
   const teacherNorm = normalizeText(teacher || '')
   const capacity = Number(maxStudents)
   const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
@@ -643,7 +649,7 @@ async function createGroupLessonsInDateRange({
   let created = 0
   let skippedDup = 0
 
-  if (weekdaySet.size === 0 || !timeStr || !subjectStr) return { created, skippedDup }
+  if (weekdaySet.size === 0 || !timeStr || !courseType) return { created, skippedDup }
 
   const prior = Array.isArray(existingLessons) ? existingLessons : []
   const commitBatchSize = 20
@@ -688,7 +694,7 @@ async function createGroupLessonsInDateRange({
       bookingMode: 'fixed',
       capacity: cap,
       bookedCount: 0,
-      isBookable: false,
+      isBookable: true,
       generationKind: 'recurring',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -2955,7 +2961,11 @@ export default function Dashboard() {
       .filter((lesson) => matchesSelectedTeacher(lesson))
       .map((lesson) => {
         const className = String(lesson.groupClassName || '').trim()
-        const subject = String(lesson.subject || '').trim()
+        const subject = resolveGroupLessonSubject({
+          subject: lesson.subject,
+          groupClassName: className,
+          groupCourseType: lesson.groupCourseType,
+        })
         return {
           id: `group-lesson-${lesson.id}`,
           date: String(lesson.date || '').trim() || todayYmd,
@@ -2963,7 +2973,7 @@ export default function Dashboard() {
           typeLabel: '단체반 수업',
           sourceKind: 'groupLesson',
           studentLabel: '-',
-          teacherLabel: String(lesson.teacher || lesson.teacherName || '').trim() || '-',
+          teacherLabel: formatTeacherDisplayName(lesson),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
           statusLabel: isNoDeductionCancelledGroupLesson(lesson) ? '휴강 · 차감 없음' : '수업 예정',
         }
@@ -2977,7 +2987,11 @@ export default function Dashboard() {
         if (!matchesSelectedTeacher(reservation, lesson)) return null
         const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
         const className = String(lesson.groupClassName || '').trim()
-        const subject = String(lesson.subject || '').trim()
+        const subject = resolveGroupLessonSubject({
+          subject: lesson.subject,
+          groupClassName: className,
+          groupCourseType: lesson.groupCourseType,
+        })
         return {
           id: `group-reservation-${reservation.id}`,
           date: String(lesson.date || reservation.date || '').trim() || todayYmd,
@@ -2989,7 +3003,13 @@ export default function Dashboard() {
             String(student?.name || '').trim() ||
             '-',
           teacherLabel:
-            String(reservation.teacher || lesson.teacher || lesson.teacherName || '').trim() || '-',
+            formatTeacherDisplayName({
+              teacherName: reservation.teacherName,
+              teacherDisplayName: reservation.teacherDisplayName,
+              displayName: reservation.displayName,
+              teacherKey: reservation.teacherKey,
+              teacher: reservation.teacher || lesson.teacher,
+            }),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
           statusLabel: '예약 완료',
         }

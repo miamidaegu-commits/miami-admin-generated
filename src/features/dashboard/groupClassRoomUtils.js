@@ -47,6 +47,19 @@ export function countActiveGroupFixedMembers(groupStudents, groupClassId) {
   }).length
 }
 
+export function resolveGroupLessonSubject({
+  subject,
+  groupClassName,
+  groupCourseType,
+} = {}) {
+  return (
+    String(subject || '').trim() ||
+    String(groupClassName || '').trim() ||
+    normalizeGroupCourseType(groupCourseType) ||
+    DEFAULT_GROUP_COURSE_TYPE
+  )
+}
+
 export function getGroupClassBookingCapacitySummary({
   maxStudents,
   activeFixedMemberCount,
@@ -104,10 +117,14 @@ export function validateGroupFormFields(form, options = {}) {
     }
   }
 
-  const subject = String(form?.subject || '').trim()
-  if (!subject) errors.subject = '과목을 입력해주세요.'
   const normalizedGroupCourseType = normalizeGroupCourseType(form?.groupCourseType)
-  const groupCourseType = normalizedGroupCourseType || (forNewClass ? DEFAULT_GROUP_COURSE_TYPE : '')
+  const groupCourseType = normalizedGroupCourseType
+  if (!groupCourseType) errors.groupCourseType = '코스 유형을 선택해주세요.'
+  const subject = resolveGroupLessonSubject({
+    subject: form?.subject,
+    groupClassName: name,
+    groupCourseType: groupCourseType || DEFAULT_GROUP_COURSE_TYPE,
+  })
 
   const weekdays = normalizeGroupWeekdaysFromDoc(
     Array.isArray(form?.weekdays) ? form.weekdays : []

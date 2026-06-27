@@ -26,6 +26,7 @@ import {
   countActiveGroupFixedMembers,
   createDefaultGroupForm,
   groupMaxStudentsToFormString,
+  resolveGroupLessonSubject,
   validateGroupFormFields,
 } from '../groupClassRoomUtils.js'
 
@@ -43,7 +44,15 @@ function areNormalizedGroupWeekdaysEqual(rawA, rawB) {
 function isGroupEditScheduleAffected(group, validated) {
   const currentGroup = group || {}
   if (String(currentGroup.time || '').trim() !== validated.time) return true
-  if (String(currentGroup.subject || '').trim() !== validated.subject) return true
+  if (
+    resolveGroupLessonSubject({
+      subject: currentGroup.subject,
+      groupClassName: currentGroup.name,
+      groupCourseType: currentGroup.groupCourseType,
+    }) !== validated.subject
+  ) {
+    return true
+  }
   if (normalizeGroupCourseType(currentGroup.groupCourseType) !== validated.groupCourseType) return true
   if (!areNormalizedGroupWeekdaysEqual(currentGroup.weekdays, validated.weekdays)) return true
   return false

@@ -6,11 +6,14 @@ import {
 } from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
 import { formatTeacherDisplayName } from '../dashboardViewUtils.js'
-import { getGroupClassBookingCapacitySummary } from '../groupClassRoomUtils.js'
+import {
+  getGroupClassBookingCapacitySummary,
+  resolveGroupLessonSubject,
+} from '../groupClassRoomUtils.js'
 
 function getLessonReservationStatusLabel(lesson, seatAvailability) {
   if (isNoDeductionCancelledGroupLesson(lesson)) return '휴강'
-  if (lesson?.isBookable !== true) return '비활성'
+  if (lesson?.isBookable !== true) return '예약 비활성'
   if (seatAvailability) return seatAvailability.isFull ? '마감' : '예약 가능'
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
@@ -328,8 +331,12 @@ export default function GroupsSection({
               {getGroupClassStatusLabel(selectedGroupClass.status)}
             </p>
             <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
-              기본 시간 {selectedGroupClass.time || '—'} · 과목{' '}
-              {selectedGroupClass.subject || '—'} · 요일{' '}
+              기본 시간 {selectedGroupClass.time || '—'} · 수업 표시명{' '}
+              {resolveGroupLessonSubject({
+                subject: selectedGroupClass.subject,
+                groupClassName: selectedGroupClass.name,
+                groupCourseType: selectedGroupClass.groupCourseType,
+              }) || '—'} · 요일{' '}
               {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'} · 코스{' '}
               {getGroupCourseTypeLabel(selectedGroupClass.groupCourseType) || '—'}
             </p>
@@ -605,6 +612,11 @@ export default function GroupsSection({
                     const isNoDeductionCancelled = isNoDeductionCancelledGroupLesson(gl)
                     const seatAvailability = groupLessonSeatAvailabilityById[gl.id] || null
                     const reservationStatusLabel = getLessonReservationStatusLabel(gl, seatAvailability)
+                    const lessonSubject = resolveGroupLessonSubject({
+                      subject: gl.subject,
+                      groupClassName: gl.groupClassName || selectedGroupClass.name,
+                      groupCourseType: gl.groupCourseType || selectedGroupClass.groupCourseType,
+                    })
                     const attendanceBusyThisLesson =
                       Boolean(busyGroupAttendanceStudentId) &&
                       busyGroupAttendanceStudentId.startsWith(`${gl.id}__`)
@@ -616,14 +628,14 @@ export default function GroupsSection({
                         data-lesson-id={gl.id || ''}
                         data-lesson-date={gl.date || ''}
                         data-lesson-time={gl.time || ''}
-                        data-lesson-subject={gl.subject || ''}
+                        data-lesson-subject={lessonSubject}
                         style={{
                           gridTemplateColumns: '0.9fr 0.6fr 1fr 1fr 1.6fr 0.75fr minmax(260px, auto)',
                         }}
                       >
                         <span>{gl.date || '-'}</span>
                         <span>{gl.time || '-'}</span>
-                        <span>{gl.subject || '-'}</span>
+                        <span>{lessonSubject || '-'}</span>
                         <span>{getGroupCourseTypeLabel(gl.groupCourseType) || '-'}</span>
                         <span
                           data-testid="group-lesson-seat-summary"
@@ -872,7 +884,15 @@ export default function GroupsSection({
             {groupReservationModal.type === 'add' ? '예약 추가' : '예약 보기'}
           </h2>
           <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
-            {[modalLesson.date, modalLesson.time, modalLesson.subject].filter(Boolean).join(' · ')}
+            {[
+              modalLesson.date,
+              modalLesson.time,
+              resolveGroupLessonSubject({
+                subject: modalLesson.subject,
+                groupClassName: modalLesson.groupClassName || selectedGroupClass?.name,
+                groupCourseType: modalLesson.groupCourseType || selectedGroupClass?.groupCourseType,
+              }),
+            ].filter(Boolean).join(' · ')}
             {' '}· 정원 {getLessonCapacityLabel(modalLesson, modalLessonSeatAvailability)}
             {modalLessonSeatAvailability
               ? ` · 남은 자리 ${modalLessonSeatAvailability.remainingSeats}명`
