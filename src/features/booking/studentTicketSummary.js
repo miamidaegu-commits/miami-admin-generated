@@ -98,7 +98,7 @@ export function formatGroupTicketScheduleSummary(balance) {
   const fixedAllocated = Math.max(0, Number(balance.futureFixedAllocatedCount) || 0)
   const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
   const available = Math.max(0, Number(balance.makeupAvailableCount) || 0)
-  const parts = [`고정 예정 ${fixedAllocated}회`]
+  const parts = [`등록 예정 ${fixedAllocated}회`]
   if (activeReservations > 0) parts.push(`선택예약 ${activeReservations}회`)
   parts.push(`선택예약 가능 ${available}회`)
   return parts.join(' · ')
