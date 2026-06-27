@@ -2954,7 +2954,7 @@ export default function StudentBookingPage() {
 	            >
 	              <h2 style={{ margin: '0 0 8px 0', fontSize: '1.1rem' }}>내 수강권</h2>
 	              <p style={{ margin: '0 0 12px 0', opacity: 0.72, fontSize: 14 }}>
-                잔여 횟수와 보충/선택예약 가능 횟수를 확인할 수 있습니다.
+                수강권별 남은 횟수와 예약 가능 횟수를 확인할 수 있습니다.
               </p>
 	              {studentPackagesError ? (
 	                <p style={{ color: '#f4a7a7', margin: 0 }}>{studentPackagesError}</p>

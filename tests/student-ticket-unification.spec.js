@@ -99,8 +99,8 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     futureFixedAllocatedCount: 4,
     activeFutureReservationCount: 0,
     availableToBook: 0,
-    statusLabel: '보충 가능 0회',
-    actionLabel: '선택예약 가능 0회',
+    statusLabel: '직접 예약 가능 0회',
+    actionLabel: '직접 예약 가능 0회',
   });
 
   const released = fixedPrivateLessons.map((lesson, index) =>
@@ -115,7 +115,8 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     now: NOW,
   });
   expect(oneReleased.availableToBook).toBe(1);
-  expect(oneReleased.statusLabel).toBe('보충 가능 1회');
+  expect(oneReleased.statusLabel).toBe('직접 예약 가능 1회');
+  expect(oneReleased.actionLabel).toBe('직접 예약 가능 1회');
 
   const oneBooked = computePrivateTicketBalance({
     ticket,
@@ -128,7 +129,8 @@ test('private fixed and flexible usage share one private ticket balance', () => 
   expect(oneBooked).toMatchObject({
     activeFutureReservationCount: 1,
     availableToBook: 0,
-    statusLabel: '보충 가능 0회',
+    statusLabel: '직접 예약 가능 0회',
+    actionLabel: '직접 예약 가능 0회',
   });
 
   const fixedReservation = computePrivateTicketBalance({
@@ -317,7 +319,8 @@ test('private fixed and flexible usage share one private ticket balance', () => 
     futureFixedAllocatedCount: 3,
     activeFutureReservationCount: 0,
     availableToBook: 1,
-    statusLabel: '보충 가능 1회',
+    statusLabel: '직접 예약 가능 1회',
+    actionLabel: '직접 예약 가능 1회',
   });
 
   const productionReservationShape = privateReservation('prod-reservation-shape', {
@@ -353,6 +356,7 @@ test('group fixed and flexible usage share one group ticket balance', () => {
     studentId: STUDENT_ID,
     packageType: 'group',
     groupCourseType: 'free_talking',
+    allowGroupFreeBooking: true,
     totalCount: 4,
     usedCount: 0,
     remainingCount: 4,
@@ -374,8 +378,8 @@ test('group fixed and flexible usage share one group ticket balance', () => {
     futureFixedAllocatedCount: 4,
     activeFutureReservationCount: 0,
     availableToBook: 0,
-    statusLabel: '보충 가능 0회',
-    actionLabel: '선택예약 가능 0회',
+    statusLabel: '자유 예약 가능 0회',
+    actionLabel: '자유 예약 가능 0회',
   });
 
   const released = fixedGroupLessons.map((lesson, index) =>
@@ -390,7 +394,8 @@ test('group fixed and flexible usage share one group ticket balance', () => {
     now: NOW,
   });
   expect(oneReleased.availableToBook).toBe(1);
-  expect(oneReleased.statusLabel).toBe('보충 가능 1회');
+  expect(oneReleased.statusLabel).toBe('자유 예약 가능 1회');
+  expect(oneReleased.actionLabel).toBe('자유 예약 가능 1회');
 
   const oneBooked = computeGroupTicketBalance({
     ticket,
@@ -403,7 +408,8 @@ test('group fixed and flexible usage share one group ticket balance', () => {
   expect(oneBooked).toMatchObject({
     activeFutureReservationCount: 1,
     availableToBook: 0,
-    statusLabel: '보충 가능 0회',
+    statusLabel: '자유 예약 가능 0회',
+    actionLabel: '자유 예약 가능 0회',
   });
 
   const cancelledBooking = computeGroupTicketBalance({
@@ -415,6 +421,39 @@ test('group fixed and flexible usage share one group ticket balance', () => {
     now: NOW,
   });
   expect(cancelledBooking.availableToBook).toBe(1);
+});
+
+test('registered group ticket defaults to no free booking', () => {
+  const ticket = {
+    id: 'registered-group-ticket',
+    academyId: ACADEMY_ID,
+    studentId: STUDENT_ID,
+    packageType: 'group',
+    groupCourseType: 'free_talking',
+    totalCount: 4,
+    usedCount: 0,
+    remainingCount: 4,
+  };
+  const fixedGroupLessons = [
+    groupLesson('g1', { packageId: ticket.id, noDeduction: true }),
+    groupLesson('g2', { packageId: ticket.id }),
+    groupLesson('g3', { packageId: ticket.id }),
+  ];
+
+  const balance = computeGroupTicketBalance({
+    ticket,
+    fixedGroupLessons,
+    groupReservations: [],
+    studentId: STUDENT_ID,
+    groupScope: { groupCourseType: 'free_talking' },
+    now: NOW,
+  });
+
+  expect(balance.futureFixedAllocatedCount).toBe(2);
+  expect(balance.availableToBook).toBe(0);
+  expect(balance.availableFreeBookingCount).toBe(0);
+  expect(balance.statusLabel).toBe('반 등록 수업만 가능');
+  expect(balance.actionLabel).toBe('반 등록 수업만 가능');
 });
 
 test('ticket labels distinguish missing, ambiguous, exhausted, allocated, and available states', () => {
@@ -469,7 +508,7 @@ test('server and UI are wired to unified ticket vocabulary and group enforcement
   expect(functionsSource).toContain('getGroupTicketBalanceForLesson');
   expect(functionsSource).toContain('packageId: ticketResult.ticket.id');
   expect(functionsSource).toContain('"수강권 등록 필요"');
-  expect(functionsSource).toContain('선택예약 가능');
+  expect(functionsSource).toContain('자유 예약 가능');
   expect(bookingSource).toContain('groupTicketAvailableToBook');
   expect(bookingSource).toContain('groupTicketStatusLabel');
   expect(bookingSource).not.toContain('수강권 미등록');

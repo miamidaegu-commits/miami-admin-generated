@@ -47,6 +47,7 @@ const DEFAULT_STUDENT_PACKAGE_FORM = {
   totalCount: '1',
   groupClassId: '',
   groupCourseType: DEFAULT_GROUP_COURSE_TYPE,
+  allowGroupFreeBooking: false,
   registrationStartDate: '',
   registrationWeeks: '4',
   weeklyFrequency: '1',
@@ -697,6 +698,8 @@ export default function useStudentPackageFlow({
           totalCount,
           groupClassId,
           groupCourseType,
+          allowGroupFreeBooking:
+            packageType === 'group' ? sourcePackage.allowGroupFreeBooking === true : false,
           registrationStartDate,
           registrationWeeks,
           weeklyFrequency,
@@ -948,6 +951,7 @@ export default function useStudentPackageFlow({
       packageType,
       groupClassId,
       groupCourseType,
+      allowGroupFreeBooking: packageType === 'group' ? form.allowGroupFreeBooking === true : false,
       registrationStartDate,
       registrationWeeks,
       weeklyFrequency,
@@ -1248,6 +1252,9 @@ export default function useStudentPackageFlow({
         packageType: result.packageType,
         groupClassId,
         groupClassName,
+        ...(result.packageType === 'group'
+          ? { allowGroupFreeBooking: result.allowGroupFreeBooking === true }
+          : {}),
         ...((result.packageType === 'group' || result.packageType === 'openGroup') && groupCourseType
           ? { groupCourseType }
           : {}),

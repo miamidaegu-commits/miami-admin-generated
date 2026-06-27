@@ -2163,6 +2163,30 @@ function groupTicketMatchesScope(ticket, lesson) {
   );
 }
 
+function getGroupTicketPackageType(ticket) {
+  return normalizeId(ticket && ticket.packageType).toLowerCase();
+}
+
+function isGroupTicketPackage(ticket) {
+  const packageType = getGroupTicketPackageType(ticket);
+  return packageType === "group" || packageType === "opengroup";
+}
+
+function isGroupTicketFreeBookingAllowed(ticket) {
+  const packageType = getGroupTicketPackageType(ticket);
+  if (packageType === "opengroup") return true;
+  if (packageType !== "group") return false;
+  return ticket && (
+    ticket.allowGroupFreeBooking === true ||
+    ticket.allowStudentGroupBooking === true
+  );
+}
+
+function groupTicketMatchesFreeBookingScope(ticket, lesson) {
+  return isGroupTicketFreeBookingAllowed(ticket) &&
+    groupTicketMatchesScope(ticket, lesson);
+}
+
 function groupRowMatchesTicketScope({row, ticket, academyId, studentId}) {
   if (normalizeId(row && row.academyId) !== academyId) return false;
   const rowStudentId = normalizeId(row && (row.studentId || row.studentID));
@@ -2248,9 +2272,11 @@ function computeGroupTicketBalance({
 
   const availableToBook = Math.max(
       0,
-      rawAvailableCount -
-        futureFixedAllocatedCount -
-        activeFutureReservationCount,
+      isGroupTicketFreeBookingAllowed(ticket) ?
+        rawAvailableCount -
+          futureFixedAllocatedCount -
+          activeFutureReservationCount :
+        0,
   );
 
   return {
@@ -2263,6 +2289,7 @@ function computeGroupTicketBalance({
     activeFutureReservationAllocatedCount: activeFutureReservationCount,
     noDeductionReleasedCount,
     availableToBook,
+    availableFreeBookingCount: availableToBook,
     makeupAvailableCount: availableToBook,
   };
 }
@@ -2271,8 +2298,11 @@ function getGroupTicketStatusLabel({ticket, balance, ambiguous = false}) {
   if (!ticket) return ambiguous ? "수강권 연결 필요" : "수강권 등록 필요";
   if (ambiguous) return "수강권 연결 필요";
   if (Number(balance && balance.remainingCount || 0) <= 0) return "소진";
+  if (ticket && !isGroupTicketFreeBookingAllowed(ticket)) {
+    return "반 등록 수업만 가능";
+  }
   const availableToBook = Number(balance && balance.availableToBook || 0);
-  return `선택예약 가능 ${Math.max(0, availableToBook)}회`;
+  return `자유 예약 가능 ${Math.max(0, availableToBook)}회`;
 }
 
 function buildFixedGroupTicketLessons({
@@ -2330,11 +2360,9 @@ async function getGroupTicketBalanceForLesson({
       }))
       .filter((candidate) => {
         const pkg = candidate.data;
-        if (normalizeId(pkg.packageType).toLowerCase() !== "group") {
-          return false;
-        }
+        if (!isGroupTicketPackage(pkg)) return false;
         if (!isPackageActiveForDeduction(pkg)) return false;
-        return groupTicketMatchesScope(pkg, lesson);
+        return groupTicketMatchesFreeBookingScope(pkg, lesson);
       })
       .sort((a, b) => {
         const aRemaining = Number(a.data.remainingCount || 0);
@@ -2348,7 +2376,7 @@ async function getGroupTicketBalanceForLesson({
   if (candidates.length === 0) {
     const hasAnyGroupTicket = packageSnap.docs.some((docSnap) => {
       const pkg = docSnap.data() || {};
-      return normalizeId(pkg.packageType).toLowerCase() === "group" &&
+      return isGroupTicketPackage(pkg) &&
         isPackageActiveForDeduction(pkg);
     });
     return {
@@ -4225,7 +4253,7 @@ exports.listGroupLessonAvailability = onCall(
         const studentGroupTickets = packagesSnap.docs
             .map((docSnap) => ({id: docSnap.id, ...docSnap.data()}))
             .filter((pkg) =>
-              normalizeId(pkg.packageType).toLowerCase() === "group" &&
+              isGroupTicketPackage(pkg) &&
               isPackageActiveForDeduction(pkg),
             );
         const activeGroupClassIds = new Set(
@@ -4257,7 +4285,10 @@ exports.listGroupLessonAvailability = onCall(
                 !isCancelledOrDeletedGroupLesson(lesson) &&
                 lessonGroupId &&
                 activeGroupClassIds.has(lessonGroupId) &&
-                hasGroupLessonAccess({summary, lesson, groupClassById});
+                hasGroupLessonAccess({summary, lesson, groupClassById}) &&
+                studentGroupTickets.some((ticket) =>
+                  groupTicketMatchesFreeBookingScope(ticket, lesson),
+                );
             })
             .map((docSnap) => {
               const lesson = {id: docSnap.id, ...docSnap.data()};
@@ -4279,7 +4310,9 @@ exports.listGroupLessonAvailability = onCall(
                 reservations: lessonReservations,
               });
               const ticketCandidates = studentGroupTickets
-                  .filter((ticket) => groupTicketMatchesScope(ticket, lesson))
+                  .filter((ticket) =>
+                    groupTicketMatchesFreeBookingScope(ticket, lesson),
+                  )
                   .sort((a, b) => {
                     const aRemaining = Number(a.remainingCount || 0);
                     const bRemaining = Number(b.remainingCount || 0);

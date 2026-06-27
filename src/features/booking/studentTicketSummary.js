@@ -3,6 +3,7 @@ import { getGroupCourseTypeLabel } from '../group-booking/groupCourseTypes.js'
 import { computePrivateTeacherPackageUsage } from '../dashboard/privatePackageHelpers.js'
 import {
   computeGroupTicketBalance,
+  isGroupTicketFreeBookingAllowed,
 } from '../dashboard/ticketBalanceHelpers.js'
 
 function toFiniteNumber(value) {
@@ -66,12 +67,11 @@ export function formatPrivateTicketScheduleSummary(balance) {
   if (!balance) return ''
   const fixedAllocated = Math.max(0, Number(balance.futureFixedAllocatedCount) || 0)
   const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
-  const releasedCount = Math.max(0, Number(balance.noDeductionReleasedCount) || 0)
   const makeupAvailable = Math.max(0, Number(balance.makeupAvailableCount) || 0)
-  const parts = [`고정 예정 ${fixedAllocated}회`]
-  if (activeReservations > 0) parts.push(`보충 예약 ${activeReservations}회`)
-  const availableLabel = releasedCount > activeReservations ? '보충 가능' : '예약 가능'
-  parts.push(`${availableLabel} ${makeupAvailable}회`)
+  const parts = []
+  if (fixedAllocated > 0) parts.push(`주간 배정 ${fixedAllocated}회`)
+  if (activeReservations > 0) parts.push(`직접 예약 ${activeReservations}회`)
+  if (makeupAvailable > 0) parts.push(`직접 예약 가능 ${makeupAvailable}회`)
   return parts.join(' · ')
 }
 
@@ -93,14 +93,24 @@ export function formatGroupPackageUsageSummary(pkg) {
   return `잔여 ${remaining}회 / 총 ${total}회 · 사용 ${used}회`
 }
 
-export function formatGroupTicketScheduleSummary(balance) {
+export function formatGroupTicketScheduleSummary(balance, pkg = {}) {
   if (!balance) return ''
+  const packageType = String(pkg?.packageType || 'group').trim()
   const fixedAllocated = Math.max(0, Number(balance.futureFixedAllocatedCount) || 0)
-  const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
-  const available = Math.max(0, Number(balance.makeupAvailableCount) || 0)
-  const parts = [`등록 예정 ${fixedAllocated}회`]
-  if (activeReservations > 0) parts.push(`선택예약 ${activeReservations}회`)
-  parts.push(`선택예약 가능 ${available}회`)
+  const available = Math.max(
+    0,
+    Number(balance.availableFreeBookingCount ?? balance.makeupAvailableCount) || 0
+  )
+
+  if (packageType === 'openGroup') {
+    return available > 0 ? `자유 예약 가능 ${available}회` : ''
+  }
+
+  const parts = []
+  if (fixedAllocated > 0) parts.push(`반 등록 수업 ${fixedAllocated}회`)
+  if (isGroupTicketFreeBookingAllowed(pkg) && available > 0) {
+    parts.push(`자유 예약 가능 ${available}회`)
+  }
   return parts.join(' · ')
 }
 
@@ -166,7 +176,10 @@ export function buildStudentGroupTicketSummaries({
   academyId,
   studentId,
 }) {
-  const displayPackages = selectDisplayPackages(packages, 'group')
+  const displayPackages = [
+    ...selectDisplayPackages(packages, 'group'),
+    ...selectDisplayPackages(packages, 'openGroup'),
+  ]
   return displayPackages.map((pkg) => {
     const packageId = String(pkg.id || '').trim()
     const balance = computeGroupTicketBalance({
@@ -186,7 +199,7 @@ export function buildStudentGroupTicketSummaries({
       id: packageId || `${getGroupPackageLabel(pkg)}-${remaining}`,
       classLabel: getGroupPackageLabel(pkg),
       usageText: formatGroupPackageUsageSummary(pkg),
-      scheduleText: formatGroupTicketScheduleSummary(balance),
+      scheduleText: formatGroupTicketScheduleSummary(balance, pkg),
       muted: !isActive || remaining <= 0,
       statusText: !isActive || remaining <= 0 ? '소진' : '',
     }
