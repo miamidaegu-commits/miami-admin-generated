@@ -19,6 +19,7 @@ import {
   normalizeGroupWeekdaysFromDoc,
   normalizeText,
   parseYmdToLocalDate,
+  resolveTeacherIdentityFields,
 } from '../dashboardViewUtils.js'
 import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
 import {
@@ -98,6 +99,7 @@ export default function useGroupManagementFlow({
   createGroupLessonsInDateRange,
   openPostGroupScheduleRebuildModal,
   groupStudents = [],
+  teacherSelectOptions = [],
 }) {
   const [groupModal, setGroupModal] = useState(null)
   const [groupForm, setGroupFormState] = useState(createDefaultGroupForm())
@@ -207,6 +209,10 @@ export default function useGroupManagementFlow({
 
     const teacherOwnKey = getTeacherOwnGroupKey(userProfile)
     const teacherKey = teacherOwnKey || normalizeText(result.teacher)
+    const teacherIdentity = resolveTeacherIdentityFields(
+      teacherKey || result.teacher,
+      teacherSelectOptions
+    )
     const canAutoCreateLessons =
       (isAdminProfile(userProfile) || userProfile?.canCreateLessonDirectly === true) &&
       userProfile?.requiresLessonApproval !== true
@@ -222,8 +228,11 @@ export default function useGroupManagementFlow({
         const docRef = await addDoc(collection(db, 'groupClasses'), {
           academyId: scopedAcademyId,
           name: result.name,
-          teacher: teacherKey,
-          teacherName: teacherKey,
+          teacher: teacherIdentity.teacher,
+          teacherKey: teacherIdentity.teacherKey,
+          teacherName: teacherIdentity.teacherName,
+          teacherDisplayName: teacherIdentity.teacherDisplayName,
+          displayName: teacherIdentity.displayName,
           maxStudents: result.maxStudents,
           status: result.status,
           time: result.time,
@@ -250,7 +259,8 @@ export default function useGroupManagementFlow({
               academyId: scopedAcademyId,
               groupClassId: newId,
               groupClassName: result.name,
-              teacher: teacherKey,
+              teacher: teacherIdentity.teacher,
+              teacherName: teacherIdentity.teacherName,
               time: result.time,
               subject: result.subject,
               groupCourseType: result.groupCourseType,
@@ -303,8 +313,11 @@ export default function useGroupManagementFlow({
       }
       await updateDoc(doc(db, 'groupClasses', group.id), {
         name: result.name,
-        teacher: teacherKey,
-        teacherName: teacherKey,
+        teacher: teacherIdentity.teacher,
+        teacherKey: teacherIdentity.teacherKey,
+        teacherName: teacherIdentity.teacherName,
+        teacherDisplayName: teacherIdentity.teacherDisplayName,
+        displayName: teacherIdentity.displayName,
         maxStudents: result.maxStudents,
         status: result.status,
         time: result.time,
@@ -333,7 +346,8 @@ export default function useGroupManagementFlow({
             newGroupCourseType: result.groupCourseType,
             newWeekdays: result.weekdays,
             maxStudents: result.maxStudents,
-            teacher: teacherKey,
+            teacher: teacherIdentity.teacher,
+            teacherName: teacherIdentity.teacherName,
             requestedFromDate: fromYmd,
           },
           fromYmd

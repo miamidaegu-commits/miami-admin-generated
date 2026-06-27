@@ -3,6 +3,7 @@ import {
   formatLessonDateLabel,
   formatLessonSessionNumber,
   formatLessonTimeLabel,
+  formatTeacherDisplayName,
   getLessonDate,
   getLessonStorageDateString,
   getStudentName,
@@ -749,10 +750,13 @@ export default function CalendarSection(props) {
             String(reservation.studentName || reservation.student || '').trim() ||
             String(reservation.studentId || '').trim() ||
             '-',
-          teacherName:
-            String(reservation.teacherName || reservation.teacher || '').trim() ||
-            String(slot?.teacherName || slot?.teacher || '').trim() ||
-            '-',
+          teacherName: formatTeacherDisplayName({
+            teacherName: reservation.teacherName,
+            teacherDisplayName: reservation.teacherDisplayName,
+            displayName: reservation.displayName,
+            teacherKey: reservation.teacherKey,
+            teacher: reservation.teacher || slot?.teacher,
+          }),
           subject:
             String(reservation.subject || '').trim() ||
             String(slot?.subject || '').trim() ||
@@ -1578,7 +1582,7 @@ export default function CalendarSection(props) {
                   <span>{row.date || '-'}</span>
                   <span>{row.time || '-'}</span>
                   <span>{row.studentName || '-'}</span>
-                  <span>{row.teacherName || '-'}</span>
+                  <span>{formatTeacherDisplayName(row)}</span>
                   <span>{row.subject || '-'}</span>
                   <span>{row.durationLabel || '-'}</span>
                   <span>{row.statusLabel || '-'}</span>

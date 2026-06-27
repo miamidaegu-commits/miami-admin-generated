@@ -100,18 +100,51 @@ export function getTeacherName(lesson) {
   return formatTeacherDisplayName(lesson)
 }
 
-export function formatTeacherDisplayName(row, fallback = '-') {
-  const display = String(
-    row?.teacherName || row?.teacherDisplayName || row?.displayName || ''
-  ).trim()
-  const key = String(row?.teacherKey || row?.teacher || '').trim()
+export function formatTeacherDisplayName(row, fallback = '선생님 미지정') {
   const looksLikeUid = (value) =>
     /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
     !/\s/.test(String(value || '').trim())
 
+  const display = String(
+    row?.teacherName || row?.teacherDisplayName || row?.displayName || ''
+  ).trim()
+  const key = String(row?.teacherKey || row?.teacher || '').trim()
+
   if (display && !looksLikeUid(display)) return display
   if (key && !looksLikeUid(key)) return key
-  return display || key || fallback
+  if (looksLikeUid(display) || looksLikeUid(key)) return '기존 선생님'
+  return fallback
+}
+
+export function resolveTeacherIdentityFields(selectedValue, teacherSelectOptions = []) {
+  const rawValue = String(selectedValue || '').trim()
+  const options = Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []
+  const option =
+    options.find((item) => String(item?.value || '').trim() === rawValue) || null
+  const displayName = String(
+    option?.displayName || option?.label || option?.teacherName || ''
+  ).trim()
+  const teacherKey = String(option?.teacherKey || option?.value || rawValue || '').trim()
+  const looksLikeUid = (value) =>
+    /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
+    !/\s/.test(String(value || '').trim())
+
+  const teacherName =
+    displayName && !looksLikeUid(displayName)
+      ? displayName
+      : teacherKey && !looksLikeUid(teacherKey)
+        ? teacherKey
+        : looksLikeUid(rawValue)
+          ? '기존 선생님'
+          : rawValue || '선생님 미지정'
+
+  return {
+    teacher: teacherKey || rawValue,
+    teacherKey: teacherKey || rawValue,
+    teacherName,
+    teacherDisplayName: teacherName,
+    displayName: teacherName,
+  }
 }
 
 export function formatLessonSessionNumber(lesson) {

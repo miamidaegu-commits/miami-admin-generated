@@ -24,6 +24,7 @@ import {
 } from './src/features/dashboard/academyScope.js'
 import {
   formatLessonSessionNumber,
+  formatTeacherDisplayName,
   getLessonStorageDateString,
   getTodayStorageDateString,
 } from './src/features/dashboard/dashboardViewUtils.js'
@@ -269,7 +270,7 @@ function getLessonDisplayTime(lesson) {
 }
 
 function getLessonTeacherLabel(lesson) {
-  return String(lesson?.teacherName || lesson?.teacher || '').trim() || '-'
+  return formatTeacherDisplayName(lesson)
 }
 
 function getLessonSubjectLabel(lesson) {

@@ -33,8 +33,9 @@ export default function StudentPackageModal({
   closeStudentPackageModal,
   submitStudentPackageModal,
 }) {
-  const isGroupPackage =
-    studentPackageForm.packageType === 'group' || studentPackageForm.packageType === 'openGroup'
+  const isRegisteredGroupPackage = studentPackageForm.packageType === 'group'
+  const isOpenGroupPackage = studentPackageForm.packageType === 'openGroup'
+  const isGroupPackage = isRegisteredGroupPackage || isOpenGroupPackage
   const isPrivatePackage = studentPackageForm.packageType === 'private'
   const isPrivateRegular =
     isPrivatePackage && studentPackageForm.privatePackageMode !== 'countBased'
@@ -45,7 +46,7 @@ export default function StudentPackageModal({
     return g?.name != null && String(g.name).trim() ? String(g.name).trim() : ''
   })()
   const groupPackageTitlePlaceholder =
-    isGroupPackage &&
+    isRegisteredGroupPackage &&
     selectedGroupClassName &&
     String(studentPackageForm.registrationStartDate || '').trim() &&
     String(studentPackageForm.registrationWeeks || '').trim()
@@ -54,8 +55,20 @@ export default function StudentPackageModal({
           registrationStartDate: studentPackageForm.registrationStartDate,
           registrationWeeks: studentPackageForm.registrationWeeks,
         })
-      : isGroupPackage
+      : isRegisteredGroupPackage
         ? '반·시작일·주수를 선택하면 제목이 자동 제안됩니다'
+        : ''
+  const openGroupTitlePlaceholder = (() => {
+    const courseLabel = getGroupCourseTypeLabel(studentPackageForm.groupCourseType)
+    if (courseLabel) return `예: ${courseLabel} 자유예약권`
+    return '제목을 입력해 주세요'
+  })()
+  const packageTitlePlaceholder = isOpenGroupPackage
+    ? openGroupTitlePlaceholder
+    : isRegisteredGroupPackage
+      ? groupPackageTitlePlaceholder
+      : isPrivateRegular
+        ? privateRegularTitlePlaceholder
         : ''
   const privateRegularComputed = isPrivateRegular
     ? computePrivateRegularTotalCount({
@@ -107,7 +120,7 @@ export default function StudentPackageModal({
         teacherKey: selectedPrivateTeacherValue,
       }
   const privateTeacherScopeLabel = formatTeacherScopeLabel(selectedPrivateTeacherScope)
-  const autoTotalCount = isGroupPackage
+  const autoTotalCount = isRegisteredGroupPackage
     ? String(studentPackageGroupAutoSummary?.computedTotalCount ?? 0)
     : isPrivateRegular
       ? String(privateRegularComputed || 0)
@@ -508,13 +521,7 @@ export default function StudentPackageModal({
                   onChange={(e) =>
                     setStudentPackageForm((prev) => ({ ...prev, title: e.target.value }))
                   }
-                  placeholder={
-                    isGroupPackage
-                      ? groupPackageTitlePlaceholder
-                      : isPrivateRegular
-                        ? privateRegularTitlePlaceholder
-                        : ''
-                  }
+                  placeholder={packageTitlePlaceholder}
                   style={{
                     padding: '10px 12px',
                     borderRadius: 8,
@@ -530,26 +537,34 @@ export default function StudentPackageModal({
                 ) : null}
               </label>
 
+              {!isOpenGroupPackage ? (
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>
                   {isPrivateRegular ? '총 수업 횟수' : '총 횟수'}
                   {isPrivateRegular ? <span style={{ opacity: 0.65 }}> — 자동 계산</span> : null}
+                  {isRegisteredGroupPackage ? (
+                    <span style={{ opacity: 0.65 }}> — 일정 기준 자동 계산</span>
+                  ) : null}
                 </span>
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={isGroupPackage || isPrivateRegular ? autoTotalCount : studentPackageForm.totalCount}
+                  value={
+                    isRegisteredGroupPackage || isPrivateRegular
+                      ? autoTotalCount
+                      : studentPackageForm.totalCount
+                  }
                   onChange={(e) =>
                     setStudentPackageForm((prev) => ({ ...prev, totalCount: e.target.value }))
                   }
-                  readOnly={isGroupPackage || isPrivateRegular}
+                  readOnly={isRegisteredGroupPackage || isPrivateRegular}
                   style={{
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
-                    background: isGroupPackage || isPrivateRegular ? '#252525' : '#1f1f1f',
+                    background: isRegisteredGroupPackage || isPrivateRegular ? '#252525' : '#1f1f1f',
                     color: 'white',
-                    cursor: isGroupPackage || isPrivateRegular ? 'default' : 'text',
+                    cursor: isRegisteredGroupPackage || isPrivateRegular ? 'default' : 'text',
                   }}
                 />
                 {studentPackageFormErrors.totalCount ? (
@@ -558,6 +573,7 @@ export default function StudentPackageModal({
                   </span>
                 ) : null}
               </label>
+              ) : null}
 
               {studentPackageForm.packageType === 'group' ? (
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>

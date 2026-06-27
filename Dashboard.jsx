@@ -3311,6 +3311,7 @@ export default function Dashboard() {
     createGroupLessonsInDateRange,
     openPostGroupScheduleRebuildModal,
     groupStudents,
+    teacherSelectOptions,
   })
 
   const selectedDateDisplayString = useMemo(
