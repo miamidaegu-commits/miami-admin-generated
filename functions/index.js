@@ -650,45 +650,6 @@ function getGroupSeatAvailability({lesson, fixedMembers, reservations}) {
   };
 }
 
-function getLessonGroupClassIds(lesson) {
-  const ids = normalizeIdList(lesson && lesson.groupClassIds);
-  const primary = getGroupLessonGroupId(lesson);
-  if (primary && !ids.includes(primary)) {
-    ids.unshift(primary);
-  }
-  return ids;
-}
-
-function getEffectiveLessonCourseTypes(lesson, groupClassById) {
-  const types = new Set();
-  const fromLesson = normalizeId(lesson && lesson.groupCourseType);
-  if (fromLesson) types.add(fromLesson);
-
-  getLessonGroupClassIds(lesson).forEach((classId) => {
-    const groupClass = groupClassById && groupClassById.get(classId);
-    const fromClass = normalizeId(groupClass && groupClass.groupCourseType);
-    if (fromClass) types.add(fromClass);
-  });
-
-  return Array.from(types.values());
-}
-
-function hasGroupLessonAccess({summary, lesson, groupClassById = null}) {
-  const accessClassIds = normalizeIdList(summary && summary.groupClassIds);
-  const accessCourseTypes = normalizeIdList(
-      summary && summary.groupCourseTypes,
-  );
-
-  if (getLessonGroupClassIds(lesson).some((classId) =>
-    accessClassIds.includes(classId),
-  )) {
-    return true;
-  }
-
-  return getEffectiveLessonCourseTypes(lesson, groupClassById)
-      .some((courseType) => accessCourseTypes.includes(courseType));
-}
-
 function sanitizeGroupLessonForStudent(docSnap, availability, ticketInfo = {}) {
   const lesson = docSnap.data() || {};
   return {
@@ -4211,12 +4172,6 @@ exports.listGroupLessonAvailability = onCall(
             .get();
         const membership = requireActiveStudentMembership(membershipSnap);
         const studentId = membership.studentId;
-        const summarySnap = await db
-            .collection("studentGroupAccessSummary")
-            .doc(`${academyId}__${studentId}`)
-            .get();
-        const summary = summarySnap.exists ? summarySnap.data() || {} : {};
-
         const [
           lessonSnap,
           groupClassesSnap,
@@ -4261,12 +4216,6 @@ exports.listGroupLessonAvailability = onCall(
                 .filter((docSnap) => isActiveGroupClass(docSnap.data() || {}))
                 .map((docSnap) => docSnap.id),
         );
-        const groupClassById = new Map(
-            groupClassesSnap.docs.map((docSnap) => [
-              docSnap.id,
-              {id: docSnap.id, ...docSnap.data()},
-            ]),
-        );
         const allGroupLessons = lessonSnap.docs.map((docSnap) => ({
           id: docSnap.id,
           ...docSnap.data(),
@@ -4285,7 +4234,6 @@ exports.listGroupLessonAvailability = onCall(
                 !isCancelledOrDeletedGroupLesson(lesson) &&
                 lessonGroupId &&
                 activeGroupClassIds.has(lessonGroupId) &&
-                hasGroupLessonAccess({summary, lesson, groupClassById}) &&
                 studentGroupTickets.some((ticket) =>
                   groupTicketMatchesFreeBookingScope(ticket, lesson),
                 );
@@ -4455,27 +4403,6 @@ exports.reserveGroupLessonSeat = onCall(
               throw new HttpsError(
                   "failed-precondition",
                   "Student membership is not linked to a student.",
-              );
-            }
-            const summaryRef = db
-                .collection("studentGroupAccessSummary")
-                .doc(`${academyId}__${studentId}`);
-            const summarySnap = await transaction.get(summaryRef);
-            const summary = summarySnap.exists ? summarySnap.data() || {} : {};
-            const reserveAccessGroupClassById = new Map([
-              [lessonGroupId, {
-                id: groupClassSnap.id,
-                ...groupClassSnap.data(),
-              }],
-            ]);
-            if (!hasGroupLessonAccess({
-              summary,
-              lesson,
-              groupClassById: reserveAccessGroupClassById,
-            })) {
-              throw new HttpsError(
-                  "permission-denied",
-                  "예약 가능한 반 권한이 없습니다.",
               );
             }
           } else {
