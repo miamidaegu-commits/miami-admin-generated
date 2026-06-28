@@ -286,6 +286,86 @@ function getLessonSubjectLabel(lesson) {
   return String(lesson?.subject || '').trim() || '1:1 수업'
 }
 
+function getStudentBookingYmdFromDateValue(value) {
+  if (!value) return ''
+  let date = null
+  if (typeof value.toDate === 'function') date = value.toDate()
+  else if (value instanceof Date) date = value
+  else if (typeof value === 'number' && Number.isFinite(value)) date = new Date(value)
+  else {
+    const raw = String(value || '').trim()
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+    const parsed = Date.parse(raw)
+    if (Number.isFinite(parsed)) date = new Date(parsed)
+  }
+  if (!date) return ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function getStudentBookingYearMonth(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}`
+}
+
+function getGroupCancelLimitInfo(pkg, reservations, studentId) {
+  const packageType = String(pkg?.packageType || '').trim()
+  const freeBookingAllowed =
+    packageType === 'openGroup' ||
+    (packageType === 'group' &&
+      (pkg?.allowGroupFreeBooking === true || pkg?.allowStudentGroupBooking === true))
+  const limitCountRaw = Number(pkg?.groupCancelLimitCount)
+  const limitCount = Number.isFinite(limitCountRaw) && limitCountRaw > 0
+    ? Math.floor(limitCountRaw)
+    : 0
+  const enabled = Boolean(pkg?.groupCancelLimitEnabled === true && freeBookingAllowed && limitCount > 0)
+  if (!enabled) return { enabled: false, usedCount: 0, limitCount: 0, remainingCount: null, label: '' }
+
+  const packageId = String(pkg?.id || '').trim()
+  const period = pkg?.groupCancelLimitPeriod === 'packagePeriod' ? 'packagePeriod' : 'calendarMonth'
+  const startYmd = getStudentBookingYmdFromDateValue(
+    pkg?.registrationStartDate || pkg?.startDate
+  )
+  const endYmd = getStudentBookingYmdFromDateValue(pkg?.coverageEndDate || pkg?.endDate || pkg?.expiresAt)
+  const currentYearMonth = getStudentBookingYearMonth()
+  const usedCount = (Array.isArray(reservations) ? reservations : []).filter((row) => {
+    if (String(row?.packageId || '').trim() !== packageId) return false
+    if (String(row?.studentId || '').trim() !== String(studentId || '').trim()) return false
+    const status = String(row?.status || '').trim().toLowerCase()
+    if (status !== 'cancelled' && status !== 'canceled') return false
+    if (String(row?.cancelledByRole || '').trim().toLowerCase() === 'admin') return false
+    const cancelledYmd = getStudentBookingYmdFromDateValue(row?.cancelledAt)
+    if (!cancelledYmd) return false
+    if (period === 'calendarMonth') {
+      return cancelledYmd.slice(0, 7) === currentYearMonth
+    }
+    if (startYmd && cancelledYmd < startYmd) return false
+    if (endYmd && cancelledYmd > endYmd) return false
+    return true
+  }).length
+  const remainingCount = Math.max(0, limitCount - usedCount)
+  const periodLabel = period === 'packagePeriod' ? '수강권 기간' : '이번 달'
+  return {
+    enabled,
+    usedCount,
+    limitCount,
+    remainingCount,
+    label: `${periodLabel} 취소 ${usedCount}/${limitCount}회`,
+  }
+}
+
 function getPrivateDurationLabel(...sources) {
   for (const source of sources) {
     const duration = Number(
@@ -1813,6 +1893,15 @@ export default function StudentBookingPage() {
     })
     return byLessonId
   }, [reservations])
+
+  const studentPackageById = useMemo(() => {
+    const byId = new Map()
+    studentPackages.forEach((pkg) => {
+      const packageId = String(pkg?.id || '').trim()
+      if (packageId) byId.set(packageId, pkg)
+    })
+    return byId
+  }, [studentPackages])
 
   const privateSlotsById = useMemo(() => {
     const byId = new Map()
@@ -3387,6 +3476,21 @@ export default function StudentBookingPage() {
                       lesson.isBookable === true &&
                       hasRemainingSeats &&
                       hasGroupTicketAvailability
+                    const reservationPackage = reservation?.packageId
+                      ? studentPackageById.get(String(reservation.packageId || '').trim()) || null
+                      : null
+                    const groupCancelLimitInfo =
+                      isReserved && reservationPackage
+                        ? getGroupCancelLimitInfo(
+                            reservationPackage,
+                            reservations,
+                            scopedStudentId
+                          )
+                        : { enabled: false, remainingCount: null, label: '' }
+                    const cancelLimitReached =
+                      groupCancelLimitInfo.enabled &&
+                      Number(groupCancelLimitInfo.remainingCount ?? 0) <= 0
+                    const cancelDisabled = Boolean(busyReservationId) || cancelLimitReached
 
                     return (
                       <article
@@ -3435,6 +3539,12 @@ export default function StudentBookingPage() {
                                 ? ` · ${getLessonCapacityLabel(lesson)}`
                                 : ''}
                             </div>
+                            {isReserved && groupCancelLimitInfo.enabled ? (
+                              <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
+                                {groupCancelLimitInfo.label}
+                                {cancelLimitReached ? ' · 취소 한도 도달' : ''}
+                              </div>
+                            ) : null}
                           </div>
                           <div
                             style={{
@@ -3465,7 +3575,7 @@ export default function StudentBookingPage() {
                               <button
                                 type="button"
                                 onClick={() => cancelReservation(reservation)}
-                                disabled={Boolean(busyReservationId)}
+                                disabled={cancelDisabled}
                                 data-testid="student-booking-cancel-button"
                                 style={{
                                   padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
@@ -3474,14 +3584,18 @@ export default function StudentBookingPage() {
                                   border: '1px solid #744242',
                                   background: '#4a2a2a',
                                   color: 'white',
-                                  cursor: busyReservationId ? 'not-allowed' : 'pointer',
+                                  cursor: cancelDisabled ? 'not-allowed' : 'pointer',
                                   fontWeight: isMobileStudentBooking ? 800 : undefined,
                                   ...(isMobileStudentBooking
                                     ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
                                     : {}),
                                 }}
                               >
-                                {isBusy ? '취소 중...' : '예약 취소'}
+                                {isBusy
+                                  ? '취소 중...'
+                                  : cancelLimitReached
+                                    ? '취소 한도 도달'
+                                    : '예약 취소'}
                               </button>
                             ) : (
                               <button

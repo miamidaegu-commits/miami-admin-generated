@@ -2162,6 +2162,112 @@ function groupTicketMatchesFreeBookingScope(ticket, lesson) {
     groupTicketMatchesScope(ticket, lesson);
 }
 
+function getYmdFromAnyDateValue(value) {
+  const millis = getTimestampMillis(value);
+  if (millis !== null) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(millis));
+    const byType = new Map(parts.map((part) => [part.type, part.value]));
+    return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+  }
+  const raw = normalizeId(value);
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : "";
+}
+
+function getSeoulYearMonthFromMillis(millis) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(new Date(millis));
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}`;
+}
+
+function getGroupCancelLimitPeriodBounds(pkg, nowMillis) {
+  const period = normalizeId(pkg && pkg.groupCancelLimitPeriod) ===
+    "packagePeriod" ? "packagePeriod" : "calendarMonth";
+  if (period === "packagePeriod") {
+    return {
+      period,
+      startYmd: getYmdFromAnyDateValue(
+          pkg &&
+            (pkg.registrationStartDate || pkg.startDate || pkg.paymentDate),
+      ),
+      endYmd: getYmdFromAnyDateValue(
+          pkg && (pkg.coverageEndDate || pkg.endDate || pkg.expiresAt),
+      ),
+      yearMonth: "",
+    };
+  }
+  return {
+    period,
+    startYmd: "",
+    endYmd: "",
+    yearMonth: getSeoulYearMonthFromMillis(nowMillis),
+  };
+}
+
+function isCancelledReservationInGroupCancelLimitPeriod(
+    reservation,
+    bounds,
+) {
+  const cancelledMillis = getTimestampMillis(
+      reservation && reservation.cancelledAt,
+  );
+  if (cancelledMillis === null) return false;
+  if (bounds.period === "calendarMonth") {
+    return getSeoulYearMonthFromMillis(cancelledMillis) === bounds.yearMonth;
+  }
+  const ymd = getYmdFromAnyDateValue(reservation && reservation.cancelledAt);
+  if (!ymd) return false;
+  if (bounds.startYmd && ymd < bounds.startYmd) return false;
+  if (bounds.endYmd && ymd > bounds.endYmd) return false;
+  return true;
+}
+
+function countStudentGroupCancellationsForLimit({
+  reservations,
+  academyId,
+  studentId,
+  packageId,
+  bounds,
+}) {
+  return (Array.isArray(reservations) ? reservations : []).filter((row) => {
+    if (normalizeId(row && row.academyId) !== academyId) return false;
+    if (normalizeId(row && row.studentId) !== studentId) return false;
+    if (normalizeId(row && row.packageId) !== packageId) return false;
+    const status = normalizeId(row && row.status).toLowerCase();
+    if (status !== "cancelled" && status !== "canceled") return false;
+    if (normalizeId(row && row.cancelledByRole).toLowerCase() === "admin") {
+      return false;
+    }
+    return isCancelledReservationInGroupCancelLimitPeriod(row, bounds);
+  }).length;
+}
+
+function getGroupCancelLimitPolicy(pkg, nowMillis = Date.now()) {
+  const limitRaw = Number(pkg && pkg.groupCancelLimitCount);
+  const limitCount = Number.isFinite(limitRaw) && limitRaw > 0 ?
+    Math.floor(limitRaw) :
+    0;
+  const enabled = Boolean(
+      pkg &&
+      pkg.groupCancelLimitEnabled === true &&
+      limitCount > 0 &&
+      isGroupTicketFreeBookingAllowed(pkg),
+  );
+  return {
+    enabled,
+    limitCount,
+    ...getGroupCancelLimitPeriodBounds(pkg, nowMillis),
+  };
+}
+
 function groupRowMatchesTicketScope({row, ticket, academyId, studentId}) {
   if (normalizeId(row && row.academyId) !== academyId) return false;
   const rowStudentId = normalizeId(row && (row.studentId || row.studentID));
@@ -4701,9 +4807,49 @@ exports.cancelGroupLessonSeat = onCall(
               normalizeId(reservation.studentId) !== studentId) {
             throw new HttpsError("permission-denied", "Academy mismatch.");
           }
+          const reservationPackageId = normalizeId(reservation.packageId);
 
           const {reservationsSnap} =
             await getGroupSeatInputSnaps(transaction, db, academyId);
+          const allReservations = reservationsSnap.docs.map((docSnap) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          }));
+          if (membership.role === "student" && reservationPackageId) {
+            const packageRef = db
+                .collection("studentPackages")
+                .doc(reservationPackageId);
+            const packageSnap = await transaction.get(packageRef);
+            if (!packageSnap.exists) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "예약에 연결된 수강권을 찾을 수 없습니다.",
+              );
+            }
+            const pkg = {id: packageSnap.id, ...packageSnap.data()};
+            if (normalizeId(pkg.academyId) !== academyId ||
+                normalizeId(pkg.studentId) !== studentId) {
+              throw new HttpsError("permission-denied", "Package mismatch.");
+            }
+            const cancelPolicy = getGroupCancelLimitPolicy(pkg, Date.now());
+            if (cancelPolicy.enabled) {
+              const usedCancelCount = countStudentGroupCancellationsForLimit({
+                reservations: allReservations,
+                academyId,
+                studentId,
+                packageId: reservationPackageId,
+                bounds: cancelPolicy,
+              });
+              if (usedCancelCount >= cancelPolicy.limitCount) {
+                const message =
+                  `단체반 자유 예약 취소 가능 횟수(${cancelPolicy.limitCount}회)를 모두 사용했습니다.`;
+                throw new HttpsError(
+                    "failed-precondition",
+                    message,
+                );
+              }
+            }
+          }
           const reservations = docsForLesson(reservationsSnap, lessonId);
           const activeReservationCount = Math.max(
               0,
@@ -4716,6 +4862,9 @@ exports.cancelGroupLessonSeat = onCall(
           transaction.update(reservationRef, {
             status: "cancelled",
             cancelledAt: now,
+            cancelledByRole:
+              membership.role === "student" ? "student" : "admin",
+            cancelledByUid: uid,
             updatedAt: now,
           });
           transaction.update(lessonRef, {
