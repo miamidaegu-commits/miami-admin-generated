@@ -59,7 +59,7 @@ export default function GroupLessonAttendanceModal({
           id="group-lesson-attendance-modal-title"
           style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
         >
-          출결 / 차감
+          {isPastLesson ? '출결 / 차감' : '자리 공개 관리'}
         </h2>
         <p style={{ margin: '0 0 6px 0', fontSize: 13, opacity: 0.88 }}>
           {selectedGroupClass.name || '-'}

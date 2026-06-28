@@ -44,6 +44,7 @@ test('group class save persists teacher display identity fields', () => {
     path.join(process.cwd(), 'src/features/dashboard/hooks/useGroupManagementFlow.js'),
     'utf8'
   );
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
 
   expect(source).toContain('teacher: teacherIdentity.teacher');
   expect(source).toContain('teacherKey: teacherIdentity.teacherKey');
@@ -52,6 +53,20 @@ test('group class save persists teacher display identity fields', () => {
   expect(source).toContain('teacherName: teacherIdentity.teacherName');
   expect(source).toContain('teacherDisplayName: teacherIdentity.teacherDisplayName');
   expect(source).toContain('displayName: teacherIdentity.displayName');
+  expect(source).toContain('resolveGroupTeacherFormValue(group, teacherSelectOptions)');
+  expect(source).toContain('const teacherChanged = teacherIdentityChanged(group, teacherIdentity)');
+  expect(source).toContain('const savedGroup = {');
+  expect(source).toContain('setSelectedGroupClass?.((prev)');
+  expect(source).toContain('futureGroupLessonsTeacherUpdate');
+  expect(source).toContain('isFutureTeacherSyncTargetGroupLesson(lesson, group.id, todayYmd)');
+  expect(source).toContain("where('groupClassId', '==', group.id)");
+  expect(source).toContain("where('groupClassID', '==', group.id)");
+  expect(source).toContain('setGroupLessons?.((prev)');
+  expect(dashboardSource).toContain('const latestGroupClass = groupClasses.find');
+  expect(dashboardSource).toContain('return { ...prev, ...latestGroupClass }');
+  expect(dashboardSource).toContain('setGroupClasses,');
+  expect(dashboardSource).toContain('setSelectedGroupClass,');
+  expect(dashboardSource).toContain('setGroupLessons,');
 });
 
 test('group lesson form allows empty subject and keeps date time validation', () => {
@@ -163,6 +178,12 @@ test('admin group lesson rows separate seat and direct booking status copy', () 
   expect(groupSectionSource).toContain('학생 직접 예약: 비활성');
   expect(groupSectionSource).toContain('좌석: {reservationStatusLabel}');
   expect(groupSectionSource).toContain('group-lesson-bookable-badge');
+  expect(groupSectionSource).toContain('group-lesson-action-seat-label');
+  expect(groupSectionSource).toContain('group-lesson-action-bookable-label');
+  expect(groupSectionSource).toContain('getGroupLessonAttendanceActionLabel(gl)');
+  expect(groupSectionSource).toContain("'자리 공개 관리'");
+  expect(groupSectionSource).toContain('수업 전체 휴강');
+  expect(groupSectionSource).toContain('자리 공개가 아니라 이 회차 전체를 차감 없이 닫습니다.');
   expect(groupSectionSource).toContain('반 등록 학생 —');
   expect(groupSectionSource).toContain('아직 반 등록 학생이 없습니다.');
   expect(groupSectionSource).toContain('남은 선착순 좌석은');
@@ -185,6 +206,7 @@ test('group attendance modal separates future seat release from attendance deduc
   );
 
   expect(modalSource).toContain("row.isReleased) return isPastLesson ? '차감취소됨' : '자리 공개됨'");
+  expect(modalSource).toContain("isPastLesson ? '출결 / 차감' : '자리 공개 관리'");
   expect(modalSource).toContain("'자리 복구'");
   expect(modalSource).toContain("'자리 공개'");
   expect(modalSource).toContain("'차감복구'");
