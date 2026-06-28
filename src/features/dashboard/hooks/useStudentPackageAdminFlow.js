@@ -43,6 +43,9 @@ const DEFAULT_STUDENT_PACKAGE_EDIT_FORM = {
   memo: '',
   groupCourseType: '',
   allowGroupFreeBooking: false,
+  groupCancelLimitEnabled: false,
+  groupCancelLimitCount: '2',
+  groupCancelLimitPeriod: 'calendarMonth',
 }
 
 function createDefaultStudentPackageEditForm(overrides = {}) {
@@ -237,6 +240,11 @@ export default function useStudentPackageAdminFlow({
         memo: String(pkg.memo || ''),
         groupCourseType: editGroupCourseType,
         allowGroupFreeBooking: pkg.allowGroupFreeBooking === true,
+        groupCancelLimitEnabled: pkg.groupCancelLimitEnabled === true,
+        groupCancelLimitCount:
+          pkg.groupCancelLimitCount != null ? String(pkg.groupCancelLimitCount) : '2',
+        groupCancelLimitPeriod:
+          pkg.groupCancelLimitPeriod === 'packagePeriod' ? 'packagePeriod' : 'calendarMonth',
       })
     )
     setStudentPackageEditFormErrors({})
@@ -311,6 +319,23 @@ export default function useStudentPackageAdminFlow({
     if (packageType === 'openGroup' && !groupCourseType) {
       errors.groupCourseType = '코스 유형을 선택해주세요.'
     }
+    const isGroupBookingPackage = packageType === 'group' || packageType === 'openGroup'
+    let groupCancelLimitEnabled = false
+    let groupCancelLimitCount = 0
+    let groupCancelLimitPeriod = 'calendarMonth'
+    if (isGroupBookingPackage) {
+      groupCancelLimitEnabled = form.groupCancelLimitEnabled === true
+      groupCancelLimitPeriod =
+        form.groupCancelLimitPeriod === 'packagePeriod' ? 'packagePeriod' : 'calendarMonth'
+      if (groupCancelLimitEnabled) {
+        const limitParsed = parseRequiredMinOneIntField(form.groupCancelLimitCount)
+        if (!limitParsed.ok) {
+          errors.groupCancelLimitCount = '취소 가능 횟수는 1 이상의 정수여야 합니다.'
+        } else {
+          groupCancelLimitCount = limitParsed.value
+        }
+      }
+    }
 
     return {
       valid: Object.keys(errors).length === 0,
@@ -326,6 +351,9 @@ export default function useStudentPackageAdminFlow({
       groupCourseType,
       groupCourseTypes: groupCourseType ? [groupCourseType] : [],
       allowGroupFreeBooking: form.allowGroupFreeBooking === true,
+      groupCancelLimitEnabled,
+      groupCancelLimitCount,
+      groupCancelLimitPeriod,
     }
   }
 
@@ -383,6 +411,10 @@ export default function useStudentPackageAdminFlow({
           ? {
               groupCourseType: result.groupCourseType,
               groupCourseTypes: result.groupCourseTypes,
+              groupCancelLimitEnabled: result.groupCancelLimitEnabled === true,
+              groupCancelLimitCount:
+                result.groupCancelLimitEnabled === true ? result.groupCancelLimitCount : 0,
+              groupCancelLimitPeriod: result.groupCancelLimitPeriod,
             }
           : {}),
         updatedAt: serverTimestamp(),
@@ -439,6 +471,16 @@ export default function useStudentPackageAdminFlow({
       const courseChanged =
         (packageType === 'group' || packageType === 'openGroup') &&
         normalizeGroupCourseType(pkg.groupCourseType) !== result.groupCourseType
+      const cancelLimitChanged =
+        (packageType === 'group' || packageType === 'openGroup') &&
+        (
+          (pkg.groupCancelLimitEnabled === true) !==
+            (result.groupCancelLimitEnabled === true) ||
+          Number(pkg.groupCancelLimitCount || 0) !==
+            Number(result.groupCancelLimitCount || 0) ||
+          String(pkg.groupCancelLimitPeriod || 'calendarMonth') !==
+            String(result.groupCancelLimitPeriod || 'calendarMonth')
+        )
 
       if (diff !== 0) {
         await addCreditTransaction({
@@ -464,7 +506,8 @@ export default function useStudentPackageAdminFlow({
         paymentDateChanged ||
         memoChanged ||
         allowChanged ||
-        courseChanged
+        courseChanged ||
+        cancelLimitChanged
       ) {
         const parts = []
         if (titleChanged) parts.push('제목')
@@ -474,6 +517,7 @@ export default function useStudentPackageAdminFlow({
         if (memoChanged) parts.push('메모')
         if (courseChanged) parts.push('코스 유형')
         if (allowChanged) parts.push('단체반 자유 예약 권한')
+        if (cancelLimitChanged) parts.push('단체반 자유 예약 취소 제한')
         await addCreditTransaction({
           studentId: sid,
           studentName: sname,

@@ -48,6 +48,9 @@ const DEFAULT_STUDENT_PACKAGE_FORM = {
   groupClassId: '',
   groupCourseType: DEFAULT_GROUP_COURSE_TYPE,
   allowGroupFreeBooking: false,
+  groupCancelLimitEnabled: false,
+  groupCancelLimitCount: '2',
+  groupCancelLimitPeriod: 'calendarMonth',
   registrationStartDate: '',
   registrationWeeks: '4',
   weeklyFrequency: '1',
@@ -700,6 +703,18 @@ export default function useStudentPackageFlow({
           groupCourseType,
           allowGroupFreeBooking:
             packageType === 'group' ? sourcePackage.allowGroupFreeBooking === true : false,
+          groupCancelLimitEnabled:
+            packageType === 'group' || packageType === 'openGroup'
+              ? sourcePackage.groupCancelLimitEnabled === true
+              : false,
+          groupCancelLimitCount:
+            sourcePackage.groupCancelLimitCount != null
+              ? String(sourcePackage.groupCancelLimitCount)
+              : '2',
+          groupCancelLimitPeriod:
+            sourcePackage.groupCancelLimitPeriod === 'packagePeriod'
+              ? 'packagePeriod'
+              : 'calendarMonth',
           registrationStartDate,
           registrationWeeks,
           weeklyFrequency,
@@ -834,6 +849,7 @@ export default function useStudentPackageFlow({
     let weeklyFrequency = '1'
     let groupCourseType = ''
     let outgoingTotalCount = totalParsed.ok ? totalParsed.value : 1
+    const isGroupBookingPackage = packageType === 'group' || packageType === 'openGroup'
 
     if (packageType === 'group') {
       if (!groupClassId) errors.groupClassId = '등록할 반을 선택해주세요.'
@@ -923,6 +939,23 @@ export default function useStudentPackageFlow({
       }
     }
 
+    let groupCancelLimitEnabled = false
+    let groupCancelLimitCount = 0
+    let groupCancelLimitPeriod = 'calendarMonth'
+    if (isGroupBookingPackage) {
+      groupCancelLimitEnabled = form.groupCancelLimitEnabled === true
+      groupCancelLimitPeriod =
+        form.groupCancelLimitPeriod === 'packagePeriod' ? 'packagePeriod' : 'calendarMonth'
+      if (groupCancelLimitEnabled) {
+        const cancelLimitParsed = parseRequiredMinOneIntField(form.groupCancelLimitCount)
+        if (!cancelLimitParsed.ok) {
+          errors.groupCancelLimitCount = '취소 가능 횟수는 1 이상의 정수여야 합니다.'
+        } else {
+          groupCancelLimitCount = cancelLimitParsed.value
+        }
+      }
+    }
+
     let expiresAtTs = null
     const expiresAtRaw = String(form.expiresAt || '').trim()
     if (expiresAtRaw) {
@@ -952,6 +985,9 @@ export default function useStudentPackageFlow({
       groupClassId,
       groupCourseType,
       allowGroupFreeBooking: packageType === 'group' ? form.allowGroupFreeBooking === true : false,
+      groupCancelLimitEnabled,
+      groupCancelLimitCount,
+      groupCancelLimitPeriod,
       registrationStartDate,
       registrationWeeks,
       weeklyFrequency,
@@ -1254,6 +1290,14 @@ export default function useStudentPackageFlow({
         groupClassName,
         ...(result.packageType === 'group'
           ? { allowGroupFreeBooking: result.allowGroupFreeBooking === true }
+          : {}),
+        ...(result.packageType === 'group' || result.packageType === 'openGroup'
+          ? {
+              groupCancelLimitEnabled: result.groupCancelLimitEnabled === true,
+              groupCancelLimitCount:
+                result.groupCancelLimitEnabled === true ? result.groupCancelLimitCount : 0,
+              groupCancelLimitPeriod: result.groupCancelLimitPeriod,
+            }
           : {}),
         ...((result.packageType === 'group' || result.packageType === 'openGroup') && groupCourseType
           ? { groupCourseType }

@@ -25,6 +25,8 @@ export default function StudentPackageEditModal({
   const isRegisteredGroupPackage = packageType === 'group'
   const isOpenGroupPackage = packageType === 'openGroup'
   const showGroupFreeBookingField = showAdminFields && packageType === 'group'
+  const showGroupCancelLimitField =
+    showAdminFields && (packageType === 'group' || packageType === 'openGroup')
 
   return (
         <div
@@ -269,6 +271,116 @@ export default function StudentPackageEditModal({
                     </span>
                   </span>
                 </label>
+              ) : null}
+
+              {showGroupCancelLimitField ? (
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: 10,
+                    padding: 12,
+                    borderRadius: 10,
+                    border: '1px solid #2e3a55',
+                    background: '#182033',
+                  }}
+                >
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                      fontSize: 13,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={studentPackageEditForm.groupCancelLimitEnabled === true}
+                      onChange={(e) =>
+                        setStudentPackageEditForm((prev) => ({
+                          ...prev,
+                          groupCancelLimitEnabled: e.target.checked,
+                        }))
+                      }
+                      style={{ marginTop: 2 }}
+                    />
+                    <span>
+                      자유 예약 취소 가능 횟수 제한
+                      <br />
+                      <span style={{ opacity: 0.72 }}>
+                        학생이 직접 취소하는 자유 예약에만 적용됩니다.
+                      </span>
+                    </span>
+                  </label>
+
+                  {studentPackageEditForm.groupCancelLimitEnabled === true ? (
+                    <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr' }}>
+                      <label
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 4,
+                          fontSize: 13,
+                        }}
+                      >
+                        <span style={{ opacity: 0.85 }}>취소 가능 횟수</span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          value={studentPackageEditForm.groupCancelLimitCount}
+                          onChange={(e) =>
+                            setStudentPackageEditForm((prev) => ({
+                              ...prev,
+                              groupCancelLimitCount: e.target.value,
+                            }))
+                          }
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 8,
+                            border: '1px solid #444',
+                            background: '#1f1f1f',
+                            color: 'white',
+                          }}
+                        />
+                        {studentPackageEditFormErrors.groupCancelLimitCount ? (
+                          <span style={{ color: '#f08080', fontSize: 12 }}>
+                            {studentPackageEditFormErrors.groupCancelLimitCount}
+                          </span>
+                        ) : null}
+                      </label>
+
+                      <label
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 4,
+                          fontSize: 13,
+                        }}
+                      >
+                        <span style={{ opacity: 0.85 }}>제한 기간</span>
+                        <select
+                          value={studentPackageEditForm.groupCancelLimitPeriod}
+                          onChange={(e) =>
+                            setStudentPackageEditForm((prev) => ({
+                              ...prev,
+                              groupCancelLimitPeriod: e.target.value,
+                            }))
+                          }
+                          style={{
+                            padding: '10px 12px',
+                            borderRadius: 8,
+                            border: '1px solid #444',
+                            background: '#1f1f1f',
+                            color: 'white',
+                          }}
+                        >
+                          <option value="calendarMonth">월별</option>
+                          <option value="packagePeriod">수강권 기간</option>
+                        </select>
+                      </label>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
 
               {showAdminFields ? (
