@@ -438,8 +438,8 @@ export default function useGroupAttendanceFlow({
         groupStudentId: groupStudentRow.id,
       })
     } catch (error) {
-      console.error('차감취소 실패:', error)
-      alert(`차감취소 실패: ${error.message}`)
+      console.error('자리 공개 실패:', error)
+      alert(`자리 공개 실패: ${error.message}`)
     } finally {
       setBusyGroupAttendanceStudentId(null)
     }
@@ -475,8 +475,8 @@ export default function useGroupAttendanceFlow({
         groupStudentId: groupStudentRow.id,
       })
     } catch (error) {
-      console.error('차감복구 실패:', error)
-      alert(`차감복구 실패: ${error.message}`)
+      console.error('자리 복구 실패:', error)
+      alert(`자리 복구 실패: ${error.message}`)
     } finally {
       setBusyGroupAttendanceStudentId(null)
     }

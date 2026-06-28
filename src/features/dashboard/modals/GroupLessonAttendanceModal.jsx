@@ -15,7 +15,7 @@ export default function GroupLessonAttendanceModal({
 }) {
   function getStatusLabel(row) {
     if (row.isCounted) return '차감됨'
-    if (row.isReleased) return '차감취소됨'
+    if (row.isReleased) return isPastLesson ? '차감취소됨' : '자리 공개됨'
     if (!isPastLesson) return '예정'
     if ((row.remainingCount ?? 0) <= 0) return '수강권 소진'
     return '차감취소됨'
@@ -85,13 +85,14 @@ export default function GroupLessonAttendanceModal({
           >
             <span>정원 {groupLessonSeatAvailability.capacity}명</span>
             <span data-testid="group-lesson-fixed-attending-count">
-              등록 참석 예정 {groupLessonSeatAvailability.fixedAttendingCount}명
+              반 등록 참석 예정 {groupLessonSeatAvailability.fixedAttendingCount}명
             </span>
             <span data-testid="group-lesson-released-seat-count">
-              등록 결석/차감취소 {groupLessonSeatAvailability.releasedFixedSeatCount}명
+              {isPastLesson ? '반 등록 차감취소' : '반 등록 자리 공개'}{' '}
+              {groupLessonSeatAvailability.releasedFixedSeatCount}명
             </span>
             <span data-testid="group-lesson-guest-reserved-count">
-              추가 예약 {groupLessonSeatAvailability.guestReservedCount}명
+              자유 예약 {groupLessonSeatAvailability.guestReservedCount}명
             </span>
             <span data-testid="group-lesson-remaining-seats">
               남은 자리 {groupLessonSeatAvailability.remainingSeats}명
@@ -158,7 +159,7 @@ export default function GroupLessonAttendanceModal({
                           fontSize: 12,
                         }}
                       >
-                        {rowBusy ? '처리 중' : '차감복구'}
+                        {rowBusy ? '처리 중' : isPastLesson ? '차감복구' : '자리 복구'}
                       </button>
                     ) : !isPastLesson && row.canReleaseSeat ? (
                       <button
@@ -177,7 +178,7 @@ export default function GroupLessonAttendanceModal({
                           fontSize: 12,
                         }}
                       >
-                        {rowBusy ? '처리 중' : '차감취소'}
+                        {rowBusy ? '처리 중' : '자리 공개'}
                       </button>
                     ) : isPastLesson && !row.isCounted && row.canDeduct ? (
                       <button
