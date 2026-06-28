@@ -85,6 +85,30 @@ test('student group availability only returns visible free-booking candidates', 
   );
   expect(bookingSource).toContain('getGroupLessonDisplaySubject');
   expect(bookingSource).toContain('student-booking-fixed-lesson-card');
+  expect(bookingSource).toContain('sortedFixedMemberLessons');
+  expect(bookingSource).toContain('sortedGroupFreeBookingLessons');
+  expect(bookingSource).toContain('내 반 등록 수업');
+  expect(bookingSource).toContain('자유 예약 가능한 단체반');
+  expect(bookingSource).toContain('예약 필요 없음');
+  expect(bookingSource).toContain('현재 자유 예약 가능한 단체반 수업이 없습니다.');
+  expect(bookingSource).toContain('반 등록 예정');
+  expect(bookingSource).toContain('반 등록됨');
+
+  const fixedSectionStart = bookingSource.indexOf('내 반 등록 수업');
+  const freeSectionStart = bookingSource.indexOf('자유 예약 가능한 단체반');
+  expect(fixedSectionStart).toBeGreaterThan(-1);
+  expect(freeSectionStart).toBeGreaterThan(fixedSectionStart);
+  const fixedSectionSource = bookingSource.slice(fixedSectionStart, freeSectionStart);
+  expect(fixedSectionSource).toContain('student-booking-fixed-lesson-card');
+  expect(fixedSectionSource).not.toContain('student-booking-reserve-button');
+  expect(fixedSectionSource).not.toContain('student-booking-cancel-button');
+
+  const freeBookingMemoStart = bookingSource.indexOf('const sortedGroupFreeBookingLessons');
+  const reservationsMemoStart = bookingSource.indexOf('const sortedReservations');
+  expect(freeBookingMemoStart).toBeGreaterThan(-1);
+  expect(reservationsMemoStart).toBeGreaterThan(freeBookingMemoStart);
+  const freeBookingMemoSource = bookingSource.slice(freeBookingMemoStart, reservationsMemoStart);
+  expect(freeBookingMemoSource).not.toContain('fixedMemberLessons');
 });
 
 test('student package edit applies group course type policies by package type', () => {
@@ -125,7 +149,7 @@ test('group and open group packages expose revoke button and group revoke flow',
   expect(flowSource).toContain('syncStudentGroupCourseTypeAccessSummary(db');
 });
 
-test('admin group lesson rows expose bookable status copy', () => {
+test('admin group lesson rows separate seat and direct booking status copy', () => {
   const groupSectionSource = fs.readFileSync(
     path.join(process.cwd(), 'src/features/dashboard/sections/GroupsSection.jsx'),
     'utf8'
@@ -135,8 +159,39 @@ test('admin group lesson rows expose bookable status copy', () => {
     'utf8'
   );
 
-  expect(groupSectionSource).toContain('학생 예약 가능');
-  expect(groupSectionSource).toContain('예약 비활성');
+  expect(groupSectionSource).toContain('학생 직접 예약: 가능');
+  expect(groupSectionSource).toContain('학생 직접 예약: 비활성');
+  expect(groupSectionSource).toContain('좌석: {reservationStatusLabel}');
   expect(groupSectionSource).toContain('group-lesson-bookable-badge');
+  expect(groupSectionSource).toContain('반 등록 학생 —');
+  expect(groupSectionSource).toContain('아직 반 등록 학생이 없습니다.');
+  expect(groupSectionSource).toContain('남은 선착순 좌석은');
   expect(calendarSource).toContain('calendar-group-lesson-bookable-badge');
+});
+
+test('group attendance modal separates future seat release from attendance deduction copy', () => {
+  const modalSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/modals/GroupLessonAttendanceModal.jsx'),
+    'utf8'
+  );
+  const attendanceFlowSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/hooks/useGroupAttendanceFlow.js'),
+    'utf8'
+  );
+  const studentBookingSource = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  const groupSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/GroupsSection.jsx'),
+    'utf8'
+  );
+
+  expect(modalSource).toContain("row.isReleased) return isPastLesson ? '차감취소됨' : '자리 공개됨'");
+  expect(modalSource).toContain("'자리 복구'");
+  expect(modalSource).toContain("'자리 공개'");
+  expect(modalSource).toContain("'차감복구'");
+  expect(attendanceFlowSource).toContain('자리 공개 실패');
+  expect(attendanceFlowSource).toContain('자리 복구 실패');
+  const legacyFixedStudentCopy = ['고정', ' 학생'].join('');
+  for (const source of [studentBookingSource, groupSectionSource, modalSource]) {
+    expect(source).not.toContain(legacyFixedStudentCopy);
+  }
 });

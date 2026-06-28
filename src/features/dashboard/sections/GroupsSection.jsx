@@ -22,7 +22,7 @@ function getLessonReservationStatusLabel(lesson, seatAvailability) {
 }
 
 function getLessonBookableBadgeLabel(lesson) {
-  return lesson?.isBookable === true ? '학생 예약 가능' : '예약 비활성'
+  return lesson?.isBookable === true ? '학생 직접 예약: 가능' : '학생 직접 예약: 비활성'
 }
 
 function getLessonCapacityLabel(lesson, seatAvailability) {
@@ -325,7 +325,7 @@ export default function GroupsSection({
             }}
           >
             <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
-              등록 학생 — {selectedGroupClass.name || '-'}
+              반 등록 학생 — {selectedGroupClass.name || '-'}
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
               담당 선생님 {formatTeacherDisplayName(
@@ -333,10 +333,14 @@ export default function GroupsSection({
                 '선생님 선택 필요',
                 teacherSelectOptions
               )} · 정원{' '}
-              {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 등록{' '}
+              {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 반 등록{' '}
               {selectedGroupCapacitySummary?.fixedMemberCount ?? activeFixedStudentCount}명 · 선착순 가능{' '}
               {selectedGroupCapacitySummary?.fcfsRemainingSeats ?? '-'}명 · 상태{' '}
               {getGroupClassStatusLabel(selectedGroupClass.status)}
+            </p>
+            <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
+              단체반 수강권 발급 시 자동 등록되는 학생 목록입니다. 남은 선착순 좌석은
+              정원에서 반 등록 참석 예정 학생과 자유 예약 학생을 제외해 계산됩니다.
             </p>
             <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
               기본 시간 {selectedGroupClass.time || '—'} · 수업 표시명{' '}
@@ -498,7 +502,9 @@ export default function GroupsSection({
             {groupStudentsLoading ? (
               <p style={{ opacity: 0.85 }}>학생 목록 불러오는 중...</p>
             ) : sortedGroupStudentsForSelectedClass.length === 0 ? (
-              <p style={{ opacity: 0.8 }}>이 반에 등록된 학생이 없습니다.</p>
+              <p style={{ opacity: 0.8 }}>
+                아직 반 등록 학생이 없습니다. 단체반 수강권을 발급하면 이 목록에 자동으로 표시됩니다.
+              </p>
             ) : (
               <div className="activity-table">
                 <div
@@ -508,10 +514,10 @@ export default function GroupsSection({
                       '1.1fr 0.75fr 0.75fr 1fr minmax(200px, auto)',
                   }}
                 >
-                  <span>학생 이름</span>
-                  <span>차감 횟수</span>
+                  <span>반 등록 학생</span>
+                  <span>출석/차감 횟수</span>
                   <span>{canViewPaymentFields ? '결제 횟수' : '총 횟수'}</span>
-                  <span>시작일</span>
+                  <span>반 등록 시작일</span>
                   <span>작업</span>
                 </div>
 
@@ -652,20 +658,20 @@ export default function GroupsSection({
                         >
                           <span>정원 {seatAvailability?.capacity ?? Number(gl.capacity ?? 0)}명</span>
                           <span data-testid="group-lesson-fixed-attending-count">
-                            등록 참석 예정 {seatAvailability?.fixedAttendingCount ?? '-'}명
+                            반 등록 참석 예정 {seatAvailability?.fixedAttendingCount ?? '-'}명
                           </span>
                           <span data-testid="group-lesson-released-seat-count">
-                            등록 결석/차감취소 {seatAvailability?.releasedFixedSeatCount ?? '-'}명
+                            반 등록 자리 공개 {seatAvailability?.releasedFixedSeatCount ?? '-'}명
                           </span>
                           <span data-testid="group-lesson-guest-reserved-count">
-                            추가 예약 {seatAvailability?.guestReservedCount ?? Number(gl.bookedCount ?? 0)}명
+                            자유 예약 {seatAvailability?.guestReservedCount ?? Number(gl.bookedCount ?? 0)}명
                           </span>
                           <span data-testid="group-lesson-remaining-seats">
                             남은 자리 {seatAvailability?.remainingSeats ?? '-'}명
                           </span>
                         </span>
                         <span style={{ display: 'grid', gap: 3 }}>
-                          <span>{reservationStatusLabel}</span>
+                          <span>좌석: {reservationStatusLabel}</span>
                           <span
                             data-testid="group-lesson-bookable-badge"
                             style={{

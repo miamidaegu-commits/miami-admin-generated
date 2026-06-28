@@ -1929,20 +1929,26 @@ export default function StudentBookingPage() {
     })
   }, [lessons])
 
-  const sortedGroupBookingLessons = useMemo(() => {
-    const byId = new Map()
-    fixedMemberLessons.forEach((lesson) => {
-      const lessonId = String(lesson.id || '').trim()
-      if (!lessonId) return
-      byId.set(lessonId, {
+  const sortedFixedMemberLessons = useMemo(() => {
+    return fixedMemberLessons
+      .filter((lesson) => String(lesson.id || '').trim())
+      .map((lesson) => ({
         ...lesson,
         enrollmentType: 'fixed',
         isFixedMemberLesson: true,
+      }))
+      .sort((a, b) => {
+        const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
+        const bKey = `${b.date || ''} ${b.time || ''} ${b.subject || ''}`
+        return aKey.localeCompare(bKey, 'ko')
       })
-    })
+  }, [fixedMemberLessons])
+
+  const sortedGroupFreeBookingLessons = useMemo(() => {
+    const byId = new Map()
     sortedLessons.forEach((lesson) => {
       const lessonId = String(lesson.id || '').trim()
-      if (!lessonId || byId.has(lessonId)) return
+      if (!lessonId) return
       byId.set(lessonId, {
         ...lesson,
         enrollmentType: lesson.enrollmentType || 'guest',
@@ -1954,7 +1960,7 @@ export default function StudentBookingPage() {
       const bKey = `${b.date || ''} ${b.time || ''} ${b.subject || ''}`
       return aKey.localeCompare(bKey, 'ko')
     })
-  }, [fixedMemberLessons, sortedLessons])
+  }, [sortedLessons])
 
   const sortedReservations = useMemo(() => {
     return [...reservations].sort((a, b) => {
@@ -3410,98 +3416,29 @@ export default function StudentBookingPage() {
                 ...studentBookingMobileOverflowGuardStyle,
               }}
             >
-              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>단체반 예약</h2>
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 반 등록 수업</h2>
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                내 반 권한이 있는 수업만 표시됩니다.
+                수강권으로 반에 등록된 수업입니다. 별도 예약 없이 참석하면 됩니다.
               </p>
 
               {accessError ? <p style={{ color: '#f4a7a7' }}>{accessError}</p> : null}
-              {lessonsError ? <p style={{ color: '#f4a7a7' }}>{lessonsError}</p> : null}
               {!accessResolved || accessLoading || lessonsLoading ? (
                 <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
-              ) : sortedGroupBookingLessons.length === 0 ? (
+              ) : sortedFixedMemberLessons.length === 0 ? (
                 <p style={{ opacity: 0.78, marginBottom: 0 }}>
-                  지금 예약 가능한 단체반 수업이 없습니다. 학원 안내 후 다시 확인해 주세요.
+                  아직 예정된 반 등록 수업이 없습니다.
                 </p>
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-                  {sortedGroupBookingLessons.map((lesson) => {
-                    const isFixedMemberLesson =
-                      lesson.isFixedMemberLesson === true || lesson.enrollmentType === 'fixed'
-                    const lessonId = String(lesson.id || '').trim()
-                    const reservation = reservationByLessonId.get(lesson.id) || null
-                    const isReserved =
-                      !isFixedMemberLesson &&
-                      (reservation?.status === 'active' ||
-                        locallyReservedGroupLessonIds.includes(lessonId))
-                    const reservationId = buildGroupLessonReservationId({
-                      academyId: currentAcademyId,
-                      lessonId: lesson.id,
-                      studentId: scopedStudentId,
-                    })
-                    const isBusy = busyReservationId === reservationId
-                    const remainingSeats = Number(
-                      lesson.remainingSeats ?? lesson.seatAvailability?.remainingSeats
-                    )
-                    const hasRemainingSeats = Number.isFinite(remainingSeats)
-                      ? remainingSeats > 0
-                      : Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
-                    const lessonBookingStatusLabel = isFixedMemberLesson
-                      ? getFixedMemberLessonStatusLabel(lesson)
-                      : isReserved
-                      ? '예약 완료'
-                      : lesson.groupTicketStatusLabel
-                        ? lesson.groupTicketStatusLabel
-                        : hasRemainingSeats
-                        ? '예약 가능'
-                        : '마감'
-                    const groupTicketAvailableToBook = Number(lesson.groupTicketAvailableToBook ?? 0)
-                    const hasGroupTicketBalanceProjection =
-                      lesson.groupTicketAvailableToBook !== undefined ||
-                      Boolean(lesson.groupTicketStatusLabel)
-                    const hasGroupTicketAvailability =
-                      !hasGroupTicketBalanceProjection ||
-                      (Number.isFinite(groupTicketAvailableToBook) && groupTicketAvailableToBook > 0)
-                    const groupReserveDisabledReason = isReserved
-                      ? '예약 완료'
-                      : !hasRemainingSeats
-                      ? '마감'
-                      : lesson.groupTicketStatusLabel && !hasGroupTicketAvailability
-                        ? lesson.groupTicketStatusLabel
-                        : '마감'
-                    const canReserve =
-                      !isFixedMemberLesson &&
-                      !isReserved &&
-                      !busyReservationId &&
-                      lesson.isBookable === true &&
-                      hasRemainingSeats &&
-                      hasGroupTicketAvailability
-                    const reservationPackage = reservation?.packageId
-                      ? studentPackageById.get(String(reservation.packageId || '').trim()) || null
-                      : null
-                    const groupCancelLimitInfo =
-                      isReserved && reservationPackage
-                        ? getGroupCancelLimitInfo(
-                            reservationPackage,
-                            reservations,
-                            scopedStudentId
-                          )
-                        : { enabled: false, remainingCount: null, label: '' }
-                    const cancelLimitReached =
-                      groupCancelLimitInfo.enabled &&
-                      Number(groupCancelLimitInfo.remainingCount ?? 0) <= 0
-                    const cancelDisabled = Boolean(busyReservationId) || cancelLimitReached
+                  {sortedFixedMemberLessons.map((lesson) => {
+                    const lessonBookingStatusLabel = getFixedMemberLessonStatusLabel(lesson)
 
                     return (
                       <article
                         key={lesson.id}
-                        data-testid={
-                          isFixedMemberLesson
-                            ? 'student-booking-fixed-lesson-card'
-                            : 'student-booking-lesson-card'
-                        }
+                        data-testid="student-booking-fixed-lesson-card"
                         data-lesson-id={lesson.id}
-                        data-enrollment-type={isFixedMemberLesson ? 'fixed' : 'guest'}
+                        data-enrollment-type="fixed"
                         style={{
                           border: '1px solid #283042',
                           borderRadius: 14,
@@ -3534,10 +3471,162 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {lessonBookingStatusLabel}
-                              {!isFixedMemberLesson
-                                ? ` · ${getLessonCapacityLabel(lesson)}`
-                                : ''}
+                              {lessonBookingStatusLabel} · 예약 필요 없음
+                            </div>
+                          </div>
+                          <span
+                            data-testid="student-booking-fixed-member-status"
+                            style={{
+                              padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                              borderRadius: isMobileStudentBooking ? 12 : 10,
+                              border: '1px solid #3a4a66',
+                              background: '#1f2940',
+                              color: '#c8d4ef',
+                              fontWeight: isMobileStudentBooking ? 800 : 600,
+                              fontSize: 13,
+                              alignSelf: 'flex-start',
+                            }}
+                          >
+                            예약 필요 없음
+                          </span>
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
+
+            <section
+              style={{
+                border: '1px solid #2e3240',
+                borderRadius: isMobileStudentBooking ? 20 : 16,
+                background: '#151922',
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 7 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>자유 예약 가능한 단체반</h2>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
+                openGroup 수강권 또는 자유 예약 권한으로 직접 예약할 수 있는 수업만 표시됩니다.
+              </p>
+
+              {accessError ? <p style={{ color: '#f4a7a7' }}>{accessError}</p> : null}
+              {lessonsError ? <p style={{ color: '#f4a7a7' }}>{lessonsError}</p> : null}
+              {!accessResolved || accessLoading || lessonsLoading ? (
+                <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
+              ) : sortedGroupFreeBookingLessons.length === 0 ? (
+                <p style={{ opacity: 0.78, marginBottom: 0 }}>
+                  현재 자유 예약 가능한 단체반 수업이 없습니다. 코스 유형, 남은 좌석, 잔여 횟수,
+                  예약 활성 상태를 확인해 주세요.
+                </p>
+              ) : (
+                <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
+                  {sortedGroupFreeBookingLessons.map((lesson) => {
+                    const lessonId = String(lesson.id || '').trim()
+                    const reservation = reservationByLessonId.get(lesson.id) || null
+                    const isReserved =
+                      reservation?.status === 'active' ||
+                      locallyReservedGroupLessonIds.includes(lessonId)
+                    const reservationId = buildGroupLessonReservationId({
+                      academyId: currentAcademyId,
+                      lessonId: lesson.id,
+                      studentId: scopedStudentId,
+                    })
+                    const isBusy = busyReservationId === reservationId
+                    const remainingSeats = Number(
+                      lesson.remainingSeats ?? lesson.seatAvailability?.remainingSeats
+                    )
+                    const hasRemainingSeats = Number.isFinite(remainingSeats)
+                      ? remainingSeats > 0
+                      : Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
+                    const lessonBookingStatusLabel = isReserved
+                      ? '예약 완료'
+                      : lesson.isBookable !== true
+                      ? '예약 비활성'
+                      : lesson.groupTicketStatusLabel
+                        ? lesson.groupTicketStatusLabel
+                        : hasRemainingSeats
+                        ? '예약 가능'
+                        : '마감'
+                    const groupTicketAvailableToBook = Number(lesson.groupTicketAvailableToBook ?? 0)
+                    const hasGroupTicketBalanceProjection =
+                      lesson.groupTicketAvailableToBook !== undefined ||
+                      Boolean(lesson.groupTicketStatusLabel)
+                    const hasGroupTicketAvailability =
+                      !hasGroupTicketBalanceProjection ||
+                      (Number.isFinite(groupTicketAvailableToBook) && groupTicketAvailableToBook > 0)
+                    const groupReserveDisabledReason = isReserved
+                      ? '예약 완료'
+                      : lesson.isBookable !== true
+                      ? '예약 비활성'
+                      : !hasRemainingSeats
+                      ? '마감'
+                      : lesson.groupTicketStatusLabel && !hasGroupTicketAvailability
+                        ? lesson.groupTicketStatusLabel
+                        : '마감'
+                    const canReserve =
+                      !isReserved &&
+                      !busyReservationId &&
+                      lesson.isBookable === true &&
+                      hasRemainingSeats &&
+                      hasGroupTicketAvailability
+                    const reservationPackage = reservation?.packageId
+                      ? studentPackageById.get(String(reservation.packageId || '').trim()) || null
+                      : null
+                    const groupCancelLimitInfo =
+                      isReserved && reservationPackage
+                        ? getGroupCancelLimitInfo(
+                            reservationPackage,
+                            reservations,
+                            scopedStudentId
+                          )
+                        : { enabled: false, remainingCount: null, label: '' }
+                    const cancelLimitReached =
+                      groupCancelLimitInfo.enabled &&
+                      Number(groupCancelLimitInfo.remainingCount ?? 0) <= 0
+                    const cancelDisabled = Boolean(busyReservationId) || cancelLimitReached
+
+                    return (
+                      <article
+                        key={lesson.id}
+                        data-testid="student-booking-lesson-card"
+                        data-lesson-id={lesson.id}
+                        data-enrollment-type="guest"
+                        style={{
+                          border: '1px solid #283042',
+                          borderRadius: 14,
+                          padding: 16,
+                          background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
+                          }}
+                        >
+                          <div style={studentBookingMobileTextGuardStyle}>
+                            <strong style={{ fontSize: '1rem' }}>
+                              {getGroupLessonDisplaySubject(lesson)}
+                            </strong>
+                            <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
+                              {[lesson.date, lesson.time].filter(Boolean).join(' · ') || lesson.id}
+                            </div>
+                            {getGroupCourseTypeLabel(lesson.groupCourseType) ? (
+                              <div style={{ marginTop: 6, opacity: 0.7, fontSize: 13 }}>
+                                {getGroupCourseTypeLabel(lesson.groupCourseType)}
+                              </div>
+                            ) : null}
+                            <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
+                              {lessonBookingStatusLabel} · {getLessonCapacityLabel(lesson)}
                             </div>
                             {isReserved && groupCancelLimitInfo.enabled ? (
                               <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
@@ -3556,22 +3645,7 @@ export default function StudentBookingPage() {
                                 : {}),
                             }}
                           >
-                            {isFixedMemberLesson ? (
-                              <span
-                                data-testid="student-booking-fixed-member-status"
-                                style={{
-                                  padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
-                                  borderRadius: isMobileStudentBooking ? 12 : 10,
-                                  border: '1px solid #3a4a66',
-                                  background: '#1f2940',
-                                  color: '#c8d4ef',
-                                  fontWeight: isMobileStudentBooking ? 800 : 600,
-                                  fontSize: 13,
-                                }}
-                              >
-                                {lessonBookingStatusLabel}
-                              </span>
-                            ) : isReserved ? (
+                            {isReserved ? (
                               <button
                                 type="button"
                                 onClick={() => cancelReservation(reservation)}
@@ -4129,7 +4203,7 @@ export default function StudentBookingPage() {
                 borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
                 padding: isMobileStudentBooking ? 16 : 20,
-                order: isMobileStudentBooking ? 7 : undefined,
+                order: isMobileStudentBooking ? 5 : undefined,
                 ...studentBookingMobileOverflowGuardStyle,
               }}
             >
