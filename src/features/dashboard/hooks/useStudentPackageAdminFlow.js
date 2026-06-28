@@ -27,6 +27,10 @@ import {
   updateStudentGroupAccessBatch,
 } from '../../group-booking/studentGroupAccessClient.js'
 import { syncStudentGroupCourseTypeAccessSummary } from '../../group-booking/studentGroupAccessSummaryClient.js'
+import {
+  DEFAULT_GROUP_COURSE_TYPE,
+  normalizeGroupCourseType,
+} from '../../group-booking/groupCourseTypes.js'
 import { removeStudentPrivateTeacherAccessBatch } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 import { canViewBillingFields } from '../billingPermissions.js'
 
@@ -37,6 +41,7 @@ const DEFAULT_STUDENT_PACKAGE_EDIT_FORM = {
   paymentDate: '',
   amountPaid: '',
   memo: '',
+  groupCourseType: '',
   allowGroupFreeBooking: false,
 }
 
@@ -63,6 +68,12 @@ function getPackageLinkedIds(row) {
 }
 
 function isActivePrivateReservationStatus(status) {
+  return ['active', 'reserved', 'confirmed', 'booked'].includes(
+    String(status || '').trim().toLowerCase()
+  )
+}
+
+function isActiveGroupReservationStatus(status) {
   return ['active', 'reserved', 'confirmed', 'booked'].includes(
     String(status || '').trim().toLowerCase()
   )
@@ -106,6 +117,22 @@ function isBlockingPrivateLessonForRevoke(lesson) {
   return false
 }
 
+function findLinkedGroupClass(groupClasses, pkg) {
+  const groupClassId = String(pkg?.groupClassId || '').trim()
+  if (!groupClassId) return null
+  return (Array.isArray(groupClasses) ? groupClasses : []).find(
+    (groupClass) => String(groupClass?.id || '').trim() === groupClassId
+  ) || null
+}
+
+function getPackageLinkedGroupCourseType(pkg, groupClasses) {
+  const linkedGroupClass = findLinkedGroupClass(groupClasses, pkg)
+  return (
+    normalizeGroupCourseType(linkedGroupClass?.groupCourseType) ||
+    normalizeGroupCourseType(pkg?.groupCourseType)
+  )
+}
+
 export default function useStudentPackageAdminFlow({
   user,
   userProfile,
@@ -113,6 +140,7 @@ export default function useStudentPackageAdminFlow({
   addCreditTransaction,
   studentDocFieldToYmdString,
   onStudentPackageRevoked,
+  groupClasses = [],
 }) {
   const [studentPackageEditModalPackage, setStudentPackageEditModalPackage] =
     useState(null)
@@ -187,6 +215,11 @@ export default function useStudentPackageAdminFlow({
   function openStudentPackageEditModal(pkg) {
     if (!pkg?.id) return
     if (!canEditStudentPackageCountsForPackage(pkg)) return
+    const packageType = String(pkg.packageType || '').trim()
+    const editGroupCourseType =
+      packageType === 'group'
+        ? getPackageLinkedGroupCourseType(pkg, groupClasses)
+        : normalizeGroupCourseType(pkg.groupCourseType)
     setStudentPackageEditModalPackage(pkg)
     setStudentPackageEditForm(
       createDefaultStudentPackageEditForm({
@@ -202,14 +235,16 @@ export default function useStudentPackageAdminFlow({
             ? String(pkg.amountPaid)
             : '',
         memo: String(pkg.memo || ''),
+        groupCourseType: editGroupCourseType,
         allowGroupFreeBooking: pkg.allowGroupFreeBooking === true,
       })
     )
     setStudentPackageEditFormErrors({})
   }
 
-  function validateStudentPackageEditFormFields(form, usedCountRaw) {
+  function validateStudentPackageEditFormFields(form, usedCountRaw, pkg) {
     const errors = {}
+    const packageType = String(pkg?.packageType || '').trim()
     const usedCount = Number(usedCountRaw ?? 0)
     if (!Number.isFinite(usedCount) || usedCount < 0) {
       errors._used = '사용 횟수가 올바르지 않습니다.'
@@ -267,6 +302,16 @@ export default function useStudentPackageAdminFlow({
       }
     }
 
+    const groupCourseType =
+      packageType === 'group'
+        ? getPackageLinkedGroupCourseType(pkg, groupClasses)
+        : packageType === 'openGroup'
+          ? normalizeGroupCourseType(form.groupCourseType) || DEFAULT_GROUP_COURSE_TYPE
+          : ''
+    if (packageType === 'openGroup' && !groupCourseType) {
+      errors.groupCourseType = '코스 유형을 선택해주세요.'
+    }
+
     return {
       valid: Object.keys(errors).length === 0,
       errors,
@@ -278,6 +323,8 @@ export default function useStudentPackageAdminFlow({
       paymentDateClear,
       amountPaid,
       memo: String(form.memo || '').trim(),
+      groupCourseType,
+      groupCourseTypes: groupCourseType ? [groupCourseType] : [],
       allowGroupFreeBooking: form.allowGroupFreeBooking === true,
     }
   }
@@ -293,7 +340,7 @@ export default function useStudentPackageAdminFlow({
     const usedCount = Number(pkg.usedCount ?? 0)
     const isAdminEdit = isAdminPackageEditor()
     const result = isAdminEdit
-      ? validateStudentPackageEditFormFields(studentPackageEditForm, usedCount)
+      ? validateStudentPackageEditFormFields(studentPackageEditForm, usedCount, pkg)
       : (() => {
           const errors = {}
           if (!Number.isFinite(usedCount) || usedCount < 0) {
@@ -319,6 +366,7 @@ export default function useStudentPackageAdminFlow({
       assertSameAcademy(pkg, scopedAcademyId, '수강권')
       setBusyStudentPackageActionId(pkg.id)
       const pkgRef = doc(db, 'studentPackages', pkg.id)
+      const packageType = String(pkg.packageType || '').trim()
       const remainingCount = Math.max(0, result.totalCount - usedCount)
       const status = getNextStudentPackageStatus(pkg.status, remainingCount)
       const updates = {
@@ -328,8 +376,14 @@ export default function useStudentPackageAdminFlow({
         status,
         amountPaid: result.amountPaid,
         memo: result.memo,
-        ...(String(pkg.packageType || '').trim() === 'group'
+        ...(packageType === 'group'
           ? { allowGroupFreeBooking: result.allowGroupFreeBooking === true }
+          : {}),
+        ...(packageType === 'group' || packageType === 'openGroup'
+          ? {
+              groupCourseType: result.groupCourseType,
+              groupCourseTypes: result.groupCourseTypes,
+            }
           : {}),
         updatedAt: serverTimestamp(),
       }
@@ -344,7 +398,7 @@ export default function useStudentPackageAdminFlow({
         updates.expiresAt = result.expiresAt
       }
       await updateDoc(pkgRef, updates)
-      if (pkg.packageType === 'group' || pkg.packageType === 'openGroup') {
+      if (packageType === 'group' || packageType === 'openGroup') {
         await syncStudentGroupCourseTypeAccessSummary(db, {
           academyId: scopedAcademyId,
           studentId: String(pkg.studentId || '').trim(),
@@ -379,9 +433,12 @@ export default function useStudentPackageAdminFlow({
       const ptitle = String(result.title || '').trim()
       const gname = pkg.groupClassName ? String(pkg.groupClassName).trim() : ''
       const allowChanged =
-        String(pkg.packageType || '').trim() === 'group' &&
+        packageType === 'group' &&
         (pkg.allowGroupFreeBooking === true) !==
           (result.allowGroupFreeBooking === true)
+      const courseChanged =
+        (packageType === 'group' || packageType === 'openGroup') &&
+        normalizeGroupCourseType(pkg.groupCourseType) !== result.groupCourseType
 
       if (diff !== 0) {
         await addCreditTransaction({
@@ -406,7 +463,8 @@ export default function useStudentPackageAdminFlow({
         expiresChanged ||
         paymentDateChanged ||
         memoChanged ||
-        allowChanged
+        allowChanged ||
+        courseChanged
       ) {
         const parts = []
         if (titleChanged) parts.push('제목')
@@ -414,6 +472,7 @@ export default function useStudentPackageAdminFlow({
         if (paymentDateChanged) parts.push('결제일')
         if (expiresChanged) parts.push('만료일')
         if (memoChanged) parts.push('메모')
+        if (courseChanged) parts.push('코스 유형')
         if (allowChanged) parts.push('단체반 자유 예약 권한')
         await addCreditTransaction({
           studentId: sid,
@@ -555,10 +614,6 @@ export default function useStudentPackageAdminFlow({
       return
     }
     if (!pkg?.id) return
-    if (String(pkg.packageType || '').trim() !== 'private') {
-      alert('개인 수강권만 회수할 수 있습니다.')
-      return
-    }
     const normalizedStatus = String(pkg.status || 'active').trim().toLowerCase()
     if (normalizedStatus === 'revoked') {
       alert('이미 회수된 수강권입니다.')
@@ -582,17 +637,138 @@ export default function useStudentPackageAdminFlow({
       const latestPackage = { id: latestPackageSnap.id, ...latestPackageSnap.data() }
       assertSameAcademy(latestPackage, scopedAcademyId, '수강권')
       const studentId = String(latestPackage.studentId || pkg.studentId || '').trim()
+      const packageType = String(latestPackage.packageType || pkg.packageType || '').trim()
       const teacher = getPrivatePackageTeacher(latestPackage) || getPrivatePackageTeacher(pkg)
       const latestStatus = String(latestPackage.status || 'active').trim().toLowerCase()
       const latestUsedCount = Number(latestPackage.usedCount ?? 0) || 0
       const latestTotalCount = Number(latestPackage.totalCount ?? 0) || 0
       const latestRemainingCount = Number(latestPackage.remainingCount ?? 0) || 0
-      if (String(latestPackage.packageType || '').trim() !== 'private') {
-        alert('개인 수강권만 회수할 수 있습니다.')
+      if (!['private', 'group', 'openGroup'].includes(packageType)) {
+        alert('이 수강권 유형은 회수할 수 없습니다.')
         return
       }
       if (latestStatus !== 'active') {
         alert(latestStatus === 'revoked' ? '이미 회수된 수강권입니다.' : '활성 상태의 수강권만 회수할 수 있습니다.')
+        return
+      }
+
+      if (packageType === 'group' || packageType === 'openGroup') {
+        const groupReservationSnap = studentId
+          ? await getDocs(
+              query(
+                collection(db, 'groupLessonReservations'),
+                where('academyId', '==', scopedAcademyId),
+                where('studentId', '==', studentId)
+              )
+            )
+          : null
+        const hasBlockingGroupReservation = groupReservationSnap
+          ? groupReservationSnap.docs.some((docItem) => {
+              const row = docItem.data() || {}
+              return (
+                isActiveGroupReservationStatus(row.status) &&
+                getPackageLinkedIds(row).includes(pkg.id) &&
+                isFuturePackageRow(row)
+              )
+            })
+          : false
+        if (hasBlockingGroupReservation) {
+          alert('미래 단체반 예약을 먼저 취소한 뒤 회수하세요.')
+          return
+        }
+
+        const title = String(latestPackage.title || pkg.title || '').trim() || pkg.id
+        const reasonInput = window.prompt(
+          [
+            '이 단체반 수강권을 회수할까요?',
+            title,
+            '',
+            `총 ${latestTotalCount}회 · 사용 ${latestUsedCount}회 · 남은 ${latestRemainingCount}회`,
+            '',
+            '회수 사유를 입력해 주세요.',
+          ].join('\n'),
+          '오발급 회수'
+        )
+        if (reasonInput === null) return
+        const revokeReason = String(reasonInput || '').trim()
+        if (!revokeReason) {
+          alert('회수 사유를 입력해 주세요.')
+          return
+        }
+
+        const revokedBy = String(userProfile?.displayName || userProfile?.email || '관리자').trim()
+        const revokedByUid = String(user?.uid || userProfile?.uid || userProfile?.userId || '').trim()
+        const groupStudentSnap = await getDocs(
+          query(
+            collection(db, 'groupStudents'),
+            where('academyId', '==', scopedAcademyId),
+            where('packageId', '==', pkg.id)
+          )
+        )
+        const batch = writeBatch(db)
+        batch.update(pkgRef, {
+          status: 'revoked',
+          totalCount: latestTotalCount,
+          usedCount: latestUsedCount,
+          remainingCount: latestRemainingCount,
+          revokedAt: serverTimestamp(),
+          revokedBy,
+          revokedByUid,
+          revokeReason,
+          updatedAt: serverTimestamp(),
+        })
+        groupStudentSnap.forEach((docItem) => {
+          const data = docItem.data() || {}
+          if (String(data.status || 'active').trim() !== 'active') return
+          batch.update(doc(db, 'groupStudents', docItem.id), {
+            status: 'inactive',
+            updatedAt: serverTimestamp(),
+          })
+          updateStudentGroupAccessBatch(
+            batch,
+            db,
+            buildStudentGroupAccessPayloadFromGroupStudent(
+              { id: docItem.id, ...data },
+              { status: 'inactive' }
+            )
+          )
+        })
+        await batch.commit()
+        await syncStudentGroupCourseTypeAccessSummary(db, {
+          academyId: scopedAcademyId,
+          studentId,
+        })
+
+        const revokedPackageSnap = await getDocFromServer(pkgRef)
+        const revokedPackage = revokedPackageSnap.exists()
+          ? { id: revokedPackageSnap.id, ...revokedPackageSnap.data() }
+          : null
+        if (String(revokedPackage?.status || '').trim().toLowerCase() !== 'revoked') {
+          throw new Error('수강권 회수 상태가 저장되지 않았습니다.')
+        }
+        onStudentPackageRevoked?.(revokedPackage)
+
+        try {
+          await addCreditTransaction({
+            studentId,
+            studentName: String(latestPackage.studentName || pkg.studentName || '').trim() || '-',
+            teacher: normalizeText(latestPackage.teacher || pkg.teacher || ''),
+            packageId: pkg.id,
+            packageType,
+            packageTitle: String(latestPackage.title || pkg.title || '').trim(),
+            groupClassName: String(latestPackage.groupClassName || pkg.groupClassName || '').trim(),
+            sourceType: 'studentPackage',
+            sourceId: pkg.id,
+            actionType: 'package_revoked',
+            deltaCount: 0,
+            memo: ['수강권 회수', revokeReason].filter(Boolean).join(' · '),
+          })
+        } catch (transactionError) {
+          console.error('수강권 회수 이력 기록 실패:', transactionError)
+          alert('수강권은 회수되었지만 이력 기록에 실패했습니다. 새로고침 후 다시 확인해 주세요.')
+          return
+        }
+        alert('수강권이 회수되었습니다.')
         return
       }
 

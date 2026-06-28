@@ -76,9 +76,10 @@ function normalizePackageStatus(status) {
 
 function mergeInlinePackageRevokeInfo(pkg, revokeInfo) {
   const status = normalizePackageStatus(pkg?.status)
+  const packageType = String(pkg?.packageType || '').trim()
   const inlineReasons = []
-  if (String(pkg?.packageType || '').trim() !== 'private') {
-    inlineReasons.push('개인 수강권만 회수할 수 있습니다.')
+  if (!['private', 'group', 'openGroup'].includes(packageType)) {
+    inlineReasons.push('이 수강권 유형은 회수할 수 없습니다.')
   }
   if (status === 'revoked') inlineReasons.push('이미 회수된 수강권입니다.')
   else if (status !== 'active') inlineReasons.push('활성 상태의 수강권만 회수할 수 있습니다.')
@@ -89,6 +90,15 @@ function mergeInlinePackageRevokeInfo(pkg, revokeInfo) {
     reason: inlineReasons[0],
     reasons: [...inlineReasons, ...((revokeInfo && revokeInfo.reasons) || [])],
   }
+  if (packageType === 'group' || packageType === 'openGroup') {
+    return {
+      ...revokeInfo,
+      canRevoke: true,
+      reason: '',
+      reasons: [],
+    }
+  }
+  return revokeInfo
 }
 
 function packageKindLabel(packageType) {
@@ -2296,7 +2306,9 @@ export default function StudentsSection({
                             </button>
                             ) : null}
                             {isAdmin &&
-                            String(pkg.packageType || '').trim() === 'private' &&
+                            ['private', 'group', 'openGroup'].includes(
+                              String(pkg.packageType || '').trim()
+                            ) &&
                             status !== 'revoked' ? (
                               <div style={{ display: 'grid', gap: 4 }}>
                                 <button
@@ -2308,7 +2320,7 @@ export default function StudentsSection({
                                   disabled={revokeDisabled}
                                   title={
                                     revokeInfo.canRevoke
-                                      ? '실수로 발급한 개인 수강권을 회수합니다.'
+                                      ? '실수로 발급한 수강권을 회수합니다.'
                                       : revokeInfo.reason
                                   }
                                   style={{

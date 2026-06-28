@@ -687,6 +687,7 @@ export default function CalendarSection(props) {
     privateLessonReservations = [],
     privateLessonSlots = [],
     selectedCalendarTeacher = null,
+    teacherSelectOptions = [],
     handleDeductionToggle,
     canManageAttendance,
     canManagePrivateLessonDeductions,
@@ -1223,6 +1224,11 @@ export default function CalendarSection(props) {
               : isPrivateReservationRow
                 ? 'privateReservation'
                 : 'private'
+            const groupBookableLabel = isGroupRow
+              ? lesson.isBookable === true
+                ? '학생 예약 가능'
+                : '예약 비활성'
+              : ''
             return (
               <div
                 key={lesson.id}
@@ -1276,7 +1282,15 @@ export default function CalendarSection(props) {
                   ) : null}
                 </span>
                 <span>{sessionLabel || '-'}</span>
-                <span>{getTeacherName(lesson)}</span>
+                <span>
+                  {isGroupRow
+                    ? formatTeacherDisplayName(
+                        lesson,
+                        '선생님 선택 필요',
+                        teacherSelectOptions
+                      )
+                    : getTeacherName(lesson)}
+                </span>
                 <span>
                   {isGroupRow
                     ? resolveGroupLessonSubject({
@@ -1289,6 +1303,29 @@ export default function CalendarSection(props) {
                 <span>{remainingLessons}</span>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span>{statusLabel}</span>
+                  {groupBookableLabel ? (
+                    <span
+                      data-testid="calendar-group-lesson-bookable-badge"
+                      style={{
+                        width: 'fit-content',
+                        padding: '2px 7px',
+                        borderRadius: 999,
+                        border:
+                          lesson.isBookable === true
+                            ? '1px solid #4c7a5c'
+                            : '1px solid #665044',
+                        background:
+                          lesson.isBookable === true
+                            ? 'rgba(52, 110, 70, 0.28)'
+                            : 'rgba(90, 65, 45, 0.28)',
+                        color: lesson.isBookable === true ? '#bde8c7' : '#f0c7a8',
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {groupBookableLabel}
+                    </span>
+                  ) : null}
                   {!isGroupRow && !isPrivateReservationRow && lesson.deductMemo ? (
                     <span style={{ fontSize: 12, opacity: 0.8 }}>
                       메모: {lesson.deductMemo}

@@ -1,5 +1,10 @@
 
-import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+import {
+  DEFAULT_GROUP_COURSE_TYPE,
+  GROUP_COURSE_TYPE_OPTIONS,
+  getGroupCourseTypeLabel,
+  normalizeGroupCourseType,
+} from '../../group-booking/groupCourseTypes.js'
 import { formatGroupStudentStartDate } from '../dashboardViewUtils.js'
 
 export default function StudentPackageEditModal({
@@ -17,6 +22,8 @@ export default function StudentPackageEditModal({
   const showAdminFields = !countOnly
   const showBillingFields = showAdminFields && canViewPaymentFields
   const packageType = String(studentPackageEditModalPackage.packageType || '').trim()
+  const isRegisteredGroupPackage = packageType === 'group'
+  const isOpenGroupPackage = packageType === 'openGroup'
   const showGroupFreeBookingField = showAdminFields && packageType === 'group'
 
   return (
@@ -166,6 +173,71 @@ export default function StudentPackageEditModal({
                   </span>
                 ) : null}
               </label>
+
+              {showAdminFields && isOpenGroupPackage ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>코스 유형</span>
+                  <select
+                    aria-label="코스 유형"
+                    data-testid="student-package-edit-open-group-course-type-select"
+                    value={
+                      normalizeGroupCourseType(studentPackageEditForm.groupCourseType) ||
+                      DEFAULT_GROUP_COURSE_TYPE
+                    }
+                    onChange={(e) =>
+                      setStudentPackageEditForm((prev) => ({
+                        ...prev,
+                        groupCourseType: e.target.value,
+                      }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  >
+                    {GROUP_COURSE_TYPE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  {studentPackageEditFormErrors.groupCourseType ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageEditFormErrors.groupCourseType}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
+
+              {showAdminFields && isRegisteredGroupPackage ? (
+                <div
+                  data-testid="student-package-edit-group-course-type-readonly"
+                  style={{
+                    display: 'grid',
+                    gap: 5,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #3a4a66',
+                    background: '#182033',
+                    fontSize: 13,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  <div style={{ opacity: 0.85 }}>코스 유형</div>
+                  <div style={{ fontWeight: 700 }}>
+                    {getGroupCourseTypeLabel(studentPackageEditForm.groupCourseType) ||
+                      getGroupCourseTypeLabel(studentPackageEditModalPackage.groupCourseType) ||
+                      '-'}
+                  </div>
+                  <div style={{ opacity: 0.72 }}>
+                    반의 코스 유형을 변경하려면 단체반 관리 &gt; 반 수정에서 변경하세요.
+                    저장 시 연결된 반의 코스 유형으로 수강권 값이 자동 동기화됩니다.
+                  </div>
+                </div>
+              ) : null}
 
               {showGroupFreeBookingField ? (
                 <label

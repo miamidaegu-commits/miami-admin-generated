@@ -104,7 +104,21 @@ function isLegacyTeacherPlaceholder(value) {
   return String(value || '').trim() === '기존 선생님'
 }
 
-export function formatTeacherDisplayName(row, fallback = '선생님 선택 필요') {
+function teacherOptionMatchesRow(option, rowKeys) {
+  return [
+    option?.value,
+    option?.teacherKey,
+    option?.teacher,
+    option?.teacherUid,
+    option?.teacherId,
+    option?.uid,
+    option?.id,
+  ]
+    .map((value) => String(value || '').trim())
+    .some((value) => value && rowKeys.includes(value))
+}
+
+export function formatTeacherDisplayName(row, fallback = '선생님 선택 필요', teacherOptions = []) {
   const looksLikeUid = (value) =>
     /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
     !/\s/.test(String(value || '').trim())
@@ -112,9 +126,28 @@ export function formatTeacherDisplayName(row, fallback = '선생님 선택 필�
   const display = String(
     row?.teacherName || row?.teacherDisplayName || row?.displayName || ''
   ).trim()
-  const key = String(row?.teacherKey || row?.teacher || '').trim()
+  const key = String(row?.teacherKey || row?.teacher || row?.teacherUid || row?.teacherId || '').trim()
 
   if (display && !looksLikeUid(display) && !isLegacyTeacherPlaceholder(display)) return display
+  const rowKeys = [
+    row?.teacher,
+    row?.teacherKey,
+    row?.teacherUid,
+    row?.teacherId,
+    row?.uid,
+    row?.id,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  const matchedOption = (Array.isArray(teacherOptions) ? teacherOptions : []).find((option) =>
+    teacherOptionMatchesRow(option, rowKeys)
+  )
+  const matchedDisplay = String(
+    matchedOption?.displayName || matchedOption?.label || matchedOption?.teacherName || ''
+  ).trim()
+  if (matchedDisplay && !looksLikeUid(matchedDisplay) && !isLegacyTeacherPlaceholder(matchedDisplay)) {
+    return matchedDisplay
+  }
   if (key && !looksLikeUid(key) && !isLegacyTeacherPlaceholder(key)) return key
   return fallback
 }
@@ -144,6 +177,8 @@ export function resolveTeacherIdentityFields(selectedValue, teacherSelectOptions
   return {
     teacher: teacherKey || rawValue,
     teacherKey: teacherKey || rawValue,
+    teacherUid: String(option?.teacherUid || option?.uid || '').trim(),
+    teacherId: String(option?.teacherId || option?.id || '').trim(),
     teacherName,
     teacherDisplayName: teacherName,
     displayName: teacherName,

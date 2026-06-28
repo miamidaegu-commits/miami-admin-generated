@@ -3222,6 +3222,7 @@ export default function Dashboard() {
     currentAcademyId,
     addCreditTransaction,
     studentDocFieldToYmdString,
+    groupClasses,
     onStudentPackageRevoked: (revokedPackage) => {
       const packageId = String(revokedPackage?.id || '').trim()
       if (!packageId) return
@@ -5654,6 +5655,7 @@ export default function Dashboard() {
       privateLessonReservations,
       privateLessonSlots,
       selectedCalendarTeacher,
+      teacherSelectOptions,
       getMatchedStudent,
       getMatchedStudentId,
       studentPackages,
@@ -5737,6 +5739,7 @@ export default function Dashboard() {
     canViewPaymentFields,
     openGroupLessonPurgeModal,
     busyGroupLessonPurge,
+    teacherSelectOptions,
     sortedGroupStudentsForSelectedClass,
     handleRemoveGroupStudent,
     sortedGroupLessonsForSelectedClass,
