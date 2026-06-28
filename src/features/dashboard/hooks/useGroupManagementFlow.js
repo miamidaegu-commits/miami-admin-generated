@@ -8,6 +8,7 @@ import {
   serverTimestamp,
   updateDoc,
   where,
+  writeBatch,
 } from 'firebase/firestore'
 import { db } from '../../../../firebase'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
@@ -16,6 +17,7 @@ import {
   formatLocalDateToYmd,
   getTodayStorageDateString,
   GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS,
+  isNoDeductionCancelledGroupLesson,
   normalizeGroupWeekdaysFromDoc,
   normalizeText,
   parseYmdToLocalDate,
@@ -97,6 +99,86 @@ function groupBelongsToTeacher(group, teacherKey) {
   )
 }
 
+function getTeacherOptionMatchValue(group, teacherSelectOptions = []) {
+  const rowKeys = [
+    group?.teacher,
+    group?.teacherKey,
+    group?.teacherUid,
+    group?.teacherId,
+    group?.teacherName,
+    group?.teacherDisplayName,
+    group?.displayName,
+  ]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+
+  const matchedOption = (Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []).find(
+    (option) =>
+      [
+        option?.value,
+        option?.teacher,
+        option?.teacherKey,
+        option?.teacherUid,
+        option?.teacherId,
+        option?.uid,
+        option?.id,
+        option?.displayName,
+        option?.teacherName,
+        option?.label,
+      ]
+        .map((value) => normalizeText(value || ''))
+        .some((value) => value && rowKeys.includes(value))
+  )
+
+  return String(matchedOption?.value || '').trim()
+}
+
+function resolveGroupTeacherFormValue(group, teacherSelectOptions = []) {
+  return (
+    getTeacherOptionMatchValue(group, teacherSelectOptions) ||
+    String(
+      group?.teacherKey ||
+        group?.teacher ||
+        group?.teacherUid ||
+        group?.teacherId ||
+        group?.teacherName ||
+        ''
+    ).trim()
+  )
+}
+
+function teacherIdentityChanged(group, teacherIdentity) {
+  return [
+    ['teacher', teacherIdentity.teacher],
+    ['teacherKey', teacherIdentity.teacherKey],
+    ['teacherUid', teacherIdentity.teacherUid],
+    ['teacherId', teacherIdentity.teacherId],
+    ['teacherName', teacherIdentity.teacherName],
+    ['teacherDisplayName', teacherIdentity.teacherDisplayName],
+    ['displayName', teacherIdentity.displayName],
+  ].some(([key, value]) => String(group?.[key] || '').trim() !== String(value || '').trim())
+}
+
+function getGroupLessonGroupId(lesson) {
+  return String(lesson?.groupClassId || lesson?.groupClassID || '').trim()
+}
+
+function isFutureTeacherSyncTargetGroupLesson(lesson, groupClassId, todayYmd) {
+  if (getGroupLessonGroupId(lesson) !== String(groupClassId || '').trim()) return false
+  if (isNoDeductionCancelledGroupLesson(lesson)) return false
+  if (lesson?.completed === true) return false
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  if (['cancelled', 'canceled', 'deleted', 'closed'].includes(status)) return false
+  const date = String(lesson?.date || '').trim()
+  return !/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayYmd
+}
+
+function chunkArray(items, size) {
+  const chunks = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
 export default function useGroupManagementFlow({
   activeSection,
   userProfile,
@@ -109,6 +191,9 @@ export default function useGroupManagementFlow({
   openPostGroupScheduleRebuildModal,
   groupStudents = [],
   teacherSelectOptions = [],
+  setGroupClasses,
+  setSelectedGroupClass,
+  setGroupLessons,
 }) {
   const [groupModal, setGroupModal] = useState(null)
   const [groupForm, setGroupFormState] = useState(createDefaultGroupForm())
@@ -188,7 +273,7 @@ export default function useGroupManagementFlow({
     setGroupFormState(
       createDefaultGroupForm({
         name: group.name || '',
-        teacher: teacherKey || group.teacher || group.teacherName || '',
+        teacher: teacherKey || resolveGroupTeacherFormValue(group, teacherSelectOptions),
         maxStudents: groupMaxStudentsToFormString(group.maxStudents),
         status: String(group.status || 'active').trim() === 'inactive' ? 'inactive' : 'active',
         time: String(group.time || '').trim(),
@@ -305,6 +390,7 @@ export default function useGroupManagementFlow({
       return
     }
     const scheduleAffected = isGroupEditScheduleAffected(group, result)
+    const teacherChanged = teacherIdentityChanged(group, teacherIdentity)
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
@@ -322,7 +408,7 @@ export default function useGroupManagementFlow({
         setBusyGroupId(null)
         return
       }
-      await updateDoc(doc(db, 'groupClasses', group.id), {
+      const groupClassUpdate = {
         name: result.name,
         teacher: teacherIdentity.teacher,
         teacherKey: teacherIdentity.teacherKey,
@@ -339,7 +425,97 @@ export default function useGroupManagementFlow({
         weekdays: result.weekdays,
         recurrenceMode: result.recurrenceMode,
         updatedAt: serverTimestamp(),
-      })
+      }
+      await updateDoc(doc(db, 'groupClasses', group.id), groupClassUpdate)
+
+      const savedGroup = {
+        ...group,
+        name: result.name,
+        teacher: teacherIdentity.teacher,
+        teacherKey: teacherIdentity.teacherKey,
+        teacherUid: teacherIdentity.teacherUid,
+        teacherId: teacherIdentity.teacherId,
+        teacherName: teacherIdentity.teacherName,
+        teacherDisplayName: teacherIdentity.teacherDisplayName,
+        displayName: teacherIdentity.displayName,
+        maxStudents: result.maxStudents,
+        status: result.status,
+        time: result.time,
+        subject: result.subject,
+        groupCourseType: result.groupCourseType,
+        weekdays: result.weekdays,
+        recurrenceMode: result.recurrenceMode,
+      }
+
+      setGroupClasses?.((prev) =>
+        (Array.isArray(prev) ? prev : []).map((row) =>
+          row?.id === savedGroup.id ? { ...row, ...savedGroup } : row
+        )
+      )
+      setSelectedGroupClass?.((prev) =>
+        prev?.id === savedGroup.id ? { ...prev, ...savedGroup } : prev
+      )
+
+      if (teacherChanged) {
+        const todayYmd = getTodayStorageDateString()
+        const futureGroupLessonsTeacherUpdate = {
+          teacher: teacherIdentity.teacher,
+          teacherKey: teacherIdentity.teacherKey,
+          teacherUid: teacherIdentity.teacherUid,
+          teacherId: teacherIdentity.teacherId,
+          teacherName: teacherIdentity.teacherName,
+          teacherDisplayName: teacherIdentity.teacherDisplayName,
+          displayName: teacherIdentity.displayName,
+          updatedAt: serverTimestamp(),
+        }
+        const snapshots = await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'groupLessons'),
+              where('academyId', '==', scopedAcademyId),
+              where('groupClassId', '==', group.id)
+            )
+          ),
+          getDocs(
+            query(
+              collection(db, 'groupLessons'),
+              where('academyId', '==', scopedAcademyId),
+              where('groupClassID', '==', group.id)
+            )
+          ),
+        ])
+        const futureGroupLessons = new Map()
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docItem) => {
+            const lesson = { id: docItem.id, ...docItem.data() }
+            if (isFutureTeacherSyncTargetGroupLesson(lesson, group.id, todayYmd)) {
+              futureGroupLessons.set(docItem.id, docItem.ref)
+            }
+          })
+        })
+        for (const refs of chunkArray([...futureGroupLessons.values()], 450)) {
+          const batch = writeBatch(db)
+          refs.forEach((lessonRef) => batch.update(lessonRef, futureGroupLessonsTeacherUpdate))
+          await batch.commit()
+        }
+        setGroupLessons?.((prev) =>
+          (Array.isArray(prev) ? prev : []).map((lesson) =>
+            isFutureTeacherSyncTargetGroupLesson(lesson, group.id, todayYmd)
+              ? {
+                  ...lesson,
+                  teacher: teacherIdentity.teacher,
+                  teacherKey: teacherIdentity.teacherKey,
+                  teacherUid: teacherIdentity.teacherUid,
+                  teacherId: teacherIdentity.teacherId,
+                  teacherName: teacherIdentity.teacherName,
+                  teacherDisplayName: teacherIdentity.teacherDisplayName,
+                  displayName: teacherIdentity.displayName,
+                }
+              : lesson
+          )
+        )
+      }
+
       closeGroupModal()
       if (
         scheduleAffected &&

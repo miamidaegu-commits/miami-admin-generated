@@ -1913,8 +1913,13 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!selectedGroupClass?.id) return
-    const stillThere = groupClasses.some((g) => g.id === selectedGroupClass.id)
-    if (!stillThere) setSelectedGroupClass(null)
+    const latestGroupClass = groupClasses.find((g) => g.id === selectedGroupClass.id) || null
+    setSelectedGroupClass((prev) => {
+      if (!prev?.id) return prev
+      if (!latestGroupClass) return null
+      if (prev === latestGroupClass) return prev
+      return { ...prev, ...latestGroupClass }
+    })
   }, [groupClasses, selectedGroupClass?.id])
 
   useEffect(() => {
@@ -3333,6 +3338,9 @@ export default function Dashboard() {
     openPostGroupScheduleRebuildModal,
     groupStudents,
     teacherSelectOptions,
+    setGroupClasses,
+    setSelectedGroupClass,
+    setGroupLessons,
   })
 
   const selectedDateDisplayString = useMemo(

@@ -1,6 +1,7 @@
 import {
   formatGroupStudentStartDate,
   formatGroupWeekdaysDisplay,
+  getTodayStorageDateString,
   isGroupStudentOperationallyEligibleOnYmd,
   isNoDeductionCancelledGroupLesson,
 } from '../dashboardViewUtils.js'
@@ -23,6 +24,15 @@ function getLessonReservationStatusLabel(lesson, seatAvailability) {
 
 function getLessonBookableBadgeLabel(lesson) {
   return lesson?.isBookable === true ? '학생 직접 예약: 가능' : '학생 직접 예약: 비활성'
+}
+
+function isPastGroupLessonForAdmin(lesson) {
+  const date = String(lesson?.date || '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date < getTodayStorageDateString()
+}
+
+function getGroupLessonAttendanceActionLabel(lesson) {
+  return isPastGroupLessonForAdmin(lesson) ? '출결/차감' : '자리 공개 관리'
 }
 
 function getLessonCapacityLabel(lesson, seatAvailability) {
@@ -700,6 +710,42 @@ export default function GroupsSection({
                           ) : null}
                         </span>
                         <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <span
+                            data-testid="group-lesson-action-seat-label"
+                            style={{
+                              alignSelf: 'center',
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              border: '1px solid #3c4f68',
+                              background: '#182234',
+                              color: '#dbe8ff',
+                              fontSize: 12,
+                              fontWeight: 700,
+                            }}
+                          >
+                            좌석: {reservationStatusLabel}
+                          </span>
+                          <span
+                            data-testid="group-lesson-action-bookable-label"
+                            style={{
+                              alignSelf: 'center',
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              border:
+                                gl.isBookable === true
+                                  ? '1px solid #4c7a5c'
+                                  : '1px solid #665044',
+                              background:
+                                gl.isBookable === true
+                                  ? 'rgba(52, 110, 70, 0.28)'
+                                  : 'rgba(90, 65, 45, 0.28)',
+                              color: gl.isBookable === true ? '#bde8c7' : '#f0c7a8',
+                              fontSize: 12,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {bookableBadgeLabel}
+                          </span>
                           {canManageGroupReservations ? (
                             <button
                               type="button"
@@ -779,13 +825,14 @@ export default function GroupsSection({
                                     : 'pointer',
                               }}
                             >
-                              {attendanceBusyThisLesson ? '처리 중' : '출결/차감'}
+                              {attendanceBusyThisLesson ? '처리 중' : getGroupLessonAttendanceActionLabel(gl)}
                             </button>
                           ) : null}
                           {isAdmin && canEditLesson && !isNoDeductionCancelled ? (
                             <button
                               type="button"
                               onClick={() => openGroupLessonNoDeductionCancelModal(gl)}
+                              title="자리 공개가 아니라 이 회차 전체를 차감 없이 닫습니다."
                               disabled={
                                 rowBusy ||
                                 busyGroupLessonId === '__add__' ||
@@ -807,7 +854,7 @@ export default function GroupsSection({
                                     : 'pointer',
                               }}
                             >
-                              휴강 처리
+                              수업 전체 휴강
                             </button>
                           ) : null}
                           {canEditLesson ? (
