@@ -361,6 +361,15 @@ function isActivePrivateReservationStatus(reservation) {
   return PRIVATE_RESERVATION_ACTIVE_STATUSES.has(getPrivateReservationStatusToken(reservation))
 }
 
+function isUpcomingPrivateReservationStatus(reservation) {
+  const status = getPrivateReservationStatusToken(reservation)
+  return (
+    PRIVATE_RESERVATION_ACTIVE_STATUSES.has(status) ||
+    status === 'scheduled' ||
+    status === 'schedule_confirmed'
+  )
+}
+
 function getReservationStatusLabel(reservation) {
   if (reservation?.noDeduction === true) {
     return '휴강 · 차감 없음'
@@ -636,6 +645,17 @@ function canShowPrivateReservationCancelAction(reservation) {
     Boolean(reservation?.slotId) &&
     isStudentDirectPrivateReservation(reservation) &&
     isActivePrivateReservationStatus(reservation) &&
+    !isPrivateReservationCancelled(reservation) &&
+    !isPrivateReservationOutcomeFinal(reservation) &&
+    !isPrivateReservationPast(reservation) &&
+    isPrivateReservationInFuture(reservation)
+  )
+}
+
+function canShowUpcomingPrivateReservation(reservation) {
+  return (
+    Boolean(reservation?.slotId) &&
+    isUpcomingPrivateReservationStatus(reservation) &&
     !isPrivateReservationCancelled(reservation) &&
     !isPrivateReservationOutcomeFinal(reservation) &&
     !isPrivateReservationPast(reservation) &&
@@ -2013,6 +2033,7 @@ export default function StudentBookingPage() {
         'reserved',
         'confirmed',
         'booked',
+        'scheduled',
         'cancelled',
         'canceled',
         'teacher_cancelled',
@@ -2298,38 +2319,69 @@ export default function StudentBookingPage() {
   }, [studentPrivateLessons, todayYmd])
 
   const upcomingPrivateScheduleItems = useMemo(() => {
-    const lessonItems = sortedUpcomingPrivateLessons.map((lesson) => ({
-      id: `lesson-${lesson.id}`,
-      source: 'lesson',
-      sourceId: lesson.id,
-      date: lesson.scheduleDate,
-      time: lesson.scheduleTime,
-      teacherLabel: getLessonTeacherLabel(lesson),
-      title: getLessonSubjectLabel(lesson),
-      sessionLabel: formatLessonSessionNumber(lesson),
-      durationLabel: getPrivateDurationLabel(lesson),
-      statusLabel: '수업 예정',
-      lesson,
-    }))
+    const seenKeys = new Set()
+    const addSeenKey = (key) => {
+      if (!key) return false
+      if (seenKeys.has(key)) return true
+      seenKeys.add(key)
+      return false
+    }
 
     const reservationItems = privateReservations
       .filter((reservation) => {
-        if (!canShowPrivateReservationCancelAction(reservation)) return false
+        if (!canShowUpcomingPrivateReservation(reservation)) return false
         const date = String(reservation.date || '').trim()
         return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= todayYmd
       })
-      .map((reservation) => ({
-        id: `private-reservation-${reservation.id}`,
-        source: 'privateReservation',
-        sourceId: reservation.id,
-        date: String(reservation.date || '').trim(),
-        time: String(reservation.time || '').trim(),
-        teacherLabel: String(reservation.teacher || '').trim() || '-',
-        title: String(reservation.subject || '').trim() || '1:1 수업',
-        sessionLabel: '',
-        durationLabel: getPrivateDurationLabel(reservation),
-        statusLabel: isFixedPrivateReservation(reservation) ? '고정 예약' : '예약 완료',
-        reservation,
+      .map((reservation) => {
+        const date = String(reservation.date || '').trim()
+        const time = String(reservation.time || '').trim()
+        const slotId = String(reservation.slotId || '').trim()
+        const typeLabel = isFixedPrivateReservation(reservation)
+          ? '고정 예약 1:1'
+          : '학생 직접예약 1:1'
+        if (slotId) addSeenKey(`${date}|${time}|${slotId}`)
+        return {
+          id: `private-reservation-${reservation.id}`,
+          source: 'privateReservation',
+          sourceId: reservation.id,
+          date,
+          time,
+          typeLabel,
+          teacherLabel:
+            String(reservation.teacherName || reservation.teacher || '').trim() || '-',
+          studentName:
+            String(reservation.studentName || reservation.student || '').trim() || '',
+          title: String(reservation.subject || '').trim() || '1:1 수업',
+          sessionLabel: '',
+          durationLabel: getPrivateDurationLabel(reservation),
+          statusLabel: '예약 완료',
+          reservation,
+        }
+      })
+
+    const lessonItems = sortedUpcomingPrivateLessons
+      .filter((lesson) => {
+        const lessonSlotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+        const duplicateKey = lessonSlotId
+          ? `${lesson.scheduleDate}|${lesson.scheduleTime}|${lessonSlotId}`
+          : ''
+        return !addSeenKey(duplicateKey)
+      })
+      .map((lesson) => ({
+        id: `lesson-${lesson.id}`,
+        source: 'lesson',
+        sourceId: lesson.id,
+        date: lesson.scheduleDate,
+        time: lesson.scheduleTime,
+        typeLabel: isFixedPrivateLesson(lesson) ? '고정 예약 1:1' : '1:1 수업',
+        teacherLabel: getLessonTeacherLabel(lesson),
+        studentName: String(lesson.studentName || lesson.student || '').trim() || '',
+        title: getLessonSubjectLabel(lesson),
+        sessionLabel: formatLessonSessionNumber(lesson),
+        durationLabel: getPrivateDurationLabel(lesson),
+        statusLabel: '수업 예정',
+        lesson,
       }))
 
     return [...lessonItems, ...reservationItems].sort((a, b) => {
@@ -3529,6 +3581,14 @@ export default function StudentBookingPage() {
                           ...studentBookingMobileContentGuardStyle,
                         }}
                       >
+                        {item.typeLabel ? (
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              구분
+                            </span>
+                            {item.typeLabel}
+                          </span>
+                        ) : null}
                         <span>
                           <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
                             날짜
@@ -3547,6 +3607,14 @@ export default function StudentBookingPage() {
                           </span>
                           {item.teacherLabel || '-'}
                         </span>
+                        {item.studentName ? (
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              학생
+                            </span>
+                            {item.studentName}
+                          </span>
+                        ) : null}
                         <span>
                           <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
                             수업명
@@ -3589,83 +3657,6 @@ export default function StudentBookingPage() {
                           {item.statusLabel || '수업 예정'}
                         </span>
                       </div>
-                      {item.source === 'lesson' &&
-                      isFixedPrivateLesson(item.lesson) ? (
-                        <div
-                          style={{
-                            display: isMobileStudentBooking ? 'grid' : 'flex',
-                            gridTemplateColumns: isMobileStudentBooking
-                              ? 'repeat(2, minmax(0, 1fr))'
-                              : undefined,
-                            justifyContent: isMobileStudentBooking ? undefined : 'space-between',
-                            gap: 10,
-                            alignItems: 'center',
-                            flexWrap: isMobileStudentBooking ? undefined : 'wrap',
-                            marginTop: 12,
-                            ...(isMobileStudentBooking
-                              ? STUDENT_BOOKING_MOBILE_STACKED_ACTION_STYLE
-                              : {}),
-                          }}
-                        >
-                          {(() => {
-                            const unavailableReason = getFixedPrivateLessonCancelUnavailableReason(item.lesson)
-                            const disabled = Boolean(busyFixedPrivateLessonId || unavailableReason)
-                            return (
-                              <>
-                                {unavailableReason ? (
-                                  <span
-                                    style={{
-                                      opacity: 0.72,
-                                      fontSize: 13,
-                                      ...studentBookingMobileTextGuardStyle,
-                                    }}
-                                  >
-                                    {unavailableReason}
-                                  </span>
-                                ) : (
-                                  <span
-                                    style={{
-                                      opacity: 0.72,
-                                      fontSize: 13,
-                                      ...studentBookingMobileTextGuardStyle,
-                                    }}
-                                  >
-                                    취소 가능 {privateCancelAllowance.remaining}회
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  onClick={() => cancelFixedPrivateLesson(item.lesson)}
-                                  disabled={disabled}
-                                  data-testid="student-fixed-private-lesson-cancel-button"
-                                  style={{
-                                    padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
-                                    minHeight: isMobileStudentBooking ? 44 : undefined,
-                                    borderRadius: 999,
-                                    border: '1px solid #9a3f48',
-                                    background: '#3a1f24',
-                                    color: '#ffd8dc',
-                                    cursor: disabled ? 'not-allowed' : 'pointer',
-                                    fontSize: isMobileStudentBooking ? 14 : 12,
-                                    fontWeight: 800,
-                                    flex: isMobileStudentBooking ? undefined : '0 0 auto',
-                                    ...(isMobileStudentBooking
-                                      ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
-                                      : {}),
-                                  }}
-                                >
-                                  {busyFixedPrivateLessonId === item.sourceId ? '취소 중...' : '고정수업 취소'}
-                                </button>
-                              </>
-                            )
-                          })()}
-                        </div>
-                      ) : null}
-                      {item.source === 'privateReservation'
-                        ? renderPrivateReservationCancelAction(item.reservation, {
-                            testId: 'student-upcoming-private-reservation-cancel-button',
-                          })
-                        : null}
                     </article>
                   ))}
                   {isMobileStudentBooking ? (
