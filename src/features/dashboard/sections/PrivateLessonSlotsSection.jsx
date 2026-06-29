@@ -1163,7 +1163,11 @@ export default function PrivateLessonSlotsSection({
                   data-testid="private-weekly-bulk-result"
                   style={{ color: '#b8f7c0', fontSize: 13 }}
                 >
-                  {privateAvailabilityBulkResult.mode === 'preview' ? '미리보기 · ' : ''}
+                  {privateAvailabilityBulkResult.mode === 'preview'
+                    ? '미리보기 · '
+                    : privateAvailabilityBulkResult.mode === 'blocked'
+                      ? '등록 중단 · '
+                      : ''}
                   생성 {privateAvailabilityBulkResult.createdCount}개 · 중복 제외{' '}
                   {privateAvailabilityBulkResult.skippedDuplicateCount}개 · 시간 겹침 제외{' '}
                   {privateAvailabilityBulkResult.skippedOverlapCount}개 · 오류{' '}
@@ -1172,6 +1176,24 @@ export default function PrivateLessonSlotsSection({
                   privateAvailabilityBulkResult.effectiveEndDate
                     ? ` · 기간: ${privateAvailabilityBulkResult.effectiveStartDate} ~ ${privateAvailabilityBulkResult.effectiveEndDate}`
                     : ''}
+                  {Array.isArray(privateAvailabilityBulkResult.conflictMessages) &&
+                  privateAvailabilityBulkResult.conflictMessages.length > 0 ? (
+                    <div style={{ display: 'grid', gap: 8, marginTop: 8, color: '#f4d48f' }}>
+                      {privateAvailabilityBulkResult.conflictMessages.map((message) => (
+                        <pre
+                          key={message}
+                          style={{
+                            margin: 0,
+                            whiteSpace: 'pre-wrap',
+                            fontFamily: 'inherit',
+                            lineHeight: 1.5,
+                          }}
+                        >
+                          {message}
+                        </pre>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </form>
@@ -1402,6 +1424,20 @@ export default function PrivateLessonSlotsSection({
                   {busyPrivateAvailabilityTemplateId === '__add__' ? '추가 중...' : '추가'}
                 </button>
               </div>
+              {privateAvailabilityTemplateErrors.form ? (
+                <div
+                  data-testid="private-availability-template-form-error"
+                  style={{
+                    gridColumn: '1 / -1',
+                    color: '#f4d48f',
+                    fontSize: 13,
+                    whiteSpace: 'pre-wrap',
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {privateAvailabilityTemplateErrors.form}
+                </div>
+              ) : null}
             </form>
             {privateAvailabilityTemplatesLoading ? (
               <p style={{ margin: 0, opacity: 0.76 }}>불러오는 중...</p>
