@@ -2,8 +2,13 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  collectTeacherIdentityCandidates,
   formatTeacherDisplayName,
+  getGroupLessonGroupId,
+  resolveTeacherDisplayName,
+  resolveTeacherFormValue,
   resolveTeacherIdentityFields,
+  resolveTeacherOption,
 } from '../src/features/dashboard/dashboardViewUtils.js';
 
 test('teacher fallback does not expose legacy existing teacher copy', () => {
@@ -74,6 +79,65 @@ test('teacher fallback resolves teacher key from options before showing missing 
   ).toBe('MikeTest · miketest');
 });
 
+test('shared teacher resolver aligns row display and edit form value', () => {
+  const teacherOptions = [
+    {
+      value: 'teacher-option-1',
+      key: 'teacher-option-key',
+      uid: 'teacher-uid-1',
+      teacherUid: 'teacher-uid-1',
+      teacherId: 'teacher-id-1',
+      teacherKey: 'miketest',
+      teacherName: 'MikeTest',
+      displayName: 'MikeTest',
+      label: 'MikeTest · miketest',
+    },
+  ];
+
+  const group = {
+    teacherName: '선생님 선택 필요',
+    teacherKey: 'miketest',
+  };
+
+  expect(collectTeacherIdentityCandidates(group)).toContain('miketest');
+  expect(resolveTeacherOption(group, teacherOptions)?.value).toBe('teacher-option-1');
+  expect(resolveTeacherDisplayName(group, teacherOptions)).toBe('MikeTest · miketest');
+  expect(formatTeacherDisplayName(group, '선생님 선택 필요', teacherOptions)).toBe(
+    'MikeTest · miketest'
+  );
+  expect(resolveTeacherFormValue(group, teacherOptions)).toBe('teacher-option-1');
+
+  expect(resolveTeacherFormValue({}, teacherOptions)).toBe('');
+  expect(
+    resolveTeacherDisplayName(
+      {
+        teacherName: '선생님 선택',
+        teacher: '기존 값 보존',
+      },
+      teacherOptions
+    )
+  ).toBe('선생님 선택 필요');
+
+  expect(
+    resolveTeacherDisplayName(
+      {
+        teacherName: '선생님 선택 필요',
+        teacher: 'MikeTest',
+      },
+      teacherOptions
+    )
+  ).toBe('MikeTest · miketest');
+});
+
+test('group lesson teacher fallback accepts legacy group class id fields', () => {
+  expect(getGroupLessonGroupId({ groupClassId: 'class-a' })).toBe('class-a');
+  expect(getGroupLessonGroupId({ groupClassID: 'class-b' })).toBe('class-b');
+  expect(getGroupLessonGroupId({ classId: 'class-c' })).toBe('class-c');
+  expect(getGroupLessonGroupId({ classID: 'class-d' })).toBe('class-d');
+  expect(getGroupLessonGroupId({ groupId: 'class-e' })).toBe('class-e');
+  expect(getGroupLessonGroupId({ groupID: 'class-f' })).toBe('class-f');
+});
+
 test('group class save persists teacher display identity fields', () => {
   const source = fs.readFileSync(
     path.join(process.cwd(), 'src/features/dashboard/hooks/useGroupManagementFlow.js'),
@@ -97,6 +161,7 @@ test('group class save persists teacher display identity fields', () => {
   expect(source).toContain('teacherDisplayName: teacherIdentity.teacherDisplayName');
   expect(source).toContain('displayName: teacherIdentity.displayName');
   expect(source).toContain('resolveGroupTeacherFormValue(group, teacherSelectOptions)');
+  expect(source).toContain('resolveTeacherFormValue(group, teacherSelectOptions)');
   expect(source).toContain('const teacherChanged = teacherIdentityChanged(group, teacherIdentity)');
   expect(source).toContain('const savedGroup = {');
   expect(source).toContain('setSelectedGroupClass?.((prev)');
@@ -111,18 +176,33 @@ test('group class save persists teacher display identity fields', () => {
   expect(dashboardSource).toContain('setSelectedGroupClass,');
   expect(dashboardSource).toContain('setGroupLessons,');
   expect(dashboardSource).toContain('const groupClassesById = useMemo(() => {');
+  expect(dashboardSource).toContain('const resolveGroupClassForLesson = (lesson) => {');
   expect(dashboardSource).toContain('buildGroupLessonTeacherDisplaySource');
   expect(dashboardSource).toContain('groupClassTeacherKey: groupClass?.teacherKey');
-  expect(dashboardSource).toContain('formatTeacherDisplayName(');
-  expect(viewUtilsSource).toContain('row?.teacherDisplayName');
-  expect(viewUtilsSource).toContain('row?.teacherName');
-  expect(viewUtilsSource).toContain('row?.teacherLabel');
+  expect(dashboardSource).toContain('resolveTeacherDisplayName(');
+  expect(viewUtilsSource).toContain('collectTeacherIdentityCandidates');
+  expect(viewUtilsSource).toContain('resolveTeacherOption');
+  expect(viewUtilsSource).toContain('resolveTeacherDisplayName');
+  expect(viewUtilsSource).toContain('resolveTeacherFormValue');
+  expect(viewUtilsSource).toContain('record?.teacherDisplayName');
+  expect(viewUtilsSource).toContain('record?.teacherName');
+  expect(viewUtilsSource).toContain('record?.teacherLabel');
   expect(viewUtilsSource).toContain('option?.teacherUid');
   expect(viewUtilsSource).toContain('option?.teacherId');
-  expect(viewUtilsSource).toContain('row?.groupClassTeacherKey');
+  expect(viewUtilsSource).toContain('option?.displayName');
+  expect(viewUtilsSource).toContain('option?.label');
+  expect(viewUtilsSource).toContain('option?.teacherName');
+  expect(viewUtilsSource).toContain('record?.groupClassTeacherKey');
   expect(viewUtilsSource).toContain("normalized === '선생님 선택 필요'");
+  expect(viewUtilsSource).toContain("normalized === '선생님 선택'");
+  expect(viewUtilsSource).toContain("normalized.includes('기존 값 보존')");
+  expect(viewUtilsSource).toContain('gl?.classId');
+  expect(viewUtilsSource).toContain('gl?.classID');
+  expect(viewUtilsSource).toContain('gl?.groupId');
+  expect(viewUtilsSource).toContain('gl?.groupID');
   expect(calendarViewModelSource).toContain('groupClassTeacherKey: String(gc?.teacherKey');
   expect(calendarViewModelSource).toContain('groupClassTeacherDisplayName: String(gc?.teacherDisplayName');
+  expect(calendarViewModelSource).toContain('findGroupClassForLesson(gl, groupClasses)');
 });
 
 test('group lesson form allows empty subject and keeps date time validation', () => {

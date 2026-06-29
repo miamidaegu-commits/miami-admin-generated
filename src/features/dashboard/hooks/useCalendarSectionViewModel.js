@@ -37,10 +37,28 @@ function groupLessonHasAutoDeduction(groupLesson) {
   )
 }
 
+function findGroupClassForLesson(groupLesson, groupClasses) {
+  const groupId = getGroupLessonGroupId(groupLesson)
+  if (groupId) {
+    const byId = groupClasses.find((groupClass) => String(groupClass.id || '').trim() === groupId)
+    if (byId) return byId
+  }
+
+  const lessonName = normalizeText(
+    groupLesson?.groupClassName || groupLesson?.name || groupLesson?.title || ''
+  )
+  if (!lessonName) return null
+  return (
+    groupClasses.find((groupClass) => {
+      const groupClassName = normalizeText(groupClass?.name || groupClass?.title || '')
+      return groupClassName && groupClassName === lessonName
+    }) || null
+  )
+}
+
 function buildCalendarGroupLessonRows(groupLessons, groupClasses, todayYmd) {
   return groupLessons.map((gl) => {
-    const gcid = getGroupLessonGroupId(gl)
-    const gc = groupClasses.find((g) => String(g.id) === String(gcid))
+    const gc = findGroupClassForLesson(gl, groupClasses)
     const name =
       gc?.name != null && String(gc.name).trim() ? String(gc.name).trim() : '-'
     const lessonDate = getLessonStorageDateString(gl)
@@ -223,24 +241,24 @@ export default function useCalendarSectionViewModel({
     return rows.filter((gl) => {
       if (isClassClosureCancelledGroupLesson(gl)) return false
       const gcid = getGroupLessonGroupId(gl)
-      if (!gcid) return false
-      return activeGroupClassById.has(String(gcid))
+      if (gcid && activeGroupClassById.has(String(gcid))) return true
+      return Boolean(findGroupClassForLesson(gl, groupClasses))
     })
-  }, [activeGroupClassById, studentSummaryGroupLessons])
+  }, [activeGroupClassById, groupClasses, studentSummaryGroupLessons])
 
   const visibleGroupLessons = useMemo(() => {
     if (userProfile?.role === 'teacher' && userProfile?.teacherName) {
       const myTeacherName = normalizeText(userProfile.teacherName)
       return activeGroupLessons.filter((gl) => {
         const gcid = getGroupLessonGroupId(gl)
-        const gc = activeGroupClassById.get(String(gcid))
+        const gc = activeGroupClassById.get(String(gcid)) || findGroupClassForLesson(gl, groupClasses)
         return gc && normalizeText(gc.teacher || '') === myTeacherName
       })
     }
     if (selectedCalendarTeacherScope) {
       return activeGroupLessons.filter((gl) => {
         const gcid = getGroupLessonGroupId(gl)
-        const gc = activeGroupClassById.get(String(gcid))
+        const gc = activeGroupClassById.get(String(gcid)) || findGroupClassForLesson(gl, groupClasses)
         return (
           rowMatchesTeacherScope(gl, selectedCalendarTeacherScope) ||
           rowMatchesTeacherScope(gc, selectedCalendarTeacherScope)
@@ -251,6 +269,7 @@ export default function useCalendarSectionViewModel({
   }, [
     activeGroupClassById,
     activeGroupLessons,
+    groupClasses,
     selectedCalendarTeacherScope,
     userProfile,
   ])

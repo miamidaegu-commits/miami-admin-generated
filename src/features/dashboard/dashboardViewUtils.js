@@ -100,103 +100,183 @@ export function getTeacherName(lesson) {
   return formatTeacherDisplayName(lesson)
 }
 
-function isLegacyTeacherPlaceholder(value) {
-  const normalized = String(value || '').trim()
+function looksLikeTeacherUid(value) {
   return (
-    normalized === '기존 선생님' ||
-    normalized === '선생님 선택 필요' ||
-    normalized === '선생님 미지정' ||
-    normalized === '-'
+    /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
+    !/\s/.test(String(value || '').trim())
   )
 }
 
-function teacherOptionMatchesRow(option, rowKeys) {
+function normalizeTeacherResolverText(value) {
+  return normalizeText(String(value ?? '').replace(/\s+/g, ' '))
+}
+
+function isTeacherPlaceholderValue(value) {
+  const normalized = normalizeTeacherResolverText(value)
+  return (
+    !normalized ||
+    normalized === '기존 선생님' ||
+    normalized === '선생님 선택 필요' ||
+    normalized === '선생님 선택' ||
+    normalized.includes('기존 값 보존') ||
+    normalized === '선생님 미지정' ||
+    normalized === '-' ||
+    normalized === '없음' ||
+    normalized === 'null' ||
+    normalized === 'undefined'
+  )
+}
+
+function cleanTeacherResolverValue(value) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+  return isTeacherPlaceholderValue(text) ? '' : text
+}
+
+function getFirstReadableTeacherValue(values) {
+  return values
+    .map(cleanTeacherResolverValue)
+    .find((value) => value && !looksLikeTeacherUid(value)) || ''
+}
+
+function teacherCandidateMatches(option, candidateKeys) {
   return [
     option?.value,
     option?.key,
+    option?.id,
+    option?.uid,
     option?.teacherKey,
-    option?.teacher,
     option?.teacherUid,
     option?.teacherId,
-    option?.uid,
-    option?.id,
+    option?.teacher,
+    option?.email,
+    option?.teacherEmail,
+    option?.displayName,
+    option?.label,
+    option?.teacherName,
+    option?.teacherDisplayName,
+    option?.name,
   ]
-    .map((value) => String(value || '').trim())
-    .some((value) => value && rowKeys.includes(value))
+    .map(normalizeTeacherResolverText)
+    .some((value) => value && !isTeacherPlaceholderValue(value) && candidateKeys.includes(value))
+}
+
+export function collectTeacherIdentityCandidates(record = {}) {
+  const values = [
+    record?.teacherKey,
+    record?.teacherUid,
+    record?.teacherUID,
+    record?.teacherId,
+    record?.teacherID,
+    record?.teacher,
+    record?.uid,
+    record?.id,
+    record?.value,
+    record?.key,
+    record?.groupClassTeacherKey,
+    record?.groupClassTeacherUid,
+    record?.groupClassTeacherId,
+    record?.groupClassTeacher,
+    record?.groupClassUid,
+    record?.groupClassId,
+    record?.groupClassID,
+    record?.classId,
+    record?.classID,
+    record?.groupId,
+    record?.groupID,
+  ]
+  const seen = new Set()
+  const candidates = []
+  values.forEach((value) => {
+    const clean = cleanTeacherResolverValue(value)
+    const normalized = normalizeTeacherResolverText(clean)
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    candidates.push(clean)
+  })
+  return candidates
+}
+
+export function resolveTeacherOption(record = {}, teacherOptions = []) {
+  const candidateKeys = collectTeacherIdentityCandidates(record).map(normalizeTeacherResolverText)
+  if (candidateKeys.length === 0) return null
+  return (
+    (Array.isArray(teacherOptions) ? teacherOptions : []).find((option) =>
+      teacherCandidateMatches(option, candidateKeys)
+    ) || null
+  )
+}
+
+export function resolveTeacherDisplayName(
+  record,
+  teacherOptions = [],
+  fallback = '선생님 선택 필요'
+) {
+  const directDisplay = getFirstReadableTeacherValue([
+    record?.teacherDisplayName,
+    record?.teacherName,
+    record?.displayName,
+    record?.teacherLabel,
+    record?.groupClassTeacherDisplayName,
+    record?.groupClassTeacherName,
+    record?.groupClassDisplayNameForTeacher,
+    record?.groupClassTeacherLabel,
+  ])
+  if (directDisplay) return directDisplay
+
+  const matchedOption = resolveTeacherOption(record, teacherOptions)
+  const optionDisplay = getFirstReadableTeacherValue([
+    matchedOption?.label,
+    matchedOption?.displayName,
+    matchedOption?.teacherDisplayName,
+    matchedOption?.teacherName,
+    matchedOption?.name,
+    matchedOption?.value,
+    matchedOption?.key,
+  ])
+  if (optionDisplay) return optionDisplay
+
+  const readableCandidate = collectTeacherIdentityCandidates(record).find(
+    (value) => value && !looksLikeTeacherUid(value)
+  )
+  return readableCandidate || fallback
+}
+
+export function resolveTeacherFormValue(record = {}, teacherOptions = []) {
+  const candidates = collectTeacherIdentityCandidates(record)
+  if (candidates.length === 0) return ''
+  const matchedOption = resolveTeacherOption(record, teacherOptions)
+  return String(
+    matchedOption?.value ||
+      matchedOption?.key ||
+      matchedOption?.id ||
+      matchedOption?.uid ||
+      candidates[0] ||
+      ''
+  ).trim()
 }
 
 export function formatTeacherDisplayName(row, fallback = '선생님 선택 필요', teacherOptions = []) {
-  const looksLikeUid = (value) =>
-    /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
-    !/\s/.test(String(value || '').trim())
-
-  const display = [
-    row?.teacherDisplayName,
-    row?.teacherName,
-    row?.displayName,
-    row?.teacherLabel,
-    row?.groupClassTeacherDisplayName,
-    row?.groupClassTeacherName,
-    row?.groupClassDisplayNameForTeacher,
-    row?.groupClassTeacherLabel,
-  ]
-    .map((value) => String(value || '').trim())
-    .find((value) => value && !looksLikeUid(value) && !isLegacyTeacherPlaceholder(value))
-  if (display) return display
-
-  const key = String(row?.teacherKey || row?.teacher || row?.teacherUid || row?.teacherId || '').trim()
-
-  const rowKeys = [
-    row?.teacher,
-    row?.teacherKey,
-    row?.teacherUid,
-    row?.teacherId,
-    row?.uid,
-    row?.id,
-    row?.value,
-    row?.key,
-    row?.groupClassTeacher,
-    row?.groupClassTeacherKey,
-    row?.groupClassTeacherUid,
-    row?.groupClassTeacherId,
-    row?.groupClassUid,
-    row?.groupClassId,
-    row?.groupClassID,
-  ]
-    .map((value) => String(value || '').trim())
-    .filter((value) => value && !isLegacyTeacherPlaceholder(value))
-  const matchedOption = (Array.isArray(teacherOptions) ? teacherOptions : []).find((option) =>
-    teacherOptionMatchesRow(option, rowKeys)
-  )
-  const matchedDisplay = String(
-    matchedOption?.displayName || matchedOption?.label || matchedOption?.teacherName || ''
-  ).trim()
-  if (matchedDisplay && !looksLikeUid(matchedDisplay) && !isLegacyTeacherPlaceholder(matchedDisplay)) {
-    return matchedDisplay
-  }
-  if (key && !looksLikeUid(key) && !isLegacyTeacherPlaceholder(key)) return key
-  return fallback
+  return resolveTeacherDisplayName(row, teacherOptions, fallback)
 }
 
 export function resolveTeacherIdentityFields(selectedValue, teacherSelectOptions = []) {
   const rawValue = String(selectedValue || '').trim()
   const options = Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []
   const option =
-    options.find((item) => String(item?.value || '').trim() === rawValue) || null
+    resolveTeacherOption({ value: rawValue }, options) ||
+    options.find((item) => String(item?.value || '').trim() === rawValue) ||
+    null
   const displayName = String(
-    option?.displayName || option?.label || option?.teacherName || ''
+    option?.label || option?.displayName || option?.teacherDisplayName || option?.teacherName || ''
   ).trim()
   const teacherKey = String(option?.teacherKey || option?.value || rawValue || '').trim()
-  const looksLikeUid = (value) =>
-    /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
-    !/\s/.test(String(value || '').trim())
 
   const teacherName =
-    displayName && !looksLikeUid(displayName) && !isLegacyTeacherPlaceholder(displayName)
+    displayName && !looksLikeTeacherUid(displayName) && !isTeacherPlaceholderValue(displayName)
       ? displayName
-      : teacherKey && !looksLikeUid(teacherKey) && !isLegacyTeacherPlaceholder(teacherKey)
+      : teacherKey && !looksLikeTeacherUid(teacherKey) && !isTeacherPlaceholderValue(teacherKey)
         ? teacherKey
-        : looksLikeUid(rawValue) || isLegacyTeacherPlaceholder(rawValue)
+        : looksLikeTeacherUid(rawValue) || isTeacherPlaceholderValue(rawValue)
           ? ''
           : rawValue || ''
 
@@ -799,7 +879,15 @@ export const GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS = 365 - 1
 
 /** iOS 등 레거시 groupLessons 문서의 groupClassID 필드와 정규 groupClassId 모두 지원 */
 export function getGroupLessonGroupId(gl) {
-  return String(gl?.groupClassId ?? gl?.groupClassID ?? '').trim()
+  return String(
+    gl?.groupClassId ??
+      gl?.groupClassID ??
+      gl?.classId ??
+      gl?.classID ??
+      gl?.groupId ??
+      gl?.groupID ??
+      ''
+  ).trim()
 }
 
 /** 그룹 수강권 제목 미입력 시 저장·표시용 기본 제목 */

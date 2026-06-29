@@ -4,9 +4,9 @@ import {
   getTodayStorageDateString,
   isGroupStudentOperationallyEligibleOnYmd,
   isNoDeductionCancelledGroupLesson,
+  resolveTeacherDisplayName,
 } from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
-import { formatTeacherDisplayName } from '../dashboardViewUtils.js'
 import {
   getGroupClassBookingCapacitySummary,
   resolveGroupLessonSubject,
@@ -266,7 +266,7 @@ export default function GroupsSection({
                 }}
               >
                 <span>{group.name || '-'}</span>
-                <span>{formatTeacherDisplayName(group, '선생님 선택 필요', teacherSelectOptions)}</span>
+                <span>{resolveTeacherDisplayName(group, teacherSelectOptions, '선생님 선택 필요')}</span>
                 <span>{getGroupCourseTypeLabel(group.groupCourseType) || '-'}</span>
                 <span>{group.maxStudents ?? '-'}</span>
                 <span>{getGroupClassStatusLabel(group.status)}</span>
@@ -338,10 +338,10 @@ export default function GroupsSection({
               반 등록 학생 — {selectedGroupClass.name || '-'}
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
-              담당 선생님 {formatTeacherDisplayName(
+              담당 선생님 {resolveTeacherDisplayName(
                 selectedGroupClass,
-                '선생님 선택 필요',
-                teacherSelectOptions
+                teacherSelectOptions,
+                '선생님 선택 필요'
               )} · 정원{' '}
               {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 반 등록{' '}
               {selectedGroupCapacitySummary?.fixedMemberCount ?? activeFixedStudentCount}명 · 선착순 가능{' '}

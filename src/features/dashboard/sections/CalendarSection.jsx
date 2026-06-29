@@ -3,7 +3,6 @@ import {
   formatLessonDateLabel,
   formatLessonSessionNumber,
   formatLessonTimeLabel,
-  formatTeacherDisplayName,
   getLessonDate,
   getLessonStorageDateString,
   getStudentName,
@@ -11,6 +10,7 @@ import {
   getTodayStorageDateString,
   getStorageDateStringFromDate,
   isSameStorageDate,
+  resolveTeacherDisplayName,
 } from '../dashboardViewUtils.js'
 import {
   computePrivateTeacherPackageUsage,
@@ -752,7 +752,7 @@ export default function CalendarSection(props) {
             String(reservation.studentName || reservation.student || '').trim() ||
             String(reservation.studentId || '').trim() ||
             '-',
-          teacherName: formatTeacherDisplayName({
+          teacherName: resolveTeacherDisplayName({
             teacherName: reservation.teacherName,
             teacherDisplayName: reservation.teacherDisplayName,
             displayName: reservation.displayName,
@@ -1293,10 +1293,10 @@ export default function CalendarSection(props) {
                 <span>{sessionLabel || '-'}</span>
                 <span>
                   {isGroupRow
-                    ? formatTeacherDisplayName(
+                    ? resolveTeacherDisplayName(
                         lesson,
-                        '선생님 선택 필요',
-                        teacherSelectOptions
+                        teacherSelectOptions,
+                        '선생님 선택 필요'
                       )
                     : getTeacherName(lesson)}
                 </span>
@@ -1660,7 +1660,7 @@ export default function CalendarSection(props) {
                   <span>{row.date || '-'}</span>
                   <span>{row.time || '-'}</span>
                   <span>{row.studentName || '-'}</span>
-                  <span>{formatTeacherDisplayName(row)}</span>
+                  <span>{resolveTeacherDisplayName(row)}</span>
                   <span>{row.subject || '-'}</span>
                   <span>{row.durationLabel || '-'}</span>
                   <span>{row.statusLabel || '-'}</span>
