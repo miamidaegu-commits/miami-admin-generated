@@ -101,12 +101,19 @@ export function getTeacherName(lesson) {
 }
 
 function isLegacyTeacherPlaceholder(value) {
-  return String(value || '').trim() === '기존 선생님'
+  const normalized = String(value || '').trim()
+  return (
+    normalized === '기존 선생님' ||
+    normalized === '선생님 선택 필요' ||
+    normalized === '선생님 미지정' ||
+    normalized === '-'
+  )
 }
 
 function teacherOptionMatchesRow(option, rowKeys) {
   return [
     option?.value,
+    option?.key,
     option?.teacherKey,
     option?.teacher,
     option?.teacherUid,
@@ -123,12 +130,22 @@ export function formatTeacherDisplayName(row, fallback = '선생님 선택 필�
     /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
     !/\s/.test(String(value || '').trim())
 
-  const display = String(
-    row?.teacherName || row?.teacherDisplayName || row?.displayName || ''
-  ).trim()
+  const display = [
+    row?.teacherDisplayName,
+    row?.teacherName,
+    row?.displayName,
+    row?.teacherLabel,
+    row?.groupClassTeacherDisplayName,
+    row?.groupClassTeacherName,
+    row?.groupClassDisplayNameForTeacher,
+    row?.groupClassTeacherLabel,
+  ]
+    .map((value) => String(value || '').trim())
+    .find((value) => value && !looksLikeUid(value) && !isLegacyTeacherPlaceholder(value))
+  if (display) return display
+
   const key = String(row?.teacherKey || row?.teacher || row?.teacherUid || row?.teacherId || '').trim()
 
-  if (display && !looksLikeUid(display) && !isLegacyTeacherPlaceholder(display)) return display
   const rowKeys = [
     row?.teacher,
     row?.teacherKey,
@@ -136,9 +153,18 @@ export function formatTeacherDisplayName(row, fallback = '선생님 선택 필�
     row?.teacherId,
     row?.uid,
     row?.id,
+    row?.value,
+    row?.key,
+    row?.groupClassTeacher,
+    row?.groupClassTeacherKey,
+    row?.groupClassTeacherUid,
+    row?.groupClassTeacherId,
+    row?.groupClassUid,
+    row?.groupClassId,
+    row?.groupClassID,
   ]
     .map((value) => String(value || '').trim())
-    .filter(Boolean)
+    .filter((value) => value && !isLegacyTeacherPlaceholder(value))
   const matchedOption = (Array.isArray(teacherOptions) ? teacherOptions : []).find((option) =>
     teacherOptionMatchesRow(option, rowKeys)
   )

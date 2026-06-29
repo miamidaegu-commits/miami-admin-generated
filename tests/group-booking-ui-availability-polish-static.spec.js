@@ -37,6 +37,41 @@ test('teacher fallback resolves teacher key from options before showing missing 
       ]
     )
   ).toBe('MikeTest');
+
+  expect(
+    formatTeacherDisplayName(
+      {
+        teacherName: '선생님 선택 필요',
+        teacherKey: 'miketest',
+      },
+      '선생님 선택 필요',
+      [
+        {
+          value: 'teacher-option-1',
+          teacherKey: 'miketest',
+          label: 'MikeTest · miketest',
+        },
+      ]
+    )
+  ).toBe('MikeTest · miketest');
+
+  expect(
+    formatTeacherDisplayName(
+      {
+        teacher: 'legacyteacheruid1234567890',
+        teacherName: '선생님 선택 필요',
+        groupClassTeacherKey: 'miketest',
+      },
+      '선생님 선택 필요',
+      [
+        {
+          value: 'teacher-option-1',
+          teacherKey: 'miketest',
+          label: 'MikeTest · miketest',
+        },
+      ]
+    )
+  ).toBe('MikeTest · miketest');
 });
 
 test('group class save persists teacher display identity fields', () => {
@@ -45,6 +80,14 @@ test('group class save persists teacher display identity fields', () => {
     'utf8'
   );
   const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const viewUtilsSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/dashboardViewUtils.js'),
+    'utf8'
+  );
+  const calendarViewModelSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/hooks/useCalendarSectionViewModel.js'),
+    'utf8'
+  );
 
   expect(source).toContain('teacher: teacherIdentity.teacher');
   expect(source).toContain('teacherKey: teacherIdentity.teacherKey');
@@ -67,6 +110,19 @@ test('group class save persists teacher display identity fields', () => {
   expect(dashboardSource).toContain('setGroupClasses,');
   expect(dashboardSource).toContain('setSelectedGroupClass,');
   expect(dashboardSource).toContain('setGroupLessons,');
+  expect(dashboardSource).toContain('const groupClassesById = useMemo(() => {');
+  expect(dashboardSource).toContain('buildGroupLessonTeacherDisplaySource');
+  expect(dashboardSource).toContain('groupClassTeacherKey: groupClass?.teacherKey');
+  expect(dashboardSource).toContain('formatTeacherDisplayName(');
+  expect(viewUtilsSource).toContain('row?.teacherDisplayName');
+  expect(viewUtilsSource).toContain('row?.teacherName');
+  expect(viewUtilsSource).toContain('row?.teacherLabel');
+  expect(viewUtilsSource).toContain('option?.teacherUid');
+  expect(viewUtilsSource).toContain('option?.teacherId');
+  expect(viewUtilsSource).toContain('row?.groupClassTeacherKey');
+  expect(viewUtilsSource).toContain("normalized === '선생님 선택 필요'");
+  expect(calendarViewModelSource).toContain('groupClassTeacherKey: String(gc?.teacherKey');
+  expect(calendarViewModelSource).toContain('groupClassTeacherDisplayName: String(gc?.teacherDisplayName');
 });
 
 test('group lesson form allows empty subject and keeps date time validation', () => {
@@ -188,6 +244,12 @@ test('admin group lesson rows separate seat and direct booking status copy', () 
   expect(groupSectionSource).toContain('아직 반 등록 학생이 없습니다.');
   expect(groupSectionSource).toContain('남은 선착순 좌석은');
   expect(calendarSource).toContain('calendar-group-lesson-bookable-badge');
+  expect(calendarSource).toContain('calendar-group-lesson-seat-badge');
+  expect(calendarSource).toContain("'좌석: 예약 가능'");
+  expect(calendarSource).toContain("'좌석: 마감'");
+  expect(calendarSource).toContain("'학생 직접 예약: 가능'");
+  expect(calendarSource).toContain("'학생 직접 예약: 비활성'");
+  expect(calendarSource).not.toContain("'학생 예약 가능'");
 });
 
 test('group attendance modal separates future seat release from attendance deduction copy', () => {
