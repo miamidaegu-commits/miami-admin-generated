@@ -15,12 +15,14 @@ import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   addCalendarDaysToYmd,
   formatLocalDateToYmd,
+  getGroupLessonGroupId,
   getTodayStorageDateString,
   GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS,
   isNoDeductionCancelledGroupLesson,
   normalizeGroupWeekdaysFromDoc,
   normalizeText,
   parseYmdToLocalDate,
+  resolveTeacherFormValue,
   resolveTeacherIdentityFields,
 } from '../dashboardViewUtils.js'
 import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
@@ -99,52 +101,8 @@ function groupBelongsToTeacher(group, teacherKey) {
   )
 }
 
-function getTeacherOptionMatchValue(group, teacherSelectOptions = []) {
-  const rowKeys = [
-    group?.teacher,
-    group?.teacherKey,
-    group?.teacherUid,
-    group?.teacherId,
-    group?.teacherName,
-    group?.teacherDisplayName,
-    group?.displayName,
-  ]
-    .map((value) => normalizeText(value || ''))
-    .filter(Boolean)
-
-  const matchedOption = (Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []).find(
-    (option) =>
-      [
-        option?.value,
-        option?.teacher,
-        option?.teacherKey,
-        option?.teacherUid,
-        option?.teacherId,
-        option?.uid,
-        option?.id,
-        option?.displayName,
-        option?.teacherName,
-        option?.label,
-      ]
-        .map((value) => normalizeText(value || ''))
-        .some((value) => value && rowKeys.includes(value))
-  )
-
-  return String(matchedOption?.value || '').trim()
-}
-
 function resolveGroupTeacherFormValue(group, teacherSelectOptions = []) {
-  return (
-    getTeacherOptionMatchValue(group, teacherSelectOptions) ||
-    String(
-      group?.teacherKey ||
-        group?.teacher ||
-        group?.teacherUid ||
-        group?.teacherId ||
-        group?.teacherName ||
-        ''
-    ).trim()
-  )
+  return resolveTeacherFormValue(group, teacherSelectOptions)
 }
 
 function teacherIdentityChanged(group, teacherIdentity) {
@@ -157,10 +115,6 @@ function teacherIdentityChanged(group, teacherIdentity) {
     ['teacherDisplayName', teacherIdentity.teacherDisplayName],
     ['displayName', teacherIdentity.displayName],
   ].some(([key, value]) => String(group?.[key] || '').trim() !== String(value || '').trim())
-}
-
-function getGroupLessonGroupId(lesson) {
-  return String(lesson?.groupClassId || lesson?.groupClassID || '').trim()
 }
 
 function isFutureTeacherSyncTargetGroupLesson(lesson, groupClassId, todayYmd) {

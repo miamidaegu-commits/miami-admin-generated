@@ -33,7 +33,6 @@ import {
   formatCreditTransactionCreatedAtDisplay,
   formatCreditTransactionDeltaCountDisplay,
   formatDate,
-  formatTeacherDisplayName,
   formatLessonSessionNumber,
   formatGroupStudentStartDate,
   formatStudentPackageDetailAmountPaid,
@@ -68,6 +67,7 @@ import {
   parseRequiredNonNegativeIntField,
   parseYmdToLocalDate,
   privateLessonNextSortKey,
+  resolveTeacherDisplayName,
   sanitizePhoneForTel,
 } from './src/features/dashboard/dashboardViewUtils.js'
 import { resolveGroupLessonSubject } from './src/features/dashboard/groupClassRoomUtils.js'
@@ -2932,6 +2932,18 @@ export default function Dashboard() {
       if (!selectedCalendarTeacherScope) return true
       return rows.some((row) => rowMatchesTeacherScope(row, selectedCalendarTeacherScope))
     }
+    const resolveGroupClassForLesson = (lesson) => {
+      const byId = groupClassesById.get(getGroupLessonGroupId(lesson)) || null
+      if (byId) return byId
+      const lessonName = normalizeText(lesson?.groupClassName || lesson?.name || lesson?.title || '')
+      if (!lessonName) return null
+      return (
+        groupClasses.find((groupClass) => {
+          const groupClassName = normalizeText(groupClass?.name || groupClass?.title || '')
+          return groupClassName && groupClassName === lessonName
+        }) || null
+      )
+    }
     const buildGroupLessonTeacherDisplaySource = (lesson, groupClass) => ({
       teacherDisplayName: lesson?.teacherDisplayName || groupClass?.teacherDisplayName,
       teacherName: lesson?.teacherName || groupClass?.teacherName,
@@ -2989,11 +3001,11 @@ export default function Dashboard() {
 
     const groupLessonItems = todayGroupLessons
       .filter((lesson) => {
-        const groupClass = groupClassesById.get(getGroupLessonGroupId(lesson)) || null
+        const groupClass = resolveGroupClassForLesson(lesson)
         return matchesSelectedTeacher(lesson, groupClass)
       })
       .map((lesson) => {
-        const groupClass = groupClassesById.get(getGroupLessonGroupId(lesson)) || null
+        const groupClass = resolveGroupClassForLesson(lesson)
         const className = String(lesson.groupClassName || groupClass?.name || '').trim()
         const subject = resolveGroupLessonSubject({
           subject: lesson.subject,
@@ -3007,10 +3019,10 @@ export default function Dashboard() {
           typeLabel: '단체반 수업',
           sourceKind: 'groupLesson',
           studentLabel: '-',
-          teacherLabel: formatTeacherDisplayName(
+          teacherLabel: resolveTeacherDisplayName(
             buildGroupLessonTeacherDisplaySource(lesson, groupClass),
-            '선생님 선택 필요',
-            teacherSelectOptions
+            teacherSelectOptions,
+            '선생님 선택 필요'
           ),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
           statusLabel: isNoDeductionCancelledGroupLesson(lesson) ? '휴강 · 차감 없음' : '수업 예정',
@@ -3022,7 +3034,7 @@ export default function Dashboard() {
       .map((reservation) => {
         const lesson = todayGroupLessonById.get(reservation.lessonId) || null
         if (!lesson) return null
-        const groupClass = groupClassesById.get(getGroupLessonGroupId(lesson)) || null
+        const groupClass = resolveGroupClassForLesson(lesson)
         if (!matchesSelectedTeacher(reservation, lesson, groupClass)) return null
         const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
         const className = String(lesson.groupClassName || groupClass?.name || '').trim()
@@ -3042,21 +3054,22 @@ export default function Dashboard() {
             String(student?.name || '').trim() ||
             '-',
           teacherLabel:
-            formatTeacherDisplayName({
-              teacherName: reservation.teacherName,
-              teacherDisplayName: reservation.teacherDisplayName,
-              displayName: reservation.displayName,
-              teacherKey: reservation.teacherKey || lesson.teacherKey || groupClass?.teacherKey,
-              teacherUid: reservation.teacherUid || lesson.teacherUid || groupClass?.teacherUid,
-              teacherId: reservation.teacherId || lesson.teacherId || groupClass?.teacherId,
-              teacher:
-                reservation.teacher ||
-                lesson.teacher ||
-                groupClass?.teacher,
-            },
-            '선생님 선택 필요',
-            teacherSelectOptions
-          ),
+            resolveTeacherDisplayName(
+              {
+                teacherName: reservation.teacherName,
+                teacherDisplayName: reservation.teacherDisplayName,
+                displayName: reservation.displayName,
+                teacherKey: reservation.teacherKey || lesson.teacherKey || groupClass?.teacherKey,
+                teacherUid: reservation.teacherUid || lesson.teacherUid || groupClass?.teacherUid,
+                teacherId: reservation.teacherId || lesson.teacherId || groupClass?.teacherId,
+                teacher:
+                  reservation.teacher ||
+                  lesson.teacher ||
+                  groupClass?.teacher,
+              },
+              teacherSelectOptions,
+              '선생님 선택 필요'
+            ),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
           statusLabel: '예약 완료',
         }
@@ -3150,6 +3163,7 @@ export default function Dashboard() {
     })
   }, [
     currentAcademyId,
+    groupClasses,
     groupClassesById,
     lessons,
     privateLessonReservations,
