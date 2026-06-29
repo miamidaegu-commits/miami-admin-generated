@@ -268,9 +268,10 @@ async function createFixture(unique) {
         packageType: 'private',
         ...commonTeacherFields,
         status: 'active',
-        totalCount: 2,
+        totalCount: 8,
         usedCount: 0,
-        remainingCount: 2,
+        remainingCount: 8,
+        privateCancelUsedCount: 0,
         createdAt: now,
         updatedAt: now,
       })
@@ -1215,8 +1216,15 @@ test.describe('fixed private lesson release', () => {
     await expect(upcomingCard).toContainText('취소 가능 2회', { timeout: 15000 });
     await expect(upcomingCard.getByTestId('student-fixed-private-lesson-cancel-button')).toBeVisible();
     await expect(upcomingCard.getByTestId('student-upcoming-private-reservation-cancel-button')).toHaveCount(0);
-    page.once('dialog', (dialog) => dialog.accept());
     await upcomingCard.getByTestId('student-fixed-private-lesson-cancel-button').click();
+    const cancelConfirmModal = page.getByTestId('student-private-reservation-cancel-confirm-modal');
+    await expect(cancelConfirmModal).toBeVisible({ timeout: 15000 });
+    await expect(cancelConfirmModal).toContainText('수업을 취소할까요?');
+    await expect(cancelConfirmModal).toContainText('이번 고정 1:1 수업을 취소할까요?');
+    await expect(cancelConfirmModal).toContainText('취소 가능 횟수 1회가 사용되며, 수강권은 차감되지 않습니다.');
+    await cancelConfirmModal
+      .getByTestId('student-private-reservation-cancel-confirm-submit')
+      .click();
     await expectLessonPatch(fixture.fixedLessonId, {
       status: 'cancelled',
       cancellationType: 'seat_released',
@@ -1226,11 +1234,20 @@ test.describe('fixed private lesson release', () => {
     await expect
       .poll(async () => {
         const snap = await getDb()
-          .collection('studentPrivateBookingStats')
-          .doc(privateBookingStatsId(fixture.originalStudentId))
+          .collection('studentPackages')
+          .doc(fixture.packageIds[0])
           .get();
-        return Number(snap.data()?.studentCancelCount || 0);
+        const data = snap.data() || {};
+        return {
+          privateCancelUsedCount: Number(data.privateCancelUsedCount || 0),
+          usedCount: Number(data.usedCount || 0),
+          remainingCount: Number(data.remainingCount || 0),
+        };
       }, { timeout: 15000 })
-      .toBe(1);
+      .toEqual({
+        privateCancelUsedCount: 1,
+        usedCount: 0,
+        remainingCount: 8,
+      });
   });
 });

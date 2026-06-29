@@ -636,6 +636,15 @@ function isPrivateReservationInFuture(reservation) {
   return startMillis !== null && Date.now() < startMillis
 }
 
+function getFixedPrivateLessonStartMillis(lesson) {
+  return getDateTimeMs(getLessonStorageDateString(lesson), getLessonDisplayTime(lesson))
+}
+
+function isFixedPrivateLessonInFuture(lesson, nowMillis = Date.now()) {
+  const startMillis = getFixedPrivateLessonStartMillis(lesson)
+  return startMillis !== null && nowMillis < startMillis
+}
+
 function isCancelablePrivatePackage(pkg) {
   if (!pkg) return false
   const packageType = String(pkg.packageType || 'private').trim()
@@ -658,6 +667,35 @@ function canShowPrivateReservationCancelAction(reservation) {
     !isPrivateReservationOutcomeFinal(reservation) &&
     !isPrivateReservationPast(reservation) &&
     isPrivateReservationInFuture(reservation)
+  )
+}
+
+function canShowFixedPrivateLessonCancelAction(
+  lesson,
+  nowMillis = Date.now(),
+  cancelAllowance = null
+) {
+  const startMillis = getFixedPrivateLessonStartMillis(lesson)
+  return (
+    isFixedPrivateLesson(lesson) &&
+    !isCancelledLesson(lesson) &&
+    !isPrivateReservationCancelled(lesson) &&
+    !isPrivateReservationOutcomeFinal(lesson) &&
+    startMillis !== null &&
+    nowMillis < startMillis &&
+    startMillis - nowMillis >= PRIVATE_CANCEL_CUTOFF_MS &&
+    Boolean(String(lesson?.packageId || '').trim()) &&
+    Number(cancelAllowance?.remaining ?? 0) > 0
+  )
+}
+
+function canRenderFixedPrivateLessonCancelAction(lesson, nowMillis = Date.now()) {
+  return (
+    isFixedPrivateLesson(lesson) &&
+    !isCancelledLesson(lesson) &&
+    !isPrivateReservationCancelled(lesson) &&
+    !isPrivateReservationOutcomeFinal(lesson) &&
+    isFixedPrivateLessonInFuture(lesson, nowMillis)
   )
 }
 
@@ -2152,6 +2190,15 @@ export default function StudentBookingPage() {
     return byLessonId
   }, [reservations])
 
+  const studentPrivateLessonById = useMemo(() => {
+    const byId = new Map()
+    studentPrivateLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (lessonId) byId.set(lessonId, lesson)
+    })
+    return byId
+  }, [studentPrivateLessons])
+
   const studentPackageById = useMemo(() => {
     const byId = new Map()
     studentPackages.forEach((pkg) => {
@@ -2339,6 +2386,8 @@ export default function StudentBookingPage() {
         const date = String(reservation.date || '').trim()
         const time = String(reservation.time || '').trim()
         const slotId = String(reservation.slotId || '').trim()
+        const lessonId = String(reservation.lessonId || '').trim()
+        const linkedLesson = lessonId ? studentPrivateLessonById.get(lessonId) || null : null
         const typeLabel = isFixedPrivateReservation(reservation)
           ? '고정 예약 1:1'
           : '학생 직접예약 1:1'
@@ -2359,6 +2408,7 @@ export default function StudentBookingPage() {
           durationLabel: getPrivateDurationLabel(reservation),
           statusLabel: '예약 완료',
           reservation,
+          lesson: linkedLesson,
         }
       })
 
@@ -2391,7 +2441,7 @@ export default function StudentBookingPage() {
       const bKey = `${b.date || ''} ${b.time || '00:00'} ${b.title || ''} ${b.sourceId || ''}`
       return aKey.localeCompare(bKey, 'ko')
     })
-  }, [privateReservations, sortedUpcomingPrivateLessons, todayYmd])
+  }, [privateReservations, sortedUpcomingPrivateLessons, studentPrivateLessonById, todayYmd])
 
   const lessonHistoryItems = useMemo(() => {
     const privateLessonItems = studentPrivateLessons.map((lesson) => {
@@ -2915,18 +2965,17 @@ export default function StudentBookingPage() {
       alert('이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.')
       return
     }
-    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(cancelAllowance, {
-      loaded: true,
-    })
     if (!options.confirmed) {
       setPrivateSlotCancelConfirm({
         kind: 'fixedLesson',
         lesson,
         lessonId,
         message:
-          `고정 1:1 수업을 취소할까요?\n\n` +
-          `${cancelConfirmMessage}\n` +
-          `취소 후 같은 시간은 다른 학생에게 예약 가능해집니다.`,
+          `이번 고정 1:1 수업을 취소할까요?\n\n` +
+          `취소 사용 ${cancelAllowance.used}/${cancelAllowance.limit}회\n` +
+          `남은 취소 가능 ${cancelAllowance.remaining}회\n` +
+          `취소 가능 횟수 1회가 사용되며, 수강권은 차감되지 않습니다.\n` +
+          `취소 후 같은 시간은 다시 예약 가능한 시간으로 열립니다.`,
       })
       return
     }
@@ -2973,13 +3022,17 @@ export default function StudentBookingPage() {
   }
 
   function getFixedPrivateLessonCancelUnavailableReason(lesson) {
-    const date = getLessonStorageDateString(lesson)
-    const time = getLessonDisplayTime(lesson)
-    const startMillis = getDateTimeMs(date, time)
+    if (!canRenderFixedPrivateLessonCancelAction(lesson)) {
+      return ''
+    }
+    const startMillis = getFixedPrivateLessonStartMillis(lesson)
     if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
       return '수업 시작 10시간 전까지만 취소할 수 있습니다.'
     }
     const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
+    if (canShowFixedPrivateLessonCancelAction(lesson, Date.now(), cancelAllowance)) {
+      return ''
+    }
     if (!cancelAllowance) {
       return '수강권 연결 정보가 없어 학원에 문의해 주세요.'
     }
@@ -2987,6 +3040,73 @@ export default function StudentBookingPage() {
       return '이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
     }
     return ''
+  }
+
+  function renderFixedPrivateLessonCancelAction(lesson, {
+    testId = 'student-fixed-private-lesson-cancel-button',
+  } = {}) {
+    if (!PRIVATE_SLOT_BOOKING_ENABLED || !privateSlotBookingPilotEnabled) {
+      return null
+    }
+    if (!canRenderFixedPrivateLessonCancelAction(lesson)) {
+      return null
+    }
+    const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
+    const unavailableReason = getFixedPrivateLessonCancelUnavailableReason(lesson)
+    const canCancel = canShowFixedPrivateLessonCancelAction(lesson, Date.now(), cancelAllowance)
+    const isBusy = busyFixedPrivateLessonId === String(lesson?.id || '').trim()
+    const disabled = Boolean(isBusy || !canCancel)
+
+    return (
+      <div
+        style={{
+          display: isMobileStudentBooking ? 'grid' : 'flex',
+          gridTemplateColumns: isMobileStudentBooking
+            ? 'repeat(2, minmax(0, 1fr))'
+            : undefined,
+          justifyContent: isMobileStudentBooking ? undefined : 'space-between',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: isMobileStudentBooking ? undefined : 'wrap',
+          marginTop: 12,
+          width: isMobileStudentBooking ? '100%' : undefined,
+          maxWidth: isMobileStudentBooking ? '100%' : undefined,
+          minWidth: 0,
+          boxSizing: 'border-box',
+        }}
+      >
+        {unavailableReason ? (
+          <span style={{ opacity: 0.72, fontSize: 13, ...studentBookingMobileTextGuardStyle }}>
+            {unavailableReason}
+          </span>
+        ) : (
+          <span style={{ opacity: 0.72, fontSize: 13, ...studentBookingMobileTextGuardStyle }}>
+            취소 가능 {cancelAllowance?.remaining ?? 0}회
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => cancelFixedPrivateLesson(lesson)}
+          disabled={disabled}
+          data-testid={testId}
+          style={{
+            padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
+            minHeight: isMobileStudentBooking ? 44 : undefined,
+            borderRadius: 999,
+            border: '1px solid #9a3f48',
+            background: '#3a1f24',
+            color: '#ffd8dc',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            fontSize: isMobileStudentBooking ? 14 : 12,
+            fontWeight: 800,
+            flex: isMobileStudentBooking ? undefined : '0 0 auto',
+            ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
+          }}
+        >
+          {isBusy ? '취소 중...' : canCancel ? '수업 취소' : '수업 취소 불가'}
+        </button>
+      </div>
+    )
   }
 
   function renderPrivateReservationCancelAction(reservation, {
@@ -3572,109 +3692,117 @@ export default function StudentBookingPage() {
                 </p>
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-                  {upcomingPrivateScheduleItems.map((item) => (
-                    <article
-                      key={item.id}
-                      data-testid="student-upcoming-private-lesson-card"
-                      data-source={item.source}
-                      data-source-id={item.sourceId}
-                      style={{
-                        border: '1px solid #283042',
-                        borderRadius: 14,
-                        padding: 16,
-                        background: '#1a1f2b',
-                        ...studentBookingMobileContentGuardStyle,
-                      }}
-                    >
-                      <div
+                  {upcomingPrivateScheduleItems.map((item) => {
+                    const fixedLessonForCancel =
+                      item.lesson && isFixedPrivateLesson(item.lesson) ? item.lesson : null
+
+                    return (
+                      <article
+                        key={item.id}
+                        data-testid="student-upcoming-private-lesson-card"
+                        data-source={item.source}
+                        data-source-id={item.sourceId}
                         style={{
-                          display: 'grid',
-                          gridTemplateColumns: isMobileStudentBooking
-                            ? 'repeat(2, minmax(0, 1fr))'
-                            : 'repeat(auto-fit, minmax(112px, 1fr))',
-                          gap: 12,
-                          alignItems: 'center',
+                          border: '1px solid #283042',
+                          borderRadius: 14,
+                          padding: 16,
+                          background: '#1a1f2b',
                           ...studentBookingMobileContentGuardStyle,
                         }}
                       >
-                        {item.typeLabel ? (
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: isMobileStudentBooking
+                              ? 'repeat(2, minmax(0, 1fr))'
+                              : 'repeat(auto-fit, minmax(112px, 1fr))',
+                            gap: 12,
+                            alignItems: 'center',
+                            ...studentBookingMobileContentGuardStyle,
+                          }}
+                        >
+                          {item.typeLabel ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                구분
+                              </span>
+                              {item.typeLabel}
+                            </span>
+                          ) : null}
                           <span>
                             <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                              구분
+                              날짜
                             </span>
-                            {item.typeLabel}
+                            {item.date || '-'}
                           </span>
-                        ) : null}
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            날짜
-                          </span>
-                          {item.date || '-'}
-                        </span>
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            시간
-                          </span>
-                          {item.time || '-'}
-                        </span>
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            선생님
-                          </span>
-                          {item.teacherLabel || '-'}
-                        </span>
-                        {item.studentName ? (
                           <span>
                             <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                              학생
+                              시간
                             </span>
-                            {item.studentName}
+                            {item.time || '-'}
                           </span>
-                        ) : null}
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            수업명
-                          </span>
-                          {item.title || '-'}
-                        </span>
-                        {item.sessionLabel ? (
                           <span>
                             <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                              회차
+                              선생님
                             </span>
-                            <span
-                              data-testid="student-upcoming-session-badge"
-                              style={{
-                                display: 'inline-block',
-                                border: '1px solid rgba(120, 140, 200, 0.45)',
-                                borderRadius: 4,
-                                padding: '2px 6px',
-                                background: 'rgba(60, 120, 90, 0.35)',
-                                fontWeight: 700,
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {item.sessionLabel}
-                            </span>
+                            {item.teacherLabel || '-'}
                           </span>
-                        ) : null}
-                        {item.durationLabel ? (
+                          {item.studentName ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                학생
+                              </span>
+                              {item.studentName}
+                            </span>
+                          ) : null}
                           <span>
                             <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                              길이
+                              수업명
                             </span>
-                            {item.durationLabel}
+                            {item.title || '-'}
                           </span>
-                        ) : null}
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            상태
+                          {item.sessionLabel ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                회차
+                              </span>
+                              <span
+                                data-testid="student-upcoming-session-badge"
+                                style={{
+                                  display: 'inline-block',
+                                  border: '1px solid rgba(120, 140, 200, 0.45)',
+                                  borderRadius: 4,
+                                  padding: '2px 6px',
+                                  background: 'rgba(60, 120, 90, 0.35)',
+                                  fontWeight: 700,
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {item.sessionLabel}
+                              </span>
+                            </span>
+                          ) : null}
+                          {item.durationLabel ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                길이
+                              </span>
+                              {item.durationLabel}
+                            </span>
+                          ) : null}
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              상태
+                            </span>
+                            {item.statusLabel || '수업 예정'}
                           </span>
-                          {item.statusLabel || '수업 예정'}
-                        </span>
-                      </div>
-                    </article>
-                  ))}
+                        </div>
+                        {fixedLessonForCancel
+                          ? renderFixedPrivateLessonCancelAction(fixedLessonForCancel)
+                          : null}
+                      </article>
+                    )
+                  })}
                   {isMobileStudentBooking ? (
                     <div
                       aria-hidden="true"
@@ -4881,7 +5009,9 @@ export default function StudentBookingPage() {
                 id="student-private-reservation-cancel-confirm-title"
                 style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.15rem' : '1.2rem' }}
               >
-                예약을 취소할까요?
+                {privateSlotCancelConfirm.kind === 'fixedLesson'
+                  ? '수업을 취소할까요?'
+                  : '예약을 취소할까요?'}
               </h2>
               <div
                 style={{
@@ -4981,7 +5111,7 @@ export default function StudentBookingPage() {
                     ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
                   }}
                 >
-                  예약 취소
+                  {privateSlotCancelConfirm.kind === 'fixedLesson' ? '수업 취소' : '예약 취소'}
                 </button>
               </div>
             </div>

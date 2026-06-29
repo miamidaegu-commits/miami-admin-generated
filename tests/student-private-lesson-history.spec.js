@@ -78,16 +78,22 @@ function lessonHistoryCard(page, subject) {
     .first();
 }
 
-test('student upcoming private lessons includes future reservations without cancel actions', () => {
+test('student upcoming private lessons exposes fixed private lesson cancel action only', () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
   const upcomingHelper =
     source.match(/function canShowUpcomingPrivateReservation[\s\S]*?\n}\n/)?.[0] || '';
+  const fixedCancelVisibilityHelper =
+    source.match(/function canShowFixedPrivateLessonCancelAction[\s\S]*?\n}\n/)?.[0] || '';
+  const fixedCancelRenderHelper =
+    source.match(/function renderFixedPrivateLessonCancelAction[\s\S]*?return \(\n[\s\S]*?\n  }\n/)?.[0] || '';
   const upcomingItemsBlock =
-    source.match(/const upcomingPrivateScheduleItems = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[privateReservations, sortedUpcomingPrivateLessons, todayYmd\]\)/)?.[0] || '';
+    source.match(/const upcomingPrivateScheduleItems = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[privateReservations, sortedUpcomingPrivateLessons, studentPrivateLessonById, todayYmd\]\)/)?.[0] || '';
   const upcomingSection =
     source.match(/id="student-upcoming-private-lessons-section"[\s\S]*?<h2 style=\{\{ margin: 0, fontSize: '1\.1rem' \}\}>내 반 등록 수업<\/h2>/)?.[0] || '';
   const historySection =
     source.match(/id="student-lesson-history-section"[\s\S]*?data-testid="student-booking-mobile-bottom-spacer"/)?.[0] || '';
+  const directPrivateRenderHelper =
+    source.match(/function renderPrivateReservationCancelAction[\s\S]*?return \(\n[\s\S]*?\n  }\n/)?.[0] || '';
 
   expect(source).toContain('function isUpcomingPrivateReservationStatus');
   expect(source).toContain("status === 'scheduled'");
@@ -103,18 +109,44 @@ test('student upcoming private lessons includes future reservations without canc
   expect(upcomingItemsBlock).toContain("isFixedPrivateReservation(reservation)");
   expect(upcomingItemsBlock).toContain("'고정 예약 1:1'");
   expect(upcomingItemsBlock).toContain("'학생 직접예약 1:1'");
+  expect(upcomingItemsBlock).toContain('studentPrivateLessonById');
+  expect(upcomingItemsBlock).toContain('lesson: linkedLesson');
   expect(upcomingItemsBlock).toContain('studentName');
   expect(upcomingItemsBlock).toContain('seenKeys');
+  expect(fixedCancelVisibilityHelper).toContain('isFixedPrivateLesson(lesson)');
+  expect(fixedCancelVisibilityHelper).toContain('!isCancelledLesson(lesson)');
+  expect(fixedCancelVisibilityHelper).toContain('!isPrivateReservationCancelled(lesson)');
+  expect(fixedCancelVisibilityHelper).toContain('!isPrivateReservationOutcomeFinal(lesson)');
+  expect(fixedCancelVisibilityHelper).toContain('PRIVATE_CANCEL_CUTOFF_MS');
+  expect(fixedCancelVisibilityHelper).toContain("lesson?.packageId");
+  expect(fixedCancelVisibilityHelper).toContain('cancelAllowance?.remaining');
+  expect(source).toContain('function getFixedPrivateLessonCancelUnavailableReason');
+  expect(source).toContain('수업 시작 10시간 전까지만 취소할 수 있습니다.');
+  expect(source).toContain('이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.');
+  expect(source).toContain('수강권 연결 정보가 없어 학원에 문의해 주세요.');
+  expect(fixedCancelRenderHelper).toContain('student-fixed-private-lesson-cancel-button');
+  expect(fixedCancelRenderHelper).toContain('cancelFixedPrivateLesson(lesson)');
+  expect(fixedCancelRenderHelper).toContain("'수업 취소'");
+  expect(fixedCancelRenderHelper).toContain("'수업 취소 불가'");
+  expect(directPrivateRenderHelper).toContain("'예약 취소'");
+  expect(directPrivateRenderHelper).toContain('cancelPrivateReservation(reservation)');
   expect(upcomingSection).toContain('예정된 1:1 수업이 없습니다.');
   expect(upcomingSection).toContain('{item.typeLabel}');
   expect(upcomingSection).toContain('{item.studentName}');
-  expect(upcomingSection).not.toContain('student-upcoming-private-reservation-cancel-button');
-  expect(upcomingSection).not.toContain('student-fixed-private-lesson-cancel-button');
+  expect(upcomingSection).toContain('renderFixedPrivateLessonCancelAction(fixedLessonForCancel)');
   expect(upcomingSection).not.toContain('renderPrivateReservationCancelAction');
-  expect(upcomingSection).not.toContain('cancelFixedPrivateLesson(');
   expect(upcomingSection).not.toContain('예약 취소');
   expect(historySection).toContain('data-testid="student-lesson-history-card"');
   expect(historySection).toContain('getLessonHistoryStatusLabel(item)');
+  expect(historySection).not.toContain('student-fixed-private-lesson-cancel-button');
+  expect(historySection).not.toContain('renderFixedPrivateLessonCancelAction');
+  expect(historySection).not.toContain('cancelFixedPrivateLesson(');
+  expect(source).toContain("'cancelFixedPrivateLessonOccurrence'");
+  expect(source).toContain("'cancelPrivateLessonReservation'");
+  expect(source).toContain("cancellationType: 'seat_released'");
+  expect(source).toContain('취소 가능 횟수 1회가 사용되며, 수강권은 차감되지 않습니다.');
+  expect(source).toContain("privateSlotCancelConfirm.kind === 'fixedLesson'\n                  ? '수업을 취소할까요?'");
+  expect(source).toContain("privateSlotCancelConfirm.kind === 'fixedLesson' ? '수업 취소' : '예약 취소'");
 });
 
 async function createPrivateLesson({
