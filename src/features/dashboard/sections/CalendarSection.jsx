@@ -1226,8 +1226,17 @@ export default function CalendarSection(props) {
                 : 'private'
             const groupBookableLabel = isGroupRow
               ? lesson.isBookable === true
-                ? '학생 예약 가능'
-                : '예약 비활성'
+                ? '학생 직접 예약: 가능'
+                : '학생 직접 예약: 비활성'
+              : ''
+            const groupSeatLabel = isGroupRow
+              ? (() => {
+                  const capacity = Number(lesson.capacity ?? 0)
+                  const bookedCount = Number(lesson.bookedCount ?? 0)
+                  if (!Number.isFinite(capacity) || capacity <= 0) return '좌석: 마감'
+                  if (Number.isFinite(bookedCount) && bookedCount >= capacity) return '좌석: 마감'
+                  return '좌석: 예약 가능'
+                })()
               : ''
             return (
               <div
@@ -1303,6 +1312,23 @@ export default function CalendarSection(props) {
                 <span>{remainingLessons}</span>
                 <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span>{statusLabel}</span>
+                  {groupSeatLabel ? (
+                    <span
+                      data-testid="calendar-group-lesson-seat-badge"
+                      style={{
+                        width: 'fit-content',
+                        padding: '2px 7px',
+                        borderRadius: 999,
+                        border: '1px solid #3c4f68',
+                        background: '#182234',
+                        color: '#dbe8ff',
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {groupSeatLabel}
+                    </span>
+                  ) : null}
                   {groupBookableLabel ? (
                     <span
                       data-testid="calendar-group-lesson-bookable-badge"
