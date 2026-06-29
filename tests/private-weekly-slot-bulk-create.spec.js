@@ -14,6 +14,8 @@ import {
 } from './e2e-helpers.js';
 import {
   buildPrivateWeeklyBulkSlotPlan,
+  findPrivateWeeklyTemplateOverlap,
+  formatPrivateWeeklyTemplateOverlapMessage,
   parsePrivateWeeklySlotTimeList,
   privateWeeklyTemplateAppliesToDate,
   privateWeeklySlotsOverlap,
@@ -133,6 +135,19 @@ test('private weekly slot bulk helpers parse times and detect overlap', async ()
       effectiveEndDate: '2026-07-31',
     })
   ).toBe(false);
+  expect(
+    privateWeeklySlotsOverlap(existing, {
+      ...teacher,
+      teacherKey: 'don2',
+      teacher: 'don2',
+      teacherName: 'Don',
+      weekday: 1,
+      time: '13:30',
+      durationMinutes: 50,
+      effectiveStartDate: '2026-07-01',
+      effectiveEndDate: '2026-07-31',
+    })
+  ).toBe(false);
   expect(privateWeeklyTemplateAppliesToDate(existing, '2026-06-01')).toBe(true);
   expect(privateWeeklyTemplateAppliesToDate(existing, '2026-08-31')).toBe(true);
   expect(privateWeeklyTemplateAppliesToDate(existing, '2026-09-01')).toBe(false);
@@ -197,6 +212,66 @@ test('private weekly slot bulk helpers parse times and detect overlap', async ()
   });
   expect(nonOverlappingRangeTimeOverlapPlan.createdRows.map((row) => row.time)).toEqual(['13:30']);
   expect(nonOverlappingRangeTimeOverlapPlan.skippedOverlapRows).toHaveLength(0);
+
+  const inactiveExistingPlan = buildPrivateWeeklyBulkSlotPlan({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    teacherFields: teacher,
+    weekdays: ['1'],
+    times: ['13:00'],
+    durationMinutes: 50,
+    effectiveStartDate: '2026-07-01',
+    effectiveEndDate: '2026-07-31',
+    existingTemplates: [{ ...existing, status: 'inactive' }],
+  });
+  expect(inactiveExistingPlan.createdRows.map((row) => row.time)).toEqual(['13:00']);
+  expect(inactiveExistingPlan.skippedDuplicateRows).toHaveLength(0);
+  expect(inactiveExistingPlan.skippedOverlapRows).toHaveLength(0);
+
+  const inactiveCandidatePlan = buildPrivateWeeklyBulkSlotPlan({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    teacherFields: teacher,
+    weekdays: ['1'],
+    times: ['13:30'],
+    durationMinutes: 50,
+    status: 'inactive',
+    effectiveStartDate: '2026-07-01',
+    effectiveEndDate: '2026-07-31',
+    existingTemplates: [existing],
+  });
+  expect(inactiveCandidatePlan.createdRows.map((row) => row.time)).toEqual(['13:30']);
+  expect(inactiveCandidatePlan.skippedOverlapRows).toHaveLength(0);
+
+  const sameTeacherByUidConflict = findPrivateWeeklyTemplateOverlap(
+    {
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacherUid: 'uid-don',
+      weekday: 1,
+      time: '13:30',
+      durationMinutes: 60,
+      status: 'active',
+      effectiveStartDate: '2026-06-29',
+      effectiveEndDate: '2026-07-31',
+    },
+    [
+      {
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        teacherUid: 'uid-don',
+        teacherName: 'Don',
+        weekday: 1,
+        time: '13:00',
+        durationMinutes: 60,
+        status: 'active',
+        effectiveStartDate: '2026-06-01',
+        effectiveEndDate: '2026-06-30',
+      },
+    ]
+  );
+  expect(sameTeacherByUidConflict?.type).toBe('overlap');
+  const conflictMessage = formatPrivateWeeklyTemplateOverlapMessage(sameTeacherByUidConflict);
+  expect(conflictMessage).toContain('이미 같은 선생님·요일·시간이 겹치는 주간 1:1 시간표가 있습니다.');
+  expect(conflictMessage).toContain('겹치는 날짜:');
+  expect(conflictMessage).toContain('2026-06-29');
+  expect(conflictMessage).toContain('기존 시간표의 종료일을 2026-07-31로 연장');
 });
 
 test('weekly template availability wiring preserves short window and honors effective range', async () => {

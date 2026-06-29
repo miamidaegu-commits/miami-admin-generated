@@ -130,6 +130,8 @@ import {
 } from './src/features/private-booking/studentPrivateAccessSummaryClient.js'
 import {
   buildPrivateWeeklyBulkSlotPlan,
+  findPrivateWeeklyTemplateOverlap,
+  formatPrivateWeeklyTemplateOverlapMessage,
   normalizePrivateWeeklySlotWeekdays,
   parsePrivateWeeklySlotTimeList,
 } from './src/features/booking/privateWeeklySlotBulk.js'
@@ -4694,21 +4696,26 @@ export default function Dashboard() {
     if (!useForFixedAssignment && !openForStudentBooking) {
       errors.usage = '용도를 하나 이상 선택해주세요.'
     }
+    const value = {
+      teacher,
+      teacherFields,
+      weekday,
+      time,
+      durationMinutes,
+      status,
+      effectiveStartDate,
+      effectiveEndDate,
+      useForFixedAssignment,
+      openForStudentBooking,
+    }
+    if (Object.keys(errors).length === 0) {
+      const conflict = findPrivateAvailabilityTemplateConflict(value)
+      if (conflict) errors.form = formatPrivateWeeklyTemplateOverlapMessage(conflict)
+    }
     return {
       valid: Object.keys(errors).length === 0,
       errors,
-      value: {
-        teacher,
-        teacherFields,
-        weekday,
-        time,
-        durationMinutes,
-        status,
-        effectiveStartDate,
-        effectiveEndDate,
-        useForFixedAssignment,
-        openForStudentBooking,
-      },
+      value,
     }
   }
 
@@ -4793,6 +4800,49 @@ export default function Dashboard() {
     })
   }
 
+  function buildPrivateAvailabilityTemplateCandidate(value, template = null) {
+    const teacherFields =
+      value.teacherFields ||
+      (template ? buildPrivateTemplateTeacherFields(template) : buildPrivateSlotTeacherFields(value.teacher))
+    return {
+      ...(template || {}),
+      academyId: isValidOperationalAcademyId(currentAcademyId) ? currentAcademyId : template?.academyId || '',
+      teacher: teacherFields.teacher,
+      teacherName: teacherFields.teacherName,
+      teacherKey: teacherFields.teacherKey,
+      teacherUid: teacherFields.teacherUid,
+      teacherEmail: teacherFields.teacherEmail,
+      weekday: value.weekday ?? template?.weekday,
+      time: value.time ?? template?.time,
+      durationMinutes: value.durationMinutes ?? template?.durationMinutes ?? 60,
+      status: value.status ?? template?.status ?? 'active',
+      effectiveStartDate: value.effectiveStartDate ?? template?.effectiveStartDate ?? '',
+      effectiveEndDate: value.effectiveEndDate ?? template?.effectiveEndDate ?? '',
+      useForFixedAssignment:
+        value.useForFixedAssignment ?? template?.useForFixedAssignment ?? true,
+      openForStudentBooking:
+        value.openForStudentBooking ?? template?.openForStudentBooking ?? false,
+    }
+  }
+
+  function findPrivateAvailabilityTemplateConflict(value, options = {}) {
+    if (!isValidOperationalAcademyId(currentAcademyId)) return null
+    const candidate = buildPrivateAvailabilityTemplateCandidate(value, options.template || null)
+    return findPrivateWeeklyTemplateOverlap(candidate, privateAvailabilityTemplates, {
+      excludeTemplateId: options.excludeTemplateId,
+    })
+  }
+
+  function getPrivateAvailabilityBulkConflictMessages(plan) {
+    const messages = [
+      ...(plan?.skippedDuplicateRows || []),
+      ...(plan?.skippedOverlapRows || []),
+    ]
+      .map((row) => formatPrivateWeeklyTemplateOverlapMessage(row.overlapConflict))
+      .filter(Boolean)
+    return Array.from(new Set(messages))
+  }
+
   function previewPrivateAvailabilityBulkTemplates() {
     const result = validatePrivateAvailabilityBulkForm()
     setPrivateAvailabilityBulkErrors(result.errors)
@@ -4808,6 +4858,7 @@ export default function Dashboard() {
         requestedCount: plan.requestedRows.length,
         effectiveStartDate: result.value.effectiveStartDate,
         effectiveEndDate: result.value.effectiveEndDate,
+        conflictMessages: getPrivateAvailabilityBulkConflictMessages(plan),
       })
     } catch (error) {
       console.error('기본 1:1 슬롯 미리보기 실패:', error)
@@ -4827,6 +4878,21 @@ export default function Dashboard() {
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       const plan = buildPrivateAvailabilityBulkPlan(result.value)
+      const conflictMessages = getPrivateAvailabilityBulkConflictMessages(plan)
+      if (conflictMessages.length > 0) {
+        setPrivateAvailabilityBulkResult({
+          mode: 'blocked',
+          createdCount: 0,
+          skippedDuplicateCount: plan.skippedDuplicateRows.length,
+          skippedOverlapCount: plan.skippedOverlapRows.length,
+          errorCount: plan.errorRows.length,
+          requestedCount: plan.requestedRows.length,
+          effectiveStartDate: result.value.effectiveStartDate,
+          effectiveEndDate: result.value.effectiveEndDate,
+          conflictMessages,
+        })
+        return
+      }
       setBusyPrivateAvailabilityTemplateId('__bulk__')
 
       for (let index = 0; index < plan.createdRows.length; index += 400) {
@@ -4866,6 +4932,7 @@ export default function Dashboard() {
         requestedCount: plan.requestedRows.length,
         effectiveStartDate: result.value.effectiveStartDate,
         effectiveEndDate: result.value.effectiveEndDate,
+        conflictMessages,
       })
       setPrivateAvailabilityBulkForm((prev) => ({
         ...prev,
@@ -5239,6 +5306,16 @@ export default function Dashboard() {
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(template, scopedAcademyId, '주간 기본 슬롯')
+      if (nextStatus === 'active') {
+        const conflict = findPrivateAvailabilityTemplateConflict(
+          { status: nextStatus },
+          { template, excludeTemplateId: template.id }
+        )
+        if (conflict) {
+          alert(formatPrivateWeeklyTemplateOverlapMessage(conflict))
+          return
+        }
+      }
       setBusyPrivateAvailabilityTemplateId(template.id)
       await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
         status: nextStatus,
@@ -5312,6 +5389,16 @@ export default function Dashboard() {
         useForFixedAssignment,
         openForStudentBooking,
       } = result.value
+      const conflict = findPrivateAvailabilityTemplateConflict(result.value, {
+        template,
+        excludeTemplateId: template.id,
+      })
+      if (conflict) {
+        return {
+          ok: false,
+          errors: { ...result.errors, form: formatPrivateWeeklyTemplateOverlapMessage(conflict) },
+        }
+      }
       setBusyPrivateAvailabilityTemplateId(template.id)
       await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
         status,

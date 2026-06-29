@@ -19,7 +19,7 @@ function unique(values) {
   return out
 }
 
-function getTeacherScopeKeys(row) {
+function getPrimaryTeacherScopeKeys(row) {
   if (!row) return []
   return unique(
     [
@@ -29,7 +29,20 @@ function getTeacherScopeKeys(row) {
       row.teacherID,
       row.teacherKey,
       row.teacher,
+      row.uid,
+      row.id,
+      row.value,
+      row.key,
+    ].map(normalizeTeacherKey)
+  )
+}
+
+function getDisplayTeacherScopeKeys(row) {
+  if (!row) return []
+  return unique(
+    [
       row.teacherName,
+      row.teacherDisplayName,
       row.displayName,
       row.name,
     ].map(normalizeTeacherKey)
@@ -37,10 +50,17 @@ function getTeacherScopeKeys(row) {
 }
 
 function sameTeacherScope(a, b) {
-  const aKeys = getTeacherScopeKeys(a)
-  const bKeys = getTeacherScopeKeys(b)
-  if (aKeys.length === 0 || bKeys.length === 0) return false
-  return aKeys.some((key) => bKeys.includes(key))
+  const aPrimaryKeys = getPrimaryTeacherScopeKeys(a)
+  const bPrimaryKeys = getPrimaryTeacherScopeKeys(b)
+  if (aPrimaryKeys.length > 0 && bPrimaryKeys.length > 0) {
+    return aPrimaryKeys.some((key) => bPrimaryKeys.includes(key))
+  }
+  if (aPrimaryKeys.length > 0 || bPrimaryKeys.length > 0) return false
+
+  const aDisplayKeys = getDisplayTeacherScopeKeys(a)
+  const bDisplayKeys = getDisplayTeacherScopeKeys(b)
+  if (aDisplayKeys.length === 0 || bDisplayKeys.length === 0) return false
+  return aDisplayKeys.some((key) => bDisplayKeys.includes(key))
 }
 
 function timeToMinutes(time) {
@@ -64,6 +84,10 @@ function getRangeStart(row) {
 
 function getRangeEnd(row) {
   return normalizeDate(row?.effectiveEndDate) || '9999-12-31'
+}
+
+function isFiniteRangeDate(value) {
+  return normalizeDate(value) && value !== '0000-01-01' && value !== '9999-12-31'
 }
 
 export function privateWeeklySlotDateRangesOverlap(a, b) {
@@ -123,6 +147,10 @@ export function normalizePrivateWeeklySlotWeekdays(values) {
   )
 }
 
+export function isActivePrivateWeeklyTemplate(template) {
+  return normalizeText(template?.status || 'active').toLowerCase() === 'active'
+}
+
 export function privateWeeklySlotsOverlap(a, b) {
   if (!a || !b) return false
   if (normalizeText(a.academyId) && normalizeText(b.academyId) && a.academyId !== b.academyId) {
@@ -150,6 +178,133 @@ export function isExactPrivateWeeklySlotDuplicate(a, b) {
     sameTeacherScope(a, b) &&
     privateWeeklySlotDateRangesOverlap(a, b)
   )
+}
+
+export function getPrivateWeeklyTemplateLabel(template) {
+  const teacherDisplay = normalizeText(template?.teacherName || template?.displayName)
+  const teacherKey = normalizeText(template?.teacherKey || template?.teacher || template?.teacherUid)
+  const teacherLabel =
+    teacherDisplay && teacherKey && teacherDisplay !== teacherKey
+      ? `${teacherDisplay} · ${teacherKey}`
+      : teacherDisplay || teacherKey || '선생님 미지정'
+  const weekdayLabel =
+    PRIVATE_WEEKLY_SLOT_WEEKDAYS.find((option) => option.value === String(template?.weekday))?.label ||
+    '요일 미지정'
+  const time = normalizeText(template?.time) || '시간 미지정'
+  const duration = Number(template?.durationMinutes || 0)
+  const durationLabel = `${Number.isFinite(duration) && duration > 0 ? Math.floor(duration) : 60}분`
+  const startDate = normalizeDate(template?.effectiveStartDate)
+  const endDate = normalizeDate(template?.effectiveEndDate)
+  const rangeLabel = startDate && endDate ? `${startDate} ~ ${endDate}` : '기간 제한 없음'
+  return `${teacherLabel} · ${weekdayLabel} ${time} · ${durationLabel} · ${rangeLabel}`
+}
+
+function addDaysYmd(ymd, days) {
+  const date = new Date(`${ymd}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return ''
+  date.setDate(date.getDate() + days)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function getPrivateWeeklyTemplateOverlapDates(a, b, limit = 4) {
+  const start = [getRangeStart(a), getRangeStart(b)].sort().at(-1)
+  const end = [getRangeEnd(a), getRangeEnd(b)].sort()[0]
+  if (!isFiniteRangeDate(start) || !isFiniteRangeDate(end) || start > end) {
+    return { dates: [], hasMore: false }
+  }
+  const weekday = Number(a?.weekday)
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6) {
+    return { dates: [], hasMore: false }
+  }
+  const parsedStart = new Date(`${start}T00:00:00`)
+  if (Number.isNaN(parsedStart.getTime())) return { dates: [], hasMore: false }
+  const offset = (weekday - parsedStart.getDay() + 7) % 7
+  let next = addDaysYmd(start, offset)
+  const dates = []
+  let hasMore = false
+  while (next && next <= end) {
+    if (dates.length >= limit) {
+      hasMore = true
+      break
+    }
+    dates.push(next)
+    next = addDaysYmd(next, 7)
+  }
+  return { dates, hasMore }
+}
+
+function buildPrivateWeeklyTemplateRecommendation(candidate, existing) {
+  const candidateEnd = normalizeDate(candidate?.effectiveEndDate)
+  const existingStart = getRangeStart(existing)
+  const candidateStart = getRangeStart(candidate)
+  const existingEnd = normalizeDate(existing?.effectiveEndDate)
+  if (
+    candidateEnd &&
+    existingEnd &&
+    existingStart <= candidateStart &&
+    existingEnd < candidateEnd
+  ) {
+    return `새 시간표를 만들지 말고 기존 시간표의 종료일을 ${candidateEnd}로 연장하세요.`
+  }
+  return '새 시간표를 만들지 말고 기존 시간표를 수정하거나, 기존 시간표를 비활성화한 뒤 새 시간표를 사용하세요.'
+}
+
+export function findPrivateWeeklyTemplateOverlap(candidate, existingTemplates = [], options = {}) {
+  if (!candidate || !isActivePrivateWeeklyTemplate(candidate)) return null
+  const excludeTemplateId = normalizeText(options.excludeTemplateId)
+  const activeTemplates = (Array.isArray(existingTemplates) ? existingTemplates : []).filter(
+    (template) => {
+      if (!template || !isActivePrivateWeeklyTemplate(template)) return false
+      if (excludeTemplateId && normalizeText(template.id) === excludeTemplateId) return false
+      return true
+    }
+  )
+  const duplicate = activeTemplates.find((existing) =>
+    isExactPrivateWeeklySlotDuplicate(candidate, existing)
+  )
+  if (duplicate) {
+    return {
+      type: 'duplicate',
+      candidate,
+      existing: duplicate,
+      overlap: getPrivateWeeklyTemplateOverlapDates(candidate, duplicate),
+    }
+  }
+  const overlap = activeTemplates.find((existing) => privateWeeklySlotsOverlap(candidate, existing))
+  if (!overlap) return null
+  return {
+    type: 'overlap',
+    candidate,
+    existing: overlap,
+    overlap: getPrivateWeeklyTemplateOverlapDates(candidate, overlap),
+  }
+}
+
+export function formatPrivateWeeklyTemplateOverlapMessage(conflict) {
+  if (!conflict) return ''
+  const overlapDates = conflict.overlap?.dates || []
+  const overlapDateText =
+    overlapDates.length > 0
+      ? `${overlapDates.join(', ')}${conflict.overlap?.hasMore ? ', ...' : ''}`
+      : '기간 제한 없음 또는 장기 반복으로 겹침'
+  return [
+    '이미 같은 선생님·요일·시간이 겹치는 주간 1:1 시간표가 있습니다.',
+    '',
+    '기존 시간표:',
+    getPrivateWeeklyTemplateLabel(conflict.existing),
+    '',
+    '새로 만들려는 기간:',
+    getPrivateWeeklyTemplateLabel(conflict.candidate),
+    '',
+    '겹치는 날짜:',
+    overlapDateText,
+    '',
+    '추천:',
+    buildPrivateWeeklyTemplateRecommendation(conflict.candidate, conflict.existing),
+  ].join('\n')
 }
 
 export function buildPrivateWeeklyBulkSlotPlan({
@@ -193,13 +348,17 @@ export function buildPrivateWeeklyBulkSlotPlan({
   })
 
   requestedRows.forEach((row) => {
-    const activeRows = [...existingTemplates, ...acceptedRows]
-    if (activeRows.some((existing) => isExactPrivateWeeklySlotDuplicate(row, existing))) {
-      skippedDuplicateRows.push(row)
+    const activeRows = [
+      ...(Array.isArray(existingTemplates) ? existingTemplates : []),
+      ...acceptedRows,
+    ].filter(isActivePrivateWeeklyTemplate)
+    const conflict = findPrivateWeeklyTemplateOverlap(row, activeRows)
+    if (conflict?.type === 'duplicate') {
+      skippedDuplicateRows.push({ ...row, overlapConflict: conflict })
       return
     }
-    if (activeRows.some((existing) => privateWeeklySlotsOverlap(row, existing))) {
-      skippedOverlapRows.push(row)
+    if (conflict) {
+      skippedOverlapRows.push({ ...row, overlapConflict: conflict })
       return
     }
     acceptedRows.push(row)
