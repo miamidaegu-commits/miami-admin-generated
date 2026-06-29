@@ -276,6 +276,8 @@ const PRIVATE_RESERVATION_COMPLETED_STATUSES = new Set([
   'pending_deduction',
 ])
 const PRIVATE_RESERVATION_NO_SHOW_STATUSES = new Set(['no_show', 'noshow', 'no-show'])
+const GROUP_RESERVATION_ACTIVE_STATUSES = new Set(['active', 'reserved', 'confirmed', 'booked'])
+const GROUP_RESERVATION_CANCELLED_STATUSES = new Set(['cancelled', 'canceled'])
 
 function normalizeStudentBookingToken(value) {
   return String(value || '')
@@ -298,10 +300,32 @@ function getPrivateReservationStatusToken(reservation) {
   return normalizeStudentBookingToken(reservation?.status)
 }
 
+function getGroupReservationStatusToken(reservation) {
+  return normalizeStudentBookingToken(reservation?.status)
+}
+
 function isPrivateReservationCancelled(reservation) {
+  const cancellationType = normalizeStudentBookingToken(reservation?.cancellationType)
+  const cancelledByRole = normalizeStudentBookingToken(
+    reservation?.cancelledByRole || reservation?.canceledByRole
+  )
+  const cancelledBy = normalizeStudentBookingToken(
+    reservation?.cancelledBy || reservation?.canceledBy
+  )
   return (
     PRIVATE_RESERVATION_CANCELLED_STATUSES.has(getPrivateReservationStatusToken(reservation)) ||
-    Boolean(reservation?.cancelledAt || reservation?.canceledAt)
+    Boolean(
+      reservation?.cancelledAt ||
+        reservation?.canceledAt ||
+        reservation?.teacherCancelledAt ||
+        reservation?.adminCancelledAt ||
+        reservation?.studentCancelledAt ||
+        cancelledByRole ||
+        cancelledBy
+    ) ||
+    cancellationType.includes('cancel') ||
+    cancellationType.includes('unavailable') ||
+    cancellationType === 'seat_released'
   )
 }
 
@@ -327,6 +351,10 @@ function isPrivateReservationNoShow(reservation) {
     reservation?.noShow === true ||
     reservation?.isNoShow === true
   )
+}
+
+function isPrivateReservationOutcomeFinal(reservation) {
+  return isPrivateReservationCompleted(reservation) || isPrivateReservationNoShow(reservation)
 }
 
 function isActivePrivateReservationStatus(reservation) {
@@ -502,6 +530,46 @@ function isStudentDirectPrivateReservation(reservation) {
   )
 }
 
+function hasPrivateRecordIndicators(...sources) {
+  return sources.some((source) => {
+    if (!source) return false
+    if (
+      source?.slotId ||
+      source?.privateLessonSlotId ||
+      source?.privateReservationId ||
+      source?.availabilityTemplateId
+    ) {
+      return true
+    }
+    const text = [
+      source.source,
+      source.sourceType,
+      source.reservationSource,
+      source.reservationType,
+      source.type,
+      source.packageType,
+      source.lessonType,
+      source.lessonCategory,
+      source.courseType,
+      source.classType,
+      source.kind,
+    ]
+      .map(normalizeStudentBookingToken)
+      .filter(Boolean)
+      .join(' ')
+    return (
+      text.includes('private') ||
+      text.includes('1_1') ||
+      text.includes('one_to_one') ||
+      text.includes('one_on_one')
+    )
+  })
+}
+
+function isGroupReservationRecord(reservation, lesson = null) {
+  return Boolean(reservation?.lessonId) && !hasPrivateRecordIndicators(reservation, lesson)
+}
+
 function isCancelledLesson(lesson) {
   const status = String(lesson?.status || '').trim().toLowerCase()
   return status === 'cancelled' || status === 'canceled'
@@ -541,9 +609,26 @@ function getPrivateReservationStartMillis(reservation) {
   )
 }
 
+function getGroupReservationStartMillis(reservation, lesson = null) {
+  return (
+    getTimestampLikeMs(reservation?.startAt) ??
+    getTimestampLikeMs(reservation?.startsAt) ??
+    getTimestampLikeMs(reservation?.startAtMillis) ??
+    getTimestampLikeMs(lesson?.startAt) ??
+    getTimestampLikeMs(lesson?.startsAt) ??
+    getTimestampLikeMs(lesson?.startAtMillis) ??
+    getDateTimeMs(reservation?.date || lesson?.date, reservation?.time || lesson?.time)
+  )
+}
+
 function isPrivateReservationInFuture(reservation) {
   const startMillis = getPrivateReservationStartMillis(reservation)
   return startMillis !== null && Date.now() < startMillis
+}
+
+function isPrivateReservationPast(reservation, nowMillis = Date.now()) {
+  const startMillis = getPrivateReservationStartMillis(reservation)
+  return startMillis !== null && nowMillis >= startMillis
 }
 
 function canShowPrivateReservationCancelAction(reservation) {
@@ -552,10 +637,24 @@ function canShowPrivateReservationCancelAction(reservation) {
     isStudentDirectPrivateReservation(reservation) &&
     isActivePrivateReservationStatus(reservation) &&
     !isPrivateReservationCancelled(reservation) &&
-    !isPrivateReservationCompleted(reservation) &&
-    !isPrivateReservationNoShow(reservation) &&
+    !isPrivateReservationOutcomeFinal(reservation) &&
+    !isPrivateReservationPast(reservation) &&
     isPrivateReservationInFuture(reservation)
   )
+}
+
+function canShowGroupReservationCancelAction(reservation, lesson = null, nowMillis = Date.now()) {
+  if (!isGroupReservationRecord(reservation, lesson)) return false
+  if (!GROUP_RESERVATION_ACTIVE_STATUSES.has(getGroupReservationStatusToken(reservation))) return false
+  if (
+    GROUP_RESERVATION_CANCELLED_STATUSES.has(getGroupReservationStatusToken(reservation)) ||
+    reservation?.cancelledAt ||
+    reservation?.canceledAt
+  ) {
+    return false
+  }
+  const startsAtMs = getGroupReservationStartMillis(reservation, lesson)
+  return startsAtMs !== null && nowMillis < startsAtMs
 }
 
 function getPrivateReservationStudentStatusLabel(reservation) {
@@ -2616,6 +2715,11 @@ export default function StudentBookingPage() {
     if (!reservation?.lessonId) return
 
     const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    const lesson = lessonsById.get(String(reservation.lessonId || '').trim()) || null
+    if (!canShowGroupReservationCancelAction(reservation, lesson)) {
+      alert('취소할 수 있는 단체반 예약이 아닙니다.')
+      return
+    }
     const reservationId = buildGroupLessonReservationId({
       academyId: scopedAcademyId,
       lessonId: reservation.lessonId,
@@ -3758,6 +3862,10 @@ export default function StudentBookingPage() {
                     const cancelLimitReached =
                       groupCancelLimitInfo.enabled &&
                       Number(groupCancelLimitInfo.remainingCount ?? 0) <= 0
+                    const canCancelGroupReservation = canShowGroupReservationCancelAction(
+                      reservation,
+                      lesson
+                    )
                     const cancelDisabled = Boolean(busyReservationId) || cancelLimitReached
 
                     return (
@@ -3817,7 +3925,7 @@ export default function StudentBookingPage() {
                                 : {}),
                             }}
                           >
-                            {isReserved ? (
+                            {isReserved && canCancelGroupReservation ? (
                               <button
                                 type="button"
                                 onClick={() => cancelReservation(reservation)}
@@ -4284,6 +4392,7 @@ export default function StudentBookingPage() {
                   {sortedPrivateReservations.map((reservation) => {
                     const slot = privateSlotsById.get(reservation.slotId) || null
                     const isActive = isActivePrivateReservationStatus(reservation)
+                    const isFixedReservation = isFixedPrivateReservation(reservation)
                     const statusLabel = getPrivateReservationStudentStatusLabel(reservation)
                     const canCancelReservation = canShowPrivateReservationCancelAction(reservation)
                     const reservationDateTime = [
@@ -4399,6 +4508,10 @@ export default function StudentBookingPage() {
                     })
                     const isBusy = busyReservationId === reservationId
                     const isActive = reservation.status === 'active'
+                    const canCancelGroupReservation = canShowGroupReservationCancelAction(
+                      reservation,
+                      lesson
+                    )
                     const reservationTitle =
                       String(reservation.subject || lesson?.subject || '').trim() || '그룹 수업'
                     const reservationDateTime = [
@@ -4446,7 +4559,7 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                           </div>
-                          {isActive ? (
+                          {canCancelGroupReservation ? (
                             <button
                               type="button"
                               onClick={() => cancelReservation(reservation)}
