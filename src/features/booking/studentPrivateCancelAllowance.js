@@ -1,10 +1,38 @@
 export const STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT = 2
 export const STUDENT_PRIVATE_CANCEL_LIMIT_MAX = 24
+export const PRIVATE_PACKAGE_CANCEL_UNIT_COUNT = 4
 
 function readNonNegativeInteger(value) {
   const n = Number(value)
   if (!Number.isFinite(n) || n < 0) return 0
   return Math.floor(n)
+}
+
+export function getPrivatePackageCancelLimit(pkg) {
+  const totalCount = readNonNegativeInteger(pkg?.totalCount)
+  return Math.floor(totalCount / PRIVATE_PACKAGE_CANCEL_UNIT_COUNT)
+}
+
+export function getPrivatePackageCancelUsed(pkg) {
+  return readNonNegativeInteger(pkg?.privateCancelUsedCount)
+}
+
+export function getPrivatePackageCancelRemaining(pkg) {
+  return Math.max(0, getPrivatePackageCancelLimit(pkg) - getPrivatePackageCancelUsed(pkg))
+}
+
+export function computePrivatePackageCancelAllowance(pkg = {}) {
+  const used = getPrivatePackageCancelUsed(pkg)
+  const limit = getPrivatePackageCancelLimit(pkg)
+  return {
+    used,
+    limit,
+    remaining: Math.max(0, limit - used),
+  }
+}
+
+export function canUsePrivatePackageCancel(pkg) {
+  return getPrivatePackageCancelRemaining(pkg) > 0
 }
 
 export function computeStudentPrivateCancelAllowance({
@@ -41,7 +69,29 @@ export function formatAdminStudentCancelAllowanceSummary(allowance) {
   return `취소 사용 ${allowance.used}/${allowance.limit}회 · 남은 ${allowance.remaining}회`
 }
 
-export function formatStudentPrivateCancelPolicyGuide({ limit, used, remaining } = {}) {
+export function formatPrivatePackageCancelUsageSummary(pkgOrAllowance) {
+  if (!pkgOrAllowance) return ''
+  const allowance =
+    typeof pkgOrAllowance.limit !== 'undefined' ||
+    typeof pkgOrAllowance.used !== 'undefined' ||
+    typeof pkgOrAllowance.remaining !== 'undefined'
+      ? {
+          used: readNonNegativeInteger(pkgOrAllowance.used),
+          limit: readNonNegativeInteger(pkgOrAllowance.limit),
+          remaining: readNonNegativeInteger(pkgOrAllowance.remaining),
+        }
+      : computePrivatePackageCancelAllowance(pkgOrAllowance)
+  return `취소 사용 ${allowance.used}/${allowance.limit}회`
+}
+
+export function formatStudentPrivateCancelPolicyGuide() {
+  return [
+    '개인 1:1 취소는 수강권 4회당 1회까지 가능합니다.',
+    '취소는 수업 시작 10시간 전까지만 가능합니다.',
+  ]
+}
+
+export function formatLegacyStudentPrivateCancelPolicyGuide({ limit, used, remaining } = {}) {
   const allowance = computeStudentPrivateCancelAllowance({
     studentCancelCount: used,
     studentCancelLimit: limit,
@@ -61,19 +111,11 @@ export function formatStudentPrivateCancelPolicyGuide({ limit, used, remaining }
   ]
 }
 
-export function buildPrivateSlotReserveConfirmMessage(
-  allowanceOrLimit = STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT
-) {
-  const allowance =
-    typeof allowanceOrLimit === 'object' && allowanceOrLimit !== null ?
-      computeStudentPrivateCancelAllowance(allowanceOrLimit) :
-      computeStudentPrivateCancelAllowance({
-        studentCancelLimit: allowanceOrLimit,
-      })
+export function buildPrivateSlotReserveConfirmMessage() {
   return (
     `1:1 수업을 예약하시겠습니까?\n\n` +
-    `취소는 수업 시작 6시간 전까지만 가능하며, ` +
-    `예약 취소는 최대 ${allowance.limit}회까지 가능합니다.`
+    `취소는 수업 시작 10시간 전까지만 가능하며, ` +
+    `개인 1:1 취소는 수강권 4회당 1회까지 가능합니다.`
   )
 }
 
@@ -96,12 +138,12 @@ export function buildPrivateReservationCancelConfirmMessage(allowance, { loaded 
   if (!loaded) {
     return (
       `예약을 취소하시겠습니까?\n\n` +
-      `예약 취소는 최대 ${STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT}회까지 가능하며, ` +
+      `개인 1:1 취소는 수강권 4회당 1회까지 가능하며, ` +
       `이 취소도 횟수에 포함됩니다.`
     )
   }
   if (resolved.remaining <= 0) {
-    return '예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+    return '이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
   }
   const afterRemaining = Math.max(0, resolved.remaining - 1)
   return (

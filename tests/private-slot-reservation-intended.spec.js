@@ -330,6 +330,20 @@ async function expectPrivateBookingStatsCount(db, studentId, expected) {
     .toBe(expected);
 }
 
+async function expectPrivatePackageCancelUsage(db, packageId, expected) {
+  await expect
+    .poll(async () => {
+      const snap = await db.collection('studentPackages').doc(packageId).get();
+      const data = snap.data() || {};
+      return {
+        privateCancelUsedCount: Number(data.privateCancelUsedCount || 0),
+        usedCount: Number(data.usedCount || 0),
+        remainingCount: Number(data.remainingCount || 0),
+      };
+    }, { timeout: 15000 })
+    .toEqual(expected);
+}
+
 async function expectNotificationEvent(db, {
   type,
   slotId,
@@ -497,6 +511,7 @@ async function createStudentFixture(db, auth, {
           totalCount: Math.max(Number(paidLessons || 0), 1),
           usedCount: 0,
           remainingCount: Math.max(Number(paidLessons || 0), 1),
+          privateCancelUsedCount: 0,
           createdAt: nowTs,
           updatedAt: nowTs,
         })
@@ -580,7 +595,7 @@ async function createFixture(unique) {
     teacherAccess: true,
     teacherKey,
     allowedSlotIds: [],
-    paidLessons: 1,
+    paidLessons: 8,
     privateSlotBookingPilotEnabled: true,
   });
   const noRemainingStudent = await createStudentFixture(db, auth, {
@@ -1286,7 +1301,7 @@ test('student booking page uses in-app private cancellation confirm modal', asyn
     '../src/features/booking/studentPrivateCancelAllowance.js'
   );
   const message = buildPrivateReservationCancelConfirmMessage(
-    { used: 1, limit: 3, remaining: 2 },
+    { used: 1, limit: 2, remaining: 1 },
     { loaded: true }
   );
 
@@ -1302,9 +1317,9 @@ test('student booking page uses in-app private cancellation confirm modal', asyn
   expect(source).toContain('student-private-reservation-cancel-confirm-submit');
   expect(source).toMatch(/setPrivateSlotCancelConfirm[\s\S]*buildPrivateReservationCancelConfirmMessage/);
   expect(source).toMatch(/confirmPrivateSlotCancel[\s\S]*cancelPrivateReservation\(pending\.reservation, \{ confirmed: true \}\)/);
-  expect(message).toContain('취소 사용 1/3회');
-  expect(message).toContain('남은 취소 가능 2회');
-  expect(message).toContain('이번 취소 후 남은 취소 가능 1회');
+  expect(message).toContain('취소 사용 1/2회');
+  expect(message).toContain('남은 취소 가능 1회');
+  expect(message).toContain('이번 취소 후 남은 취소 가능 0회');
 });
 
 test('weekly private booking window helper is deterministic for Monday-Saturday', async () => {
@@ -1576,7 +1591,9 @@ test('private admin actions are restricted away from teacher execution paths', a
   expect(functionsSource).toContain('reason: outcome');
   expect(functionsSource).toContain('reason,');
   expect(rulesSource).toContain('function validTeacherStudentPackageCountUpdate() {\n      return false;');
-  expect(rulesSource).toContain('resource.data.packageType in ["group", "openGroup"]');
+  expect(rulesSource).toMatch(
+    /match \/studentPackages\/\{packageId\}[\s\S]*allow update: if sameAcademyOnUpdate\(\) &&[\s\S]*isAcademyAdmin\(resource\.data\.academyId\);/
+  );
   expect(rulesSource).not.toContain('canManageOwnLessonDeductions(request.resource.data.academyId)) &&');
 });
 
@@ -1663,13 +1680,10 @@ test('intended flexible private slot visibility honors teacher access and pilot 
       '예약은 수업 시작 7시간 전까지만 가능합니다.'
     );
     await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
-      '취소는 수업 시작 6시간 전까지만 가능합니다.'
+      '취소는 수업 시작 10시간 전까지만 가능합니다.'
     );
     await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
-      '예약 취소는 최대 2회까지 가능합니다.'
-    );
-    await expect(eligiblePage.getByTestId('student-private-booking-policy-notice')).toContainText(
-      '취소 사용 0/2회 · 남은 취소 가능 2회'
+      '개인 1:1 취소는 수강권 4회당 1회까지 가능합니다.'
     );
     await expect(studentSlotCard(eligiblePage, fixture.date)).toBeVisible({ timeout: 15000 });
     await expect(studentSlotCard(eligiblePage, fixture.date)).toContainText(fixture.time);
@@ -2106,8 +2120,8 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
         () =>
           bookingDialogs.some(
             (message) =>
-              message.includes('취소는 수업 시작 6시간 전까지만 가능') &&
-              message.includes('예약 취소는 최대 2회')
+              message.includes('취소는 수업 시작 10시간 전까지만 가능') &&
+              message.includes('개인 1:1 취소는 수강권 4회당 1회')
           ),
         { timeout: 15000 }
       )
@@ -2234,7 +2248,12 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'cancelled'
     );
     await expectSlotStatus(db, fixture.slotId, 'open');
-    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 1);
+    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 0);
+    await expectPrivatePackageCancelUsage(db, fixture.eligibleStudent.packageId, {
+      privateCancelUsedCount: 1,
+      usedCount: 0,
+      remainingCount: 8,
+    });
     await expectNotificationEvent(db, {
       type: 'private_slot_cancelled',
       slotId: fixture.slotId,
@@ -2276,7 +2295,12 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'cancelled'
     );
     await expectSlotStatus(db, fixture.slotId, 'open');
-    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 2);
+    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 0);
+    await expectPrivatePackageCancelUsage(db, fixture.eligibleStudent.packageId, {
+      privateCancelUsedCount: 2,
+      usedCount: 0,
+      remainingCount: 8,
+    });
 
     await db.collection('privateLessonSlots').doc(fixture.slotId).set(
       {
@@ -2632,7 +2656,7 @@ test('stale cancelled normal private slot is bookable for another eligible stude
   }
 });
 
-test('student flexible private cancellation cutoff blocks cancel within 6 hours', async ({
+test('student flexible private cancellation cutoff blocks cancel within 10 hours', async ({
   browser,
   browserName,
 }, testInfo) => {
@@ -2707,13 +2731,13 @@ test('student flexible private cancellation cutoff blocks cancel within 6 hours'
       .filter({ hasText: nearStart.date })
       .first();
     await expect(upcomingReservationCard).toBeVisible({ timeout: 15000 });
-    await expect(upcomingReservationCard).toContainText('수업 시작 6시간 전까지만 취소할 수 있습니다.');
+    await expect(upcomingReservationCard).toContainText('수업 시작 10시간 전까지만 취소할 수 있습니다.');
     await expect(
       upcomingReservationCard.getByTestId('student-upcoming-private-reservation-cancel-button')
     ).toBeDisabled();
     const reservationCard = privateReservationCard(page, nearStart.date);
     await expect(reservationCard).toBeVisible({ timeout: 15000 });
-    await expect(reservationCard).toContainText('수업 시작 6시간 전까지만 취소할 수 있습니다.');
+    await expect(reservationCard).toContainText('수업 시작 10시간 전까지만 취소할 수 있습니다.');
     await expect(reservationCard.getByTestId('student-private-reservation-cancel-button')).toBeDisabled();
     expect(dialogs).toEqual([]);
     await expectReservationStatus(db, nearSlotId, fixture.eligibleStudent.studentId, 'active');
@@ -2781,7 +2805,12 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
       await reservationCard.getByTestId('student-private-reservation-cancel-button').click();
       await expectReservationStatus(db, fixture.slotId, fixture.eligibleStudent.studentId, 'cancelled');
       await expectSlotStatus(db, fixture.slotId, 'open');
-      await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, index);
+      await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 0);
+      await expectPrivatePackageCancelUsage(db, fixture.eligibleStudent.packageId, {
+        privateCancelUsedCount: index,
+        usedCount: 0,
+        remainingCount: 8,
+      });
       await expect(
         page.locator('[data-testid="student-private-reservation-card"]').filter({ hasText: fixture.date }),
         `reservation card should disappear after cancellation ${index}`
@@ -2809,11 +2838,16 @@ test('student flexible private cancellation limit allows 2 and blocks third', as
 
     const reservationCard = privateReservationCard(page, fixture.date);
     await expect(reservationCard).toBeVisible({ timeout: 15000 });
-    await expect(reservationCard).toContainText('취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.');
+    await expect(reservationCard).toContainText('이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.');
     await expect(reservationCard.getByTestId('student-private-reservation-cancel-button')).toBeDisabled();
-    expect(dialogs.filter((message) => message.includes('예약 취소 가능 횟수를 모두 사용'))).toEqual([]);
+    expect(dialogs.filter((message) => message.includes('취소 가능 횟수를 모두 사용'))).toEqual([]);
     await expectReservationStatus(db, fixture.slotId, fixture.eligibleStudent.studentId, 'active');
-    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 2);
+    await expectPrivateBookingStatsCount(db, fixture.eligibleStudent.studentId, 0);
+    await expectPrivatePackageCancelUsage(db, fixture.eligibleStudent.packageId, {
+      privateCancelUsedCount: 2,
+      usedCount: 0,
+      remainingCount: 8,
+    });
     await expectNotificationEvent(db, {
       type: 'private_slot_reserved',
       slotId: fixture.slotId,

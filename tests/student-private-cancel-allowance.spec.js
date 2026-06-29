@@ -1,10 +1,17 @@
 import { test, expect } from '@playwright/test';
 import {
+  PRIVATE_PACKAGE_CANCEL_UNIT_COUNT,
   STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT,
   buildPrivateReservationCancelConfirmMessage,
+  canUsePrivatePackageCancel,
+  computePrivatePackageCancelAllowance,
   computeStudentPrivateCancelAllowance,
   formatAdminStudentCancelAllowanceSummary,
+  formatPrivatePackageCancelUsageSummary,
   formatStudentPrivateCancelPolicyGuide,
+  getPrivatePackageCancelLimit,
+  getPrivatePackageCancelRemaining,
+  getPrivatePackageCancelUsed,
   formatTeacherRosterStudentCancelLabel,
   validateStudentCancelLimitInput,
 } from '../src/features/booking/studentPrivateCancelAllowance.js';
@@ -66,17 +73,66 @@ test('format labels use friendly cancellation wording', () => {
   expect(formatAdminStudentCancelAllowanceSummary(allowance)).toBe(
     '취소 사용 2/6회 · 남은 4회'
   );
-  expect(formatStudentPrivateCancelPolicyGuide({ limit: 6, used: 2, remaining: 4 })).toEqual([
-    '예약 취소는 최대 6회까지 가능합니다.',
-    '취소 사용 2/6회 · 남은 취소 가능 4회',
+  expect(formatStudentPrivateCancelPolicyGuide()).toEqual([
+    '개인 1:1 취소는 수강권 4회당 1회까지 가능합니다.',
+    '취소는 수업 시작 10시간 전까지만 가능합니다.',
   ]);
   expect(STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT).toBe(2);
 });
 
+test('private package cancel allowance is computed from total count', () => {
+  expect(PRIVATE_PACKAGE_CANCEL_UNIT_COUNT).toBe(4);
+  expect(getPrivatePackageCancelLimit({ totalCount: 1 })).toBe(0);
+  expect(getPrivatePackageCancelLimit({ totalCount: 3 })).toBe(0);
+  expect(getPrivatePackageCancelLimit({ totalCount: 4 })).toBe(1);
+  expect(getPrivatePackageCancelLimit({ totalCount: 8 })).toBe(2);
+  expect(getPrivatePackageCancelLimit({ totalCount: 24 })).toBe(6);
+  expect(getPrivatePackageCancelUsed({ privateCancelUsedCount: 1.8 })).toBe(1);
+  expect(getPrivatePackageCancelRemaining({
+    totalCount: 8,
+    privateCancelUsedCount: 1,
+  })).toBe(1);
+  expect(computePrivatePackageCancelAllowance({
+    totalCount: 8,
+    privateCancelUsedCount: 1,
+  })).toEqual({
+    used: 1,
+    limit: 2,
+    remaining: 1,
+  });
+  expect(canUsePrivatePackageCancel({
+    totalCount: 4,
+    privateCancelUsedCount: 1,
+  })).toBe(false);
+  expect(formatPrivatePackageCancelUsageSummary({
+    totalCount: 4,
+    privateCancelUsedCount: 0,
+  })).toBe('취소 사용 0/1회');
+  expect(formatPrivatePackageCancelUsageSummary({
+    totalCount: 8,
+    privateCancelUsedCount: 1,
+  })).toBe('취소 사용 1/2회');
+});
+
+test('private package top-up increases computed limit while preserving used count', () => {
+  const before = { totalCount: 4, privateCancelUsedCount: 1 };
+  const afterTopUp = { ...before, totalCount: 8 };
+  expect(computePrivatePackageCancelAllowance(before)).toEqual({
+    used: 1,
+    limit: 1,
+    remaining: 0,
+  });
+  expect(computePrivatePackageCancelAllowance(afterTopUp)).toEqual({
+    used: 1,
+    limit: 2,
+    remaining: 1,
+  });
+});
+
 test('cancel confirmation shows used, remaining, and after-cancel counts', () => {
-  const allowance = computeStudentPrivateCancelAllowance({
-    studentCancelCount: 2,
-    studentCancelLimit: 6,
+  const allowance = computePrivatePackageCancelAllowance({
+    totalCount: 24,
+    privateCancelUsedCount: 2,
   });
   const message = buildPrivateReservationCancelConfirmMessage(allowance, { loaded: true });
   expect(message).toContain('예약을 취소하시겠습니까?');
@@ -85,11 +141,11 @@ test('cancel confirmation shows used, remaining, and after-cancel counts', () =>
   expect(message).toContain('이번 취소 후 남은 취소 가능 3회');
   expect(message).toContain('이 취소도 횟수에 포함됩니다.');
   expect(buildPrivateReservationCancelConfirmMessage(
-    computeStudentPrivateCancelAllowance({ studentCancelCount: 2, studentCancelLimit: 2 }),
+    computePrivatePackageCancelAllowance({ totalCount: 8, privateCancelUsedCount: 2 }),
     { loaded: true }
-  )).toBe('예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.');
+  )).toBe('이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.');
   expect(buildPrivateReservationCancelConfirmMessage(null, { loaded: false })).toContain(
-    '예약 취소는 최대 2회까지 가능하며'
+    '개인 1:1 취소는 수강권 4회당 1회까지 가능하며'
   );
 });
 
@@ -163,7 +219,34 @@ test('updateStudentPrivateCancelAllowance callable enforces admin and limit rule
     /updateStudentPrivateCancelAllowance[\s\S]*studentCancelLimit cannot be less than current/
   );
   expect(source).toMatch(
-    /cancelPrivateLessonReservation[\s\S]*resolveStudentPrivateCancelAllowance\(stats\)/
+    /cancelPrivateLessonReservation[\s\S]*privateCancelUsedCount: allowance\.privateCancelUsedCount \+ 1/
+  );
+  expect(source).toMatch(
+    /cancelPrivateLessonReservation[\s\S]*studentPackages[\s\S]*doc\(reservationPackageId\)/
+  );
+  expect(source).toMatch(
+    /cancelFixedPrivateLessonOccurrence[\s\S]*privateCancelUsedCount: nextPrivateCancelUsedCount/
+  );
+  expect(source).toMatch(
+    /STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 10 \* 60 \* 60 \* 1000/
+  );
+  expect(source).toContain('computePrivatePackageCancelLimit');
+  expect(source).toContain('Math.floor(totalCount / PRIVATE_PACKAGE_CANCEL_UNIT_COUNT)');
+  expect(source).toContain('수강권 연결 정보가 없어 학원에 문의해 주세요.');
+  expect(source).toContain('이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.');
+  expect(source).toContain('Private reservation can only be cancelled at least 10 hours');
+  expect(source).toContain('Fixed private lessons can only be cancelled at least');
+  expect(source).toContain('10 hours');
+  expect(source).not.toContain('Private reservation can only be cancelled at least 6 hours');
+  expect(source).not.toContain('Fixed private lessons can only be cancelled at least 6 hours');
+  expect(source).toMatch(
+    /markPrivateReservationOutcome[\s\S]*usedCount: usedAfter[\s\S]*remainingCount: remainingAfter/
+  );
+  expect(source).toMatch(
+    /markPrivateReservationOutcome[\s\S]*private_reservation_no_show_deduct/
+  );
+  expect(source).toMatch(
+    /reversePrivateReservationOutcome[\s\S]*usedCount: usedAfter[\s\S]*remainingCount: remainingAfter/
   );
   const adminCancelBlock =
     source.match(

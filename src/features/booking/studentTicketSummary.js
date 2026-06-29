@@ -5,6 +5,7 @@ import {
   computeGroupTicketBalance,
   isGroupTicketFreeBookingAllowed,
 } from '../dashboard/ticketBalanceHelpers.js'
+import { formatPrivatePackageCancelUsageSummary } from './studentPrivateCancelAllowance.js'
 
 function toFiniteNumber(value) {
   const n = Number(value)
@@ -163,6 +164,7 @@ export function buildStudentPrivateTicketSummaries({
       teacherLabel: getPrivatePackageTeacherLabel(pkg),
       usageText: formatPrivatePackageUsageSummary(pkg),
       scheduleText: formatPrivateTicketScheduleSummary(balance),
+      cancelUsageText: formatPrivatePackageCancelUsageSummary(pkg),
       registrationSummaryText: formatPrivatePackageRegistrationSummary(pkg),
       muted: !isActive || remaining <= 0,
       statusText: !isActive || remaining <= 0 ? '소진' : '',
@@ -237,6 +239,11 @@ export function buildStudentPrivateTicketSummariesFromCallablePackages(slots = [
       teacherLabel: row.teacherLabel,
       usageText: `총 ${totalCount}회 · 사용 ${used}회 · 남은 ${remaining}회`,
       scheduleText: formatPrivateTicketScheduleSummary(balanceLike),
+      cancelUsageText: formatPrivatePackageCancelUsageSummary({
+        used: summary.privateCancelUsedCount,
+        limit: summary.privateCancelLimit,
+        remaining: summary.privateCancelRemaining,
+      }),
       registrationSummaryText: formatPrivatePackageRegistrationSummary(summary),
       muted: remaining <= 0,
       statusText: remaining <= 0 ? '소진' : '',

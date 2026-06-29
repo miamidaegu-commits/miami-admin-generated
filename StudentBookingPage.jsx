@@ -59,12 +59,20 @@ import {
 import {
   buildPrivateSlotReserveConfirmMessage,
   buildPrivateReservationCancelConfirmMessage,
-  computeStudentPrivateCancelAllowance,
+  computePrivatePackageCancelAllowance,
   formatStudentPrivateCancelPolicyGuide,
 } from './src/features/booking/studentPrivateCancelAllowance.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
-const PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000
+const PRIVATE_CANCEL_CUTOFF_MS = 10 * 60 * 60 * 1000
+const PRIVATE_CANCEL_BLOCKED_PACKAGE_STATUSES = new Set([
+  'inactive',
+  'expired',
+  'ended',
+  'revoked',
+  'cancelled',
+  'canceled',
+])
 function isEnabledFlag(value) {
   return ['1', 'true', 'yes', 'on', 'enabled'].includes(
     String(value || '').trim().toLowerCase()
@@ -197,13 +205,6 @@ function resetHorizontalScroll() {
     }
     window.clearTimeout(timeoutId)
   }
-}
-
-function applyCallableCancelAllowance(cancelAllowance) {
-  return computeStudentPrivateCancelAllowance({
-    studentCancelCount: cancelAllowance?.studentCancelCount,
-    studentCancelLimit: cancelAllowance?.studentCancelLimit,
-  })
 }
 
 function chunkValues(values, size) {
@@ -635,6 +636,14 @@ function isPrivateReservationInFuture(reservation) {
   return startMillis !== null && Date.now() < startMillis
 }
 
+function isCancelablePrivatePackage(pkg) {
+  if (!pkg) return false
+  const packageType = String(pkg.packageType || 'private').trim()
+  if (packageType && packageType !== 'private') return false
+  const status = String(pkg.status || 'active').trim().toLowerCase()
+  return !PRIVATE_CANCEL_BLOCKED_PACKAGE_STATUSES.has(status)
+}
+
 function isPrivateReservationPast(reservation, nowMillis = Date.now()) {
   const startMillis = getPrivateReservationStartMillis(reservation)
   return startMillis !== null && nowMillis >= startMillis
@@ -1033,10 +1042,6 @@ export default function StudentBookingPage() {
   const [studentPackagesResolved, setStudentPackagesResolved] = useState(false)
   const [studentPackagesError, setStudentPackagesError] = useState('')
   const [linkedPrivateStudent, setLinkedPrivateStudent] = useState(null)
-  const [privateCancelAllowance, setPrivateCancelAllowance] = useState(() =>
-    computeStudentPrivateCancelAllowance({})
-  )
-  const [privateCancelAllowanceLoaded, setPrivateCancelAllowanceLoaded] = useState(false)
   const [privateSlotReserveConfirm, setPrivateSlotReserveConfirm] = useState(null)
   const [privateSlotCancelConfirm, setPrivateSlotCancelConfirm] = useState(null)
   const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
@@ -1057,20 +1062,7 @@ export default function StudentBookingPage() {
     ? `${currentAcademyId}__${getTodayStorageDateString()}`
     : ''
   const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
-  const privateCancelPolicyLines = useMemo(
-    () =>
-      formatStudentPrivateCancelPolicyGuide({
-        limit: privateCancelAllowance.limit,
-        used: privateCancelAllowance.used,
-        remaining: privateCancelAllowance.remaining,
-      }),
-    [privateCancelAllowance]
-  )
-
-  useEffect(() => {
-    setPrivateCancelAllowance(computeStudentPrivateCancelAllowance({}))
-    setPrivateCancelAllowanceLoaded(false)
-  }, [currentAcademyId, scopedStudentId])
+  const privateCancelPolicyLines = useMemo(() => formatStudentPrivateCancelPolicyGuide(), [])
 
   useEffect(() => {
     reservationsRef.current = reservations
@@ -1682,10 +1674,6 @@ export default function StudentBookingPage() {
         academyId: currentAcademyId,
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
-      setPrivateCancelAllowance(
-        applyCallableCancelAllowance(response?.data?.cancelAllowance)
-      )
-      setPrivateCancelAllowanceLoaded(response?.data?.cancelAllowance != null)
       const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
       const rows = canUsePrivateBooking
         ? serverRows
@@ -1919,10 +1907,6 @@ export default function StudentBookingPage() {
           ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
         })
         if (cancelled) return
-        setPrivateCancelAllowance(
-          applyCallableCancelAllowance(response?.data?.cancelAllowance)
-        )
-        setPrivateCancelAllowanceLoaded(response?.data?.cancelAllowance != null)
         const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
         const rows = canUsePrivateBooking
           ? serverRows
@@ -2176,6 +2160,24 @@ export default function StudentBookingPage() {
     })
     return byId
   }, [studentPackages])
+
+  function getPrivatePackageCancelAllowanceById(packageId) {
+    const scopedPackageId = String(packageId || '').trim()
+    if (!scopedPackageId) return null
+    const pkg = studentPackageById.get(scopedPackageId)
+    if (!isCancelablePrivatePackage(pkg)) return null
+    return computePrivatePackageCancelAllowance(pkg)
+  }
+
+  function getPrivateReservationCancelAllowance(reservation) {
+    return getPrivatePackageCancelAllowanceById(reservation?.packageId)
+  }
+
+  function getFixedPrivateLessonCancelAllowance(lesson) {
+    const lessonId = String(lesson?.id || '').trim()
+    const linkedReservation = lessonId ? reservationByLessonId.get(lessonId) : null
+    return getPrivatePackageCancelAllowanceById(lesson?.packageId || linkedReservation?.packageId)
+  }
 
   const privateSlotsById = useMemo(() => {
     const byId = new Map()
@@ -2692,7 +2694,7 @@ export default function StudentBookingPage() {
       setPrivateSlotReserveConfirm({
         slot,
         reservationId,
-        message: buildPrivateSlotReserveConfirmMessage(privateCancelAllowance),
+        message: buildPrivateSlotReserveConfirmMessage(),
       })
       return
     }
@@ -2839,14 +2841,11 @@ export default function StudentBookingPage() {
       slotId: reservation.slotId,
       studentId: scopedStudentId,
     })
-    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(
-      privateCancelAllowance,
-      { loaded: privateCancelAllowanceLoaded }
-    )
-    if (
-      privateCancelAllowanceLoaded &&
-      privateCancelAllowance.remaining <= 0
-    ) {
+    const cancelAllowance = getPrivateReservationCancelAllowance(reservation)
+    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(cancelAllowance, {
+      loaded: Boolean(cancelAllowance),
+    })
+    if (cancelAllowance && cancelAllowance.remaining <= 0) {
       alert(cancelConfirmMessage)
       return
     }
@@ -2904,17 +2903,21 @@ export default function StudentBookingPage() {
     const time = getLessonDisplayTime(lesson)
     const startMillis = getDateTimeMs(date, time)
     if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
-      alert('수업 시작 6시간 전까지만 취소할 수 있습니다.')
+      alert('수업 시작 10시간 전까지만 취소할 수 있습니다.')
       return
     }
-    if (privateCancelAllowance.remaining <= 0) {
-      alert('1:1 예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.')
+    const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
+    if (!cancelAllowance) {
+      alert('수강권 연결 정보가 없어 학원에 문의해 주세요.')
       return
     }
-    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(
-      privateCancelAllowance,
-      { loaded: privateCancelAllowanceLoaded }
-    )
+    if (cancelAllowance.remaining <= 0) {
+      alert('이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.')
+      return
+    }
+    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(cancelAllowance, {
+      loaded: true,
+    })
     if (!options.confirmed) {
       setPrivateSlotCancelConfirm({
         kind: 'fixedLesson',
@@ -2935,17 +2938,13 @@ export default function StudentBookingPage() {
         firebaseFunctions,
         'cancelFixedPrivateLessonOccurrence'
       )
-      const response = await cancelFixedPrivateLessonOccurrence({
+      await cancelFixedPrivateLessonOccurrence({
         academyId: scopedAcademyId,
         lessonId,
         cancellationType: 'seat_released',
         reason: 'student_cancelled_fixed_private_lesson',
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
-      if (response?.data?.cancelAllowance) {
-        setPrivateCancelAllowance(applyCallableCancelAllowance(response.data.cancelAllowance))
-        setPrivateCancelAllowanceLoaded(true)
-      }
       await Promise.all([loadPrivateReservations(), loadPrivateSlotAvailability()])
     } catch (error) {
       console.error('고정 1:1 수업 취소 실패:', error)
@@ -2961,10 +2960,14 @@ export default function StudentBookingPage() {
     }
     const startMillis = getPrivateReservationStartMillis(reservation)
     if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
-      return '수업 시작 6시간 전까지만 취소할 수 있습니다.'
+      return '수업 시작 10시간 전까지만 취소할 수 있습니다.'
     }
-    if (privateCancelAllowanceLoaded && privateCancelAllowance.remaining <= 0) {
-      return '취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+    const cancelAllowance = getPrivateReservationCancelAllowance(reservation)
+    if (!cancelAllowance) {
+      return '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+    }
+    if (cancelAllowance.remaining <= 0) {
+      return '이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
     }
     return ''
   }
@@ -2974,10 +2977,14 @@ export default function StudentBookingPage() {
     const time = getLessonDisplayTime(lesson)
     const startMillis = getDateTimeMs(date, time)
     if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
-      return '수업 시작 6시간 전까지만 취소할 수 있습니다.'
+      return '수업 시작 10시간 전까지만 취소할 수 있습니다.'
     }
-    if (privateCancelAllowance.remaining <= 0) {
-      return '취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+    const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
+    if (!cancelAllowance) {
+      return '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+    }
+    if (cancelAllowance.remaining <= 0) {
+      return '이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
     }
     return ''
   }
@@ -2999,6 +3006,7 @@ export default function StudentBookingPage() {
     const isBusy = busyPrivateReservationId === reservationId
     const unavailableReason = getPrivateReservationCancelUnavailableReason(reservation)
     const disabled = Boolean(isBusy || unavailableReason)
+    const cancelAllowance = getPrivateReservationCancelAllowance(reservation)
 
     return (
       <div
@@ -3024,7 +3032,7 @@ export default function StudentBookingPage() {
           </span>
         ) : (
           <span style={{ opacity: 0.72, fontSize: 13, ...studentBookingMobileTextGuardStyle }}>
-            취소 가능 {privateCancelAllowance.remaining}회
+            취소 가능 {cancelAllowance?.remaining ?? 0}회
           </span>
         )}
         <button
@@ -3418,6 +3426,14 @@ export default function StudentBookingPage() {
 	                              style={{ opacity: 0.86, fontSize: 14 }}
 	                            >
 	                              {summary.scheduleText}
+	                            </span>
+	                          ) : null}
+	                          {summary.cancelUsageText ? (
+	                            <span
+	                              data-testid="student-private-ticket-summary-cancel-usage"
+	                              style={{ opacity: 0.86, fontSize: 14 }}
+	                            >
+	                              {summary.cancelUsageText}
 	                            </span>
 	                          ) : null}
 	                          {summary.registrationSummaryText ? (
@@ -4049,11 +4065,9 @@ export default function StudentBookingPage() {
                 }}
               >
                 <div>예약은 수업 시작 7시간 전까지만 가능합니다.</div>
-                <div>취소는 수업 시작 6시간 전까지만 가능합니다.</div>
                 {privateCancelPolicyLines.map((line) => (
                   <div key={line}>{line}</div>
                 ))}
-                <div>{privateCancelAllowance.limit}회를 초과하면 학원에 문의해 주세요.</div>
               </div>
 
               {privateAccessError ? <p style={{ color: '#f4a7a7' }}>{privateAccessError}</p> : null}

@@ -23,7 +23,8 @@ const PRODUCTION_PROJECT_ID = "daegu-miami-production";
 const E2E_PROJECT_ID = "miami-e2e";
 const STUDENT_PRIVATE_CANCEL_LIMIT = 2;
 const STUDENT_PRIVATE_CANCEL_LIMIT_MAX = 24;
-const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 6 * 60 * 60 * 1000;
+const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 10 * 60 * 60 * 1000;
+const PRIVATE_PACKAGE_CANCEL_UNIT_COUNT = 4;
 const PRIVATE_SLOT_BOOKING_CUTOFF_MS = 7 * 60 * 60 * 1000;
 const PRIVATE_SLOT_AVAILABILITY_LIMIT = 100;
 const PRIVATE_SLOT_QUERY_CHUNK_SIZE = 10;
@@ -341,6 +342,100 @@ function resolveStudentPrivateCancelAllowance(stats) {
     studentCancelLimit,
     remainingCancelCount: Math.max(0, studentCancelLimit - studentCancelCount),
   };
+}
+
+function computePrivatePackageCancelLimit(packageData) {
+  const totalCount = readNonNegativeInteger(
+      packageData && packageData.totalCount,
+  );
+  return Math.floor(totalCount / PRIVATE_PACKAGE_CANCEL_UNIT_COUNT);
+}
+
+function readPrivatePackageCancelUsed(packageData) {
+  return readNonNegativeInteger(
+      packageData && packageData.privateCancelUsedCount,
+  );
+}
+
+function resolvePrivatePackageCancelAllowance(packageData) {
+  const privateCancelUsedCount = readPrivatePackageCancelUsed(packageData);
+  const privateCancelLimit = computePrivatePackageCancelLimit(packageData);
+  return {
+    privateCancelUsedCount,
+    privateCancelLimit,
+    remainingCancelCount: Math.max(
+        0,
+        privateCancelLimit - privateCancelUsedCount,
+    ),
+  };
+}
+
+function getPrivatePackageStudentCancelRejectReason({
+  pkg,
+  academyId,
+  studentId,
+  teacherKey,
+  teacherKeys = [],
+}) {
+  if (!pkg) return "package_missing";
+  if (normalizeId(pkg.academyId) !== normalizeId(academyId)) {
+    return "academy_mismatch";
+  }
+  if (normalizeId(pkg.studentId) !== normalizeId(studentId)) {
+    return "student_mismatch";
+  }
+  const packageType = normalizeId(pkg.packageType).toLowerCase();
+  if (packageType && packageType !== "private") {
+    return "package_type_mismatch";
+  }
+  const status = normalizeId(pkg.status || "active").toLowerCase();
+  if (
+    ["inactive", "expired", "ended", "revoked", "cancelled", "canceled"]
+        .includes(status)
+  ) {
+    return "package_not_active";
+  }
+  const packageTeacherKeys = getPrivatePackageTeacherKeys(pkg);
+  const requestedTeacherKeys = uniqueNormalizedTeacherKeyList([
+    teacherKey,
+    ...teacherKeys,
+  ]);
+  if (requestedTeacherKeys.length === 0) return "missing_lesson_teacher";
+  if (packageTeacherKeys.length === 0) return "missing_package_teacher";
+  if (!requestedTeacherKeys.some((key) => packageTeacherKeys.includes(key))) {
+    return "teacher_mismatch";
+  }
+  return "";
+}
+
+function assertPrivatePackageStudentCancelAllowed({
+  packageData,
+  academyId,
+  studentId,
+  teacherKey,
+  teacherKeys = [],
+}) {
+  const rejectReason = getPrivatePackageStudentCancelRejectReason({
+    pkg: packageData,
+    academyId,
+    studentId,
+    teacherKey,
+    teacherKeys,
+  });
+  if (rejectReason) {
+    throw new HttpsError(
+        "failed-precondition",
+        "수강권 연결 정보가 없어 학원에 문의해 주세요.",
+    );
+  }
+  const allowance = resolvePrivatePackageCancelAllowance(packageData);
+  if (allowance.privateCancelUsedCount >= allowance.privateCancelLimit) {
+    throw new HttpsError(
+        "failed-precondition",
+        "이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.",
+    );
+  }
+  return allowance;
 }
 
 function parseStudentCancelLimitInput(value) {
@@ -3169,6 +3264,9 @@ function sanitizePrivateSlotAvailabilityRow({
     remainingCount: packageRemainingCount,
     totalCount: Number(packageSummary.totalCount || 0),
     usedDeductedCount: Number(packageSummary.usedDeductedCount || 0),
+    privateCancelUsedCount: Number(packageSummary.privateCancelUsedCount || 0),
+    privateCancelLimit: Number(packageSummary.privateCancelLimit || 0),
+    privateCancelRemaining: Number(packageSummary.privateCancelRemaining || 0),
     futureFixedAllocatedCount:
       Number(packageSummary.futureFixedAllocatedCount || 0),
     activeFutureReservationAllocatedCount:
@@ -3382,6 +3480,11 @@ function buildBusyPrivateScheduleRow({
       remainingCount: packageRemainingCount,
       totalCount: Number(packageSummary.totalCount || 0),
       usedDeductedCount: Number(packageSummary.usedDeductedCount || 0),
+      privateCancelUsedCount:
+        Number(packageSummary.privateCancelUsedCount || 0),
+      privateCancelLimit: Number(packageSummary.privateCancelLimit || 0),
+      privateCancelRemaining:
+        Number(packageSummary.privateCancelRemaining || 0),
       futureFixedAllocatedCount:
         Number(packageSummary.futureFixedAllocatedCount || 0),
       activeFutureReservationAllocatedCount:
@@ -3774,6 +3877,10 @@ function getPackageSummaryByTeacherKey(packageSnap, {
       makeupAvailableCount: safeRemainingCount,
       totalCount: usage.totalCount,
       usedDeductedCount: usage.usedDeductedCount,
+      privateCancelUsedCount: readPrivatePackageCancelUsed(packageData),
+      privateCancelLimit: computePrivatePackageCancelLimit(packageData),
+      privateCancelRemaining:
+        resolvePrivatePackageCancelAllowance(packageData).remainingCancelCount,
       futureFixedAllocatedCount: usage.futureFixedAllocatedCount,
       activeFutureReservationCount:
         usage.activeFutureReservationCount ||
@@ -5957,9 +6064,6 @@ exports.cancelPrivateLessonReservation = onCall(
           const reservationRef = db
               .collection("privateLessonReservations")
               .doc(reservationId);
-          const statsRef = db
-              .collection("studentPrivateBookingStats")
-              .doc(`${academyId}__${studentId}`);
           const studentRef = db.collection("privateStudents").doc(studentId);
           const summaryRef = db
               .collection("studentPrivateAccessSummary")
@@ -5968,13 +6072,11 @@ exports.cancelPrivateLessonReservation = onCall(
           const [
             reservationSnap,
             slotSnap,
-            statsSnap,
             studentSnap,
             summarySnap,
           ] = await Promise.all([
             transaction.get(reservationRef),
             transaction.get(slotRef),
-            transaction.get(statsRef),
             transaction.get(studentRef),
             transaction.get(summaryRef),
           ]);
@@ -6036,19 +6138,36 @@ exports.cancelPrivateLessonReservation = onCall(
           if (Date.now() > startMillis - STUDENT_PRIVATE_CANCEL_CUTOFF_MS) {
             throw new HttpsError(
                 "failed-precondition",
-                "Private reservation can only be cancelled at least 6 hours " +
+                "Private reservation can only be cancelled at least 10 hours " +
                 "before start time.",
             );
           }
 
-          const stats = statsSnap.exists ? statsSnap.data() || {} : {};
-          const allowance = resolveStudentPrivateCancelAllowance(stats);
-          if (allowance.studentCancelCount >= allowance.studentCancelLimit) {
+          const reservationPackageId = normalizeId(reservation.packageId);
+          if (!reservationPackageId) {
             throw new HttpsError(
                 "failed-precondition",
-                "1:1 예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.",
+                "수강권 연결 정보가 없어 학원에 문의해 주세요.",
             );
           }
+          const packageRef = db
+              .collection("studentPackages")
+              .doc(reservationPackageId);
+          const packageSnap = await transaction.get(packageRef);
+          if (!packageSnap.exists) {
+            throw new HttpsError(
+                "failed-precondition",
+                "수강권 연결 정보가 없어 학원에 문의해 주세요.",
+            );
+          }
+          const packageData = packageSnap.data() || {};
+          const allowance = assertPrivatePackageStudentCancelAllowed({
+            packageData,
+            academyId,
+            studentId,
+            teacherKey: getReservationTeacherKey(reservation, slot),
+            teacherKeys: getReservationTeacherKeys(reservation, slot),
+          });
 
           const now = admin.firestore.FieldValue.serverTimestamp();
           transaction.update(
@@ -6059,14 +6178,10 @@ exports.cancelPrivateLessonReservation = onCall(
                 studentId,
               }),
           );
-          transaction.set(statsRef, {
-            academyId,
-            studentId,
-            studentCancelCount: allowance.studentCancelCount + 1,
-            createdAt:
-              statsSnap.exists && stats.createdAt ? stats.createdAt : now,
+          transaction.update(packageRef, {
+            privateCancelUsedCount: allowance.privateCancelUsedCount + 1,
             updatedAt: now,
-          }, {merge: true});
+          });
 
           if (privateSlotBelongsToCancelledReservation({
             slot,
@@ -6112,6 +6227,15 @@ exports.cancelPrivateLessonReservation = onCall(
             slotId,
             studentId,
             reservationId,
+            packageCancelAllowance: {
+              privateCancelUsedCount: allowance.privateCancelUsedCount + 1,
+              privateCancelLimit: allowance.privateCancelLimit,
+              remainingCancelCount: Math.max(
+                  0,
+                  allowance.privateCancelLimit -
+                    (allowance.privateCancelUsedCount + 1),
+              ),
+            },
           };
         });
       } catch (error) {
@@ -6188,9 +6312,8 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
           const lessonStudentId = normalizeId(
               lesson.studentId || lesson.studentID,
           );
-          let statsRef = null;
+          let packageRef = null;
           let allowance = null;
-          let statsSnap = null;
           if (actorRole === "student") {
             if (
               !membership.studentId ||
@@ -6205,22 +6328,33 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
               throw new HttpsError(
                   "failed-precondition",
                   "Fixed private lessons can only be cancelled at least " +
-                  "6 hours " +
+                  "10 hours " +
                   "before start time.",
               );
             }
-            statsRef = db
-                .collection("studentPrivateBookingStats")
-                .doc(`${academyId}__${lessonStudentId}`);
-            statsSnap = await transaction.get(statsRef);
-            const stats = statsSnap.exists ? statsSnap.data() || {} : {};
-            allowance = resolveStudentPrivateCancelAllowance(stats);
-            if (allowance.studentCancelCount >= allowance.studentCancelLimit) {
+            const lessonPackageId = normalizeId(lesson.packageId);
+            if (!lessonPackageId) {
               throw new HttpsError(
                   "failed-precondition",
-                  "1:1 예약 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.",
+                  "수강권 연결 정보가 없어 학원에 문의해 주세요.",
               );
             }
+            packageRef = db.collection("studentPackages").doc(lessonPackageId);
+            const packageSnap = await transaction.get(packageRef);
+            if (!packageSnap.exists) {
+              throw new HttpsError(
+                  "failed-precondition",
+                  "수강권 연결 정보가 없어 학원에 문의해 주세요.",
+              );
+            }
+            const packageData = packageSnap.data() || {};
+            allowance = assertPrivatePackageStudentCancelAllowed({
+              packageData,
+              academyId,
+              studentId: lessonStudentId,
+              teacherKey: normalizeId(lesson.teacher || lesson.teacherKey),
+              teacherKeys: getPrivateTeacherScopeKeys(lesson),
+            });
           } else if (actorRole === "teacher") {
             throw new HttpsError(
                 "permission-denied",
@@ -6299,25 +6433,20 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
             createdAt: now,
           });
 
-          let nextAllowance = null;
-          if (actorRole === "student" && statsRef && allowance) {
-            const nextStudentCancelCount = allowance.studentCancelCount + 1;
-            transaction.set(statsRef, {
-              academyId,
-              studentId: lessonStudentId,
-              studentCancelCount: nextStudentCancelCount,
-              createdAt:
-                statsSnap && statsSnap.exists && statsSnap.data().createdAt ?
-                  statsSnap.data().createdAt :
-                  now,
+          let nextPackageCancelAllowance = null;
+          if (actorRole === "student" && packageRef && allowance) {
+            const nextPrivateCancelUsedCount =
+              allowance.privateCancelUsedCount + 1;
+            transaction.update(packageRef, {
+              privateCancelUsedCount: nextPrivateCancelUsedCount,
               updatedAt: now,
-            }, {merge: true});
-            nextAllowance = {
-              studentCancelCount: nextStudentCancelCount,
-              studentCancelLimit: allowance.studentCancelLimit,
+            });
+            nextPackageCancelAllowance = {
+              privateCancelUsedCount: nextPrivateCancelUsedCount,
+              privateCancelLimit: allowance.privateCancelLimit,
               remainingCancelCount: Math.max(
                   0,
-                  allowance.studentCancelLimit - nextStudentCancelCount,
+                  allowance.privateCancelLimit - nextPrivateCancelUsedCount,
               ),
             };
           }
@@ -6329,7 +6458,7 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
             cancellationType,
             cancelledByRole: actorRole,
             isSeatReleased: cancellationType === "seat_released",
-            cancelAllowance: nextAllowance,
+            packageCancelAllowance: nextPackageCancelAllowance,
           };
         });
       } catch (error) {
