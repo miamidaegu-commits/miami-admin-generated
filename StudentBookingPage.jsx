@@ -258,11 +258,92 @@ function getLessonCapacityLabel(lesson) {
   return `남은 자리 ${Math.max(0, safeCapacity - safeBooked)}명`
 }
 
+const PRIVATE_RESERVATION_ACTIVE_STATUSES = new Set(['active', 'reserved', 'confirmed', 'booked'])
+const PRIVATE_RESERVATION_CANCELLED_STATUSES = new Set([
+  'cancelled',
+  'canceled',
+  'teacher_cancelled',
+  'teacher_unavailable',
+  'admin_cancelled',
+  'student_cancelled',
+])
+const PRIVATE_RESERVATION_COMPLETED_STATUSES = new Set([
+  'completed',
+  'complete',
+  'done',
+  'deducted',
+  'auto_deducted',
+  'pending_deduction',
+])
+const PRIVATE_RESERVATION_NO_SHOW_STATUSES = new Set(['no_show', 'noshow', 'no-show'])
+
+function normalizeStudentBookingToken(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+}
+
+function getPrivateReservationOutcomeToken(reservation) {
+  return normalizeStudentBookingToken(
+    reservation?.outcome ||
+      reservation?.reservationOutcome ||
+      reservation?.lessonOutcome ||
+      reservation?.attendanceStatus ||
+      ''
+  )
+}
+
+function getPrivateReservationStatusToken(reservation) {
+  return normalizeStudentBookingToken(reservation?.status)
+}
+
+function isPrivateReservationCancelled(reservation) {
+  return (
+    PRIVATE_RESERVATION_CANCELLED_STATUSES.has(getPrivateReservationStatusToken(reservation)) ||
+    Boolean(reservation?.cancelledAt || reservation?.canceledAt)
+  )
+}
+
+function isPrivateReservationCompleted(reservation) {
+  const status = getPrivateReservationStatusToken(reservation)
+  const outcome = getPrivateReservationOutcomeToken(reservation)
+  return (
+    PRIVATE_RESERVATION_COMPLETED_STATUSES.has(status) ||
+    PRIVATE_RESERVATION_COMPLETED_STATUSES.has(outcome) ||
+    reservation?.deductionApplied === true ||
+    reservation?.autoDeducted === true ||
+    reservation?.deducted === true ||
+    reservation?.completed === true
+  )
+}
+
+function isPrivateReservationNoShow(reservation) {
+  const status = getPrivateReservationStatusToken(reservation)
+  const outcome = getPrivateReservationOutcomeToken(reservation)
+  return (
+    PRIVATE_RESERVATION_NO_SHOW_STATUSES.has(status) ||
+    PRIVATE_RESERVATION_NO_SHOW_STATUSES.has(outcome) ||
+    reservation?.noShow === true ||
+    reservation?.isNoShow === true
+  )
+}
+
+function isActivePrivateReservationStatus(reservation) {
+  return PRIVATE_RESERVATION_ACTIVE_STATUSES.has(getPrivateReservationStatusToken(reservation))
+}
+
 function getReservationStatusLabel(reservation) {
   if (reservation?.noDeduction === true) {
     return '휴강 · 차감 없음'
   }
-  return reservation?.status === 'active' ? '예약 완료' : '예약 취소'
+  if (isPrivateReservationNoShow(reservation)) return '노쇼'
+  if (isPrivateReservationCompleted(reservation)) return '완료'
+  if (isPrivateReservationCancelled(reservation)) {
+    const actorLabel = getLessonHistoryCancelActorLabel(reservation)
+    return actorLabel || '예약 취소'
+  }
+  return isActivePrivateReservationStatus(reservation) ? '예약 완료' : '예약 취소'
 }
 
 function getLessonDisplayTime(lesson) {
@@ -397,6 +478,30 @@ function isFixedPrivateReservation(reservation) {
   )
 }
 
+function isStudentDirectPrivateReservation(reservation) {
+  if (isFixedPrivateReservation(reservation)) return false
+  const source = normalizeStudentBookingToken(
+    reservation?.source ||
+      reservation?.sourceType ||
+      reservation?.reservationSource ||
+      reservation?.createdByRole ||
+      reservation?.createdBy ||
+      ''
+  )
+  const reservationType = normalizeStudentBookingToken(
+    reservation?.reservationType || reservation?.type || ''
+  )
+  if (!source && !reservationType) return true
+  return (
+    source.includes('student') ||
+    source.includes('direct') ||
+    reservationType.includes('student') ||
+    reservationType.includes('direct') ||
+    reservationType === 'flexible' ||
+    reservationType === 'regular'
+  )
+}
+
 function isCancelledLesson(lesson) {
   const status = String(lesson?.status || '').trim().toLowerCase()
   return status === 'cancelled' || status === 'canceled'
@@ -434,6 +539,32 @@ function getPrivateReservationStartMillis(reservation) {
     getTimestampLikeMs(reservation?.startAtMillis) ??
     getDateTimeMs(reservation?.date, reservation?.time)
   )
+}
+
+function isPrivateReservationInFuture(reservation) {
+  const startMillis = getPrivateReservationStartMillis(reservation)
+  return startMillis !== null && Date.now() < startMillis
+}
+
+function canShowPrivateReservationCancelAction(reservation) {
+  return (
+    Boolean(reservation?.slotId) &&
+    isStudentDirectPrivateReservation(reservation) &&
+    isActivePrivateReservationStatus(reservation) &&
+    !isPrivateReservationCancelled(reservation) &&
+    !isPrivateReservationCompleted(reservation) &&
+    !isPrivateReservationNoShow(reservation) &&
+    isPrivateReservationInFuture(reservation)
+  )
+}
+
+function getPrivateReservationStudentStatusLabel(reservation) {
+  if (isPrivateReservationCancelled(reservation)) return getReservationStatusLabel(reservation)
+  if (isPrivateReservationNoShow(reservation)) return '노쇼'
+  if (isPrivateReservationCompleted(reservation)) return '완료'
+  if (!isActivePrivateReservationStatus(reservation)) return getReservationStatusLabel(reservation)
+  if (!isPrivateReservationInFuture(reservation)) return '지난 수업'
+  return isFixedPrivateReservation(reservation) ? '고정 예약' : '내 예약'
 }
 
 function normalizePrivateAccessKey(value) {
@@ -644,6 +775,11 @@ function getPrivateSlotViewModeButtonStyle(isSelected, isMobile = false) {
 }
 
 function getLessonHistoryStatusLabel(item) {
+  if (item?.source === 'privateReservation') {
+    if (isPrivateReservationCancelled(item)) return getReservationStatusLabel(item)
+    if (isPrivateReservationNoShow(item)) return '노쇼'
+    if (isPrivateReservationCompleted(item)) return '완료'
+  }
   const cancellationType = String(item?.cancellationType || '').trim()
   if (cancellationType === 'seat_released') return '고정수업 자리 공개됨'
   if (cancellationType === 'lesson_cancelled') return '수업 취소'
@@ -658,8 +794,11 @@ function getLessonHistoryStatusLabel(item) {
 }
 
 function getLessonHistoryCancelActorLabel(item) {
-  const status = String(item?.status || '').trim().toLowerCase()
-  if (status !== 'cancelled' && status !== 'canceled') return ''
+  const status = getPrivateReservationStatusToken(item)
+  if (status.includes('teacher')) return '선생님 취소'
+  if (status.includes('admin') || status.includes('owner')) return '관리자 취소'
+  if (status.includes('student')) return '학생 취소'
+  if (!PRIVATE_RESERVATION_CANCELLED_STATUSES.has(status)) return ''
   const actor = String(
     item?.cancelledByRole ||
       item?.canceledByRole ||
@@ -1770,7 +1909,22 @@ export default function StudentBookingPage() {
       collection(db, 'privateLessonReservations'),
       where('academyId', '==', currentAcademyId),
       where('studentId', '==', scopedStudentId),
-      where('status', 'in', ['active', 'reserved', 'confirmed', 'booked', 'cancelled', 'canceled'])
+      where('status', 'in', [
+        'active',
+        'reserved',
+        'confirmed',
+        'booked',
+        'cancelled',
+        'canceled',
+        'teacher_cancelled',
+        'teacher_unavailable',
+        'admin_cancelled',
+        'student_cancelled',
+        'completed',
+        'no_show',
+        'pending_deduction',
+        'auto_deducted',
+      ])
     )
 
     const unsubscribe = onSnapshot(
@@ -2013,7 +2167,7 @@ export default function StudentBookingPage() {
 
   const sortedPrivateReservations = useMemo(() => {
     return privateReservations
-      .filter((reservation) => reservation.status === 'active')
+      .filter((reservation) => isStudentDirectPrivateReservation(reservation))
       .sort((a, b) => {
         const aKey = `${a.date || ''} ${a.time || ''} ${a.slotId || ''}`
         const bKey = `${b.date || ''} ${b.time || ''} ${b.slotId || ''}`
@@ -2061,7 +2215,7 @@ export default function StudentBookingPage() {
 
     const reservationItems = privateReservations
       .filter((reservation) => {
-        if (reservation.status !== 'active') return false
+        if (!canShowPrivateReservationCancelAction(reservation)) return false
         const date = String(reservation.date || '').trim()
         return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= todayYmd
       })
@@ -2133,6 +2287,14 @@ export default function StudentBookingPage() {
         cancelledBy: reservation.cancelledBy || reservation.canceledBy || '',
         cancellationReason: reservation.cancellationReason || reservation.cancelledReason || '',
         cancelledAt: reservation.cancelledAt || reservation.canceledAt || null,
+        outcome: reservation.outcome || reservation.reservationOutcome || reservation.lessonOutcome || '',
+        attendanceStatus: reservation.attendanceStatus || '',
+        deductionApplied: reservation.deductionApplied === true,
+        autoDeducted: reservation.autoDeducted === true,
+        deducted: reservation.deducted === true,
+        completed: reservation.completed === true,
+        noShow: reservation.noShow === true,
+        isNoShow: reservation.isNoShow === true,
         startsAtMs,
         fallbackId: reservation.slotId,
       }
@@ -2507,6 +2669,10 @@ export default function StudentBookingPage() {
     if (!reservation?.slotId) return
 
     const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    if (!canShowPrivateReservationCancelAction(reservation)) {
+      alert('취소할 수 있는 1:1 예약이 아닙니다.')
+      return
+    }
     const unavailableReason = getPrivateReservationCancelUnavailableReason(reservation)
     if (unavailableReason) {
       alert(unavailableReason)
@@ -2634,6 +2800,9 @@ export default function StudentBookingPage() {
   }
 
   function getPrivateReservationCancelUnavailableReason(reservation) {
+    if (!canShowPrivateReservationCancelAction(reservation)) {
+      return '취소할 수 있는 1:1 예약이 아닙니다.'
+    }
     const startMillis = getPrivateReservationStartMillis(reservation)
     if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
       return '수업 시작 6시간 전까지만 취소할 수 있습니다.'
@@ -2661,6 +2830,9 @@ export default function StudentBookingPage() {
     testId = 'student-private-reservation-cancel-button',
   } = {}) {
     if (!reservation || !PRIVATE_SLOT_BOOKING_ENABLED || !privateSlotBookingPilotEnabled) {
+      return null
+    }
+    if (!canShowPrivateReservationCancelAction(reservation)) {
       return null
     }
     const reservationId = buildPrivateLessonReservationId({
@@ -4111,8 +4283,9 @@ export default function StudentBookingPage() {
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {sortedPrivateReservations.map((reservation) => {
                     const slot = privateSlotsById.get(reservation.slotId) || null
-                    const isActive = reservation.status === 'active'
-                    const isFixedReservation = isFixedPrivateReservation(reservation)
+                    const isActive = isActivePrivateReservationStatus(reservation)
+                    const statusLabel = getPrivateReservationStudentStatusLabel(reservation)
+                    const canCancelReservation = canShowPrivateReservationCancelAction(reservation)
                     const reservationDateTime = [
                       String(reservation.date || slot?.date || '').trim(),
                       String(reservation.time || slot?.time || '').trim(),
@@ -4166,19 +4339,15 @@ export default function StudentBookingPage() {
                               {reservationDateTime || `slotId: ${reservation.slotId}`}
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {isActive
-                                ? isFixedReservation
-                                  ? '고정 예약'
-                                  : '내 예약'
-                                : getReservationStatusLabel(reservation)}
+                              {statusLabel}
                             </div>
-                            {isActive ? (
+                            {isActive && canCancelReservation ? (
                               <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
                                 결제는 학원 안내에 따라 진행됩니다.
                               </div>
                             ) : null}
                           </div>
-                          {isActive ? renderPrivateReservationCancelAction(reservation) : null}
+                          {canCancelReservation ? renderPrivateReservationCancelAction(reservation) : null}
                         </div>
                       </article>
                     )

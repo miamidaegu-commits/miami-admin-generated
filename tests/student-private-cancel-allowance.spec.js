@@ -93,6 +93,30 @@ test('cancel confirmation shows used, remaining, and after-cancel counts', () =>
   );
 });
 
+test('student private reservation cancel button is gated by active future direct reservation state', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile('StudentBookingPage.jsx', 'utf8');
+  const visibilityHelper =
+    source.match(/function canShowPrivateReservationCancelAction[\s\S]*?\n}\n/)?.[0] || '';
+  const renderHelper =
+    source.match(/function renderPrivateReservationCancelAction[\s\S]*?return \(\n[\s\S]*?\n  }\n/)?.[0] || '';
+  const historyLabelHelper =
+    source.match(/function getLessonHistoryStatusLabel[\s\S]*?\n}\n/)?.[0] || '';
+
+  expect(visibilityHelper).toContain('isStudentDirectPrivateReservation(reservation)');
+  expect(visibilityHelper).toContain('isActivePrivateReservationStatus(reservation)');
+  expect(visibilityHelper).toContain('!isPrivateReservationCancelled(reservation)');
+  expect(visibilityHelper).toContain('!isPrivateReservationCompleted(reservation)');
+  expect(visibilityHelper).toContain('!isPrivateReservationNoShow(reservation)');
+  expect(visibilityHelper).toContain('isPrivateReservationInFuture(reservation)');
+  expect(source).toContain("'teacher_unavailable'");
+  expect(source).toContain("'admin_cancelled'");
+  expect(renderHelper).toMatch(/if \(!canShowPrivateReservationCancelAction\(reservation\)\) \{\s*return null\s*\}/);
+  expect(historyLabelHelper).toContain("item?.source === 'privateReservation'");
+  expect(historyLabelHelper).toContain("return '완료'");
+  expect(historyLabelHelper).toContain("return '노쇼'");
+});
+
 test('updateStudentPrivateCancelAllowance callable enforces admin and limit rules', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile('functions/index.js', 'utf8');
