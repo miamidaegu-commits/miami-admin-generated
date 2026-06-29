@@ -31,6 +31,7 @@ import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js
 import {
   computeStudentPrivateCancelAllowance,
   formatAdminStudentCancelAllowanceSummary,
+  formatPrivatePackageCancelUsageSummary,
   STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT,
   STUDENT_PRIVATE_CANCEL_LIMIT_MAX,
   validateStudentCancelLimitInput,
@@ -2197,6 +2198,12 @@ export default function StudentsSection({
                               ? String(pkg.remainingCount)
                               : '-'}
                           </span>
+                          {String(pkg.packageType || '').trim() === 'private' ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>취소 사용</span>
+                              <span>{formatPrivatePackageCancelUsageSummary(pkg)}</span>
+                            </>
+                          ) : null}
                           <span style={{ opacity: 0.72 }}>수강권 시작일</span>
                           <span>{formatPackageStartDate(pkg)}</span>
                           <span style={{ opacity: 0.72 }}>만료일</span>
