@@ -3863,6 +3863,15 @@ export default function StudentBookingPage() {
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {upcomingPrivateScheduleItems.map((item) => {
                     const fixedLessonForCancel = getUpcomingFixedPrivateCancelLesson(item)
+                    const fixedCancelUnavailableReason = fixedLessonForCancel
+                      ? getFixedPrivateLessonCancelUnavailableReason(fixedLessonForCancel) ||
+                        '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+                      : ''
+                    const fixedCancelNode = fixedLessonForCancel
+                      ? renderFixedPrivateLessonCancelAction(fixedLessonForCancel, {
+                          forceRender: true,
+                        })
+                      : null
 
                     return (
                       <article
@@ -3975,9 +3984,60 @@ export default function StudentBookingPage() {
                             data-fixed-cancel-missing-link-reason="수강권 연결 정보가 없어 학원에 문의해 주세요."
                             aria-label="고정 예약 1:1 수업 취소 또는 수업 취소 불가"
                           >
-                            {renderFixedPrivateLessonCancelAction(fixedLessonForCancel, {
-                              forceRender: true,
-                            })}
+                            {fixedCancelNode || (
+                              <div
+                                data-testid="student-upcoming-fixed-private-cancel-fallback"
+                                style={{
+                                  display: isMobileStudentBooking ? 'grid' : 'flex',
+                                  gridTemplateColumns: isMobileStudentBooking
+                                    ? 'repeat(2, minmax(0, 1fr))'
+                                    : undefined,
+                                  justifyContent: isMobileStudentBooking ? undefined : 'space-between',
+                                  gap: 10,
+                                  alignItems: 'center',
+                                  flexWrap: isMobileStudentBooking ? undefined : 'wrap',
+                                  marginTop: 12,
+                                  width: isMobileStudentBooking ? '100%' : undefined,
+                                  maxWidth: isMobileStudentBooking ? '100%' : undefined,
+                                  minWidth: 0,
+                                  boxSizing: 'border-box',
+                                }}
+                              >
+                                <p
+                                  style={{
+                                    margin: 0,
+                                    opacity: 0.72,
+                                    fontSize: 13,
+                                    ...studentBookingMobileTextGuardStyle,
+                                  }}
+                                >
+                                  {fixedCancelUnavailableReason ||
+                                    '수강권 연결 정보가 없어 학원에 문의해 주세요.'}
+                                </p>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
+                                    minHeight: isMobileStudentBooking ? 44 : undefined,
+                                    borderRadius: 999,
+                                    border: '1px solid #9a3f48',
+                                    background: '#3a1f24',
+                                    color: '#ffd8dc',
+                                    cursor: 'not-allowed',
+                                    fontSize: isMobileStudentBooking ? 14 : 12,
+                                    fontWeight: 800,
+                                    flex: isMobileStudentBooking ? undefined : '0 0 auto',
+                                    ...(isMobileStudentBooking
+                                      ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                      : {}),
+                                  }}
+                                >
+                                  수업 취소 불가
+                                </span>
+                              </div>
+                            )}
                           </div>
                         ) : null}
                       </article>
