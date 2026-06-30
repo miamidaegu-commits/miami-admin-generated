@@ -1909,8 +1909,15 @@ service cloud.firestore {
       allow create: if sameAcademyOnCreate() &&
         isAcademyAdmin(request.resource.data.academyId) &&
         (
-          validPrivateSlotCreateShape() ||
-          validPrivateFixedSlotAdminCreateShape()
+          (
+            request.resource.data.status == "open" &&
+            validPrivateSlotCreateShape()
+          ) ||
+          (
+            request.resource.data.status == "reserved" &&
+            request.resource.data.slotType == "fixed" &&
+            validPrivateFixedSlotAdminCreateShape()
+          )
         );
 
       allow update: if sameAcademyOnUpdate() && (
@@ -1988,9 +1995,14 @@ service cloud.firestore {
 
       allow create: if sameAcademyOnCreate() &&
         (
-          validPrivateReservationStudentCreate(reservationId) ||
+          (
+            request.resource.data.source == "student" &&
+            validPrivateReservationStudentCreate(reservationId)
+          ) ||
           (
             isAcademyAdmin(request.resource.data.academyId) &&
+            request.resource.data.source == "fixed_admin" &&
+            request.resource.data.sourceType == "fixed-private-slot-assignment" &&
             validPrivateFixedReservationAdminCreate(reservationId)
           )
         );

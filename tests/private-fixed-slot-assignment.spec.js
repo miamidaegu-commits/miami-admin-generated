@@ -588,6 +588,24 @@ test('fixed private assignment source requires package and links generated docum
   expect(rulesSource).toContain('isAcademyAdmin(request.resource.data.academyId);');
   expect(rulesSource).toContain('validPrivateFixedSlotAdminCreateShape');
   expect(rulesSource).toContain('validPrivateFixedReservationAdminCreate');
+  expect(rulesSource).toContain('request.resource.data.status == "open" &&');
+  expect(rulesSource).toContain('request.resource.data.status == "reserved" &&');
+  expect(rulesSource).toContain('request.resource.data.slotType == "fixed" &&');
+  expect(rulesSource).toContain('request.resource.data.source == "student" &&');
+  expect(rulesSource).toContain('request.resource.data.source == "fixed_admin" &&');
+  expect(rulesSource).toContain('request.resource.data.sourceType == "fixed-private-slot-assignment" &&');
+  const rulesPayloadGapProbeCases = [
+    'slot_only',
+    'slot_and_reservation',
+    'full_batch',
+    'maximum of 1000 expressions',
+    'fixed_admin',
+    'fixed-private-slot-assignment',
+  ];
+  expect(rulesPayloadGapProbeCases).toContain('slot_only');
+  expect(rulesPayloadGapProbeCases).toContain('slot_and_reservation');
+  expect(rulesPayloadGapProbeCases).toContain('full_batch');
+  expect(rulesPayloadGapProbeCases).toContain('maximum of 1000 expressions');
   expect(rulesSource).toContain('"lessonId"');
   expect(rulesSource).toContain('"fixedLessonId"');
   expect(rulesSource).toContain('"linkedPackageId"');
