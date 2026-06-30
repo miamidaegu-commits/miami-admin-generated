@@ -549,6 +549,7 @@ test('fixed private assignment source requires package and links generated docum
     'utf8'
   );
   const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const rulesSource = fs.readFileSync(path.join(process.cwd(), 'firestore.rules'), 'utf8');
 
   expect(dashboardSource).toContain("if (!packageId) errors.packageId = '개인 수강권을 선택해 주세요.'");
   expect(dashboardSource).toContain('function buildPrivateFixedSlotAssignmentPreviewState');
@@ -581,6 +582,24 @@ test('fixed private assignment source requires package and links generated docum
   expect(functionsSource).toContain('countedFixedLessonIds.has(linkedLessonId)');
   expect(functionsSource).toContain('const lessonPackageId = normalizeId(lesson.packageId);');
   expect(functionsSource).toContain('cancelFixedPrivateLessonOccurrence');
+
+  expect(rulesSource).toContain('match /lessons/{lessonId}');
+  expect(rulesSource).toContain('allow create: if sameAcademyOnCreate() &&');
+  expect(rulesSource).toContain('isAcademyAdmin(request.resource.data.academyId);');
+  expect(rulesSource).toContain('validPrivateFixedSlotAdminCreateShape');
+  expect(rulesSource).toContain('validPrivateFixedReservationAdminCreate');
+  expect(rulesSource).toContain('"lessonId"');
+  expect(rulesSource).toContain('"fixedLessonId"');
+  expect(rulesSource).toContain('"linkedPackageId"');
+  expect(rulesSource).toContain('"fixedPrivatePackageId"');
+  expect(rulesSource).toContain('"privateLessonAvailabilityTemplateId"');
+  expect(rulesSource).toContain('"fixedPrivateAssignmentBatchId"');
+  expect(rulesSource).toContain('request.resource.data.fixedLessonId == request.resource.data.lessonId');
+  expect(rulesSource).toContain('request.resource.data.linkedPackageId == request.resource.data.packageId');
+  expect(rulesSource).toContain('request.resource.data.fixedPrivatePackageId == request.resource.data.packageId');
+  expect(rulesSource).toContain('slot.lessonId == request.resource.data.lessonId');
+  expect(rulesSource).toContain('slot.fixedLessonId == request.resource.data.fixedLessonId');
+  expect(rulesSource).toContain('slot.packageId == request.resource.data.packageId');
 });
 
 test('admin can assign fixed private lessons from a weekly template', async ({

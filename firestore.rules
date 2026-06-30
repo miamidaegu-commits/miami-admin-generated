@@ -727,11 +727,22 @@ service cloud.firestore {
           "eligibleStudentIds",
           "reservedStudentId",
           "reservationId",
+          "lessonId",
+          "fixedLessonId",
           "slotType",
           "availabilityTemplateId",
+          "privateLessonAvailabilityTemplateId",
           "isGeneratedFromTemplate",
           "fixedStudentId",
           "fixedStudentName",
+          "fixedPrivateAssignmentBatchId",
+          "packageId",
+          "deductionPackageId",
+          "linkedPackageId",
+          "fixedPrivatePackageId",
+          "packageName",
+          "packageTitle",
+          "packageTeacherKey",
           "releasedFromFixed",
           "releasedByStudentId",
           "releasedAt",
@@ -765,14 +776,27 @@ service cloud.firestore {
         data.durationMinutes >= 10 &&
         data.durationMinutes <= 240 &&
         (!("eligibleStudentIds" in data.keys()) || data.eligibleStudentIds is list) &&
+        (!("lessonId" in data.keys()) || data.lessonId is string) &&
+        (!("fixedLessonId" in data.keys()) || data.fixedLessonId is string) &&
         (!("slotType" in data.keys()) ||
           data.slotType in ["fixed", "open", "released_fixed", "template"]) &&
         (!("availabilityTemplateId" in data.keys()) ||
           data.availabilityTemplateId is string) &&
+        (!("privateLessonAvailabilityTemplateId" in data.keys()) ||
+          data.privateLessonAvailabilityTemplateId is string) &&
         (!("isGeneratedFromTemplate" in data.keys()) ||
           data.isGeneratedFromTemplate is bool) &&
         (!("fixedStudentId" in data.keys()) || data.fixedStudentId is string) &&
         (!("fixedStudentName" in data.keys()) || data.fixedStudentName is string) &&
+        (!("fixedPrivateAssignmentBatchId" in data.keys()) ||
+          data.fixedPrivateAssignmentBatchId is string) &&
+        (!("packageId" in data.keys()) || data.packageId is string) &&
+        (!("deductionPackageId" in data.keys()) || data.deductionPackageId is string) &&
+        (!("linkedPackageId" in data.keys()) || data.linkedPackageId is string) &&
+        (!("fixedPrivatePackageId" in data.keys()) || data.fixedPrivatePackageId is string) &&
+        (!("packageName" in data.keys()) || data.packageName is string) &&
+        (!("packageTitle" in data.keys()) || data.packageTitle is string) &&
+        (!("packageTeacherKey" in data.keys()) || data.packageTeacherKey is string) &&
         (!("releasedFromFixed" in data.keys()) || data.releasedFromFixed is bool) &&
         (!("releasedByStudentId" in data.keys()) || data.releasedByStudentId is string) &&
         (!("releasedAt" in data.keys()) || data.releasedAt is timestamp) &&
@@ -806,6 +830,18 @@ service cloud.firestore {
           request.resource.data.academyId + "__" +
           request.resource.id + "__" +
           request.resource.data.reservedStudentId &&
+        request.resource.data.lessonId is string &&
+        request.resource.data.lessonId != "" &&
+        request.resource.data.fixedLessonId == request.resource.data.lessonId &&
+        request.resource.data.packageId is string &&
+        request.resource.data.packageId != "" &&
+        request.resource.data.deductionPackageId == request.resource.data.packageId &&
+        request.resource.data.linkedPackageId == request.resource.data.packageId &&
+        request.resource.data.fixedPrivatePackageId == request.resource.data.packageId &&
+        request.resource.data.privateLessonAvailabilityTemplateId is string &&
+        request.resource.data.privateLessonAvailabilityTemplateId != "" &&
+        request.resource.data.fixedPrivateAssignmentBatchId is string &&
+        request.resource.data.fixedPrivateAssignmentBatchId != "" &&
         request.resource.data.createdByUid == currentUid() &&
         request.resource.data.createdAt == request.time &&
         request.resource.data.updatedAt == request.time &&
@@ -1118,8 +1154,17 @@ service cloud.firestore {
           "source",
           "sourceType",
           "reservationType",
+          "lessonId",
+          "fixedLessonId",
           "packageId",
           "deductionPackageId",
+          "linkedPackageId",
+          "fixedPrivatePackageId",
+          "packageName",
+          "packageTitle",
+          "packageTeacherKey",
+          "privateLessonAvailabilityTemplateId",
+          "fixedPrivateAssignmentBatchId",
           "durationMinutes",
           "reservedAt",
           "createdAt",
@@ -1154,6 +1199,19 @@ service cloud.firestore {
         request.resource.data.packageId is string &&
         request.resource.data.packageId != "" &&
         request.resource.data.deductionPackageId == request.resource.data.packageId &&
+        request.resource.data.linkedPackageId == request.resource.data.packageId &&
+        request.resource.data.fixedPrivatePackageId == request.resource.data.packageId &&
+        request.resource.data.lessonId is string &&
+        request.resource.data.lessonId != "" &&
+        request.resource.data.fixedLessonId == request.resource.data.lessonId &&
+        request.resource.data.privateLessonAvailabilityTemplateId is string &&
+        request.resource.data.privateLessonAvailabilityTemplateId != "" &&
+        request.resource.data.fixedPrivateAssignmentBatchId is string &&
+        request.resource.data.fixedPrivateAssignmentBatchId != "" &&
+        (!("packageName" in request.resource.data.keys()) || request.resource.data.packageName is string) &&
+        (!("packageTitle" in request.resource.data.keys()) || request.resource.data.packageTitle is string) &&
+        (!("packageTeacherKey" in request.resource.data.keys()) ||
+          request.resource.data.packageTeacherKey is string) &&
         request.resource.data.durationMinutes is int &&
         request.resource.data.durationMinutes >= 10 &&
         request.resource.data.durationMinutes <= 240 &&
@@ -1163,6 +1221,12 @@ service cloud.firestore {
         request.resource.data.cancelledAt == null &&
         slot.academyId == request.resource.data.academyId &&
         slot.reservationId == reservationId &&
+        slot.lessonId == request.resource.data.lessonId &&
+        slot.fixedLessonId == request.resource.data.fixedLessonId &&
+        slot.packageId == request.resource.data.packageId &&
+        slot.deductionPackageId == request.resource.data.deductionPackageId &&
+        slot.linkedPackageId == request.resource.data.linkedPackageId &&
+        slot.fixedPrivatePackageId == request.resource.data.fixedPrivatePackageId &&
         slot.reservedStudentId == request.resource.data.studentId &&
         slot.status == "reserved";
     }
