@@ -87,7 +87,7 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   const fixedCancelRenderHelper =
     source.match(/function renderFixedPrivateLessonCancelAction[\s\S]*?return \(\n[\s\S]*?\n  }\n/)?.[0] || '';
   const upcomingItemsBlock =
-    source.match(/const upcomingPrivateScheduleItems = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[privateReservations, sortedUpcomingPrivateLessons, studentPrivateLessonById, todayYmd\]\)/)?.[0] || '';
+    source.match(/const upcomingPrivateScheduleItems = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?todayYmd,\n  \]\)/)?.[0] || '';
   const upcomingSection =
     source.match(/id="student-upcoming-private-lessons-section"[\s\S]*?<h2 style=\{\{ margin: 0, fontSize: '1\.1rem' \}\}>내 반 등록 수업<\/h2>/)?.[0] || '';
   const historySection =
@@ -99,13 +99,33 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(source).toContain('function isFixedPrivateScheduleDisplayLabel');
   expect(source).toContain('function getUpcomingFixedPrivateCancelLesson');
   expect(source).toContain('function getPrivatePackageLinkId');
+  expect(source).toContain('function getFixedPrivateLessonLinkId');
+  expect(source).toContain('function getFixedPrivateFallbackLessonId');
   expect(source).toContain("sourceType === 'weekly_slot_fixed_assignment'");
   expect(source).toContain('source?.deductionPackageId');
   expect(source).toContain('source?.linkedPackageId');
+  expect(source).toContain('item?.packageId');
+  expect(source).toContain('reservation?.packageId');
+  expect(source).toContain('slot?.packageId');
+  expect(source).toContain('lesson?.packageId');
+  expect(source).toContain('item?.lessonId');
+  expect(source).toContain('reservation?.lessonId');
+  expect(source).toContain('slot?.lessonId');
+  expect(source).toContain('lesson?.lessonId');
+  expect(source).toContain("item?.source === 'lesson'");
+  expect(source).toContain('fixedLessonId || lessonId');
   expect(source).toContain('missingFixedLessonId: !lessonId');
   expect(source).toContain("trim() === '고정 예약 1:1'");
   expect(source).toContain('isFixedPrivateScheduleDisplayLabel(item?.typeLabel)');
   expect(source).toContain('isFixedPrivateLesson: true');
+  expect(source).toContain('const privateReservationByLessonId = useMemo');
+  expect(source).toContain('function getStudentPackageLookupIds');
+  expect(source).toContain('pkg?.packageId');
+  expect(source).toContain('pkg?.docId');
+  expect(source).toContain('pkg?.originalId');
+  expect(source).toContain('function studentPackageMatchesPrivateCancelScope');
+  expect(source).toContain('function getFixedPrivatePackageLinkId');
+  expect(source).toContain('getFixedPrivatePackageLinkId({');
   expect(source).toContain('function isUpcomingPrivateReservationStatus');
   expect(source).toContain("status === 'scheduled'");
   expect(source).toMatch(/where\('status', 'in', \[[\s\S]*'scheduled'/);
@@ -122,7 +142,9 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(upcomingItemsBlock).toContain("'학생 직접예약 1:1'");
   expect(upcomingItemsBlock).toContain('studentPrivateLessonById');
   expect(upcomingItemsBlock).toContain('lesson: linkedLesson');
+  expect(upcomingItemsBlock).toContain('const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null');
   expect(upcomingItemsBlock).toContain('const fixedCancelLesson = buildFixedPrivateCancelLessonFromReservation');
+  expect(upcomingItemsBlock).toContain('slot: linkedSlot');
   expect(upcomingItemsBlock).toContain('fixedCancelLesson,');
   expect(upcomingItemsBlock).toContain('fixedCancelLesson: isFixedPrivateLesson(lesson) ? lesson : null');
   expect(upcomingItemsBlock).toContain('studentName');
@@ -170,7 +192,7 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(upcomingSection).toContain('student-upcoming-fixed-private-cancel-fallback');
   expect(upcomingSection).toContain("fixedCancelUnavailableReason ||");
   expect(upcomingSection).toContain('고정 예약 1:1 수업 취소 또는 수업 취소 불가');
-  expect(upcomingSection).toContain('renderFixedPrivateLessonCancelAction(fixedLessonForCancel)');
+  expect(upcomingSection).toContain('renderFixedPrivateLessonCancelAction(fixedLessonForCancel, {');
   expect(upcomingSection).toContain('forceRender: true');
   expect(upcomingSection).toContain('수강권 연결 정보가 없어 학원에 문의해 주세요.');
   expect(upcomingSection).not.toContain('renderPrivateReservationCancelAction');

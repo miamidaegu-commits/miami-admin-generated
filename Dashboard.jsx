@@ -5280,6 +5280,7 @@ export default function Dashboard() {
           ...fixedAssignmentBase,
           id: lessonRef.id,
           lessonId: lessonRef.id,
+          fixedLessonId: lessonRef.id,
           reservationId,
           slotId: slotRef.id,
           scheduleDate: date,
