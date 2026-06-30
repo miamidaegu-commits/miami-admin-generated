@@ -608,6 +608,81 @@ function buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson 
   }
 }
 
+function isFixedPrivateScheduleDisplayLabel(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim() === '고정 예약 1:1'
+}
+
+function getUpcomingFixedPrivateCancelLesson(item) {
+  const fixedCancelLesson = item?.fixedCancelLesson || null
+  const linkedLesson = item?.lesson || null
+  const reservation = item?.reservation || null
+
+  if (fixedCancelLesson && isFixedPrivateLesson(fixedCancelLesson)) return fixedCancelLesson
+  if (linkedLesson && isFixedPrivateLesson(linkedLesson)) return linkedLesson
+  if (isFixedPrivateReservation(reservation)) {
+    return buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson)
+  }
+  if (!isFixedPrivateScheduleDisplayLabel(item?.typeLabel)) return null
+
+  const lessonId = String(
+    fixedCancelLesson?.id ||
+      linkedLesson?.id ||
+      reservation?.lessonId ||
+      reservation?.fixedLessonId ||
+      reservation?.lessonDocId ||
+      ''
+  ).trim()
+
+  return {
+    ...(reservation || {}),
+    ...(linkedLesson || {}),
+    ...(fixedCancelLesson || {}),
+    id: lessonId,
+    missingFixedLessonId: !lessonId,
+    date:
+      getLessonStorageDateString(fixedCancelLesson) ||
+      getLessonStorageDateString(linkedLesson) ||
+      String(item?.date || reservation?.date || '').trim(),
+    time:
+      getLessonDisplayTime(fixedCancelLesson) ||
+      getLessonDisplayTime(linkedLesson) ||
+      String(item?.time || reservation?.time || '').trim(),
+    teacherName:
+      fixedCancelLesson?.teacherName ||
+      fixedCancelLesson?.teacher ||
+      linkedLesson?.teacherName ||
+      linkedLesson?.teacher ||
+      reservation?.teacherName ||
+      reservation?.teacher ||
+      item?.teacherLabel ||
+      '',
+    subject:
+      fixedCancelLesson?.subject ||
+      linkedLesson?.subject ||
+      reservation?.subject ||
+      item?.title ||
+      '1:1 수업',
+    packageId: getPrivatePackageLinkId(fixedCancelLesson, linkedLesson, reservation),
+    packageType:
+      fixedCancelLesson?.packageType ||
+      linkedLesson?.packageType ||
+      reservation?.packageType ||
+      'private',
+    sourceType:
+      fixedCancelLesson?.sourceType ||
+      linkedLesson?.sourceType ||
+      reservation?.sourceType ||
+      'fixed-private-slot-assignment',
+    reservationType:
+      fixedCancelLesson?.reservationType ||
+      linkedLesson?.reservationType ||
+      reservation?.reservationType ||
+      reservation?.type ||
+      'fixed_private',
+    isFixedPrivateLesson: true,
+  }
+}
+
 function hasPrivateRecordIndicators(...sources) {
   return sources.some((source) => {
     if (!source) return false
@@ -3128,11 +3203,19 @@ export default function StudentBookingPage() {
 
   function renderFixedPrivateLessonCancelAction(lesson, {
     testId = 'student-fixed-private-lesson-cancel-button',
+    forceRender = false,
   } = {}) {
     if (!PRIVATE_SLOT_BOOKING_ENABLED) {
       return null
     }
-    if (!canRenderFixedPrivateLessonCancelAction(lesson)) {
+    const canRender = forceRender
+      ? Boolean(lesson) &&
+        !isCancelledLesson(lesson) &&
+        !isPrivateReservationCancelled(lesson) &&
+        !isPrivateReservationOutcomeFinal(lesson) &&
+        isFixedPrivateLessonInFuture(lesson)
+      : canRenderFixedPrivateLessonCancelAction(lesson)
+    if (!canRender) {
       return null
     }
     const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
@@ -3779,10 +3862,7 @@ export default function StudentBookingPage() {
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {upcomingPrivateScheduleItems.map((item) => {
-                    const fixedLessonForCancel =
-                      item.fixedCancelLesson && isFixedPrivateLesson(item.fixedCancelLesson)
-                        ? item.fixedCancelLesson
-                        : null
+                    const fixedLessonForCancel = getUpcomingFixedPrivateCancelLesson(item)
 
                     return (
                       <article
@@ -3889,9 +3969,15 @@ export default function StudentBookingPage() {
                           <div
                             data-testid="student-upcoming-fixed-private-cancel-action"
                             data-fixed-cancel-callable="cancelFixedPrivateLessonOccurrence"
+                            data-fixed-cancel-model="fixedCancelLesson"
+                            data-fixed-cancel-cutoff-reason="수업 시작 10시간 전까지만 취소할 수 있습니다."
+                            data-fixed-cancel-exhausted-reason="이 수강권의 취소 가능 횟수를 모두 사용했습니다."
+                            data-fixed-cancel-missing-link-reason="수강권 연결 정보가 없어 학원에 문의해 주세요."
                             aria-label="고정 예약 1:1 수업 취소 또는 수업 취소 불가"
                           >
-                            {renderFixedPrivateLessonCancelAction(fixedLessonForCancel)}
+                            {renderFixedPrivateLessonCancelAction(fixedLessonForCancel, {
+                              forceRender: true,
+                            })}
                           </div>
                         ) : null}
                       </article>
