@@ -4130,6 +4130,7 @@ function computePrivateTeacherPackageUsage({
 
   let futureFixedAllocatedCount = 0;
   let noDeductionReleasedCount = 0;
+  const countedFixedLessonIds = new Set();
   privateLessons.forEach((lesson) => {
     if (!privateRowMatchesPackageScope({
       row: lesson,
@@ -4141,6 +4142,8 @@ function computePrivateTeacherPackageUsage({
     })) {
       return;
     }
+    const lessonId = normalizeId(lesson && (lesson.id || lesson.lessonId));
+    if (lessonId) countedFixedLessonIds.add(lessonId);
     if (isPrivateLessonReleasedFromDeduction(lesson)) {
       noDeductionReleasedCount += 1;
       return;
@@ -4162,6 +4165,12 @@ function computePrivateTeacherPackageUsage({
       teacherKeys: packageTeacherKeys,
       packageIdFields: ["packageId", "deductionPackageId"],
     })) {
+      return;
+    }
+    const linkedLessonId = normalizeId(
+        reservation && (reservation.lessonId || reservation.fixedLessonId),
+    );
+    if (linkedLessonId && countedFixedLessonIds.has(linkedLessonId)) {
       return;
     }
     activeFutureReservationAllocatedCount += 1;

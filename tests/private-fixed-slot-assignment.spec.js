@@ -541,6 +541,48 @@ async function fillAssignmentForm(page, fixture) {
   return section;
 }
 
+test('fixed private assignment source requires package and links generated documents', () => {
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const studentBookingSource = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  const ticketBalanceSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/ticketBalanceHelpers.js'),
+    'utf8'
+  );
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+
+  expect(dashboardSource).toContain("if (!packageId) errors.packageId = '개인 수강권을 선택해 주세요.'");
+  expect(dashboardSource).toContain('function buildPrivateFixedSlotAssignmentPreviewState');
+  expect(dashboardSource).toContain("const missingPackage = plan.errors?.packageId === '개인 수강권을 선택해 주세요.'");
+  expect(dashboardSource).toContain('const previewDates = missingPackage ? [] : plan.dates');
+  expect(dashboardSource).toContain("const lessonRef = doc(collection(db, 'lessons'))");
+  expect(dashboardSource).toContain('lessonId: lessonRef.id');
+  expect(dashboardSource).toContain('fixedLessonId: lessonRef.id');
+  expect(dashboardSource).toContain('batch.set(lessonRef');
+  expect(dashboardSource).toContain('packageId,');
+  expect(dashboardSource).toContain('deductionPackageId: packageId');
+  expect(dashboardSource).toContain('linkedPackageId: packageId');
+  expect(dashboardSource).toContain('fixedPrivatePackageId: packageId');
+  expect(dashboardSource).toContain('packageTeacherKey');
+  expect(dashboardSource).toContain("sourceType: 'fixed-private-slot-assignment'");
+  expect(dashboardSource).toContain('privateLessonAvailabilityTemplateId');
+  expect(dashboardSource).toContain('fixedPrivateAssignmentBatchId');
+
+  expect(ticketBalanceSource).toContain('const countedFixedLessonIds = new Set()');
+  expect(ticketBalanceSource).toContain("reservation?.lessonId || reservation?.fixedLessonId");
+  expect(ticketBalanceSource).toContain('countedFixedLessonIds.has(linkedLessonId)');
+  expect(studentBookingSource).toContain('source?.packageId');
+  expect(studentBookingSource).toContain('source?.deductionPackageId');
+  expect(studentBookingSource).toContain('source?.linkedPackageId');
+  expect(studentBookingSource).toContain('source?.fixedPrivatePackageId');
+  expect(studentBookingSource).toContain('missingFixedLessonId: !lessonId');
+  expect(studentBookingSource).toContain('fixedCancelNode || (');
+  expect(functionsSource).toContain('const countedFixedLessonIds = new Set();');
+  expect(functionsSource).toContain('reservation.lessonId || reservation.fixedLessonId');
+  expect(functionsSource).toContain('countedFixedLessonIds.has(linkedLessonId)');
+  expect(functionsSource).toContain('const lessonPackageId = normalizeId(lesson.packageId);');
+  expect(functionsSource).toContain('cancelFixedPrivateLessonOccurrence');
+});
+
 test('admin can assign fixed private lessons from a weekly template', async ({
   page,
   browser,
@@ -572,15 +614,23 @@ test('admin can assign fixed private lessons from a weekly template', async ({
       .poll(async () => (await queryFixedReservationsByPackage(fixture.packageId)).length, { timeout: 15000 })
       .toBe(4);
     const reservations = await queryFixedReservationsByPackage(fixture.packageId);
+    const lessons = await queryLessonsByPackage(fixture.packageId);
     const slots = await queryFixedSlotsByPackage(fixture.packageId);
     const slotByDate = new Map(slots.map((slot) => [slot.date, slot]));
+    const lessonById = new Map(lessons.map((lesson) => [lesson.id, lesson]));
     expect(reservations.map((reservation) => reservation.date).sort()).toEqual(fixture.dates);
+    expect(lessons.map((lesson) => lesson.date).sort()).toEqual(fixture.dates);
     expect(slots.map((slot) => slot.date).sort()).toEqual(fixture.dates);
     for (const reservation of reservations) {
+      const lesson = lessonById.get(String(reservation.lessonId || '').trim());
       expect(reservation.studentId).toBe(fixture.studentId);
       expect(reservation.studentName).toBe(fixture.studentName);
       expect(reservation.packageId).toBe(fixture.packageId);
       expect(reservation.deductionPackageId).toBe(fixture.packageId);
+      expect(reservation.linkedPackageId).toBe(fixture.packageId);
+      expect(reservation.fixedPrivatePackageId).toBe(fixture.packageId);
+      expect(reservation.lessonId).toBeTruthy();
+      expect(reservation.fixedLessonId).toBe(reservation.lessonId);
       expect(reservation.teacherKey).toBe(fixture.teacher.key);
       expect(reservation.teacherUid).toBe(fixture.teacher.uid);
       expect(reservation.time).toBe(fixture.time);
@@ -589,10 +639,27 @@ test('admin can assign fixed private lessons from a weekly template', async ({
       expect(reservation.sourceType).toBe('fixed-private-slot-assignment');
       expect(reservation.reservationType).toBe('fixed');
       expect(reservation.status).toBe('active');
+      expect(lesson).toBeTruthy();
+      expect(lesson.packageId).toBe(fixture.packageId);
+      expect(lesson.deductionPackageId).toBe(fixture.packageId);
+      expect(lesson.linkedPackageId).toBe(fixture.packageId);
+      expect(lesson.fixedPrivatePackageId).toBe(fixture.packageId);
+      expect(lesson.studentId).toBe(fixture.studentId);
+      expect(lesson.studentID).toBe(fixture.studentId);
+      expect(lesson.teacherKey).toBe(fixture.teacher.key);
+      expect(lesson.teacherUid).toBe(fixture.teacher.uid);
+      expect(lesson.reservationId).toBe(reservation.id);
+      expect(lesson.slotId).toBe(reservation.slotId);
+      expect(lesson.packageType).toBe('private');
+      expect(lesson.sourceType).toBe('fixed-private-slot-assignment');
+      expect(lesson.status).toBe('active');
       const slot = slots.find((row) => row.id === reservation.slotId);
       expect(slot).toBeTruthy();
       expect(slot.status).toBe('reserved');
       expect(slot.reservedStudentId).toBe(fixture.studentId);
+      expect(slot.lessonId).toBe(reservation.lessonId);
+      expect(slot.fixedLessonId).toBe(reservation.lessonId);
+      expect(slot.packageId).toBe(fixture.packageId);
     }
 
     studentContext = await browser.newContext();

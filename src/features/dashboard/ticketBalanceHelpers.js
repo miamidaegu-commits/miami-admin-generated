@@ -322,8 +322,11 @@ function buildBalanceResult({
 
   let futureFixedAllocatedCount = 0
   let noDeductionReleasedCount = 0
+  const countedFixedLessonIds = new Set()
   ;(Array.isArray(fixedLessons) ? fixedLessons : []).forEach((lesson) => {
     if (!rowMatchesTicketScope(lesson)) return
+    const lessonId = normalizeId(lesson?.id || lesson?.lessonId)
+    if (lessonId) countedFixedLessonIds.add(lessonId)
     if (isReleasedFromDeduction(lesson)) {
       noDeductionReleasedCount += 1
       return
@@ -336,6 +339,8 @@ function buildBalanceResult({
     if (!isActivePrivateReservationStatus(reservation?.status)) return
     if (!rowMatchesTicketScope(reservation, ['packageId', 'deductionPackageId'])) return
     if (isFixedPrivateReservation(reservation)) {
+      const linkedLessonId = normalizeId(reservation?.lessonId || reservation?.fixedLessonId)
+      if (linkedLessonId && countedFixedLessonIds.has(linkedLessonId)) return
       if (isFutureAllocation(reservation, now)) futureFixedAllocatedCount += 1
       return
     }
