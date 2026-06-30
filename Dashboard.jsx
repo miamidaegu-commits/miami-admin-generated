@@ -4966,7 +4966,7 @@ export default function Dashboard() {
       errors.templateId = '고정 배정에 사용하는 주간 가능 시간을 선택해 주세요'
     }
     if (!studentId) errors.studentId = '학생을 선택해 주세요'
-    if (!packageId) errors.packageId = '개인 수강권을 선택해 주세요'
+    if (!packageId) errors.packageId = '개인 수강권을 선택해 주세요.'
     if (!isYmd(startDate) || !isYmd(endDate) || endDate < startDate) {
       errors.dateRange = '시작일/종료일을 확인해 주세요'
     }
@@ -5113,20 +5113,28 @@ export default function Dashboard() {
     }
   }
 
+  function buildPrivateFixedSlotAssignmentPreviewState(plan, mode = 'preview') {
+    const errorReasons = Object.values(plan.errors || {}).filter(Boolean)
+    const blockingReasons = Array.from(new Set([...errorReasons, ...plan.blockingReasons]))
+    const missingPackage = plan.errors?.packageId === '개인 수강권을 선택해 주세요.'
+    const previewDates = missingPackage ? [] : plan.dates
+    return {
+      mode,
+      dates: previewDates,
+      blockingReasons,
+      conflictDetails: plan.conflictDetails,
+      duplicateDetails: plan.duplicateDetails,
+      availableAssignmentCount: plan.availableAssignmentCount,
+      requestedCount: previewDates.length,
+      canCreate: plan.valid,
+    }
+  }
+
   function previewPrivateFixedSlotAssignment() {
     try {
       const plan = buildPrivateFixedSlotAssignmentPlan()
       setPrivateFixedSlotAssignmentErrors(plan.errors)
-      setPrivateFixedSlotAssignmentPreview({
-        mode: 'preview',
-        dates: plan.dates,
-        blockingReasons: plan.blockingReasons,
-        conflictDetails: plan.conflictDetails,
-        duplicateDetails: plan.duplicateDetails,
-        availableAssignmentCount: plan.availableAssignmentCount,
-        requestedCount: plan.dates.length,
-        canCreate: plan.valid,
-      })
+      setPrivateFixedSlotAssignmentPreview(buildPrivateFixedSlotAssignmentPreviewState(plan))
     } catch (error) {
       console.error('고정 1:1 수업 배정 미리보기 실패:', error)
       alert(`고정 1:1 수업 배정 미리보기 실패: ${error.message}`)
@@ -5140,16 +5148,7 @@ export default function Dashboard() {
     }
     const plan = buildPrivateFixedSlotAssignmentPlan()
     setPrivateFixedSlotAssignmentErrors(plan.errors)
-    setPrivateFixedSlotAssignmentPreview({
-      mode: 'preview',
-      dates: plan.dates,
-      blockingReasons: plan.blockingReasons,
-      conflictDetails: plan.conflictDetails,
-      duplicateDetails: plan.duplicateDetails,
-      availableAssignmentCount: plan.availableAssignmentCount,
-      requestedCount: plan.dates.length,
-      canCreate: plan.valid,
-    })
+    setPrivateFixedSlotAssignmentPreview(buildPrivateFixedSlotAssignmentPreviewState(plan))
     if (!plan.valid) return
 
     try {
@@ -5164,12 +5163,51 @@ export default function Dashboard() {
       plan.dates.forEach((date) => {
         const start = parseLegacyLessonToDate(date, plan.template.time)
         const slotRef = doc(collection(db, 'privateLessonSlots'))
+        const lessonRef = doc(collection(db, 'lessons'))
         const reservationId = buildPrivateLessonReservationId({
           academyId: scopedAcademyId,
           slotId: slotRef.id,
           studentId: plan.student.id,
         })
         const reservationRef = doc(db, 'privateLessonReservations', reservationId)
+        const packageId = String(plan.selectedPackage.id || '').trim()
+        const packageName = String(
+          plan.selectedPackage.packageTitle ||
+            plan.selectedPackage.title ||
+            plan.selectedPackage.name ||
+            packageTitle ||
+            ''
+        ).trim()
+        const fixedAssignmentBase = {
+          academyId: scopedAcademyId,
+          studentId: plan.student.id,
+          studentID: plan.student.id,
+          studentName,
+          teacher: plan.teacherFields.teacher,
+          teacherName: plan.teacherFields.teacherName,
+          teacherKey: plan.teacherFields.teacherKey,
+          teacherUid: plan.teacherFields.teacherUid,
+          teacherUID: plan.teacherFields.teacherUID,
+          teacherId: plan.teacherFields.teacherId,
+          teacherEmail: plan.teacherFields.teacherEmail,
+          date,
+          time: String(plan.template.time || '').trim(),
+          subject: plan.subject,
+          durationMinutes: plan.durationMinutes,
+          packageId,
+          deductionPackageId: packageId,
+          linkedPackageId: packageId,
+          fixedPrivatePackageId: packageId,
+          packageName,
+          packageTitle: packageName,
+          packageTeacherKey: plan.teacherFields.teacherKey || plan.teacherFields.teacher || '',
+          packageType: 'private',
+          source: 'fixed_admin',
+          sourceType: 'fixed-private-slot-assignment',
+          reservationType: 'fixed',
+          privateLessonAvailabilityTemplateId: plan.template.id || '',
+          fixedPrivateAssignmentBatchId: batchId,
+        }
         batch.set(slotRef, {
           academyId: scopedAcademyId,
           teacher: plan.teacherFields.teacher,
@@ -5187,6 +5225,17 @@ export default function Dashboard() {
           fixedStudentId: plan.student.id,
           fixedStudentName: studentName,
           reservationId,
+          lessonId: lessonRef.id,
+          fixedLessonId: lessonRef.id,
+          packageId,
+          deductionPackageId: packageId,
+          linkedPackageId: packageId,
+          fixedPrivatePackageId: packageId,
+          packageName,
+          packageTitle: packageName,
+          packageTeacherKey: plan.teacherFields.teacherKey || plan.teacherFields.teacher || '',
+          privateLessonAvailabilityTemplateId: plan.template.id || '',
+          fixedPrivateAssignmentBatchId: batchId,
           createdByUid: user?.uid || '',
           ...(start ? { startAt: Timestamp.fromDate(start) } : {}),
           reservedAt: serverTimestamp(),
@@ -5210,13 +5259,37 @@ export default function Dashboard() {
           source: 'fixed_admin',
           sourceType: 'fixed-private-slot-assignment',
           reservationType: 'fixed',
-          packageId: plan.selectedPackage.id,
-          deductionPackageId: plan.selectedPackage.id,
+          lessonId: lessonRef.id,
+          fixedLessonId: lessonRef.id,
+          packageId,
+          deductionPackageId: packageId,
+          linkedPackageId: packageId,
+          fixedPrivatePackageId: packageId,
+          packageName,
+          packageTitle: packageName,
+          packageTeacherKey: plan.teacherFields.teacherKey || plan.teacherFields.teacher || '',
+          privateLessonAvailabilityTemplateId: plan.template.id || '',
+          fixedPrivateAssignmentBatchId: batchId,
           durationMinutes: plan.durationMinutes,
           reservedAt: serverTimestamp(),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
           cancelledAt: null,
+        })
+        batch.set(lessonRef, {
+          ...fixedAssignmentBase,
+          id: lessonRef.id,
+          lessonId: lessonRef.id,
+          reservationId,
+          slotId: slotRef.id,
+          scheduleDate: date,
+          scheduleTime: String(plan.template.time || '').trim(),
+          status: 'active',
+          createdByUid: user?.uid || '',
+          ...(start ? { startAt: Timestamp.fromDate(start), startsAt: Timestamp.fromDate(start) } : {}),
+          cancelledAt: null,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         })
       })
       await batch.commit()
