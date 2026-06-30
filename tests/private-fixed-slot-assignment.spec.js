@@ -567,6 +567,9 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain("sourceType: 'fixed-private-slot-assignment'");
   expect(dashboardSource).toContain('privateLessonAvailabilityTemplateId');
   expect(dashboardSource).toContain('fixedPrivateAssignmentBatchId');
+  expect(dashboardSource).toMatch(
+    /batch\.set\(lessonRef[\s\S]*lessonId: lessonRef\.id[\s\S]*fixedLessonId: lessonRef\.id/
+  );
 
   expect(ticketBalanceSource).toContain('const countedFixedLessonIds = new Set()');
   expect(ticketBalanceSource).toContain("reservation?.lessonId || reservation?.fixedLessonId");

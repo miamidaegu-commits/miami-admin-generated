@@ -571,19 +571,98 @@ function getPrivatePackageLinkId(...sources) {
   return ''
 }
 
-function buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson = null) {
-  if (!isFixedPrivateReservation(reservation)) return linkedLesson
-  const lessonId = String(
-    linkedLesson?.id ||
-      reservation?.lessonId ||
-      reservation?.fixedLessonId ||
-      reservation?.lessonDocId ||
+function getFixedPrivatePackageLinkId({
+  item = null,
+  reservation = null,
+  slot = null,
+  lesson = null,
+  fixedCancelLesson = null,
+} = {}) {
+  return String(
+    item?.packageId ||
+      item?.deductionPackageId ||
+      item?.linkedPackageId ||
+      item?.fixedPrivatePackageId ||
+      reservation?.packageId ||
+      reservation?.deductionPackageId ||
+      reservation?.linkedPackageId ||
+      reservation?.fixedPrivatePackageId ||
+      slot?.packageId ||
+      slot?.deductionPackageId ||
+      slot?.linkedPackageId ||
+      slot?.fixedPrivatePackageId ||
+      lesson?.packageId ||
+      lesson?.deductionPackageId ||
+      lesson?.linkedPackageId ||
+      lesson?.fixedPrivatePackageId ||
+      fixedCancelLesson?.packageId ||
+      fixedCancelLesson?.deductionPackageId ||
+      fixedCancelLesson?.linkedPackageId ||
+      fixedCancelLesson?.fixedPrivatePackageId ||
       ''
   ).trim()
+}
+
+function getFixedPrivateLessonLinkId({
+  item = null,
+  reservation = null,
+  slot = null,
+  lesson = null,
+  fixedCancelLesson = null,
+} = {}) {
+  const lessonBackedItemId =
+    item?.source === 'lesson'
+      ? String(item?.sourceId || item?.id || '').trim()
+      : ''
+  return String(
+    item?.lessonId ||
+      item?.fixedLessonId ||
+      reservation?.lessonId ||
+      reservation?.fixedLessonId ||
+      slot?.lessonId ||
+      slot?.fixedLessonId ||
+      lesson?.lessonId ||
+      lesson?.fixedLessonId ||
+      lesson?.id ||
+      fixedCancelLesson?.lessonId ||
+      fixedCancelLesson?.fixedLessonId ||
+      fixedCancelLesson?.id ||
+      lessonBackedItemId ||
+      ''
+  ).trim()
+}
+
+function getFixedPrivateFallbackLessonId(lessonId, ...sources) {
+  const fixedLessonId = String(
+    sources.find((source) => String(source?.fixedLessonId || '').trim())?.fixedLessonId || ''
+  ).trim()
+  return fixedLessonId || lessonId
+}
+
+function buildFixedPrivateCancelLessonFromReservation(
+  reservation,
+  linkedLesson = null,
+  linkedSlot = null
+) {
+  if (!isFixedPrivateReservation(reservation)) return linkedLesson
+  const lessonId = getFixedPrivateLessonLinkId({
+    reservation,
+    slot: linkedSlot,
+    lesson: linkedLesson,
+  })
+  const fixedLessonId = getFixedPrivateFallbackLessonId(
+    lessonId,
+    reservation,
+    linkedSlot,
+    linkedLesson
+  )
   return {
     ...reservation,
+    ...(linkedSlot || {}),
     ...(linkedLesson || {}),
     id: lessonId,
+    lessonId,
+    fixedLessonId,
     missingFixedLessonId: !lessonId,
     date: getLessonStorageDateString(linkedLesson) || String(reservation?.date || '').trim(),
     time: getLessonDisplayTime(linkedLesson) || String(reservation?.time || '').trim(),
@@ -594,7 +673,11 @@ function buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson 
       reservation?.teacher ||
       '',
     subject: linkedLesson?.subject || reservation?.subject || '1:1 수업',
-    packageId: getPrivatePackageLinkId(linkedLesson, reservation),
+    packageId: getFixedPrivatePackageLinkId({
+      reservation,
+      slot: linkedSlot,
+      lesson: linkedLesson,
+    }),
     packageType: linkedLesson?.packageType || reservation?.packageType || 'private',
     sourceType:
       linkedLesson?.sourceType ||
@@ -616,28 +699,51 @@ function getUpcomingFixedPrivateCancelLesson(item) {
   const fixedCancelLesson = item?.fixedCancelLesson || null
   const linkedLesson = item?.lesson || null
   const reservation = item?.reservation || null
+  const linkedSlot = item?.slot || null
 
-  if (fixedCancelLesson && isFixedPrivateLesson(fixedCancelLesson)) return fixedCancelLesson
-  if (linkedLesson && isFixedPrivateLesson(linkedLesson)) return linkedLesson
   if (isFixedPrivateReservation(reservation)) {
-    return buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson)
+    return buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson, linkedSlot)
   }
-  if (!isFixedPrivateScheduleDisplayLabel(item?.typeLabel)) return null
+  if (
+    !isFixedPrivateScheduleDisplayLabel(item?.typeLabel) &&
+    !isFixedPrivateLesson(fixedCancelLesson) &&
+    !isFixedPrivateLesson(linkedLesson)
+  ) {
+    return null
+  }
 
-  const lessonId = String(
-    fixedCancelLesson?.id ||
-      linkedLesson?.id ||
-      reservation?.lessonId ||
-      reservation?.fixedLessonId ||
-      reservation?.lessonDocId ||
-      ''
-  ).trim()
+  const lessonId = getFixedPrivateLessonLinkId({
+    item,
+    reservation,
+    slot: linkedSlot,
+    lesson: linkedLesson,
+    fixedCancelLesson,
+  })
+  const fixedLessonId = getFixedPrivateFallbackLessonId(
+    lessonId,
+    item,
+    reservation,
+    linkedSlot,
+    linkedLesson,
+    fixedCancelLesson
+  )
+  const packageId = getFixedPrivatePackageLinkId({
+    item,
+    reservation,
+    slot: linkedSlot,
+    lesson: linkedLesson,
+    fixedCancelLesson,
+  })
 
   return {
+    ...(item || {}),
     ...(reservation || {}),
+    ...(linkedSlot || {}),
     ...(linkedLesson || {}),
     ...(fixedCancelLesson || {}),
     id: lessonId,
+    lessonId,
+    fixedLessonId,
     missingFixedLessonId: !lessonId,
     date:
       getLessonStorageDateString(fixedCancelLesson) ||
@@ -662,7 +768,7 @@ function getUpcomingFixedPrivateCancelLesson(item) {
       reservation?.subject ||
       item?.title ||
       '1:1 수업',
-    packageId: getPrivatePackageLinkId(fixedCancelLesson, linkedLesson, reservation),
+    packageId,
     packageType:
       fixedCancelLesson?.packageType ||
       linkedLesson?.packageType ||
@@ -2344,32 +2450,111 @@ export default function StudentBookingPage() {
     return byId
   }, [studentPrivateLessons])
 
+  const privateReservationByLessonId = useMemo(() => {
+    const byLessonId = new Map()
+    privateReservations.forEach((reservation) => {
+      ;[reservation.lessonId, reservation.fixedLessonId].forEach((lessonIdValue) => {
+        const lessonId = String(lessonIdValue || '').trim()
+        if (lessonId) byLessonId.set(lessonId, reservation)
+      })
+    })
+    return byLessonId
+  }, [privateReservations])
+
   const studentPackageById = useMemo(() => {
     const byId = new Map()
     studentPackages.forEach((pkg) => {
-      const packageId = String(pkg?.id || '').trim()
-      if (packageId) byId.set(packageId, pkg)
+      getStudentPackageLookupIds(pkg).forEach((packageId) => {
+        byId.set(packageId, pkg)
+      })
     })
     return byId
   }, [studentPackages])
 
-  function getPrivatePackageCancelAllowanceById(packageId) {
+  function getStudentPackageLookupIds(pkg) {
+    return Array.from(
+      new Set(
+        [pkg?.id, pkg?.packageId, pkg?.docId, pkg?.originalId]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+    )
+  }
+
+  function getPrivateCancelTeacherScopeIds(...sources) {
+    return Array.from(
+      new Set(
+        sources
+          .flatMap((source) => [
+            source?.teacher,
+            source?.teacherName,
+            source?.teacherKey,
+            source?.packageTeacherKey,
+            source?.teacherUid,
+            source?.teacherUID,
+            source?.teacherId,
+          ])
+          .map(normalizeStudentBookingToken)
+          .filter(Boolean)
+      )
+    )
+  }
+
+  function studentPackageMatchesPrivateCancelScope(pkg, ...sources) {
+    if (!isCancelablePrivatePackage(pkg)) return false
+    const packageAcademyId = String(pkg?.academyId || '').trim()
+    if (currentAcademyId && packageAcademyId && packageAcademyId !== currentAcademyId) {
+      return false
+    }
+    const packageStudentId = String(pkg?.studentId || pkg?.studentID || '').trim()
+    if (scopedStudentId && packageStudentId && packageStudentId !== scopedStudentId) {
+      return false
+    }
+    const packageTeacherIds = getPrivateCancelTeacherScopeIds(pkg)
+    const sourceTeacherIds = getPrivateCancelTeacherScopeIds(...sources)
+    if (
+      packageTeacherIds.length > 0 &&
+      sourceTeacherIds.length > 0 &&
+      !packageTeacherIds.some((teacherId) => sourceTeacherIds.includes(teacherId))
+    ) {
+      return false
+    }
+    return true
+  }
+
+  function getPrivatePackageCancelAllowanceById(packageId, ...sources) {
     const scopedPackageId = String(packageId || '').trim()
     if (!scopedPackageId) return null
-    const pkg = studentPackageById.get(scopedPackageId)
-    if (!isCancelablePrivatePackage(pkg)) return null
+    const pkg =
+      studentPackageById.get(scopedPackageId) ||
+      studentPackages.find((candidate) =>
+        getStudentPackageLookupIds(candidate).includes(scopedPackageId)
+      ) ||
+      null
+    if (!studentPackageMatchesPrivateCancelScope(pkg, ...sources)) return null
     return computePrivatePackageCancelAllowance(pkg)
   }
 
   function getPrivateReservationCancelAllowance(reservation) {
-    return getPrivatePackageCancelAllowanceById(getPrivatePackageLinkId(reservation))
+    return getPrivatePackageCancelAllowanceById(getPrivatePackageLinkId(reservation), reservation)
   }
 
   function getFixedPrivateLessonCancelAllowance(lesson) {
-    const lessonId = String(lesson?.id || '').trim()
-    const linkedReservation = lessonId ? reservationByLessonId.get(lessonId) : null
+    const lessonId = String(lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || '').trim()
+    const linkedReservation = lessonId ? privateReservationByLessonId.get(lessonId) : null
+    const slotId = String(
+      lesson?.slotId || lesson?.privateLessonSlotId || linkedReservation?.slotId || ''
+    ).trim()
+    const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null
     return getPrivatePackageCancelAllowanceById(
-      getPrivatePackageLinkId(lesson, linkedReservation)
+      getFixedPrivatePackageLinkId({
+        lesson,
+        reservation: linkedReservation,
+        slot: linkedSlot,
+      }),
+      lesson,
+      linkedReservation,
+      linkedSlot
     )
   }
 
@@ -2535,9 +2720,11 @@ export default function StudentBookingPage() {
         const slotId = String(reservation.slotId || '').trim()
         const lessonId = String(reservation.lessonId || '').trim()
         const linkedLesson = lessonId ? studentPrivateLessonById.get(lessonId) || null : null
+        const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null
         const fixedCancelLesson = buildFixedPrivateCancelLessonFromReservation(
           reservation,
-          linkedLesson
+          linkedLesson,
+          linkedSlot
         )
         const typeLabel = isFixedPrivateReservation(reservation)
           ? '고정 예약 1:1'
@@ -2559,6 +2746,7 @@ export default function StudentBookingPage() {
           durationLabel: getPrivateDurationLabel(reservation),
           statusLabel: '예약 완료',
           reservation,
+          slot: linkedSlot,
           lesson: linkedLesson,
           fixedCancelLesson,
         }
@@ -2572,29 +2760,40 @@ export default function StudentBookingPage() {
           : ''
         return !addSeenKey(duplicateKey)
       })
-      .map((lesson) => ({
-        id: `lesson-${lesson.id}`,
-        source: 'lesson',
-        sourceId: lesson.id,
-        date: lesson.scheduleDate,
-        time: lesson.scheduleTime,
-        typeLabel: isFixedPrivateLesson(lesson) ? '고정 예약 1:1' : '1:1 수업',
-        teacherLabel: getLessonTeacherLabel(lesson),
-        studentName: String(lesson.studentName || lesson.student || '').trim() || '',
-        title: getLessonSubjectLabel(lesson),
-        sessionLabel: formatLessonSessionNumber(lesson),
-        durationLabel: getPrivateDurationLabel(lesson),
-        statusLabel: '수업 예정',
-        lesson,
-        fixedCancelLesson: isFixedPrivateLesson(lesson) ? lesson : null,
-      }))
+      .map((lesson) => {
+        const slotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+        const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null
+        return {
+          id: `lesson-${lesson.id}`,
+          source: 'lesson',
+          sourceId: lesson.id,
+          date: lesson.scheduleDate,
+          time: lesson.scheduleTime,
+          typeLabel: isFixedPrivateLesson(lesson) ? '고정 예약 1:1' : '1:1 수업',
+          teacherLabel: getLessonTeacherLabel(lesson),
+          studentName: String(lesson.studentName || lesson.student || '').trim() || '',
+          title: getLessonSubjectLabel(lesson),
+          sessionLabel: formatLessonSessionNumber(lesson),
+          durationLabel: getPrivateDurationLabel(lesson),
+          statusLabel: '수업 예정',
+          slot: linkedSlot,
+          lesson,
+          fixedCancelLesson: isFixedPrivateLesson(lesson) ? lesson : null,
+        }
+      })
 
     return [...lessonItems, ...reservationItems].sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || '00:00'} ${a.title || ''} ${a.sourceId || ''}`
       const bKey = `${b.date || ''} ${b.time || '00:00'} ${b.title || ''} ${b.sourceId || ''}`
       return aKey.localeCompare(bKey, 'ko')
     })
-  }, [privateReservations, sortedUpcomingPrivateLessons, studentPrivateLessonById, todayYmd])
+  }, [
+    privateReservations,
+    privateSlotsById,
+    sortedUpcomingPrivateLessons,
+    studentPrivateLessonById,
+    todayYmd,
+  ])
 
   const lessonHistoryItems = useMemo(() => {
     const privateLessonItems = studentPrivateLessons.map((lesson) => {
