@@ -499,8 +499,8 @@ function getPrivateDurationLabel(...sources) {
 }
 
 function isFixedPrivateLesson(lesson) {
-  const sourceType = String(lesson?.sourceType || lesson?.source || '').trim()
-  const reservationType = String(lesson?.reservationType || lesson?.type || '').trim()
+  const sourceType = normalizeStudentBookingToken(lesson?.sourceType || lesson?.source || '')
+  const reservationType = normalizeStudentBookingToken(lesson?.reservationType || lesson?.type || '')
   const packageType = String(lesson?.packageType || '').trim()
   return (
     (
@@ -509,8 +509,8 @@ function isFixedPrivateLesson(lesson) {
       reservationType === 'fixed_private'
     ) &&
     (
-      sourceType === 'fixed-private-slot-assignment' ||
-      sourceType === 'weekly-slot-fixed-assignment' ||
+      sourceType === 'fixed_private_slot_assignment' ||
+      sourceType === 'weekly_slot_fixed_assignment' ||
       reservationType === 'fixed' ||
       reservationType === 'fixed_private' ||
       lesson?.isFixedPrivateLesson === true
@@ -519,11 +519,13 @@ function isFixedPrivateLesson(lesson) {
 }
 
 function isFixedPrivateReservation(reservation) {
-  const sourceType = String(reservation?.sourceType || '').trim()
-  const reservationType = String(reservation?.reservationType || reservation?.type || '').trim()
+  const sourceType = normalizeStudentBookingToken(reservation?.sourceType || '')
+  const reservationType = normalizeStudentBookingToken(
+    reservation?.reservationType || reservation?.type || ''
+  )
   return (
-    sourceType === 'fixed-private-slot-assignment' ||
-    sourceType === 'weekly-slot-fixed-assignment' ||
+    sourceType === 'fixed_private_slot_assignment' ||
+    sourceType === 'weekly_slot_fixed_assignment' ||
     reservationType === 'fixed' ||
     reservationType === 'fixed_private'
   )
@@ -553,6 +555,22 @@ function isStudentDirectPrivateReservation(reservation) {
   )
 }
 
+function getPrivatePackageLinkId(...sources) {
+  for (const source of sources) {
+    const packageId = String(
+      source?.packageId ||
+        source?.deductionPackageId ||
+        source?.linkedPackageId ||
+        source?.fixedPrivatePackageId ||
+        source?.packageSummary?.packageId ||
+        source?.package?.id ||
+        ''
+    ).trim()
+    if (packageId) return packageId
+  }
+  return ''
+}
+
 function buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson = null) {
   if (!isFixedPrivateReservation(reservation)) return linkedLesson
   const lessonId = String(
@@ -562,11 +580,11 @@ function buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson 
       reservation?.lessonDocId ||
       ''
   ).trim()
-  if (!lessonId) return linkedLesson
   return {
     ...reservation,
     ...(linkedLesson || {}),
     id: lessonId,
+    missingFixedLessonId: !lessonId,
     date: getLessonStorageDateString(linkedLesson) || String(reservation?.date || '').trim(),
     time: getLessonDisplayTime(linkedLesson) || String(reservation?.time || '').trim(),
     teacherName:
@@ -576,7 +594,7 @@ function buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson 
       reservation?.teacher ||
       '',
     subject: linkedLesson?.subject || reservation?.subject || '1:1 수업',
-    packageId: linkedLesson?.packageId || reservation?.packageId || '',
+    packageId: getPrivatePackageLinkId(linkedLesson, reservation),
     packageType: linkedLesson?.packageType || reservation?.packageType || 'private',
     sourceType:
       linkedLesson?.sourceType ||
@@ -728,13 +746,15 @@ function canShowFixedPrivateLessonCancelAction(
   const startMillis = getFixedPrivateLessonStartMillis(lesson)
   return (
     isFixedPrivateLesson(lesson) &&
+    Boolean(String(lesson?.id || '').trim()) &&
+    lesson?.missingFixedLessonId !== true &&
     !isCancelledLesson(lesson) &&
     !isPrivateReservationCancelled(lesson) &&
     !isPrivateReservationOutcomeFinal(lesson) &&
     startMillis !== null &&
     nowMillis < startMillis &&
     startMillis - nowMillis >= PRIVATE_CANCEL_CUTOFF_MS &&
-    Boolean(String(lesson?.packageId || '').trim()) &&
+    Boolean(getPrivatePackageLinkId(lesson)) &&
     Number(cancelAllowance?.remaining ?? 0) > 0
   )
 }
@@ -2209,7 +2229,7 @@ export default function StudentBookingPage() {
           console.error(`student lessons ${spec.label} 불러오기 실패:`, error)
           sourceMaps.set(index, new Map())
           resolvedSources.add(index)
-          setStudentPrivateLessonsError('내 예정 수업을 불러오지 못했습니다.')
+          setStudentPrivateLessonsError('예정된 1:1 수업을 불러오지 못했습니다.')
           mergeRows()
         }
       )
@@ -2267,13 +2287,15 @@ export default function StudentBookingPage() {
   }
 
   function getPrivateReservationCancelAllowance(reservation) {
-    return getPrivatePackageCancelAllowanceById(reservation?.packageId)
+    return getPrivatePackageCancelAllowanceById(getPrivatePackageLinkId(reservation))
   }
 
   function getFixedPrivateLessonCancelAllowance(lesson) {
     const lessonId = String(lesson?.id || '').trim()
     const linkedReservation = lessonId ? reservationByLessonId.get(lessonId) : null
-    return getPrivatePackageCancelAllowanceById(lesson?.packageId || linkedReservation?.packageId)
+    return getPrivatePackageCancelAllowanceById(
+      getPrivatePackageLinkId(lesson, linkedReservation)
+    )
   }
 
   const privateSlotsById = useMemo(() => {
@@ -3004,7 +3026,10 @@ export default function StudentBookingPage() {
 
   async function cancelFixedPrivateLesson(lesson, options = {}) {
     const lessonId = String(lesson?.id || '').trim()
-    if (!lessonId) return
+    if (!lessonId || lesson?.missingFixedLessonId === true) {
+      alert('수강권 연결 정보가 없어 학원에 문의해 주세요.')
+      return
+    }
     const date = getLessonStorageDateString(lesson)
     const time = getLessonDisplayTime(lesson)
     const startMillis = getDateTimeMs(date, time)
@@ -3085,6 +3110,9 @@ export default function StudentBookingPage() {
     if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
       return '수업 시작 10시간 전까지만 취소할 수 있습니다.'
     }
+    if (!String(lesson?.id || '').trim() || lesson?.missingFixedLessonId === true) {
+      return '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+    }
     const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
     if (canShowFixedPrivateLessonCancelAction(lesson, Date.now(), cancelAllowance)) {
       return ''
@@ -3101,7 +3129,7 @@ export default function StudentBookingPage() {
   function renderFixedPrivateLessonCancelAction(lesson, {
     testId = 'student-fixed-private-lesson-cancel-button',
   } = {}) {
-    if (!PRIVATE_SLOT_BOOKING_ENABLED || !privateSlotBookingPilotEnabled) {
+    if (!PRIVATE_SLOT_BOOKING_ENABLED) {
       return null
     }
     if (!canRenderFixedPrivateLessonCancelAction(lesson)) {
@@ -3115,6 +3143,8 @@ export default function StudentBookingPage() {
 
     return (
       <div
+        data-private-cancel-used-field="privateCancelUsedCount"
+        data-private-cancel-used-count={cancelAllowance?.used ?? 0}
         style={{
           display: isMobileStudentBooking ? 'grid' : 'flex',
           gridTemplateColumns: isMobileStudentBooking
@@ -3855,9 +3885,15 @@ export default function StudentBookingPage() {
                             {item.statusLabel || '수업 예정'}
                           </span>
                         </div>
-                        {fixedLessonForCancel
-                          ? renderFixedPrivateLessonCancelAction(fixedLessonForCancel)
-                          : null}
+                        {fixedLessonForCancel ? (
+                          <div
+                            data-testid="student-upcoming-fixed-private-cancel-action"
+                            data-fixed-cancel-callable="cancelFixedPrivateLessonOccurrence"
+                            aria-label="고정 예약 1:1 수업 취소 또는 수업 취소 불가"
+                          >
+                            {renderFixedPrivateLessonCancelAction(fixedLessonForCancel)}
+                          </div>
+                        ) : null}
                       </article>
                     )
                   })}
