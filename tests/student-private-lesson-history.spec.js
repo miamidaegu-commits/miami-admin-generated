@@ -96,7 +96,11 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
     source.match(/function renderPrivateReservationCancelAction[\s\S]*?return \(\n[\s\S]*?\n  }\n/)?.[0] || '';
 
   expect(source).toContain('function buildFixedPrivateCancelLessonFromReservation');
-  expect(source).toContain("sourceType === 'weekly-slot-fixed-assignment'");
+  expect(source).toContain('function getPrivatePackageLinkId');
+  expect(source).toContain("sourceType === 'weekly_slot_fixed_assignment'");
+  expect(source).toContain('source?.deductionPackageId');
+  expect(source).toContain('source?.linkedPackageId');
+  expect(source).toContain('missingFixedLessonId: !lessonId');
   expect(source).toContain('function isUpcomingPrivateReservationStatus');
   expect(source).toContain("status === 'scheduled'");
   expect(source).toMatch(/where\('status', 'in', \[[\s\S]*'scheduled'/);
@@ -123,7 +127,9 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(fixedCancelVisibilityHelper).toContain('!isPrivateReservationCancelled(lesson)');
   expect(fixedCancelVisibilityHelper).toContain('!isPrivateReservationOutcomeFinal(lesson)');
   expect(fixedCancelVisibilityHelper).toContain('PRIVATE_CANCEL_CUTOFF_MS');
-  expect(fixedCancelVisibilityHelper).toContain("lesson?.packageId");
+  expect(fixedCancelVisibilityHelper).toContain("String(lesson?.id || '').trim()");
+  expect(fixedCancelVisibilityHelper).toContain('lesson?.missingFixedLessonId !== true');
+  expect(fixedCancelVisibilityHelper).toContain('getPrivatePackageLinkId(lesson)');
   expect(fixedCancelVisibilityHelper).toContain('cancelAllowance?.remaining');
   expect(source).toContain('function getFixedPrivateLessonCancelUnavailableReason');
   expect(source).toContain('수업 시작 10시간 전까지만 취소할 수 있습니다.');
@@ -134,12 +140,20 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(fixedCancelRenderHelper).toContain("'수업 취소'");
   expect(fixedCancelRenderHelper).toContain("'수업 취소 불가'");
   expect(fixedCancelRenderHelper).toContain('{unavailableReason}');
+  expect(fixedCancelRenderHelper).toContain('data-private-cancel-used-field="privateCancelUsedCount"');
+  expect(fixedCancelRenderHelper).not.toContain('privateSlotBookingPilotEnabled');
   expect(directPrivateRenderHelper).toContain("'예약 취소'");
+  expect(directPrivateRenderHelper).toContain('privateSlotBookingPilotEnabled');
   expect(directPrivateRenderHelper).toContain('cancelPrivateReservation(reservation)');
+  expect(source).toContain('>내 예정 수업</h2>');
+  expect(source).toContain('>내 수업 내역</h2>');
   expect(upcomingSection).toContain('예정된 1:1 수업이 없습니다.');
   expect(upcomingSection).toContain('{item.typeLabel}');
   expect(upcomingSection).toContain('{item.studentName}');
   expect(upcomingSection).toContain('item.fixedCancelLesson && isFixedPrivateLesson(item.fixedCancelLesson)');
+  expect(upcomingSection).toContain('student-upcoming-fixed-private-cancel-action');
+  expect(upcomingSection).toContain('data-fixed-cancel-callable="cancelFixedPrivateLessonOccurrence"');
+  expect(upcomingSection).toContain('고정 예약 1:1 수업 취소 또는 수업 취소 불가');
   expect(upcomingSection).toContain('renderFixedPrivateLessonCancelAction(fixedLessonForCancel)');
   expect(upcomingSection).not.toContain('renderPrivateReservationCancelAction');
   expect(upcomingSection).not.toContain('예약 취소');
