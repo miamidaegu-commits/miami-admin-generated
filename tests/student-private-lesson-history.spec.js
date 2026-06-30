@@ -95,6 +95,8 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   const directPrivateRenderHelper =
     source.match(/function renderPrivateReservationCancelAction[\s\S]*?return \(\n[\s\S]*?\n  }\n/)?.[0] || '';
 
+  expect(source).toContain('function buildFixedPrivateCancelLessonFromReservation');
+  expect(source).toContain("sourceType === 'weekly-slot-fixed-assignment'");
   expect(source).toContain('function isUpcomingPrivateReservationStatus');
   expect(source).toContain("status === 'scheduled'");
   expect(source).toMatch(/where\('status', 'in', \[[\s\S]*'scheduled'/);
@@ -111,6 +113,9 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(upcomingItemsBlock).toContain("'학생 직접예약 1:1'");
   expect(upcomingItemsBlock).toContain('studentPrivateLessonById');
   expect(upcomingItemsBlock).toContain('lesson: linkedLesson');
+  expect(upcomingItemsBlock).toContain('const fixedCancelLesson = buildFixedPrivateCancelLessonFromReservation');
+  expect(upcomingItemsBlock).toContain('fixedCancelLesson,');
+  expect(upcomingItemsBlock).toContain('fixedCancelLesson: isFixedPrivateLesson(lesson) ? lesson : null');
   expect(upcomingItemsBlock).toContain('studentName');
   expect(upcomingItemsBlock).toContain('seenKeys');
   expect(fixedCancelVisibilityHelper).toContain('isFixedPrivateLesson(lesson)');
@@ -128,11 +133,13 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(fixedCancelRenderHelper).toContain('cancelFixedPrivateLesson(lesson)');
   expect(fixedCancelRenderHelper).toContain("'수업 취소'");
   expect(fixedCancelRenderHelper).toContain("'수업 취소 불가'");
+  expect(fixedCancelRenderHelper).toContain('{unavailableReason}');
   expect(directPrivateRenderHelper).toContain("'예약 취소'");
   expect(directPrivateRenderHelper).toContain('cancelPrivateReservation(reservation)');
   expect(upcomingSection).toContain('예정된 1:1 수업이 없습니다.');
   expect(upcomingSection).toContain('{item.typeLabel}');
   expect(upcomingSection).toContain('{item.studentName}');
+  expect(upcomingSection).toContain('item.fixedCancelLesson && isFixedPrivateLesson(item.fixedCancelLesson)');
   expect(upcomingSection).toContain('renderFixedPrivateLessonCancelAction(fixedLessonForCancel)');
   expect(upcomingSection).not.toContain('renderPrivateReservationCancelAction');
   expect(upcomingSection).not.toContain('예약 취소');

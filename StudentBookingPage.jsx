@@ -499,9 +499,22 @@ function getPrivateDurationLabel(...sources) {
 }
 
 function isFixedPrivateLesson(lesson) {
+  const sourceType = String(lesson?.sourceType || lesson?.source || '').trim()
+  const reservationType = String(lesson?.reservationType || lesson?.type || '').trim()
+  const packageType = String(lesson?.packageType || '').trim()
   return (
-    String(lesson?.packageType || '').trim() === 'private' &&
-    String(lesson?.sourceType || '').trim() === 'fixed-private-slot-assignment'
+    (
+      packageType === 'private' ||
+      hasPrivateRecordIndicators(lesson) ||
+      reservationType === 'fixed_private'
+    ) &&
+    (
+      sourceType === 'fixed-private-slot-assignment' ||
+      sourceType === 'weekly-slot-fixed-assignment' ||
+      reservationType === 'fixed' ||
+      reservationType === 'fixed_private' ||
+      lesson?.isFixedPrivateLesson === true
+    )
   )
 }
 
@@ -538,6 +551,43 @@ function isStudentDirectPrivateReservation(reservation) {
     reservationType === 'flexible' ||
     reservationType === 'regular'
   )
+}
+
+function buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson = null) {
+  if (!isFixedPrivateReservation(reservation)) return linkedLesson
+  const lessonId = String(
+    linkedLesson?.id ||
+      reservation?.lessonId ||
+      reservation?.fixedLessonId ||
+      reservation?.lessonDocId ||
+      ''
+  ).trim()
+  if (!lessonId) return linkedLesson
+  return {
+    ...reservation,
+    ...(linkedLesson || {}),
+    id: lessonId,
+    date: getLessonStorageDateString(linkedLesson) || String(reservation?.date || '').trim(),
+    time: getLessonDisplayTime(linkedLesson) || String(reservation?.time || '').trim(),
+    teacherName:
+      linkedLesson?.teacherName ||
+      linkedLesson?.teacher ||
+      reservation?.teacherName ||
+      reservation?.teacher ||
+      '',
+    subject: linkedLesson?.subject || reservation?.subject || '1:1 수업',
+    packageId: linkedLesson?.packageId || reservation?.packageId || '',
+    packageType: linkedLesson?.packageType || reservation?.packageType || 'private',
+    sourceType:
+      linkedLesson?.sourceType ||
+      reservation?.sourceType ||
+      'fixed-private-slot-assignment',
+    reservationType:
+      linkedLesson?.reservationType ||
+      reservation?.reservationType ||
+      reservation?.type ||
+      'fixed_private',
+  }
 }
 
 function hasPrivateRecordIndicators(...sources) {
@@ -2388,6 +2438,10 @@ export default function StudentBookingPage() {
         const slotId = String(reservation.slotId || '').trim()
         const lessonId = String(reservation.lessonId || '').trim()
         const linkedLesson = lessonId ? studentPrivateLessonById.get(lessonId) || null : null
+        const fixedCancelLesson = buildFixedPrivateCancelLessonFromReservation(
+          reservation,
+          linkedLesson
+        )
         const typeLabel = isFixedPrivateReservation(reservation)
           ? '고정 예약 1:1'
           : '학생 직접예약 1:1'
@@ -2409,6 +2463,7 @@ export default function StudentBookingPage() {
           statusLabel: '예약 완료',
           reservation,
           lesson: linkedLesson,
+          fixedCancelLesson,
         }
       })
 
@@ -2434,6 +2489,7 @@ export default function StudentBookingPage() {
         durationLabel: getPrivateDurationLabel(lesson),
         statusLabel: '수업 예정',
         lesson,
+        fixedCancelLesson: isFixedPrivateLesson(lesson) ? lesson : null,
       }))
 
     return [...lessonItems, ...reservationItems].sort((a, b) => {
@@ -3694,7 +3750,9 @@ export default function StudentBookingPage() {
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {upcomingPrivateScheduleItems.map((item) => {
                     const fixedLessonForCancel =
-                      item.lesson && isFixedPrivateLesson(item.lesson) ? item.lesson : null
+                      item.fixedCancelLesson && isFixedPrivateLesson(item.fixedCancelLesson)
+                        ? item.fixedCancelLesson
+                        : null
 
                     return (
                       <article
