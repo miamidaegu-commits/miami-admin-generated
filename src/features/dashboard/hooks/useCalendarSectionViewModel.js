@@ -109,10 +109,95 @@ function sortCalendarRows(rows) {
   return all
 }
 
+function isStudentFixedPrivateSeatReleasedCancellation(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const cancelledByRole = String(
+    lesson?.cancelledByRole || lesson?.canceledByRole || ''
+  )
+    .trim()
+    .toLowerCase()
+  const cancellationReason = String(
+    lesson?.cancellationReason || lesson?.cancelledReason || ''
+  )
+    .trim()
+    .toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    cancellationType === 'seat_released' &&
+    (cancelledByRole === 'student' || cancellationReason.includes('student_cancelled'))
+  )
+}
+
+function addPrivateLessonReservationLinkKeys(keys, lesson) {
+  if (!keys || !lesson) return
+  const lessonIds = [lesson.id, lesson.lessonId, lesson.fixedLessonId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  lessonIds.forEach((lessonId) => {
+    keys.add(`lessonId:${lessonId}`)
+    keys.add(`fixedLessonId:${lessonId}`)
+  })
+
+  const reservationId = String(lesson.reservationId || '').trim()
+  if (reservationId) keys.add(`reservationId:${reservationId}`)
+
+  const slotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+  if (slotId) keys.add(`slotId:${slotId}`)
+
+  const date = String(getLessonStorageDateString(lesson) || lesson.date || '').trim()
+  const time = String(lesson.time || '').trim()
+  const studentKey = normalizeText(
+    lesson.studentId || lesson.studentID || getStudentName(lesson)
+  )
+  const teacherKey = normalizeText(
+    lesson.teacherName || lesson.teacher || lesson.teacherKey || lesson.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.add(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+}
+
+function getPrivateReservationLinkKeys(reservation) {
+  const keys = []
+  const reservationIds = [reservation?.id, reservation?.reservationId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  reservationIds.forEach((reservationId) => keys.push(`reservationId:${reservationId}`))
+
+  const slotId = String(reservation?.slotId || '').trim()
+  if (slotId) keys.push(`slotId:${slotId}`)
+
+  ;[reservation?.lessonId, reservation?.fixedLessonId].forEach((lessonIdValue) => {
+    const lessonId = String(lessonIdValue || '').trim()
+    if (!lessonId) return
+    keys.push(`lessonId:${lessonId}`)
+    keys.push(`fixedLessonId:${lessonId}`)
+  })
+
+  const date = String(reservation?.date || '').trim()
+  const time = String(reservation?.time || '').trim()
+  const studentKey = normalizeText(
+    reservation?.studentId || reservation?.studentName || reservation?.student
+  )
+  const teacherKey = normalizeText(
+    reservation?.teacherName ||
+      reservation?.teacher ||
+      reservation?.teacherKey ||
+      reservation?.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.push(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+
+  return keys
+}
+
 function buildCalendarPrivateReservationRows({
   privateLessonReservations,
   privateSlotById,
   approvedPrivateLessonKeys,
+  cancelledFixedPrivateLessonKeys,
   selectedCalendarTeacherScope = null,
 }) {
   const rows = Array.isArray(privateLessonReservations) ? privateLessonReservations : []
@@ -163,6 +248,10 @@ function buildCalendarPrivateReservationRows({
     })
     .filter((reservation) => {
       if (!reservation.date) return false
+      const linkedToCancelledFixedLesson = getPrivateReservationLinkKeys(reservation).some((key) =>
+        cancelledFixedPrivateLessonKeys.has(key)
+      )
+      if (linkedToCancelledFixedLesson) return false
       const reservationId = String(reservation.id || reservation.reservationId || '').trim()
       const slotId = String(reservation.slotId || '').trim()
       if (reservationId && approvedPrivateLessonKeys.has(`reservationId:${reservationId}`)) {
@@ -353,15 +442,35 @@ export default function useCalendarSectionViewModel({
     return byKey
   }, [sortedLessons])
 
+  const cancelledFixedPrivateLessonKeys = useMemo(() => {
+    const byKey = new Set()
+    visibleLessons.forEach((lesson) => {
+      if (!isStudentFixedPrivateSeatReleasedCancellation(lesson)) return
+      addPrivateLessonReservationLinkKeys(byKey, lesson)
+    })
+    return byKey
+  }, [visibleLessons])
+
+  const allCancelledFixedPrivateLessonKeys = useMemo(() => {
+    const byKey = new Set()
+    sortedLessons.forEach((lesson) => {
+      if (!isStudentFixedPrivateSeatReleasedCancellation(lesson)) return
+      addPrivateLessonReservationLinkKeys(byKey, lesson)
+    })
+    return byKey
+  }, [sortedLessons])
+
   const calendarPrivateReservationRows = useMemo(() => {
     return buildCalendarPrivateReservationRows({
       privateLessonReservations,
       privateSlotById,
       approvedPrivateLessonKeys,
+      cancelledFixedPrivateLessonKeys,
       selectedCalendarTeacherScope,
     })
   }, [
     approvedPrivateLessonKeys,
+    cancelledFixedPrivateLessonKeys,
     privateLessonReservations,
     privateSlotById,
     selectedCalendarTeacherScope,
@@ -372,9 +481,15 @@ export default function useCalendarSectionViewModel({
       privateLessonReservations,
       privateSlotById,
       approvedPrivateLessonKeys: allApprovedPrivateLessonKeys,
+      cancelledFixedPrivateLessonKeys: allCancelledFixedPrivateLessonKeys,
       selectedCalendarTeacherScope: null,
     })
-  }, [allApprovedPrivateLessonKeys, privateLessonReservations, privateSlotById])
+  }, [
+    allApprovedPrivateLessonKeys,
+    allCancelledFixedPrivateLessonKeys,
+    privateLessonReservations,
+    privateSlotById,
+  ])
 
   const calendarCombinedLessons = useMemo(() => {
     const priv = visibleLessons.map((l) => ({ ...l, _calendarRowKind: 'private' }))
