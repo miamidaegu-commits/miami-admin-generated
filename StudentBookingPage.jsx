@@ -913,6 +913,9 @@ function addStudentCancelledFixedPrivateLessonLinkKeys(keys, lesson) {
   if (date && time && studentKey && teacherKey) {
     keys.add(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
   }
+  if (date && time && teacherKey) {
+    keys.add(`schedule:${date}|${time}|${teacherKey}`)
+  }
 }
 
 function getPrivateReservationFixedLessonLinkKeys(reservation, slot = null) {
@@ -950,8 +953,48 @@ function getPrivateReservationFixedLessonLinkKeys(reservation, slot = null) {
   if (date && time && studentKey && teacherKey) {
     keys.push(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
   }
+  if (date && time && teacherKey) {
+    keys.push(`schedule:${date}|${time}|${teacherKey}`)
+  }
 
   return keys
+}
+
+function isPrivateSlotOwnReservationStatus(status) {
+  return status === 'my_reservation' || status === 'reserved_by_me'
+}
+
+function isStudentCancelledFixedPrivateGridSlot({
+  slot,
+  reservation = null,
+  canUsePrivateBooking,
+  cancelledFixedLessonKeys,
+}) {
+  if (!slot || !cancelledFixedLessonKeys) return false
+  const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
+  const hasOwnReservationState =
+    isPrivateSlotOwnReservationStatus(bookingStatus) ||
+    isActivePrivateReservationStatus(reservation)
+  if (!hasOwnReservationState) return false
+  return getPrivateReservationFixedLessonLinkKeys(reservation || {}, slot).some((key) =>
+    cancelledFixedLessonKeys.has(key)
+  )
+}
+
+function getPrivateSlotPublicDedupeKey(slot) {
+  const date = String(slot?.date || '').trim()
+  const time = String(slot?.time || '').trim()
+  const duration = String(Number(slot?.durationMinutes || 0) || 60)
+  const teacherKey = normalizeStudentBookingToken(
+    slot?.teacherUid ||
+      slot?.teacherUID ||
+      slot?.teacherId ||
+      slot?.teacherKey ||
+      slot?.teacherName ||
+      slot?.teacher
+  )
+  if (!date || !time || !teacherKey) return ''
+  return `${date}|${time}|${duration}|${teacherKey}`
 }
 
 function getDateTimeMs(dateValue, timeValue) {
@@ -2758,8 +2801,22 @@ export default function StudentBookingPage() {
   }, [lessonsById, reservations])
 
   const sortedPrivateSlots = useMemo(() => {
+    const publicSlotKeys = new Set()
     return privateSlots
       .filter((slot) => {
+        const reservation = privateReservationBySlotId.get(String(slot.id || '').trim()) || null
+        // Remove seat_released fixed lesson matches by lessonId/fixedLessonId/reservationId/slotId
+        // before my_reservation/reserved_by_me slots become blue "내 예약" grid cards.
+        if (
+          isStudentCancelledFixedPrivateGridSlot({
+            slot,
+            reservation,
+            canUsePrivateBooking,
+            cancelledFixedLessonKeys: studentCancelledFixedPrivateLessonLinkKeys,
+          })
+        ) {
+          return false
+        }
         if (privateSlotViewMode !== 'available') return true
         const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
         return (
@@ -2774,7 +2831,22 @@ export default function StudentBookingPage() {
         const bKey = `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`
         return aKey.localeCompare(bKey, 'ko')
       })
-  }, [canUsePrivateBooking, privateSlotViewMode, privateSlots])
+      .filter((slot) => {
+        const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
+        if (isPrivateSlotOwnReservationStatus(bookingStatus)) return true
+        const key = getPrivateSlotPublicDedupeKey(slot)
+        if (!key) return true
+        if (publicSlotKeys.has(key)) return false
+        publicSlotKeys.add(key)
+        return true
+      })
+  }, [
+    canUsePrivateBooking,
+    privateReservationBySlotId,
+    privateSlotViewMode,
+    privateSlots,
+    studentCancelledFixedPrivateLessonLinkKeys,
+  ])
 
   const privateCalendarWeeks = useMemo(() => {
     const weekStarts = []
