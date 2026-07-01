@@ -210,6 +210,14 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(upcomingSection).not.toContain('예약 취소');
   expect(historySection).toContain('data-testid="student-lesson-history-card"');
   expect(historySection).toContain('getLessonHistoryStatusLabel(item)');
+  expect(source).toContain('function isStudentFixedPrivateSeatReleasedCancellation');
+  expect(source).toContain('function mergeFixedPrivateReservationCancellationFromLesson');
+  expect(source).toContain('cancelledFixedLessonIdsWithReservation');
+  expect(source).toContain('isStudentFixedPrivateSeatReleasedCancellation(linkedLesson)');
+  expect(source).toContain('mergeFixedPrivateReservationCancellationFromLesson(');
+  expect(source).toContain("return '학생 취소'");
+  expect(historySection).toContain('취소 처리일: ${cancellationDateLabel}');
+  expect(historySection).toContain('수강권 차감 없음');
   expect(historySection).not.toContain('student-fixed-private-lesson-cancel-button');
   expect(historySection).not.toContain('renderFixedPrivateLessonCancelAction');
   expect(historySection).not.toContain('cancelFixedPrivateLesson(');
@@ -219,6 +227,55 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(source).toContain('취소 가능 횟수 1회가 사용되며, 수강권은 차감되지 않습니다.');
   expect(source).toContain("privateSlotCancelConfirm.kind === 'fixedLesson'\n                  ? '수업을 취소할까요?'");
   expect(source).toContain("privateSlotCancelConfirm.kind === 'fixedLesson' ? '수업 취소' : '예약 취소'");
+});
+
+test('fixed private student cancellation history sync is represented in static code paths', () => {
+  const studentSource = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  const adminSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/StudentsSection.jsx'),
+    'utf8'
+  );
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const upcomingItemsBlock =
+    studentSource.match(/const upcomingPrivateScheduleItems = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?todayYmd,\n  \]\)/)?.[0] || '';
+  const historyItemsBlock =
+    studentSource.match(/const lessonHistoryItems = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?studentPrivateLessons\]\)/)?.[0] || '';
+  const adminHistoryBlock =
+    adminSource.match(/const studentHistoryRows = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?studentHistoryPrivateReservations,\n  \]\)/)?.[0] || '';
+
+  expect(functionsSource).toContain('function buildFixedPrivateReservationCancellationPatch');
+  expect(functionsSource).toContain('function buildOriginalFixedPrivateSlotReleasePatch');
+  expect(functionsSource).toContain('alreadyStudentSeatReleased');
+  expect(functionsSource).toContain('!alreadyStudentSeatReleased');
+  expect(functionsSource).toContain('privateCancelUsedCount: nextPrivateCancelUsedCount');
+  expect(functionsSource).toContain('.where("lessonId", "==", lessonId)');
+  expect(functionsSource).toContain('.where("fixedLessonId", "==", lessonId)');
+  expect(functionsSource).toContain('status: "cancelled"');
+  expect(functionsSource).toContain('status: isSeatReleased ? "released" : "cancelled"');
+  expect(functionsSource).toContain('isBookable: false');
+  expect(functionsSource).toContain('noDeduction: true');
+
+  expect(upcomingItemsBlock).toContain('isStudentFixedPrivateSeatReleasedCancellation(linkedLesson)');
+  expect(upcomingItemsBlock).toContain('return false');
+  expect(historyItemsBlock).toContain('cancelledFixedLessonIdsWithReservation');
+  expect(historyItemsBlock).toContain('mergeFixedPrivateReservationCancellationFromLesson');
+  expect(historyItemsBlock).toContain('noDeduction: effectiveReservation.noDeduction === true');
+  expect(studentSource).toContain('취소 처리일: ${cancellationDateLabel}');
+  expect(studentSource).toContain("'수강권 차감 없음'");
+  expect(studentSource).toContain('고정수업 자리 공개됨');
+  expect(studentSource).toContain("if (isStudentFixedPrivateSeatReleasedCancellation(item)) return '학생 취소'");
+
+  expect(adminSource).toContain('const [studentHistoryPrivateLessons, setStudentHistoryPrivateLessons]');
+  expect(adminSource).toContain('function isStudentFixedPrivateSeatReleasedLesson');
+  expect(adminSource).toContain('function mergePrivateReservationCancellationFromLesson');
+  expect(adminSource).toContain('function privateCancellationDetailLabel');
+  expect(adminSource).toContain("collection(db, 'lessons')");
+  expect(adminHistoryBlock).toContain('studentHistoryPrivateLessonById');
+  expect(adminHistoryBlock).toContain('mergePrivateReservationCancellationFromLesson');
+  expect(adminHistoryBlock).toContain('privateCancellationDetailLabel');
+  expect(adminSource).toContain('취소 처리일: ${cancelledAt}');
+  expect(adminSource).toContain("'수강권 차감 없음'");
+  expect(adminSource).toContain('formatPrivatePackageCancelUsageSummary(pkg)');
 });
 
 async function createPrivateLesson({

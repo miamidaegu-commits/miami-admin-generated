@@ -1679,6 +1679,95 @@ function buildFixedPrivateLessonCancellationPatch({
   };
 }
 
+function isStudentReleasedFixedPrivateLessonCancellation(lesson) {
+  const status = normalizeId(lesson && lesson.status).toLowerCase();
+  const cancellationType = normalizeId(
+      lesson && lesson.cancellationType,
+  ).toLowerCase();
+  const cancelledByRole = normalizeId(
+      lesson && lesson.cancelledByRole,
+  ).toLowerCase();
+  const cancellationReason = normalizeId(
+      lesson && (lesson.cancellationReason || lesson.cancelledReason),
+  ).toLowerCase();
+  return (
+    (status === "cancelled" || status === "canceled") &&
+    cancellationType === "seat_released" &&
+    (
+      cancelledByRole === "student" ||
+      cancellationReason.includes("student_cancelled")
+    )
+  );
+}
+
+function buildFixedPrivateReservationCancellationPatch({
+  now,
+  uid,
+  actorRole,
+  actorName = "",
+  cancellationType,
+  reason,
+  lessonId,
+}) {
+  const reservationOutcome = actorRole === "student" ?
+    "student_cancelled" :
+    `${actorRole || "admin"}_cancelled`;
+  return {
+    ...buildFixedPrivateLessonCancellationPatch({
+      now,
+      uid,
+      actorRole,
+      actorName,
+      cancellationType,
+      reason,
+      lessonId,
+    }),
+    status: "cancelled",
+    canceledAt: now,
+    canceledBy: uid,
+    canceledByRole: actorRole,
+    cancellationStatus: "cancelled",
+    reservationOutcome,
+    lessonOutcome: reservationOutcome,
+  };
+}
+
+function buildOriginalFixedPrivateSlotReleasePatch({
+  now,
+  uid,
+  actorRole,
+  actorName = "",
+  cancellationType,
+  reason,
+  lessonId,
+}) {
+  const isSeatReleased = cancellationType === "seat_released";
+  return {
+    status: isSeatReleased ? "released" : "cancelled",
+    slotType: isSeatReleased ? "fixed_seat_released" : "fixed_closed",
+    cancellationType,
+    cancellationReason: reason,
+    cancelledReason: reason,
+    releasedAt: isSeatReleased ? now : null,
+    releasedBy: isSeatReleased ? uid : "",
+    releasedByUid: isSeatReleased ? uid : "",
+    releasedByRole: isSeatReleased ? actorRole : "",
+    releasedByName: isSeatReleased ? actorName : "",
+    releasedForPrivateBooking: isSeatReleased,
+    releasedFromFixed: isSeatReleased,
+    releasedFromFixedLessonId: isSeatReleased ? lessonId : "",
+    isSeatReleased,
+    isBookable: false,
+    cancelledAt: now,
+    cancelledBy: uid,
+    cancelledByUid: uid,
+    cancelledByRole: actorRole,
+    cancelledByName: actorName,
+    noDeduction: true,
+    updatedAt: now,
+  };
+}
+
 function buildReleasedFixedPrivateLessonSlot({
   academyId,
   lessonId,
@@ -6304,14 +6393,22 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
             );
           }
           const lessonStatus = normalizeId(lesson.status).toLowerCase();
-          if (lessonStatus === "cancelled" || lessonStatus === "canceled") {
+          const alreadyStudentSeatReleased =
+            isStudentReleasedFixedPrivateLessonCancellation(lesson);
+          if (
+            (lessonStatus === "cancelled" || lessonStatus === "canceled") &&
+            !alreadyStudentSeatReleased
+          ) {
             throw new HttpsError(
                 "failed-precondition",
                 "Fixed private lesson is already cancelled.",
             );
           }
           const startMillis = getFixedPrivateLessonStartMillis(lesson);
-          if (startMillis === null || Date.now() >= startMillis) {
+          if (
+            !alreadyStudentSeatReleased &&
+            (startMillis === null || Date.now() >= startMillis)
+          ) {
             throw new HttpsError(
                 "failed-precondition",
                 "Only future fixed private lessons can be cancelled.",
@@ -6333,7 +6430,10 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
                   "Cannot cancel another student's fixed private lesson.",
               );
             }
-            if (Date.now() > startMillis - STUDENT_PRIVATE_CANCEL_CUTOFF_MS) {
+            if (
+              !alreadyStudentSeatReleased &&
+              Date.now() > startMillis - STUDENT_PRIVATE_CANCEL_CUTOFF_MS
+            ) {
               throw new HttpsError(
                   "failed-precondition",
                   "Fixed private lessons can only be cancelled at least " +
@@ -6342,28 +6442,34 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
               );
             }
             const lessonPackageId = normalizeId(lesson.packageId);
-            if (!lessonPackageId) {
+            if (!lessonPackageId && !alreadyStudentSeatReleased) {
               throw new HttpsError(
                   "failed-precondition",
                   "수강권 연결 정보가 없어 학원에 문의해 주세요.",
               );
             }
-            packageRef = db.collection("studentPackages").doc(lessonPackageId);
-            const packageSnap = await transaction.get(packageRef);
-            if (!packageSnap.exists) {
-              throw new HttpsError(
-                  "failed-precondition",
-                  "수강권 연결 정보가 없어 학원에 문의해 주세요.",
-              );
+            if (lessonPackageId) {
+              packageRef = db
+                  .collection("studentPackages")
+                  .doc(lessonPackageId);
+              const packageSnap = await transaction.get(packageRef);
+              if (!packageSnap.exists && !alreadyStudentSeatReleased) {
+                throw new HttpsError(
+                    "failed-precondition",
+                    "수강권 연결 정보가 없어 학원에 문의해 주세요.",
+                );
+              }
+              if (!alreadyStudentSeatReleased) {
+                const packageData = packageSnap.data() || {};
+                allowance = assertPrivatePackageStudentCancelAllowed({
+                  packageData,
+                  academyId,
+                  studentId: lessonStudentId,
+                  teacherKey: normalizeId(lesson.teacher || lesson.teacherKey),
+                  teacherKeys: getPrivateTeacherScopeKeys(lesson),
+                });
+              }
             }
-            const packageData = packageSnap.data() || {};
-            allowance = assertPrivatePackageStudentCancelAllowed({
-              packageData,
-              academyId,
-              studentId: lessonStudentId,
-              teacherKey: normalizeId(lesson.teacher || lesson.teacherKey),
-              teacherKeys: getPrivateTeacherScopeKeys(lesson),
-            });
           } else if (actorRole === "teacher") {
             throw new HttpsError(
                 "permission-denied",
@@ -6371,24 +6477,135 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
             );
           }
 
+          const reservationReadPromises = [];
+          const lessonReservationId = normalizeId(lesson.reservationId);
+          if (lessonReservationId) {
+            reservationReadPromises.push(transaction.get(
+                db.collection("privateLessonReservations")
+                    .doc(lessonReservationId),
+            ));
+          }
+          reservationReadPromises.push(
+              transaction.get(db.collection("privateLessonReservations")
+                  .where("lessonId", "==", lessonId)),
+              transaction.get(db.collection("privateLessonReservations")
+                  .where("fixedLessonId", "==", lessonId)),
+          );
+          const slotReadPromises = [];
+          const lessonSlotId = normalizeId(
+              lesson.slotId || lesson.privateLessonSlotId,
+          );
+          if (lessonSlotId) {
+            slotReadPromises.push(transaction.get(
+                db.collection("privateLessonSlots").doc(lessonSlotId),
+            ));
+          }
+          slotReadPromises.push(
+              transaction.get(db.collection("privateLessonSlots")
+                  .where("lessonId", "==", lessonId)),
+              transaction.get(db.collection("privateLessonSlots")
+                  .where("fixedLessonId", "==", lessonId)),
+          );
+          const [reservationReadResults, slotReadResults] = await Promise.all([
+            Promise.all(reservationReadPromises),
+            Promise.all(slotReadPromises),
+          ]);
+          const reservationSnapsByPath = new Map();
+          const addReservationSnap = (snap) => {
+            if (!snap || !snap.exists) return;
+            const row = snap.data() || {};
+            if (normalizeId(row.academyId) !== academyId) return;
+            reservationSnapsByPath.set(snap.ref.path, snap);
+          };
+          reservationReadResults.forEach((result) => {
+            if (result && Array.isArray(result.docs)) {
+              result.docs.forEach(addReservationSnap);
+            } else {
+              addReservationSnap(result);
+            }
+          });
+          const slotSnapsByPath = new Map();
+          const addSlotSnap = (snap) => {
+            if (!snap || !snap.exists) return;
+            const row = snap.data() || {};
+            if (normalizeId(row.academyId) !== academyId) return;
+            slotSnapsByPath.set(snap.ref.path, snap);
+          };
+          slotReadResults.forEach((result) => {
+            if (result && Array.isArray(result.docs)) {
+              result.docs.forEach(addSlotSnap);
+            } else {
+              addSlotSnap(result);
+            }
+          });
+
           const now = admin.firestore.FieldValue.serverTimestamp();
           const effectiveReason = reason || (
             cancellationType === "seat_released" ?
               "fixed_private_seat_released" :
               "fixed_private_lesson_cancelled"
           );
-          transaction.update(
-              lessonRef,
-              buildFixedPrivateLessonCancellationPatch({
-                now,
-                uid,
-                actorRole,
-                actorName,
-                cancellationType,
-                reason: effectiveReason,
-                lessonId,
-              }),
-          );
+          const cancellationTimestamp = alreadyStudentSeatReleased ?
+            (lesson.cancelledAt ||
+              lesson.canceledAt ||
+              lesson.releasedAt ||
+              now) :
+            now;
+          const syncUid = alreadyStudentSeatReleased ?
+            normalizeId(lesson.cancelledBy || lesson.cancelledByUid || uid) :
+            uid;
+          const syncActorRole = alreadyStudentSeatReleased ?
+            (normalizeId(lesson.cancelledByRole) || actorRole) :
+            actorRole;
+          const syncActorName = alreadyStudentSeatReleased ?
+            (normalizeId(lesson.cancelledByName) || actorName) :
+            actorName;
+          const syncReason = alreadyStudentSeatReleased ?
+            (normalizeId(lesson.cancellationReason || lesson.cancelledReason) ||
+              effectiveReason) :
+            effectiveReason;
+          if (!alreadyStudentSeatReleased) {
+            transaction.update(
+                lessonRef,
+                buildFixedPrivateLessonCancellationPatch({
+                  now: cancellationTimestamp,
+                  uid,
+                  actorRole,
+                  actorName,
+                  cancellationType,
+                  reason: effectiveReason,
+                  lessonId,
+                }),
+            );
+          }
+          reservationSnapsByPath.forEach((snap) => {
+            transaction.update(
+                snap.ref,
+                buildFixedPrivateReservationCancellationPatch({
+                  now: cancellationTimestamp,
+                  uid: syncUid,
+                  actorRole: syncActorRole,
+                  actorName: syncActorName,
+                  cancellationType,
+                  reason: syncReason,
+                  lessonId,
+                }),
+            );
+          });
+          slotSnapsByPath.forEach((snap) => {
+            transaction.update(
+                snap.ref,
+                buildOriginalFixedPrivateSlotReleasePatch({
+                  now: cancellationTimestamp,
+                  uid: syncUid,
+                  actorRole: syncActorRole,
+                  actorName: syncActorName,
+                  cancellationType,
+                  reason: syncReason,
+                  lessonId,
+                }),
+            );
+          });
           if (cancellationType === "seat_released") {
             const releasedSlotRef = db
                 .collection("privateLessonSlots")
@@ -6399,11 +6616,12 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
                   academyId,
                   lessonId,
                   lesson,
-                  now,
-                  uid,
-                  actorRole,
-                  actorName,
+                  now: cancellationTimestamp,
+                  uid: syncUid,
+                  actorRole: syncActorRole,
+                  actorName: syncActorName,
                 }),
+                {merge: true},
             );
           } else {
             const closedSlotRef = db
@@ -6415,35 +6633,43 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
                   academyId,
                   lessonId,
                   lesson,
-                  now,
-                  uid,
-                  actorRole,
-                  actorName,
-                  cancellationReason: effectiveReason,
+                  now: cancellationTimestamp,
+                  uid: syncUid,
+                  actorRole: syncActorRole,
+                  actorName: syncActorName,
+                  cancellationReason: syncReason,
                 }),
+                {merge: true},
             );
           }
-          createPrivateSlotNotification(transaction, db, {
-            academyId,
-            type: "private_fixed_lesson_cancelled",
-            studentId: lessonStudentId,
-            studentName: normalizeId(lesson.studentName || lesson.student),
-            teacher: normalizeId(lesson.teacher || lesson.teacherKey),
-            teacherName: normalizeId(lesson.teacherName || lesson.teacher),
-            slotId: buildReleasedFixedPrivateSlotId(lessonId),
-            reservationId: normalizeId(lesson.reservationId),
-            date: normalizeId(lesson.date),
-            time: normalizeId(lesson.time),
-            source: actorRole,
-            actorUid: uid,
-            actorRole,
-            actorName,
-            reason: effectiveReason,
-            createdAt: now,
-          });
+          if (!alreadyStudentSeatReleased) {
+            createPrivateSlotNotification(transaction, db, {
+              academyId,
+              type: "private_fixed_lesson_cancelled",
+              studentId: lessonStudentId,
+              studentName: normalizeId(lesson.studentName || lesson.student),
+              teacher: normalizeId(lesson.teacher || lesson.teacherKey),
+              teacherName: normalizeId(lesson.teacherName || lesson.teacher),
+              slotId: buildReleasedFixedPrivateSlotId(lessonId),
+              reservationId: normalizeId(lesson.reservationId),
+              date: normalizeId(lesson.date),
+              time: normalizeId(lesson.time),
+              source: actorRole,
+              actorUid: uid,
+              actorRole,
+              actorName,
+              reason: effectiveReason,
+              createdAt: now,
+            });
+          }
 
           let nextPackageCancelAllowance = null;
-          if (actorRole === "student" && packageRef && allowance) {
+          if (
+            actorRole === "student" &&
+            packageRef &&
+            allowance &&
+            !alreadyStudentSeatReleased
+          ) {
             const nextPrivateCancelUsedCount =
               allowance.privateCancelUsedCount + 1;
             transaction.update(packageRef, {
