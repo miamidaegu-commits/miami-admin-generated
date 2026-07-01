@@ -511,6 +511,7 @@ function isFixedPrivateLesson(lesson) {
     (
       sourceType === 'fixed_private_slot_assignment' ||
       sourceType === 'weekly_slot_fixed_assignment' ||
+      sourceType === 'fixed_admin' ||
       reservationType === 'fixed' ||
       reservationType === 'fixed_private' ||
       lesson?.isFixedPrivateLesson === true
@@ -519,13 +520,14 @@ function isFixedPrivateLesson(lesson) {
 }
 
 function isFixedPrivateReservation(reservation) {
-  const sourceType = normalizeStudentBookingToken(reservation?.sourceType || '')
+  const sourceType = normalizeStudentBookingToken(reservation?.sourceType || reservation?.source || '')
   const reservationType = normalizeStudentBookingToken(
     reservation?.reservationType || reservation?.type || ''
   )
   return (
     sourceType === 'fixed_private_slot_assignment' ||
     sourceType === 'weekly_slot_fixed_assignment' ||
+    sourceType === 'fixed_admin' ||
     reservationType === 'fixed' ||
     reservationType === 'fixed_private'
   )
@@ -3404,9 +3406,6 @@ export default function StudentBookingPage() {
     testId = 'student-fixed-private-lesson-cancel-button',
     forceRender = false,
   } = {}) {
-    if (!PRIVATE_SLOT_BOOKING_ENABLED) {
-      return null
-    }
     const canRender = forceRender
       ? Boolean(lesson) &&
         !isCancelledLesson(lesson) &&

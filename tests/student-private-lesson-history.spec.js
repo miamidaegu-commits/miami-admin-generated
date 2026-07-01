@@ -101,6 +101,8 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(source).toContain('function getPrivatePackageLinkId');
   expect(source).toContain('function getFixedPrivateLessonLinkId');
   expect(source).toContain('function getFixedPrivateFallbackLessonId');
+  expect(source).toContain("sourceType === 'fixed_admin'");
+  expect(source).toContain("'fixed-private-slot-assignment'");
   expect(source).toContain("sourceType === 'weekly_slot_fixed_assignment'");
   expect(source).toContain('source?.deductionPackageId');
   expect(source).toContain('source?.linkedPackageId');
@@ -170,8 +172,10 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(fixedCancelRenderHelper).toContain('data-private-cancel-used-field="privateCancelUsedCount"');
   expect(fixedCancelRenderHelper).toContain('forceRender = false');
   expect(fixedCancelRenderHelper).toContain('isFixedPrivateLessonInFuture(lesson)');
+  expect(fixedCancelRenderHelper).not.toContain('PRIVATE_SLOT_BOOKING_ENABLED');
   expect(fixedCancelRenderHelper).not.toContain('privateSlotBookingPilotEnabled');
   expect(directPrivateRenderHelper).toContain("'예약 취소'");
+  expect(directPrivateRenderHelper).toContain('PRIVATE_SLOT_BOOKING_ENABLED');
   expect(directPrivateRenderHelper).toContain('privateSlotBookingPilotEnabled');
   expect(directPrivateRenderHelper).toContain('cancelPrivateReservation(reservation)');
   expect(source).toContain('>내 예정 수업</h2>');

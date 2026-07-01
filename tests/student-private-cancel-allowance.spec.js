@@ -231,6 +231,8 @@ test('student fixed private lesson cancel action uses package allowance and sepa
   expect(source).toContain('function getPrivatePackageLinkId');
   expect(source).toContain('function getFixedPrivateLessonLinkId');
   expect(source).toContain('function getFixedPrivateFallbackLessonId');
+  expect(source).toContain("sourceType === 'fixed_admin'");
+  expect(source).toContain("'fixed-private-slot-assignment'");
   expect(source).toContain("sourceType === 'weekly_slot_fixed_assignment'");
   expect(source).toContain('source?.deductionPackageId');
   expect(source).toContain('source?.linkedPackageId');
@@ -278,6 +280,7 @@ test('student fixed private lesson cancel action uses package allowance and sepa
   expect(fixedRenderHelper).toContain('data-private-cancel-used-field="privateCancelUsedCount"');
   expect(fixedRenderHelper).toContain('forceRender = false');
   expect(fixedRenderHelper).toContain('isFixedPrivateLessonInFuture(lesson)');
+  expect(fixedRenderHelper).not.toContain('PRIVATE_SLOT_BOOKING_ENABLED');
   expect(fixedRenderHelper).not.toContain('privateSlotBookingPilotEnabled');
   expect(upcomingItemsBlock).toContain('const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null');
   expect(upcomingItemsBlock).toContain('buildFixedPrivateCancelLessonFromReservation(');
