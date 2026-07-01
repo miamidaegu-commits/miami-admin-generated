@@ -886,6 +886,74 @@ function mergeFixedPrivateReservationCancellationFromLesson(reservation, linkedL
   }
 }
 
+function addStudentCancelledFixedPrivateLessonLinkKeys(keys, lesson) {
+  if (!keys || !lesson) return
+  const lessonIds = [lesson.id, lesson.lessonId, lesson.fixedLessonId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  lessonIds.forEach((lessonId) => {
+    keys.add(`lessonId:${lessonId}`)
+    keys.add(`fixedLessonId:${lessonId}`)
+  })
+
+  const reservationId = String(lesson.reservationId || '').trim()
+  if (reservationId) keys.add(`reservationId:${reservationId}`)
+
+  const slotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+  if (slotId) keys.add(`slotId:${slotId}`)
+
+  const date = String(getLessonStorageDateString(lesson) || lesson.date || '').trim()
+  const time = String(getLessonDisplayTime(lesson) || lesson.time || '').trim()
+  const studentKey = normalizeStudentBookingToken(
+    lesson.studentId || lesson.studentID || lesson.studentName || lesson.student
+  )
+  const teacherKey = normalizeStudentBookingToken(
+    lesson.teacherName || lesson.teacher || lesson.teacherKey || lesson.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.add(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+}
+
+function getPrivateReservationFixedLessonLinkKeys(reservation, slot = null) {
+  const keys = []
+  const reservationIds = [reservation?.id, reservation?.reservationId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  reservationIds.forEach((reservationId) => keys.push(`reservationId:${reservationId}`))
+
+  const slotId = String(reservation?.slotId || slot?.id || '').trim()
+  if (slotId) keys.push(`slotId:${slotId}`)
+
+  ;[reservation?.lessonId, reservation?.fixedLessonId].forEach((lessonIdValue) => {
+    const lessonId = String(lessonIdValue || '').trim()
+    if (!lessonId) return
+    keys.push(`lessonId:${lessonId}`)
+    keys.push(`fixedLessonId:${lessonId}`)
+  })
+
+  const date = String(reservation?.date || slot?.date || '').trim()
+  const time = String(reservation?.time || slot?.time || '').trim()
+  const studentKey = normalizeStudentBookingToken(
+    reservation?.studentId || reservation?.studentID || reservation?.studentName || reservation?.student
+  )
+  const teacherKey = normalizeStudentBookingToken(
+    reservation?.teacherName ||
+      reservation?.teacher ||
+      reservation?.teacherKey ||
+      reservation?.teacherUid ||
+      slot?.teacherName ||
+      slot?.teacher ||
+      slot?.teacherKey ||
+      slot?.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.push(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+
+  return keys
+}
+
 function getDateTimeMs(dateValue, timeValue) {
   const date = String(dateValue || '').trim()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
@@ -2619,6 +2687,15 @@ export default function StudentBookingPage() {
     return byId
   }, [privateSlots])
 
+  const studentCancelledFixedPrivateLessonLinkKeys = useMemo(() => {
+    const keys = new Set()
+    studentPrivateLessons.forEach((lesson) => {
+      if (!isStudentFixedPrivateSeatReleasedCancellation(lesson)) return
+      addStudentCancelledFixedPrivateLessonLinkKeys(keys, lesson)
+    })
+    return keys
+  }, [studentPrivateLessons])
+
   const privateReservationBySlotId = useMemo(() => {
     const bySlotId = new Map()
     privateReservations.forEach((reservation) => {
@@ -2721,13 +2798,21 @@ export default function StudentBookingPage() {
 
   const sortedPrivateReservations = useMemo(() => {
     return privateReservations
-      .filter((reservation) => isStudentDirectPrivateReservation(reservation))
+      .filter((reservation) => {
+        if (!isStudentDirectPrivateReservation(reservation)) return false
+        const slot = privateSlotsById.get(String(reservation.slotId || '').trim()) || null
+        const hasCancelledFixedLessonLink = getPrivateReservationFixedLessonLinkKeys(
+          reservation,
+          slot
+        ).some((key) => studentCancelledFixedPrivateLessonLinkKeys.has(key))
+        return !hasCancelledFixedLessonLink
+      })
       .sort((a, b) => {
         const aKey = `${a.date || ''} ${a.time || ''} ${a.slotId || ''}`
         const bKey = `${b.date || ''} ${b.time || ''} ${b.slotId || ''}`
         return aKey.localeCompare(bKey, 'ko')
       })
-  }, [privateReservations])
+  }, [privateReservations, privateSlotsById, studentCancelledFixedPrivateLessonLinkKeys])
 
   const todayYmd = getTodayStorageDateString()
 
@@ -2764,6 +2849,12 @@ export default function StudentBookingPage() {
     const reservationItems = privateReservations
       .filter((reservation) => {
         if (!canShowUpcomingPrivateReservation(reservation)) return false
+        const slot = privateSlotsById.get(String(reservation.slotId || '').trim()) || null
+        const hasCancelledFixedLessonLink = getPrivateReservationFixedLessonLinkKeys(
+          reservation,
+          slot
+        ).some((key) => studentCancelledFixedPrivateLessonLinkKeys.has(key))
+        if (hasCancelledFixedLessonLink) return false
         const linkedLessonId = String(reservation.lessonId || reservation.fixedLessonId || '').trim()
         const linkedLesson = linkedLessonId
           ? studentPrivateLessonById.get(linkedLessonId) || null
@@ -2849,6 +2940,7 @@ export default function StudentBookingPage() {
     privateReservations,
     privateSlotsById,
     sortedUpcomingPrivateLessons,
+    studentCancelledFixedPrivateLessonLinkKeys,
     studentPrivateLessonById,
     todayYmd,
   ])
