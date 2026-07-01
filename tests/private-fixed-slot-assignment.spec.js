@@ -585,6 +585,16 @@ test('fixed private assignment source requires package and links generated docum
   expect(functionsSource).toContain('countedFixedLessonIds.has(linkedLessonId)');
   expect(functionsSource).toContain('const lessonPackageId = normalizeId(lesson.packageId);');
   expect(functionsSource).toContain('cancelFixedPrivateLessonOccurrence');
+  expect(functionsSource).toContain('function buildFixedPrivateReservationCancellationPatch');
+  expect(functionsSource).toContain('function buildOriginalFixedPrivateSlotReleasePatch');
+  expect(functionsSource).toContain('alreadyStudentSeatReleased');
+  expect(functionsSource).toContain('reservationSnapsByPath.forEach');
+  expect(functionsSource).toContain('slotSnapsByPath.forEach');
+  expect(functionsSource).toContain('!alreadyStudentSeatReleased');
+  expect(functionsSource).toContain('privateCancelUsedCount: nextPrivateCancelUsedCount');
+  expect(functionsSource).toContain('status: isSeatReleased ? "released" : "cancelled"');
+  expect(functionsSource).toContain('isBookable: false');
+  expect(functionsSource).toContain('{merge: true}');
 
   expect(rulesSource).toContain('match /lessons/{lessonId}');
   expect(rulesSource).toContain('allow create: if sameAcademyOnCreate() &&');

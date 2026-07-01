@@ -391,12 +391,97 @@ function privateReservationStatusLabel(row, startsAtMs) {
     Boolean(row?.reversalCreditTransactionId) ||
     Boolean(row?.previousOutcomeStatus)
 
-  if (status === 'cancelled' || status === 'canceled') return '예약 취소'
+  const actorLabel = privateReservationCancelActorLabel(row)
+  if (status === 'cancelled' || status === 'canceled' || status === 'student_cancelled') {
+    return actorLabel || '예약 취소'
+  }
   if (wasReversed) return isPast ? '지난 수업 · 차감 취소' : '차감 취소'
   if (wasDeducted) return isPast ? '지난 수업 · 차감 완료' : '차감 완료'
   if (status === 'active' && isPast) return '지난 수업 · 미차감'
   if (status === 'active') return '예약 완료'
   return cleanText(status, '-')
+}
+
+function privateReservationCancelActorLabel(row) {
+  const status = String(row?.status || '').trim().toLowerCase()
+  const actor = String(
+    row?.cancelledByRole || row?.canceledByRole || row?.cancelledBy || row?.canceledBy || ''
+  )
+    .trim()
+    .toLowerCase()
+  const reason = String(row?.cancellationReason || row?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  if (status.includes('student') || actor.includes('student') || reason.includes('student')) {
+    return '학생 취소'
+  }
+  if (status.includes('teacher') || actor.includes('teacher') || reason.includes('teacher')) {
+    return '선생님 취소'
+  }
+  if (status.includes('admin') || actor.includes('admin') || actor.includes('owner')) {
+    return '관리자 취소'
+  }
+  return ''
+}
+
+function isStudentFixedPrivateSeatReleasedLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const actor = String(
+    lesson?.cancelledByRole || lesson?.canceledByRole || lesson?.cancelledBy || lesson?.canceledBy || ''
+  )
+    .trim()
+    .toLowerCase()
+  const reason = String(lesson?.cancellationReason || lesson?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    cancellationType === 'seat_released' &&
+    (actor.includes('student') || reason.includes('student_cancelled'))
+  )
+}
+
+function mergePrivateReservationCancellationFromLesson(reservation, linkedLesson) {
+  if (!isStudentFixedPrivateSeatReleasedLesson(linkedLesson)) return reservation
+  return {
+    ...(reservation || {}),
+    status: 'cancelled',
+    cancellationType: linkedLesson.cancellationType || 'seat_released',
+    cancellationReason:
+      linkedLesson.cancellationReason ||
+      linkedLesson.cancelledReason ||
+      reservation?.cancellationReason ||
+      '',
+    cancelledReason:
+      linkedLesson.cancelledReason ||
+      linkedLesson.cancellationReason ||
+      reservation?.cancelledReason ||
+      '',
+    cancelledAt: linkedLesson.cancelledAt || linkedLesson.canceledAt || reservation?.cancelledAt,
+    canceledAt: linkedLesson.canceledAt || linkedLesson.cancelledAt || reservation?.canceledAt,
+    cancelledByRole:
+      linkedLesson.cancelledByRole || linkedLesson.canceledByRole || reservation?.cancelledByRole,
+    canceledByRole:
+      linkedLesson.canceledByRole || linkedLesson.cancelledByRole || reservation?.canceledByRole,
+    cancelledBy: linkedLesson.cancelledBy || linkedLesson.canceledBy || reservation?.cancelledBy,
+    canceledBy: linkedLesson.canceledBy || linkedLesson.cancelledBy || reservation?.canceledBy,
+    noDeduction: true,
+    isSeatReleased: true,
+    releasedForPrivateBooking: true,
+  }
+}
+
+function privateCancellationDetailLabel(row, pkg) {
+  if (!privateReservationCancelActorLabel(row)) return ''
+  const labels = []
+  const cancelledAt = formatYmdDateTime(row?.cancelledAt || row?.canceledAt, '')
+  if (cancelledAt) labels.push(`취소 처리일: ${cancelledAt}`)
+  if (row?.noDeduction === true) labels.push('수강권 차감 없음')
+  if (pkg && String(pkg.packageType || '').trim() === 'private') {
+    labels.push(formatPrivatePackageCancelUsageSummary(pkg))
+  }
+  return labels.filter(Boolean).join(' · ')
 }
 
 function creditTransactionHistoryStatus(row) {
@@ -544,6 +629,7 @@ export default function StudentsSection({
   const [studentHistoryError, setStudentHistoryError] = useState('')
   const [studentHistoryGroupReservations, setStudentHistoryGroupReservations] = useState([])
   const [studentHistoryPrivateReservations, setStudentHistoryPrivateReservations] = useState([])
+  const [studentHistoryPrivateLessons, setStudentHistoryPrivateLessons] = useState([])
   const [studentHistoryCreditTransactions, setStudentHistoryCreditTransactions] = useState([])
   const [packageRegistrationRowsByPackageId, setPackageRegistrationRowsByPackageId] =
     useState(new Map())
@@ -702,6 +788,17 @@ export default function StudentsSection({
     return new Map(studentHistoryPackages.map((pkg) => [pkg.id, pkg]))
   }, [studentHistoryPackages])
 
+  const studentHistoryPrivateLessonById = useMemo(() => {
+    const map = new Map()
+    studentHistoryPrivateLessons.forEach((lesson) => {
+      const lessonId = cleanText(lesson.id, '')
+      if (lessonId) map.set(lessonId, lesson)
+      const fixedLessonId = cleanText(lesson.fixedLessonId, '')
+      if (fixedLessonId) map.set(fixedLessonId, lesson)
+    })
+    return map
+  }, [studentHistoryPrivateLessons])
+
   const studentHistorySummary = useMemo(() => {
     const activePackages = studentHistoryPackages.filter((pkg) => isStudentPackageRowActive(pkg))
     const endedPackages = studentHistoryPackages.filter((pkg) => !isStudentPackageRowActive(pkg))
@@ -752,22 +849,32 @@ export default function StudentsSection({
     })
 
     const privateRows = studentHistoryPrivateReservations.map((reservation) => {
-      const date = cleanText(reservation.date, '')
-      const time = cleanText(reservation.time, '')
+      const linkedLessonId = cleanText(reservation.lessonId || reservation.fixedLessonId, '')
+      const linkedLesson = linkedLessonId ? studentHistoryPrivateLessonById.get(linkedLessonId) : null
+      const effectiveReservation = mergePrivateReservationCancellationFromLesson(
+        reservation,
+        linkedLesson
+      )
+      const date = cleanText(effectiveReservation.date || linkedLesson?.date, '')
+      const time = cleanText(effectiveReservation.time || linkedLesson?.time, '')
       const startsAtMs = ymdTimeToMillis(date, time)
-      const pkg = reservation.packageId
-        ? studentHistoryPackageById.get(String(reservation.packageId))
+      const pkg = effectiveReservation.packageId
+        ? studentHistoryPackageById.get(String(effectiveReservation.packageId))
         : null
+      const cancellationDetail = privateCancellationDetailLabel(effectiveReservation, pkg)
       return {
-        key: `private-reservation-${reservation.id}`,
+        key: `private-reservation-${effectiveReservation.id}`,
         date,
         time,
         type: '1:1 수업',
-        teacher: cleanText(reservation.teacher),
+        teacher: cleanText(effectiveReservation.teacher || linkedLesson?.teacher),
         title: '1:1 수업',
-        status: privateReservationStatusLabel(reservation, startsAtMs),
-        packageTitle: cleanText(reservation.packageTitle || pkg?.title, '-'),
-        sortMs: startsAtMs ?? docDateToMillis(reservation.updatedAt),
+        status: privateReservationStatusLabel(effectiveReservation, startsAtMs),
+        packageTitle: cleanText(effectiveReservation.packageTitle || pkg?.title, '-'),
+        detail: cancellationDetail,
+        sortMs:
+          startsAtMs ??
+          docDateToMillis(effectiveReservation.cancelledAt || effectiveReservation.updatedAt),
       }
     })
 
@@ -794,6 +901,7 @@ export default function StudentsSection({
     studentHistoryGroupReservations,
     studentHistoryGroupRows,
     studentHistoryPackageById,
+    studentHistoryPrivateLessonById,
     studentHistoryPrivateReservations,
   ])
 
@@ -822,6 +930,7 @@ export default function StudentsSection({
     setStudentHistoryError('')
     setStudentHistoryGroupReservations([])
     setStudentHistoryPrivateReservations([])
+    setStudentHistoryPrivateLessons([])
     setStudentHistoryCreditTransactions([])
   }
 
@@ -832,6 +941,7 @@ export default function StudentsSection({
     setStudentHistoryError('')
     setStudentHistoryGroupReservations([])
     setStudentHistoryPrivateReservations([])
+    setStudentHistoryPrivateLessons([])
     setStudentHistoryCreditTransactions([])
 
     try {
@@ -842,7 +952,7 @@ export default function StudentsSection({
           String(pkg.studentId || '').trim() === studentId
       )
 
-      const [groupReservationSnap, privateReservationSnap, creditTransactionSnaps] =
+      const [groupReservationSnap, privateReservationSnap, privateLessonSnaps, creditTransactionSnaps] =
         await Promise.all([
           getDocs(
             query(
@@ -858,6 +968,17 @@ export default function StudentsSection({
               where('academyId', '==', currentAcademyId),
               where('studentId', '==', studentId),
               where('status', 'in', ['active', 'cancelled'])
+            )
+          ),
+          Promise.all(
+            ['studentId', 'studentID'].map((fieldName) =>
+              getDocs(
+                query(
+                  collection(db, 'lessons'),
+                  where('academyId', '==', currentAcademyId),
+                  where(fieldName, '==', studentId)
+                )
+              )
             )
           ),
           Promise.all(
@@ -891,6 +1012,20 @@ export default function StudentsSection({
               String(row.studentId || '').trim() === studentId
           )
       )
+      const privateLessonsById = new Map()
+      privateLessonSnaps.forEach((snap) => {
+        snap.docs.forEach((docItem) => {
+          const row = { id: docItem.id, ...docItem.data() }
+          if (
+            String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+            (String(row.studentId || '').trim() === studentId ||
+              String(row.studentID || '').trim() === studentId)
+          ) {
+            privateLessonsById.set(docItem.id, row)
+          }
+        })
+      })
+      setStudentHistoryPrivateLessons([...privateLessonsById.values()])
       setStudentHistoryCreditTransactions(
         creditTransactionSnaps
           .flatMap((snap) => snap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })))
@@ -2636,7 +2771,11 @@ export default function StudentsSection({
                       <span>{cleanText(row.teacher)}</span>
                       <span>{cleanText(row.status)}</span>
                       <span>{cleanText(row.packageTitle)}</span>
-                      <span>{cleanText(row.title)}{row.delta ? ` · ${row.delta}` : ''}</span>
+                      <span>
+                        {cleanText(row.title)}
+                        {row.delta ? ` · ${row.delta}` : ''}
+                        {row.detail ? ` · ${row.detail}` : ''}
+                      </span>
                     </div>
                   ))}
                 </div>
