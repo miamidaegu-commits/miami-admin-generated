@@ -230,6 +230,7 @@ test('student fixed private lesson cancel action uses package allowance and sepa
   expect(source).toContain('function getUpcomingFixedPrivateCancelLesson');
   expect(source).toContain('function getPrivatePackageLinkId');
   expect(source).toContain('function getFixedPrivateLessonLinkId');
+  expect(source).toContain('function getFixedPrivateCancellableLessonId');
   expect(source).toContain('function getFixedPrivateFallbackLessonId');
   expect(source).toContain("sourceType === 'fixed_admin'");
   expect(source).toContain("'fixed-private-slot-assignment'");
@@ -280,6 +281,12 @@ test('student fixed private lesson cancel action uses package allowance and sepa
   expect(fixedRenderHelper).toContain('data-private-cancel-used-field="privateCancelUsedCount"');
   expect(fixedRenderHelper).toContain('forceRender = false');
   expect(fixedRenderHelper).toContain('isFixedPrivateLessonInFuture(lesson)');
+  expect(fixedRenderHelper).toContain('const fixedCancelLessonId = getFixedPrivateCancellableLessonId(lesson)');
+  expect(fixedRenderHelper).toContain('Boolean(fixedCancelLessonId)');
+  expect(fixedRenderHelper).toContain('busyFixedPrivateLessonId === fixedCancelLessonId');
+  expect(fixedRenderHelper).toContain('!fixedCancelLessonId');
+  expect(fixedRenderHelper).toContain('if (!fixedCancelLessonId || !canCancel) return');
+  expect(fixedRenderHelper).toContain("isBusy ? '취소 중...' : canCancel ? '수업 취소' : '수업 취소 불가'");
   expect(fixedRenderHelper).not.toContain('PRIVATE_SLOT_BOOKING_ENABLED');
   expect(fixedRenderHelper).not.toContain('privateSlotBookingPilotEnabled');
   expect(upcomingItemsBlock).toContain('const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null');
