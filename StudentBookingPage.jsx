@@ -634,6 +634,10 @@ function getFixedPrivateLessonLinkId({
   ).trim()
 }
 
+function getFixedPrivateCancellableLessonId(lesson) {
+  return String(lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || '').trim()
+}
+
 function getFixedPrivateFallbackLessonId(lessonId, ...sources) {
   const fixedLessonId = String(
     sources.find((source) => String(source?.fixedLessonId || '').trim())?.fixedLessonId || ''
@@ -3301,7 +3305,7 @@ export default function StudentBookingPage() {
   }
 
   async function cancelFixedPrivateLesson(lesson, options = {}) {
-    const lessonId = String(lesson?.id || '').trim()
+    const lessonId = getFixedPrivateCancellableLessonId(lesson)
     if (!lessonId || lesson?.missingFixedLessonId === true) {
       alert('수강권 연결 정보가 없어 학원에 문의해 주세요.')
       return
@@ -3419,8 +3423,10 @@ export default function StudentBookingPage() {
     const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
     const unavailableReason = getFixedPrivateLessonCancelUnavailableReason(lesson)
     const canCancel = canShowFixedPrivateLessonCancelAction(lesson, Date.now(), cancelAllowance)
-    const isBusy = busyFixedPrivateLessonId === String(lesson?.id || '').trim()
-    const disabled = Boolean(isBusy || !canCancel)
+    const fixedCancelLessonId = getFixedPrivateCancellableLessonId(lesson)
+    const isBusy =
+      Boolean(fixedCancelLessonId) && busyFixedPrivateLessonId === fixedCancelLessonId
+    const disabled = Boolean(isBusy || !canCancel || !fixedCancelLessonId)
 
     return (
       <div
@@ -3453,7 +3459,10 @@ export default function StudentBookingPage() {
         )}
         <button
           type="button"
-          onClick={() => cancelFixedPrivateLesson(lesson)}
+          onClick={() => {
+            if (!fixedCancelLessonId || !canCancel) return
+            cancelFixedPrivateLesson(lesson)
+          }}
           disabled={disabled}
           data-testid={testId}
           style={{

@@ -100,6 +100,7 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(source).toContain('function getUpcomingFixedPrivateCancelLesson');
   expect(source).toContain('function getPrivatePackageLinkId');
   expect(source).toContain('function getFixedPrivateLessonLinkId');
+  expect(source).toContain('function getFixedPrivateCancellableLessonId');
   expect(source).toContain('function getFixedPrivateFallbackLessonId');
   expect(source).toContain("sourceType === 'fixed_admin'");
   expect(source).toContain("'fixed-private-slot-assignment'");
@@ -172,6 +173,12 @@ test('student upcoming private lessons exposes fixed private lesson cancel actio
   expect(fixedCancelRenderHelper).toContain('data-private-cancel-used-field="privateCancelUsedCount"');
   expect(fixedCancelRenderHelper).toContain('forceRender = false');
   expect(fixedCancelRenderHelper).toContain('isFixedPrivateLessonInFuture(lesson)');
+  expect(fixedCancelRenderHelper).toContain('const fixedCancelLessonId = getFixedPrivateCancellableLessonId(lesson)');
+  expect(fixedCancelRenderHelper).toContain('Boolean(fixedCancelLessonId)');
+  expect(fixedCancelRenderHelper).toContain('busyFixedPrivateLessonId === fixedCancelLessonId');
+  expect(fixedCancelRenderHelper).toContain('!fixedCancelLessonId');
+  expect(fixedCancelRenderHelper).toContain('if (!fixedCancelLessonId || !canCancel) return');
+  expect(fixedCancelRenderHelper).toContain("'취소 중...'");
   expect(fixedCancelRenderHelper).not.toContain('PRIVATE_SLOT_BOOKING_ENABLED');
   expect(fixedCancelRenderHelper).not.toContain('privateSlotBookingPilotEnabled');
   expect(directPrivateRenderHelper).toContain("'예약 취소'");
