@@ -17,6 +17,7 @@ import {
   findPrivatePackageForTeacherContext,
   findStudentPrivatePackageContexts,
 } from '../privatePackageHelpers.js'
+import { formatPrivatePackageCancelUsageSummary } from '../../booking/studentPrivateCancelAllowance.js'
 import { resolveGroupLessonSubject } from '../groupClassRoomUtils.js'
 import { rowMatchesTeacherScope } from '../teacherLessonRosterHelpers.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
@@ -97,7 +98,114 @@ function isReleasedFixedPrivateSlot(slot) {
   )
 }
 
+function normalizePrivateReservationLinkText(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+}
+
+function isStudentFixedPrivateSeatReleasedLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const cancelledByRole = String(lesson?.cancelledByRole || lesson?.canceledByRole || '')
+    .trim()
+    .toLowerCase()
+  const cancellationReason = String(lesson?.cancellationReason || lesson?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    cancellationType === 'seat_released' &&
+    (cancelledByRole === 'student' || cancellationReason.includes('student_cancelled')) &&
+    (lesson?.releasedForPrivateBooking === true || lesson?.isSeatReleased === true)
+  )
+}
+
+function addCalendarPrivateReservationLinkKeys(keys, source, slot = null) {
+  if (!keys || !source) return
+  ;[source.id, source.lessonId, source.fixedLessonId].forEach((lessonIdValue) => {
+    const lessonId = String(lessonIdValue || '').trim()
+    if (!lessonId) return
+    keys.add(`lessonId:${lessonId}`)
+    keys.add(`fixedLessonId:${lessonId}`)
+  })
+
+  const reservationId = String(source.reservationId || '').trim()
+  if (reservationId) keys.add(`reservationId:${reservationId}`)
+
+  const slotId = String(source.slotId || source.privateLessonSlotId || slot?.id || '').trim()
+  if (slotId) keys.add(`slotId:${slotId}`)
+
+  const date = String(getLessonStorageDateString(source) || source.date || slot?.date || '').trim()
+  const time = String(source.time || slot?.time || '').trim()
+  const studentKey = normalizePrivateReservationLinkText(
+    source.studentId || source.studentID || source.studentName || source.student || getStudentName(source)
+  )
+  const teacherKey = normalizePrivateReservationLinkText(
+    source.teacherName ||
+      source.teacher ||
+      source.teacherKey ||
+      source.teacherUid ||
+      slot?.teacherName ||
+      slot?.teacher ||
+      slot?.teacherKey ||
+      slot?.teacherUid ||
+      getTeacherName(source)
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.add(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+}
+
+function getCalendarPrivateReservationLinkKeys(reservation, slot = null) {
+  const keys = new Set()
+  addCalendarPrivateReservationLinkKeys(keys, reservation, slot)
+  return Array.from(keys)
+}
+
+function mergeCalendarReservationCancellationFromLesson(reservation, linkedLesson) {
+  if (!isStudentFixedPrivateSeatReleasedLesson(linkedLesson)) return reservation
+  return {
+    ...(reservation || {}),
+    status: 'cancelled',
+    cancellationType: linkedLesson.cancellationType || 'seat_released',
+    cancellationReason:
+      linkedLesson.cancellationReason ||
+      linkedLesson.cancelledReason ||
+      reservation?.cancellationReason ||
+      '',
+    cancelledReason:
+      linkedLesson.cancelledReason ||
+      linkedLesson.cancellationReason ||
+      reservation?.cancelledReason ||
+      '',
+    cancelledAt: linkedLesson.cancelledAt || linkedLesson.canceledAt || reservation?.cancelledAt,
+    canceledAt: linkedLesson.canceledAt || linkedLesson.cancelledAt || reservation?.canceledAt,
+    cancelledByRole:
+      linkedLesson.cancelledByRole || linkedLesson.canceledByRole || reservation?.cancelledByRole,
+    canceledByRole:
+      linkedLesson.canceledByRole || linkedLesson.cancelledByRole || reservation?.canceledByRole,
+    cancelledBy: linkedLesson.cancelledBy || linkedLesson.canceledBy || reservation?.cancelledBy,
+    canceledBy: linkedLesson.canceledBy || linkedLesson.cancelledBy || reservation?.canceledBy,
+    noDeduction: true,
+    isSeatReleased: true,
+    releasedForPrivateBooking: true,
+  }
+}
+
+function isStudentSeatReleasedPrivateReservation(row) {
+  const status = String(row?.status || '').trim().toLowerCase()
+  const cancellationType = String(row?.cancellationType || '').trim().toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    cancellationType === 'seat_released' &&
+    getPrivateReservationCancelActorLabel(row) === '학생 취소'
+  )
+}
+
 function getPrivateReservationHistoryStatusLabel(row, slot) {
+  if (isStudentSeatReleasedPrivateReservation(row)) return '학생 취소'
   const status = String(row?.status || '').trim().toLowerCase()
   if (status === 'cancelled' || status === 'canceled') {
     const reason = row?.cancellationReason || row?.cancelledReason || slot?.releaseReason
@@ -156,6 +264,63 @@ function formatPrivateReservationCancelledAt(row) {
   }).formatToParts(new Date(millis))
   const byType = new Map(parts.map((part) => [part.type, part.value]))
   return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
+}
+
+function getPrivateReservationHistoryPackage({
+  reservation,
+  linkedLesson,
+  studentPackages,
+  academyId,
+}) {
+  const directPackageId = String(
+    reservation?.packageId ||
+      reservation?.deductionPackageId ||
+      reservation?.studentPackageId ||
+      linkedLesson?.packageId ||
+      ''
+  ).trim()
+  const directPackage = getPackageById(studentPackages, directPackageId)
+  if (directPackage && String(directPackage.packageType || '').trim() === 'private') {
+    return directPackage
+  }
+
+  const studentId = String(
+    reservation?.studentId || reservation?.studentID || linkedLesson?.studentId || linkedLesson?.studentID || ''
+  ).trim()
+  if (!studentId) return null
+  return findPrivatePackageForTeacherContext({
+    studentPackages,
+    academyId,
+    studentId,
+    teacher:
+      reservation?.teacherName ||
+      reservation?.teacher ||
+      linkedLesson?.teacherName ||
+      linkedLesson?.teacher,
+  })
+}
+
+function getPrivateReservationHistoryDetailLabel(row, pkg) {
+  if (!getPrivateReservationCancelActorLabel(row)) return ''
+  if (!isStudentSeatReleasedPrivateReservation(row)) {
+    return [getPrivateReservationCancelActorLabel(row), formatPrivateReservationCancelledAt(row)]
+      .filter(Boolean)
+      .join(' · ')
+  }
+
+  const labels = []
+  const cancelledAt = formatPrivateReservationCancelledAt(row)
+  if (cancelledAt) labels.push(`취소 처리일: ${cancelledAt}`)
+  if (row?.noDeduction === true) labels.push('수강권 차감 없음')
+  if (pkg && String(pkg.packageType || '').trim() === 'private') {
+    const cancelUsageLabel = formatPrivatePackageCancelUsageSummary(pkg)
+    if (cancelUsageLabel) {
+      labels.push(
+        cancelUsageLabel.includes('취소 사용') ? cancelUsageLabel : `취소 사용 ${cancelUsageLabel}`
+      )
+    }
+  }
+  return labels.filter(Boolean).join(' · ')
 }
 
 function parseStorageDateToLocalDate(value) {
@@ -726,6 +891,18 @@ export default function CalendarSection(props) {
       ])
     )
   }, [privateLessonSlots])
+  const cancelledFixedPrivateLessonByReservationKey = useMemo(() => {
+    const byKey = new Map()
+    ;(Array.isArray(allPrivateLessons) ? allPrivateLessons : []).forEach((lesson) => {
+      if (!isStudentFixedPrivateSeatReleasedLesson(lesson)) return
+      const keys = new Set()
+      addCalendarPrivateReservationLinkKeys(keys, lesson)
+      keys.forEach((key) => {
+        if (!byKey.has(key)) byKey.set(key, lesson)
+      })
+    })
+    return byKey
+  }, [allPrivateLessons])
   const privateReservationHistoryRows = useMemo(() => {
     if (activeSection !== 'calendar' || !showOnlySelectedDate || !selectedDateString) return []
     return (Array.isArray(privateLessonReservations) ? privateLessonReservations : [])
@@ -744,29 +921,56 @@ export default function CalendarSection(props) {
           return null
         }
         const duration = Number(reservation.durationMinutes || slot?.durationMinutes || 0)
+        // Apply linked student seat_released cancellation before active reservations render as 예약 완료.
+        // The reservation record should show 학생 취소 / 취소 처리일 / 수강권 차감 없음.
+        // Link matching covers lessonId/fixedLessonId plus reservationId/slotId/date-time fallbacks.
+        const linkedCancelledLesson =
+          getCalendarPrivateReservationLinkKeys(reservation, slot)
+            .map((key) => cancelledFixedPrivateLessonByReservationKey.get(key) || null)
+            .find(Boolean) || null
+        const effectiveReservation = mergeCalendarReservationCancellationFromLesson(
+          reservation,
+          linkedCancelledLesson
+        )
+        const historyPackage = getPrivateReservationHistoryPackage({
+          reservation: effectiveReservation,
+          linkedLesson: linkedCancelledLesson,
+          studentPackages,
+          academyId: effectiveReservation.academyId || linkedCancelledLesson?.academyId,
+        })
+        const detailLabel = getPrivateReservationHistoryDetailLabel(
+          effectiveReservation,
+          historyPackage
+        )
         return {
-          id: String(reservation.id || reservation.reservationId || reservation.slotId || ''),
+          id: String(
+            effectiveReservation.id ||
+              effectiveReservation.reservationId ||
+              effectiveReservation.slotId ||
+              ''
+          ),
           date,
-          time: String(reservation.time || slot?.time || '').trim(),
+          time: String(effectiveReservation.time || slot?.time || '').trim(),
           studentName:
-            String(reservation.studentName || reservation.student || '').trim() ||
-            String(reservation.studentId || '').trim() ||
+            String(effectiveReservation.studentName || effectiveReservation.student || '').trim() ||
+            String(effectiveReservation.studentId || '').trim() ||
             '-',
           teacherName: resolveTeacherDisplayName({
-            teacherName: reservation.teacherName,
-            teacherDisplayName: reservation.teacherDisplayName,
-            displayName: reservation.displayName,
-            teacherKey: reservation.teacherKey,
-            teacher: reservation.teacher || slot?.teacher,
+            teacherName: effectiveReservation.teacherName,
+            teacherDisplayName: effectiveReservation.teacherDisplayName,
+            displayName: effectiveReservation.displayName,
+            teacherKey: effectiveReservation.teacherKey,
+            teacher: effectiveReservation.teacher || slot?.teacher,
           }),
           subject:
-            String(reservation.subject || '').trim() ||
+            String(effectiveReservation.subject || '').trim() ||
             String(slot?.subject || '').trim() ||
             '1:1 수업',
           durationLabel: Number.isFinite(duration) && duration > 0 ? `${duration}분` : '-',
-          statusLabel: getPrivateReservationHistoryStatusLabel(reservation, slot),
-          cancelActorLabel: getPrivateReservationCancelActorLabel(reservation),
-          cancelledAtLabel: formatPrivateReservationCancelledAt(reservation),
+          statusLabel: getPrivateReservationHistoryStatusLabel(effectiveReservation, slot),
+          cancelActorLabel: getPrivateReservationCancelActorLabel(effectiveReservation),
+          cancelledAtLabel: formatPrivateReservationCancelledAt(effectiveReservation),
+          detailLabel,
         }
       })
       .filter(Boolean)
@@ -777,11 +981,14 @@ export default function CalendarSection(props) {
       })
   }, [
     activeSection,
+    allPrivateLessons,
+    cancelledFixedPrivateLessonByReservationKey,
     privateLessonReservations,
     privateSlotById,
     selectedDateString,
     selectedCalendarTeacher,
     showOnlySelectedDate,
+    studentPackages,
   ])
   const showGroupSelectedDateControl = activeSection === 'groups'
   const selectedDateControlLabel = formatSelectedDateControlLabel(
@@ -1664,8 +1871,14 @@ export default function CalendarSection(props) {
                   <span>{row.subject || '-'}</span>
                   <span>{row.durationLabel || '-'}</span>
                   <span>{row.statusLabel || '-'}</span>
-                  <span style={{ opacity: row.cancelActorLabel || row.cancelledAtLabel ? 1 : 0.62 }}>
-                    {[row.cancelActorLabel, row.cancelledAtLabel].filter(Boolean).join(' · ') || '-'}
+                  <span
+                    style={{
+                      opacity: row.detailLabel || row.cancelActorLabel || row.cancelledAtLabel ? 1 : 0.62,
+                    }}
+                  >
+                    {row.detailLabel ||
+                      [row.cancelActorLabel, row.cancelledAtLabel].filter(Boolean).join(' · ') ||
+                      '-'}
                   </span>
                 </article>
               ))}

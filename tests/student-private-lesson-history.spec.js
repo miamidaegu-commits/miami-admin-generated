@@ -239,6 +239,10 @@ test('fixed private student cancellation history sync is represented in static c
     path.join(process.cwd(), 'src/features/dashboard/hooks/useCalendarSectionViewModel.js'),
     'utf8'
   );
+  const calendarSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/CalendarSection.jsx'),
+    'utf8'
+  );
   const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   const studentGridSlotsBlock =
     studentSource.match(/const sortedPrivateSlots = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?studentCancelledFixedPrivateLessonLinkKeys,\n  \]\)/)?.[0] ||
@@ -254,6 +258,9 @@ test('fixed private student cancellation history sync is represented in static c
     adminSource.match(/const studentHistoryRows = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?studentHistoryPrivateReservations,\n  \]\)/)?.[0] || '';
   const calendarPrivateReservationRowsBlock =
     calendarViewModelSource.match(/function buildCalendarPrivateReservationRows\([\s\S]*?\n}\n\nexport default function/)?.[0] ||
+    '';
+  const privateReservationHistoryRowsBlock =
+    calendarSectionSource.match(/const privateReservationHistoryRows = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?studentPackages,\n  \]\)/)?.[0] ||
     '';
 
   expect(functionsSource).toContain('function buildFixedPrivateReservationCancellationPatch');
@@ -321,12 +328,23 @@ test('fixed private student cancellation history sync is represented in static c
   expect(calendarPrivateReservationRowsBlock).toContain('cancelledFixedPrivateLessonKeys');
   expect(calendarPrivateReservationRowsBlock).toContain('getPrivateReservationLinkKeys(reservation)');
   expect(calendarPrivateReservationRowsBlock).toContain('if (linkedToCancelledFixedLesson) return false');
+  expect(calendarSectionSource).toContain('data-testid="private-reservation-history-section"');
+  expect(calendarSectionSource).toContain('1:1 예약 기록');
+  expect(calendarSectionSource).toContain('function isStudentFixedPrivateSeatReleasedLesson');
+  expect(calendarSectionSource).toContain('function mergeCalendarReservationCancellationFromLesson');
+  expect(calendarSectionSource).toContain('function getPrivateReservationHistoryDetailLabel');
+  expect(calendarSectionSource).toContain('formatPrivatePackageCancelUsageSummary');
+  expect(privateReservationHistoryRowsBlock).toContain('cancelledFixedPrivateLessonByReservationKey');
+  expect(privateReservationHistoryRowsBlock).toContain('mergeCalendarReservationCancellationFromLesson');
+  expect(privateReservationHistoryRowsBlock).toContain('getPrivateReservationHistoryStatusLabel(effectiveReservation');
+  expect(privateReservationHistoryRowsBlock).toContain('getPrivateReservationHistoryDetailLabel(');
+  expect(calendarSectionSource).toContain("if (isStudentSeatReleasedPrivateReservation(row)) return '학생 취소'");
+  expect(calendarSectionSource).toContain('취소 처리일: ${cancelledAt}');
+  expect(calendarSectionSource).toContain("'수강권 차감 없음'");
   expect(studentSource).toContain('고정수업 자리 공개됨');
   expect(studentSource).toContain('자리 공개됨');
   expect(studentSource).toContain('예약 완료');
-  expect(fs.readFileSync(path.join(process.cwd(), 'src/features/dashboard/sections/CalendarSection.jsx'), 'utf8')).toContain(
-    '수업 종료 후 처리'
-  );
+  expect(calendarSectionSource).toContain('수업 종료 후 처리');
 });
 
 async function createPrivateLesson({
