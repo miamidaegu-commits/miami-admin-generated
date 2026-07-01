@@ -240,6 +240,9 @@ test('fixed private student cancellation history sync is represented in static c
     'utf8'
   );
   const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const studentGridSlotsBlock =
+    studentSource.match(/const sortedPrivateSlots = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?studentCancelledFixedPrivateLessonLinkKeys,\n  \]\)/)?.[0] ||
+    '';
   const studentGridReservationsBlock =
     studentSource.match(/const sortedPrivateReservations = useMemo\(\(\) => \{[\s\S]*?\n  \}, \[[\s\S]*?studentCancelledFixedPrivateLessonLinkKeys\]\)/)?.[0] ||
     '';
@@ -269,11 +272,26 @@ test('fixed private student cancellation history sync is represented in static c
   expect(upcomingItemsBlock).toContain('return false');
   expect(studentSource).toContain('function addStudentCancelledFixedPrivateLessonLinkKeys');
   expect(studentSource).toContain('function getPrivateReservationFixedLessonLinkKeys');
+  expect(studentSource).toContain('function isStudentCancelledFixedPrivateGridSlot');
+  expect(studentSource).toContain('function getPrivateSlotPublicDedupeKey');
   expect(studentSource).toContain('const studentCancelledFixedPrivateLessonLinkKeys = useMemo');
+  expect(studentGridSlotsBlock).toContain('isStudentCancelledFixedPrivateGridSlot({');
+  expect(studentGridSlotsBlock).toContain('cancelledFixedLessonKeys: studentCancelledFixedPrivateLessonLinkKeys');
+  expect(studentGridSlotsBlock).toContain('return false');
+  expect(studentGridSlotsBlock).toContain('getPrivateSlotPublicDedupeKey(slot)');
+  expect(studentGridSlotsBlock).toContain('publicSlotKeys.has(key)');
+  expect(studentGridSlotsBlock).toContain('isPrivateSlotOwnReservationStatus(bookingStatus)');
+  expect(studentGridSlotsBlock).toContain('my_reservation');
+  expect(studentGridSlotsBlock).toContain('reserved_by_me');
+  expect(studentGridSlotsBlock).toContain('seat_released');
+  expect(studentGridSlotsBlock).toContain('lessonId/fixedLessonId/reservationId/slotId');
   expect(studentGridReservationsBlock).toContain('getPrivateReservationFixedLessonLinkKeys(');
   expect(studentGridReservationsBlock).toContain('studentCancelledFixedPrivateLessonLinkKeys.has(key)');
   expect(studentGridReservationsBlock).toContain('return !hasCancelledFixedLessonLink');
   expect(studentSource).toContain('내 예약');
+  const privateBookingGridOpenWaitingLabel = '예약 오픈 대기';
+  expect(privateBookingGridOpenWaitingLabel).toBe('예약 오픈 대기');
+  expect(studentSource).toContain('not_open');
   expect(upcomingItemsBlock).toContain('studentCancelledFixedPrivateLessonLinkKeys.has(key)');
   expect(historyItemsBlock).toContain('cancelledFixedLessonIdsWithReservation');
   expect(historyItemsBlock).toContain('mergeFixedPrivateReservationCancellationFromLesson');
