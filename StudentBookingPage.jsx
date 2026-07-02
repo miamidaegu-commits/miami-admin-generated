@@ -38,6 +38,7 @@ import {
   normalizePrivateTeacherKey,
 } from './src/features/private-booking/privateBookingModel.js'
 import {
+  addKstDays,
   buildMondaySaturdayWeekDays,
   formatKstDotDateTime,
   getBookingWindowForPrivateLesson,
@@ -2849,24 +2850,38 @@ export default function StudentBookingPage() {
   ])
 
   const privateCalendarWeeks = useMemo(() => {
-    const weekStarts = []
+    const weekStarts = new Set()
+    const addWeekStart = (value) => {
+      const weekStart = getMondayForKstDate(value)
+      if (weekStart) weekStarts.add(weekStart)
+    }
+
+    // 전체 시간 보기 keeps empty weeks visible; 예약 가능한 시간만 remains slot-driven.
+    // Next-week cards such as 예약 오픈 대기 still render from sortedPrivateSlots.
+    if (privateSlotViewMode === 'all') {
+      const currentWeekStart = getMondayForKstDate(getTodayStorageDateString())
+      addWeekStart(currentWeekStart)
+      addWeekStart(addKstDays(currentWeekStart, 7))
+    }
+
     sortedPrivateSlots.forEach((slot) => {
-      const weekStart = getMondayForKstDate(slot.date)
-      if (weekStart && !weekStarts.includes(weekStart)) weekStarts.push(weekStart)
+      addWeekStart(slot.date)
     })
-    weekStarts.sort((a, b) => a.localeCompare(b))
-    return weekStarts.map((weekStart) => {
-      const days = buildMondaySaturdayWeekDays(weekStart).map((date) => ({
-        date,
-        slots: sortedPrivateSlots.filter((slot) => String(slot.date || '').trim() === date),
-      }))
-      return {
-        weekStart,
-        weekEnd: days[days.length - 1]?.date || weekStart,
-        days,
-      }
-    })
-  }, [sortedPrivateSlots])
+
+    return Array.from(weekStarts)
+      .sort((a, b) => a.localeCompare(b))
+      .map((weekStart) => {
+        const days = buildMondaySaturdayWeekDays(weekStart).map((date) => ({
+          date,
+          slots: sortedPrivateSlots.filter((slot) => String(slot.date || '').trim() === date),
+        }))
+        return {
+          weekStart,
+          weekEnd: days[days.length - 1]?.date || weekStart,
+          days,
+        }
+      })
+  }, [privateSlotViewMode, sortedPrivateSlots])
 
   const sortedPrivateReservations = useMemo(() => {
     return privateReservations
@@ -4904,7 +4919,7 @@ export default function StudentBookingPage() {
               {privateSlotsError ? <p style={{ color: '#f4a7a7' }}>{privateSlotsError}</p> : null}
               {!privateAccessResolved || privateAccessLoading || privateSlotsLoading ? (
                 <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
-              ) : sortedPrivateSlots.length === 0 ? (
+              ) : privateCalendarWeeks.length === 0 ? (
                 <p style={{ opacity: 0.78, marginBottom: 0 }}>
                   지금 예약 가능한 1:1 수업 시간이 없습니다. 학원 안내 후 다시 확인해 주세요.
                 </p>

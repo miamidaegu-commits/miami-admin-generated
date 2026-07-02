@@ -1140,6 +1140,40 @@ test('student booking page passes private slot e2e override to callable actions'
   );
 });
 
+test('student private all-view calendar keeps current week and next week visible', async () => {
+  const pageSource = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  const functionSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const helperSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/booking/privateBookingWindow.js'),
+    'utf8'
+  );
+  const weekHelper = await import('../src/features/booking/privateBookingWindow.js');
+
+  const currentWeekStart = weekHelper.getMondayForKstDate('2026-07-02');
+  const currentWeekDays = weekHelper.buildMondaySaturdayWeekDays(currentWeekStart);
+  const nextWeekStart = weekHelper.addKstDays(currentWeekStart, 7);
+  const nextWeekDays = weekHelper.buildMondaySaturdayWeekDays(nextWeekStart);
+
+  expect(currentWeekStart).toBe('2026-06-29');
+  expect(currentWeekDays.at(-1)).toBe('2026-07-04');
+  expect(nextWeekStart).toBe('2026-07-06');
+  expect(nextWeekDays.at(-1)).toBe('2026-07-11');
+  expect(nextWeekDays).toContain('2026-07-07');
+
+  expect(pageSource).toContain('const privateCalendarWeeks = useMemo');
+  expect(pageSource).toContain('const weekStarts = new Set()');
+  expect(pageSource).toContain("privateSlotViewMode === 'all'");
+  expect(pageSource).toContain('const currentWeekStart = getMondayForKstDate(getTodayStorageDateString())');
+  expect(pageSource).toContain('addWeekStart(addKstDays(currentWeekStart, 7))');
+  expect(pageSource).toContain("if (privateSlotViewMode !== 'available') return true");
+  expect(pageSource).toContain('privateCalendarWeeks.length === 0');
+  expect(pageSource).toContain('가능한 시간이 없습니다');
+  expect(pageSource).toContain('전체 시간 보기');
+  expect(pageSource).toContain('예약 가능한 시간만');
+  expect(helperSource).toContain("not_open: '예약 오픈 대기'");
+  expect(functionSource).toContain('수강권 기간 밖');
+});
+
 test('student booking page wires mobile friendly private booking layout without changing locators', async () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
   expect(source).toContain("STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY = 'studentBookingPreferredViewMode'");
