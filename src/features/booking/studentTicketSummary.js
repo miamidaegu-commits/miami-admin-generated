@@ -17,6 +17,95 @@ function cleanText(value, fallback = '-') {
   return text || fallback
 }
 
+function isValidYmd(value) {
+  const match = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return false
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  )
+}
+
+function formatMillisAsKstYmd(millis) {
+  if (!Number.isFinite(millis)) return ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(millis))
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  const ymd = `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+  return isValidYmd(ymd) ? ymd : ''
+}
+
+export function formatPrivatePackageDateValueYmd(value) {
+  if (value == null || value === '') return ''
+
+  if (typeof value === 'string') {
+    const text = value.trim()
+    const ymd = text.match(/^(\d{4}-\d{2}-\d{2})/)?.[1] || ''
+    if (ymd && isValidYmd(ymd)) return ymd
+    const parsed = Date.parse(text)
+    return Number.isFinite(parsed) ? formatMillisAsKstYmd(parsed) : ''
+  }
+
+  if (value instanceof Date) {
+    return formatMillisAsKstYmd(value.getTime())
+  }
+
+  if (typeof value === 'number') {
+    return formatMillisAsKstYmd(value)
+  }
+
+  if (typeof value?.toMillis === 'function') {
+    return formatMillisAsKstYmd(value.toMillis())
+  }
+
+  if (typeof value?.toDate === 'function') {
+    return formatPrivatePackageDateValueYmd(value.toDate())
+  }
+
+  if (value?.seconds !== undefined) {
+    const seconds = Number(value.seconds)
+    const nanos = Number(value.nanoseconds || value.nanoSeconds || 0)
+    if (Number.isFinite(seconds)) {
+      const millis = seconds * 1000 + (Number.isFinite(nanos) ? nanos / 1e6 : 0)
+      return formatMillisAsKstYmd(millis)
+    }
+  }
+
+  return ''
+}
+
+function getPrivatePackageCoverageBounds(pkg) {
+  const startDate =
+    formatPrivatePackageDateValueYmd(pkg?.registrationStartDate) ||
+    formatPrivatePackageDateValueYmd(pkg?.startDate) ||
+    formatPrivatePackageDateValueYmd(pkg?.packageStartDate) ||
+    formatPrivatePackageDateValueYmd(pkg?.validFrom)
+  const endDate =
+    formatPrivatePackageDateValueYmd(pkg?.expiresAt) ||
+    formatPrivatePackageDateValueYmd(pkg?.endDate) ||
+    formatPrivatePackageDateValueYmd(pkg?.coverageEndDate) ||
+    formatPrivatePackageDateValueYmd(pkg?.packageEndDate) ||
+    formatPrivatePackageDateValueYmd(pkg?.validUntil)
+  return { startDate, endDate }
+}
+
+export function formatPrivatePackageCoveragePeriodSummary(pkg) {
+  const { startDate, endDate } = getPrivatePackageCoverageBounds(pkg)
+  if (startDate && endDate) return `수강기간 ${startDate} ~ ${endDate}`
+  if (startDate) return `수강기간 ${startDate} ~ 만료일 없음`
+  if (endDate) return `수강기간 시작일 미설정 ~ ${endDate}`
+  return '수강기간 미설정'
+}
+
 export function getPrivatePackageTeacherLabel(pkg) {
   return cleanText(pkg?.teacher || pkg?.teacherName, '선생님 미지정')
 }
@@ -163,6 +252,7 @@ export function buildStudentPrivateTicketSummaries({
       id: packageId || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}`,
       teacherLabel: getPrivatePackageTeacherLabel(pkg),
       usageText: formatPrivatePackageUsageSummary(pkg),
+      coverageText: formatPrivatePackageCoveragePeriodSummary(pkg),
       scheduleText: formatPrivateTicketScheduleSummary(balance),
       cancelUsageText: formatPrivatePackageCancelUsageSummary(pkg),
       registrationSummaryText: formatPrivatePackageRegistrationSummary(pkg),
@@ -238,6 +328,7 @@ export function buildStudentPrivateTicketSummariesFromCallablePackages(slots = [
       id: packageId,
       teacherLabel: row.teacherLabel,
       usageText: `총 ${totalCount}회 · 사용 ${used}회 · 남은 ${remaining}회`,
+      coverageText: formatPrivatePackageCoveragePeriodSummary(summary),
       scheduleText: formatPrivateTicketScheduleSummary(balanceLike),
       cancelUsageText: formatPrivatePackageCancelUsageSummary({
         used: summary.privateCancelUsedCount,
