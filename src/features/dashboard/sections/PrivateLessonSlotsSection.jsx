@@ -631,6 +631,37 @@ export default function PrivateLessonSlotsSection({
         </h2>
       </div>
 
+      {canManagePrivateSlots ? (
+        <>
+          <section
+            data-testid="private-time-management-teacher-time-group"
+            style={{
+              display: 'grid',
+              gap: 16,
+              padding: 18,
+              border: '1px solid #3b4152',
+              borderRadius: 14,
+              background: '#101722',
+              marginBottom: 22,
+            }}
+          >
+          <div>
+            <h3 style={{ margin: 0, fontSize: 18 }}>선생님 1:1 시간 만들기</h3>
+            <p
+              data-testid="private-time-management-teacher-time-copy"
+              style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13, lineHeight: 1.6 }}
+            >
+              선생님이 수업할 수 있는 시간을 등록하고 확인합니다.
+              <br />
+              학생 수강권 기간과 상관없이 미리 길게 등록할 수 있습니다.
+              <br />
+              학생은 자신의 수강권 기간 안에 있는 날짜만 예약할 수 있습니다.
+              <br />
+              학생 직접 예약 허용을 켠 시간만 학생 화면에 공개됩니다.
+              <br />
+              고정 수업 배정용은 학생 고정 배정에서 사용할 수 있는 시간입니다.
+            </p>
+          </div>
       {isAdmin || selectedPrivateBoardTeacherOption ? (
           <section
             data-testid="private-teacher-weekly-board-section"
@@ -880,8 +911,6 @@ export default function PrivateLessonSlotsSection({
           </section>
       ) : null}
 
-      {canManagePrivateSlots ? (
-        <>
           <section
             data-testid="private-weekly-slot-bulk-section"
             style={{
@@ -1700,6 +1729,498 @@ export default function PrivateLessonSlotsSection({
             )}
           </section>
 
+          <div
+            data-testid="private-dated-availability-helper"
+            style={{
+              display: 'grid',
+              gap: 6,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 8,
+              background: '#151922',
+              marginBottom: 12,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 16 }}>
+              날짜별 1:1 예약 가능 시간 (학생 직접 예약 허용)
+            </h3>
+            <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+              이 목록은 학생이 직접 예약할 수 있는 날짜별 시간입니다.
+              <br />
+                고정 1:1 배정에 사용하려면 선생님 주간 1:1 시간표로 등록하세요.
+            </p>
+          </div>
+
+          <form
+            onSubmit={(event) => {
+              event.preventDefault()
+              createPrivateSlot()
+            }}
+            data-testid="private-slot-form"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              background: '#151922',
+              marginBottom: 20,
+            }}
+          >
+          {isAdmin ? (
+            <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+              선생님
+              <select
+                value={privateSlotForm.teacher}
+                data-testid="private-slot-teacher-select"
+                onChange={(event) =>
+                  setPrivateSlotForm((prev) => ({ ...prev, teacher: event.target.value }))
+                }
+                aria-label="1:1 수업 선생님"
+              >
+                <option value="">선택</option>
+                {teacherSelectOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {privateSlotFormErrors.teacher ? (
+                <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.teacher}</span>
+              ) : null}
+            </label>
+          ) : null}
+          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+            날짜
+            <input
+              type="date"
+              value={privateSlotForm.date}
+              onChange={(event) =>
+                setPrivateSlotForm((prev) => ({ ...prev, date: event.target.value }))
+              }
+              aria-label="1:1 수업 날짜"
+            />
+            {privateSlotFormErrors.date ? (
+              <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.date}</span>
+            ) : null}
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+            시간
+            <input
+              type="time"
+              value={privateSlotForm.time}
+              onChange={(event) =>
+                setPrivateSlotForm((prev) => ({ ...prev, time: event.target.value }))
+              }
+              aria-label="1:1 수업 시작 시간"
+            />
+            {privateSlotFormErrors.time ? (
+              <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.time}</span>
+            ) : null}
+          </label>
+          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+            분
+            <input
+              type="number"
+              min="10"
+              max="240"
+              step="5"
+              value={privateSlotForm.durationMinutes}
+              onChange={(event) =>
+                setPrivateSlotForm((prev) => ({
+                  ...prev,
+                  durationMinutes: event.target.value,
+                }))
+              }
+              aria-label="1:1 수업 진행 시간"
+            />
+            {privateSlotFormErrors.durationMinutes ? (
+              <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.durationMinutes}</span>
+            ) : null}
+          </label>
+          <label
+            style={{
+              display: 'flex',
+              gap: 8,
+              alignItems: 'center',
+              fontSize: 13,
+              alignSelf: 'end',
+              minHeight: 40,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={privateSlotForm.repeatWeekly === true}
+              onChange={(event) =>
+                setPrivateSlotForm((prev) => ({
+                  ...prev,
+                  repeatWeekly: event.target.checked,
+                }))
+              }
+              aria-label="매주 반복 생성"
+            />
+            매주 반복
+          </label>
+          {privateSlotForm.repeatWeekly === true ? (
+            <>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                반복 주 수
+                <input
+                  type="number"
+                  min="1"
+                  max="52"
+                  step="1"
+                  value={privateSlotForm.repeatWeeks}
+                  onChange={(event) =>
+                    setPrivateSlotForm((prev) => ({
+                      ...prev,
+                      repeatWeeks: event.target.value,
+                    }))
+                  }
+                  aria-label="1:1 수업 반복 주 수"
+                />
+                {privateSlotFormErrors.repeatWeeks ? (
+                  <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.repeatWeeks}</span>
+                ) : null}
+              </label>
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                종료일
+                <input
+                  type="date"
+                  value={privateSlotForm.repeatEndDate}
+                  onChange={(event) =>
+                    setPrivateSlotForm((prev) => ({
+                      ...prev,
+                      repeatEndDate: event.target.value,
+                    }))
+                  }
+                  aria-label="1:1 수업 반복 종료일"
+                />
+                {privateSlotFormErrors.repeatEndDate ? (
+                  <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.repeatEndDate}</span>
+                ) : null}
+              </label>
+            </>
+          ) : null}
+          <div style={{ display: 'flex', alignItems: 'end' }}>
+            <button
+              type="submit"
+              disabled={isPrivateSlotSubmitting}
+              data-testid="private-slot-create-button"
+              style={{
+                padding: '10px 14px',
+                borderRadius: 10,
+                border: '1px solid #444',
+                background: '#1f2a44',
+                color: 'white',
+                cursor: isPrivateSlotSubmitting ? 'not-allowed' : 'pointer',
+                width: '100%',
+              }}
+            >
+              {isPrivateSlotSubmitting ? '생성 중...' : '수업 시간 추가'}
+            </button>
+          </div>
+          {privateSlotCreateResult ? (
+            <div
+              data-testid="private-slot-create-result"
+              style={{
+                gridColumn: '1 / -1',
+                color: '#b8f7c0',
+                fontSize: 13,
+              }}
+            >
+              생성 {privateSlotCreateResult.createdCount}개
+              {privateSlotCreateResult.skippedDuplicateCount > 0
+                ? ` · 중복 ${privateSlotCreateResult.skippedDuplicateCount}개 건너뜀`
+                : ''}
+            </div>
+          ) : null}
+          </form>
+      {isAdmin ? (
+        privateLessonSlotsLoading || privateLessonReservationsLoading ? (
+          <p>불러오는 중...</p>
+        ) : privateLessonSlots.length === 0 ? (
+          <p style={{ opacity: 0.8 }}>등록된 1:1 수업 시간이 없습니다.</p>
+        ) : (
+          <div className="activity-table">
+          <div
+            className="table-head"
+            style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
+          >
+            <span>일시</span>
+            <span>선생님</span>
+            <span>상태</span>
+            <span>예약 가능 대상</span>
+            <span>예약</span>
+            <span>작업</span>
+          </div>
+          {privateLessonSlots.map((slot) => {
+            const slotReservations = reservationsBySlotId.get(slot.id) || []
+            const activeReservation =
+              slotReservations.find((reservation) => reservation.status === 'active') || null
+            const busy = busyPrivateSlotActionId === slot.id
+            const closedByTeacher = isPrivateSlotClosedByTeacher(slot)
+            const eligibleStudentIds = normalizeEligibleStudentIds(slot.eligibleStudentIds)
+            const eligibleStudentLabels = eligibleStudentIds.map((studentId) => {
+              const student = privateStudentOptions.find((option) => option.id === studentId)
+              return student?.name || studentId
+            })
+            const isEditingEligibility = editingEligibilitySlotId === slot.id
+            return (
+              <div
+                key={slot.id}
+                className="table-row"
+                data-testid="private-slot-row"
+                data-slot-id={slot.id}
+                data-academy-id={slot.academyId || ''}
+                style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
+              >
+                <span>{[slot.date, slot.time].filter(Boolean).join(' ') || slot.id}</span>
+                <span>{getPrivateSlotTeacherDisplay(slot)}</span>
+                <span>
+                  {privateSlotStatusLabel(slot)}
+                  {isAdmin &&
+                  (slot.releasedFromFixed === true ||
+                    String(slot.slotType || '').trim() === 'released_fixed') ? (
+                    <span style={{ display: 'block', opacity: 0.75, fontSize: 12, marginTop: 4 }}>
+                      원래 학생: {slot.fixedStudentName || slot.fixedStudentId || '-'}
+                    </span>
+                  ) : null}
+                </span>
+                <span data-testid="private-slot-eligible-students">
+                  {eligibleStudentLabels.length > 0
+                    ? `특정 학생 제한: ${eligibleStudentLabels.join(', ')}`
+                    : '해당 선생님 개인 수강권 보유 학생'}
+                </span>
+                <span>
+                  {activeReservation
+                    ? `${activeReservation.studentName || activeReservation.studentId || '-'} · ${reservationStatusLabel(activeReservation.status)}`
+                    : '예약 없음'}
+                </span>
+                <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {isAdmin ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (isEditingEligibility) {
+                          setEditingEligibilitySlotId('')
+                          setEditingEligibilityStudentIds([])
+                        } else {
+                          setEditingEligibilitySlotId(slot.id)
+                          setEditingEligibilityStudentIds(eligibleStudentIds)
+                        }
+                      }}
+                      disabled={busy}
+                      data-testid="private-slot-edit-eligibility-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f2a44',
+                        color: 'white',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      대상 수정
+                    </button>
+                  ) : null}
+                  {closedByTeacher ? (
+                    <button
+                      type="button"
+                      onClick={() => reopenPrivateLessonSlot?.(slot)}
+                      disabled={busy}
+                      data-testid="private-slot-reopen-unavailable-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #456034',
+                        background: '#2d4d2d',
+                        color: 'white',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {busy ? '처리 중...' : '수업불가 해제'}
+                    </button>
+                  ) : null}
+                  {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
+                    <button
+                      type="button"
+                      onClick={() => cancelPrivateSlotOrReservation(slot, activeReservation)}
+                      disabled={busy}
+                      data-testid="private-slot-cancel-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #553333',
+                        background: '#4a2a2a',
+                        color: 'white',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {busy ? '처리 중...' : activeReservation ? '예약 취소 후 공개' : '수업 시간 취소'}
+                    </button>
+                  ) : null}
+                  {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        cancelPrivateSlotOrReservation(slot, activeReservation, {
+                          closeAsTeacherUnavailable: true,
+                        })
+                      }
+                      disabled={busy}
+                      data-testid="private-slot-close-unavailable-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #6b4d2a',
+                        background: '#4a351f',
+                        color: 'white',
+                        cursor: busy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {busy ? '처리 중...' : '수업불가로 닫기'}
+                    </button>
+                  ) : null}
+                </span>
+                {isEditingEligibility ? (
+                  <div
+                    style={{
+                      gridColumn: '1 / -1',
+                      display: 'grid',
+                      gap: 10,
+                      padding: 12,
+                      borderTop: '1px solid #2e3240',
+                    }}
+                    data-testid="private-slot-eligibility-editor"
+                  >
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                        gap: 8,
+                      }}
+                    >
+                      {privateStudentOptions.map((student) => (
+                        <label
+                          key={student.id}
+                          style={{
+                            display: 'flex',
+                            gap: 8,
+                            alignItems: 'center',
+                            fontSize: 13,
+                            minWidth: 0,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={editingEligibilityStudentIds.includes(student.id)}
+                            onChange={() =>
+                              setEditingEligibilityStudentIds((prev) =>
+                                toggleStudentId(prev, student.id)
+                              )
+                            }
+                            data-testid="private-slot-edit-eligible-student-checkbox"
+                          />
+                          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                            {student.name || student.id}
+                            {student.teacher ? ` · ${student.teacher}` : ''}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingEligibilitySlotId('')
+                          setEditingEligibilityStudentIds([])
+                        }}
+                        disabled={busy}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #444',
+                          background: '#252a35',
+                          color: 'white',
+                          cursor: busy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await updatePrivateSlotEligibility(slot, editingEligibilityStudentIds)
+                          setEditingEligibilitySlotId('')
+                          setEditingEligibilityStudentIds([])
+                        }}
+                        disabled={busy}
+                        data-testid="private-slot-save-eligibility-button"
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #456034',
+                          background: '#2d4d2d',
+                          color: 'white',
+                          cursor: busy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        저장
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+          </div>
+        )
+      ) : null}
+          </section>
+
+          <section
+            data-testid="private-time-management-student-assignment-group"
+            style={{
+              display: 'grid',
+              gap: 16,
+              padding: 18,
+              border: '1px solid #3b4152',
+              borderRadius: 14,
+              background: '#101722',
+              marginBottom: 22,
+            }}
+          >
+          <div>
+            <h3 style={{ margin: 0, fontSize: 18 }}>학생 고정 배정 / 연장</h3>
+            <p
+              data-testid="private-time-management-student-assignment-copy"
+              style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13, lineHeight: 1.6 }}
+            >
+              선생님 1:1 시간 중 특정 학생에게 고정 수업을 배정합니다.
+              <br />
+              수강권 기간 안 날짜만 배정 가능하며, 기간 밖 날짜는 제외됩니다.
+              <br />
+              수강권만 등록하면 수업 일정은 자동 생성되지 않습니다.
+              <br />
+              먼저 선생님 시간을 만든 뒤 학생에게 배정합니다.
+            </p>
+          </div>
+          <div
+            data-testid="private-time-extension-placeholder"
+            style={{
+              padding: 12,
+              border: '1px dashed #3b4152',
+              borderRadius: 8,
+              background: '#111722',
+              color: '#d7def0',
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            같은 시간으로 연장 기능은 추후 제공 예정입니다.
+          </div>
           <section
             data-testid="private-fixed-slot-assignment-section"
             style={{
@@ -2123,458 +2644,262 @@ export default function PrivateLessonSlotsSection({
             )}
           </section>
 
-          <div
-            data-testid="private-dated-availability-helper"
+          </section>
+        </>
+      ) : (
+        <>
+      {isAdmin || selectedPrivateBoardTeacherOption ? (
+          <section
+            data-testid="private-teacher-weekly-board-section"
             style={{
               display: 'grid',
-              gap: 6,
-              padding: 16,
-              border: '1px solid #2e3240',
-              borderRadius: 8,
-              background: '#151922',
-              marginBottom: 12,
-            }}
-          >
-            <h3 style={{ margin: 0, fontSize: 16 }}>
-              날짜별 1:1 예약 가능 시간 (학생 직접 예약 허용)
-            </h3>
-            <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
-              이 목록은 학생이 직접 예약할 수 있는 날짜별 시간입니다.
-              <br />
-                고정 1:1 배정에 사용하려면 선생님 주간 1:1 시간표로 등록하세요.
-            </p>
-          </div>
-
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              createPrivateSlot()
-            }}
-            data-testid="private-slot-form"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
               gap: 12,
               padding: 16,
-              border: '1px solid #2e3240',
-              borderRadius: 12,
-              background: '#151922',
+              border: '1px solid #3b4152',
+              borderRadius: 10,
+              background: '#141b28',
               marginBottom: 20,
             }}
           >
-          {isAdmin ? (
-            <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-              선생님
-              <select
-                value={privateSlotForm.teacher}
-                data-testid="private-slot-teacher-select"
-                onChange={(event) =>
-                  setPrivateSlotForm((prev) => ({ ...prev, teacher: event.target.value }))
-                }
-                aria-label="1:1 수업 선생님"
-              >
-                <option value="">선택</option>
-                {teacherSelectOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              {privateSlotFormErrors.teacher ? (
-                <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.teacher}</span>
-              ) : null}
-            </label>
-          ) : null}
-          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-            날짜
-            <input
-              type="date"
-              value={privateSlotForm.date}
-              onChange={(event) =>
-                setPrivateSlotForm((prev) => ({ ...prev, date: event.target.value }))
-              }
-              aria-label="1:1 수업 날짜"
-            />
-            {privateSlotFormErrors.date ? (
-              <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.date}</span>
-            ) : null}
-          </label>
-          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-            시간
-            <input
-              type="time"
-              value={privateSlotForm.time}
-              onChange={(event) =>
-                setPrivateSlotForm((prev) => ({ ...prev, time: event.target.value }))
-              }
-              aria-label="1:1 수업 시작 시간"
-            />
-            {privateSlotFormErrors.time ? (
-              <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.time}</span>
-            ) : null}
-          </label>
-          <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-            분
-            <input
-              type="number"
-              min="10"
-              max="240"
-              step="5"
-              value={privateSlotForm.durationMinutes}
-              onChange={(event) =>
-                setPrivateSlotForm((prev) => ({
-                  ...prev,
-                  durationMinutes: event.target.value,
-                }))
-              }
-              aria-label="1:1 수업 진행 시간"
-            />
-            {privateSlotFormErrors.durationMinutes ? (
-              <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.durationMinutes}</span>
-            ) : null}
-          </label>
-          <label
-            style={{
-              display: 'flex',
-              gap: 8,
-              alignItems: 'center',
-              fontSize: 13,
-              alignSelf: 'end',
-              minHeight: 40,
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={privateSlotForm.repeatWeekly === true}
-              onChange={(event) =>
-                setPrivateSlotForm((prev) => ({
-                  ...prev,
-                  repeatWeekly: event.target.checked,
-                }))
-              }
-              aria-label="매주 반복 생성"
-            />
-            매주 반복
-          </label>
-          {privateSlotForm.repeatWeekly === true ? (
-            <>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                반복 주 수
-                <input
-                  type="number"
-                  min="1"
-                  max="52"
-                  step="1"
-                  value={privateSlotForm.repeatWeeks}
-                  onChange={(event) =>
-                    setPrivateSlotForm((prev) => ({
-                      ...prev,
-                      repeatWeeks: event.target.value,
-                    }))
-                  }
-                  aria-label="1:1 수업 반복 주 수"
-                />
-                {privateSlotFormErrors.repeatWeeks ? (
-                  <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.repeatWeeks}</span>
-                ) : null}
-              </label>
-              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                종료일
-                <input
-                  type="date"
-                  value={privateSlotForm.repeatEndDate}
-                  onChange={(event) =>
-                    setPrivateSlotForm((prev) => ({
-                      ...prev,
-                      repeatEndDate: event.target.value,
-                    }))
-                  }
-                  aria-label="1:1 수업 반복 종료일"
-                />
-                {privateSlotFormErrors.repeatEndDate ? (
-                  <span style={{ color: '#f4a7a7' }}>{privateSlotFormErrors.repeatEndDate}</span>
-                ) : null}
-              </label>
-            </>
-          ) : null}
-          <div style={{ display: 'flex', alignItems: 'end' }}>
-            <button
-              type="submit"
-              disabled={isPrivateSlotSubmitting}
-              data-testid="private-slot-create-button"
-              style={{
-                padding: '10px 14px',
-                borderRadius: 10,
-                border: '1px solid #444',
-                background: '#1f2a44',
-                color: 'white',
-                cursor: isPrivateSlotSubmitting ? 'not-allowed' : 'pointer',
-                width: '100%',
-              }}
-            >
-              {isPrivateSlotSubmitting ? '생성 중...' : '수업 시간 추가'}
-            </button>
-          </div>
-          {privateSlotCreateResult ? (
-            <div
-              data-testid="private-slot-create-result"
-              style={{
-                gridColumn: '1 / -1',
-                color: '#b8f7c0',
-                fontSize: 13,
-              }}
-            >
-              생성 {privateSlotCreateResult.createdCount}개
-              {privateSlotCreateResult.skippedDuplicateCount > 0
-                ? ` · 중복 ${privateSlotCreateResult.skippedDuplicateCount}개 건너뜀`
-                : ''}
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16 }}>
+                {showPrivateBoardActions ? '선생님별 1:1 시간표/예약판' : '내 주간 1:1 시간표'}
+              </h3>
+              <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+                {showPrivateBoardActions
+                  ? '학생 예약 화면처럼 선생님별 주간 슬롯을 보고, 예약된 수업과 빈 주간 슬롯을 해당 날짜만 수업불가로 닫거나 다시 엽니다.'
+                  : '본인에게 연결된 주간 1:1 시간표와 예약 상태를 읽기 전용으로 확인합니다.'}
+              </p>
             </div>
-          ) : null}
-          </form>
-        </>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(180px, 1fr) minmax(220px, auto)',
+                gap: 12,
+                alignItems: 'end',
+              }}
+            >
+              <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                선생님
+                <select
+                  value={selectedPrivateBoardTeacherOption?.value || ''}
+                  data-testid="private-teacher-weekly-board-teacher-select"
+                  onChange={(event) => setPrivateBoardTeacherValue(event.target.value)}
+                  disabled={!showPrivateBoardActions}
+                >
+                  {teacherSelectOptions.length === 0 ? (
+                    <option value="">선생님 없음</option>
+                  ) : null}
+                  {teacherSelectOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  data-testid="private-teacher-weekly-board-prev-week-button"
+                  onClick={() => setPrivateBoardWeekStart((prev) => addDaysToYmd(prev, -7))}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                  }}
+                >
+                  이전 주
+                </button>
+                <button
+                  type="button"
+                  data-testid="private-teacher-weekly-board-this-week-button"
+                  onClick={() => setPrivateBoardWeekStart(getMondayYmd())}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                  }}
+                >
+                  이번 주
+                </button>
+                <button
+                  type="button"
+                  data-testid="private-teacher-weekly-board-next-week-button"
+                  onClick={() => setPrivateBoardWeekStart((prev) => addDaysToYmd(prev, 7))}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#252a35',
+                    color: 'white',
+                  }}
+                >
+                  다음 주
+                </button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', opacity: 0.72, fontSize: 12 }}>
+              {privateBoardWeekDays.map((day) => (
+                <span key={day.date}>{day.label}</span>
+              ))}
+            </div>
+            {privateLessonSlotsLoading || privateLessonReservationsLoading || privateAvailabilityTemplatesLoading ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>예약판을 불러오는 중...</p>
+            ) : !selectedPrivateBoardTeacherOption ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>선생님을 먼저 등록해 주세요.</p>
+            ) : privateBoardRows.length === 0 ? (
+              <p style={{ margin: 0, opacity: 0.76 }}>해당 주에 표시할 1:1 시간이 없습니다.</p>
+            ) : (
+              <div className="activity-table">
+                <div
+                  className="table-head"
+                  style={{ gridTemplateColumns: privateBoardGridTemplate }}
+                >
+                  <span>날짜</span>
+                  <span>시간</span>
+                  <span>상태</span>
+                  <span>내용</span>
+                  <span>출처</span>
+                  {showPrivateBoardActions ? <span>작업</span> : null}
+                </div>
+                {privateBoardRows.map((row) => {
+                  const statusLabel = getPrivateBoardSlotStatusLabel(row)
+                  const isClosed = statusLabel === '선생님 수업불가로 닫힘'
+                  const busy =
+                    (row.slot?.id && busyPrivateSlotActionId === row.slot.id) ||
+                    (row.fixedLesson?.id && busyFixedPrivateLessonCancelId === row.fixedLesson.id)
+                  const sourceLabel =
+                    row.source === 'fixedLesson'
+                      ? '고정 수업'
+                      : row.source === 'template'
+                        ? '주간 시간표'
+                        : row.slot?.isGeneratedFromTemplate
+                          ? '주간 시간표'
+                          : '날짜별 슬롯'
+                  return (
+                    <div
+                      key={row.key}
+                      className="table-row"
+                      data-testid="private-teacher-weekly-board-slot-row"
+                      data-slot-id={row.slot?.id || ''}
+                      data-lesson-id={row.fixedLesson?.id || ''}
+                      data-date={row.date || ''}
+                      data-time={row.time || ''}
+                      style={{ gridTemplateColumns: privateBoardGridTemplate }}
+                    >
+                      <span>{row.date || '-'}</span>
+                      <span>{row.time || '-'}</span>
+                      <span data-testid="private-teacher-weekly-board-slot-status">
+                        {statusLabel}
+                      </span>
+                      <span>{getPrivateBoardSlotDetail(row)}</span>
+                      <span>
+                        {sourceLabel}
+                        {row.slot?.openForStudentBooking === true ? (
+                          <span style={{ display: 'block', marginTop: 4, opacity: 0.7, fontSize: 12 }}>
+                            학생 직접 예약 허용
+                          </span>
+                        ) : null}
+                      </span>
+                      {showPrivateBoardActions ? (
+                        <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {isClosed ? (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              data-testid="private-teacher-weekly-board-reopen-button"
+                              onClick={() => reopenPrivateLessonSlot?.(row.slot)}
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #456034',
+                                background: '#2d4d2d',
+                                color: 'white',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {busy ? '처리 중...' : '수업불가 해제'}
+                            </button>
+                          ) : (
+                            <>
+                              {row.reservation || row.fixedLesson ? (
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  data-testid="private-teacher-weekly-board-release-button"
+                                  onClick={() => {
+                                    if (row.fixedLesson) {
+                                      onCancelFixedPrivateLesson?.(row.fixedLesson, 'seat_released')
+                                      return
+                                    }
+                                    cancelPrivateSlotOrReservation(row.slot, row.reservation)
+                                  }}
+                                  style={{
+                                    padding: '6px 10px',
+                                    borderRadius: 8,
+                                    border: '1px solid #553333',
+                                    background: '#4a2a2a',
+                                    color: 'white',
+                                    cursor: busy ? 'not-allowed' : 'pointer',
+                                  }}
+                                >
+                                  {busy ? '처리 중...' : '예약 취소 후 공개'}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                disabled={busy}
+                                data-testid="private-teacher-weekly-board-close-button"
+                                onClick={() => {
+                                  if (row.reservation) {
+                                    cancelPrivateSlotOrReservation(row.slot, row.reservation, {
+                                      closeAsTeacherUnavailable: true,
+                                    })
+                                    return
+                                  }
+                                  if (row.fixedLesson) {
+                                    onCancelFixedPrivateLesson?.(row.fixedLesson, 'lesson_cancelled', {
+                                      reason: 'teacher_unavailable',
+                                    })
+                                    return
+                                  }
+                                  closePrivateLessonSlot?.(row.slot)
+                                }}
+                                style={{
+                                  padding: '6px 10px',
+                                  borderRadius: 8,
+                                  border: '1px solid #6b4d2a',
+                                  background: '#4a351f',
+                                  color: 'white',
+                                  cursor: busy ? 'not-allowed' : 'pointer',
+                                }}
+                              >
+                                {busy ? '처리 중...' : '수업불가로 닫기'}
+                              </button>
+                            </>
+                          )}
+                        </span>
+                      ) : null}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <p style={{ margin: 0, opacity: 0.65, fontSize: 12 }}>
+              {showPrivateBoardActions
+                ? '“예약 취소 후 공개”는 다른 학생에게 열고, “수업불가로 닫기”는 누구에게도 열지 않습니다. “수업불가 해제”는 해당 날짜/시간만 다시 예약 가능하게 엽니다.'
+                : '이 화면은 읽기 전용입니다. 수업불가 닫기/해제와 예약 조작은 관리자만 할 수 있습니다.'}
+            </p>
+          </section>
       ) : null}
 
-      {isAdmin ? (
-        privateLessonSlotsLoading || privateLessonReservationsLoading ? (
-          <p>불러오는 중...</p>
-        ) : privateLessonSlots.length === 0 ? (
-          <p style={{ opacity: 0.8 }}>등록된 1:1 수업 시간이 없습니다.</p>
-        ) : (
-          <div className="activity-table">
-          <div
-            className="table-head"
-            style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
-          >
-            <span>일시</span>
-            <span>선생님</span>
-            <span>상태</span>
-            <span>예약 가능 대상</span>
-            <span>예약</span>
-            <span>작업</span>
-          </div>
-          {privateLessonSlots.map((slot) => {
-            const slotReservations = reservationsBySlotId.get(slot.id) || []
-            const activeReservation =
-              slotReservations.find((reservation) => reservation.status === 'active') || null
-            const busy = busyPrivateSlotActionId === slot.id
-            const closedByTeacher = isPrivateSlotClosedByTeacher(slot)
-            const eligibleStudentIds = normalizeEligibleStudentIds(slot.eligibleStudentIds)
-            const eligibleStudentLabels = eligibleStudentIds.map((studentId) => {
-              const student = privateStudentOptions.find((option) => option.id === studentId)
-              return student?.name || studentId
-            })
-            const isEditingEligibility = editingEligibilitySlotId === slot.id
-            return (
-              <div
-                key={slot.id}
-                className="table-row"
-                data-testid="private-slot-row"
-                data-slot-id={slot.id}
-                data-academy-id={slot.academyId || ''}
-                style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
-              >
-                <span>{[slot.date, slot.time].filter(Boolean).join(' ') || slot.id}</span>
-                <span>{getPrivateSlotTeacherDisplay(slot)}</span>
-                <span>
-                  {privateSlotStatusLabel(slot)}
-                  {isAdmin &&
-                  (slot.releasedFromFixed === true ||
-                    String(slot.slotType || '').trim() === 'released_fixed') ? (
-                    <span style={{ display: 'block', opacity: 0.75, fontSize: 12, marginTop: 4 }}>
-                      원래 학생: {slot.fixedStudentName || slot.fixedStudentId || '-'}
-                    </span>
-                  ) : null}
-                </span>
-                <span data-testid="private-slot-eligible-students">
-                  {eligibleStudentLabels.length > 0
-                    ? `특정 학생 제한: ${eligibleStudentLabels.join(', ')}`
-                    : '해당 선생님 개인 수강권 보유 학생'}
-                </span>
-                <span>
-                  {activeReservation
-                    ? `${activeReservation.studentName || activeReservation.studentId || '-'} · ${reservationStatusLabel(activeReservation.status)}`
-                    : '예약 없음'}
-                </span>
-                <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {isAdmin ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (isEditingEligibility) {
-                          setEditingEligibilitySlotId('')
-                          setEditingEligibilityStudentIds([])
-                        } else {
-                          setEditingEligibilitySlotId(slot.id)
-                          setEditingEligibilityStudentIds(eligibleStudentIds)
-                        }
-                      }}
-                      disabled={busy}
-                      data-testid="private-slot-edit-eligibility-button"
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #444',
-                        background: '#1f2a44',
-                        color: 'white',
-                        cursor: busy ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      대상 수정
-                    </button>
-                  ) : null}
-                  {closedByTeacher ? (
-                    <button
-                      type="button"
-                      onClick={() => reopenPrivateLessonSlot?.(slot)}
-                      disabled={busy}
-                      data-testid="private-slot-reopen-unavailable-button"
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #456034',
-                        background: '#2d4d2d',
-                        color: 'white',
-                        cursor: busy ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {busy ? '처리 중...' : '수업불가 해제'}
-                    </button>
-                  ) : null}
-                  {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
-                    <button
-                      type="button"
-                      onClick={() => cancelPrivateSlotOrReservation(slot, activeReservation)}
-                      disabled={busy}
-                      data-testid="private-slot-cancel-button"
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #553333',
-                        background: '#4a2a2a',
-                        color: 'white',
-                        cursor: busy ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {busy ? '처리 중...' : activeReservation ? '예약 취소 후 공개' : '수업 시간 취소'}
-                    </button>
-                  ) : null}
-                  {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
-                    <button
-                      type="button"
-                      onClick={() =>
-                        cancelPrivateSlotOrReservation(slot, activeReservation, {
-                          closeAsTeacherUnavailable: true,
-                        })
-                      }
-                      disabled={busy}
-                      data-testid="private-slot-close-unavailable-button"
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: '1px solid #6b4d2a',
-                        background: '#4a351f',
-                        color: 'white',
-                        cursor: busy ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {busy ? '처리 중...' : '수업불가로 닫기'}
-                    </button>
-                  ) : null}
-                </span>
-                {isEditingEligibility ? (
-                  <div
-                    style={{
-                      gridColumn: '1 / -1',
-                      display: 'grid',
-                      gap: 10,
-                      padding: 12,
-                      borderTop: '1px solid #2e3240',
-                    }}
-                    data-testid="private-slot-eligibility-editor"
-                  >
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                        gap: 8,
-                      }}
-                    >
-                      {privateStudentOptions.map((student) => (
-                        <label
-                          key={student.id}
-                          style={{
-                            display: 'flex',
-                            gap: 8,
-                            alignItems: 'center',
-                            fontSize: 13,
-                            minWidth: 0,
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={editingEligibilityStudentIds.includes(student.id)}
-                            onChange={() =>
-                              setEditingEligibilityStudentIds((prev) =>
-                                toggleStudentId(prev, student.id)
-                              )
-                            }
-                            data-testid="private-slot-edit-eligible-student-checkbox"
-                          />
-                          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                            {student.name || student.id}
-                            {student.teacher ? ` · ${student.teacher}` : ''}
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingEligibilitySlotId('')
-                          setEditingEligibilityStudentIds([])
-                        }}
-                        disabled={busy}
-                        style={{
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          border: '1px solid #444',
-                          background: '#252a35',
-                          color: 'white',
-                          cursor: busy ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        취소
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          await updatePrivateSlotEligibility(slot, editingEligibilityStudentIds)
-                          setEditingEligibilitySlotId('')
-                          setEditingEligibilityStudentIds([])
-                        }}
-                        disabled={busy}
-                        data-testid="private-slot-save-eligibility-button"
-                        style={{
-                          padding: '6px 10px',
-                          borderRadius: 8,
-                          border: '1px solid #456034',
-                          background: '#2d4d2d',
-                          color: 'white',
-                          cursor: busy ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        저장
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            )
-          })}
-          </div>
-        )
-      ) : null}
+        </>
+      )}
+
       {fixedPrivateLessonAction ? (
         <FixedPrivateLessonActionModal
           lesson={fixedPrivateLessonAction}
