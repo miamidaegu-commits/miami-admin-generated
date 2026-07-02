@@ -548,13 +548,26 @@ test('fixed private assignment source requires package and links generated docum
     path.join(process.cwd(), 'src/features/dashboard/ticketBalanceHelpers.js'),
     'utf8'
   );
+  const privateSlotsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
   const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   const rulesSource = fs.readFileSync(path.join(process.cwd(), 'firestore.rules'), 'utf8');
 
   expect(dashboardSource).toContain("if (!packageId) errors.packageId = '개인 수강권을 선택해 주세요.'");
   expect(dashboardSource).toContain('function buildPrivateFixedSlotAssignmentPreviewState');
   expect(dashboardSource).toContain("const missingPackage = plan.errors?.packageId === '개인 수강권을 선택해 주세요.'");
-  expect(dashboardSource).toContain('const previewDates = missingPackage ? [] : plan.dates');
+  expect(dashboardSource).toContain('function getPrivatePackageDateBounds');
+  expect(dashboardSource).toContain('function isPrivatePackageValidForDate');
+  expect(dashboardSource).toContain('assignableDates');
+  expect(dashboardSource).toContain('excludedDates');
+  expect(dashboardSource).toContain("reason: '수강권 기간 밖'");
+  expect(dashboardSource).toContain("reason: '남은 횟수 부족'");
+  expect(dashboardSource).toContain("'수강권 기간 안에 배정 가능한 날짜가 없습니다.'");
+  expect(dashboardSource).toContain('const previewDates = missingPackage ? [] : plan.assignableDates || plan.dates');
+  expect(dashboardSource).toMatch(/plan\.assignableDates\.forEach\(\(date\) => \{[\s\S]*batch\.set\(slotRef/);
+  expect(dashboardSource).not.toContain('plan.dates.forEach((date) => {\n        const start = parseLegacyLessonToDate');
   expect(dashboardSource).toContain("const lessonRef = doc(collection(db, 'lessons'))");
   expect(dashboardSource).toContain('lessonId: lessonRef.id');
   expect(dashboardSource).toContain('fixedLessonId: lessonRef.id');
@@ -580,6 +593,9 @@ test('fixed private assignment source requires package and links generated docum
   expect(studentBookingSource).toContain('source?.fixedPrivatePackageId');
   expect(studentBookingSource).toContain('missingFixedLessonId: !lessonId');
   expect(studentBookingSource).toContain('fixedCancelNode || (');
+  expect(privateSlotsSectionSource).toContain('private-fixed-assignment-excluded-date');
+  expect(privateSlotsSectionSource).toContain('배정 가능');
+  expect(privateSlotsSectionSource).toContain('제외');
   expect(functionsSource).toContain('const countedFixedLessonIds = new Set();');
   expect(functionsSource).toContain('reservation.lessonId || reservation.fixedLessonId');
   expect(functionsSource).toContain('countedFixedLessonIds.has(linkedLessonId)');

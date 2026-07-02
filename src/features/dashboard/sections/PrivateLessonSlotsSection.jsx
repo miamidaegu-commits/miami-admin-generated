@@ -1974,6 +1974,12 @@ export default function PrivateLessonSlotsSection({
                       ? `배정 완료 ${privateFixedSlotAssignmentPreview.requestedCount}회`
                       : `배정 예정 ${privateFixedSlotAssignmentPreview.requestedCount}회`}
                   </strong>
+                  {Number(privateFixedSlotAssignmentPreview.excludedCount || 0) > 0 ? (
+                    <div style={{ opacity: 0.78 }}>
+                      배정 가능 {privateFixedSlotAssignmentPreview.requestedCount}회 · 제외{' '}
+                      {privateFixedSlotAssignmentPreview.excludedCount}회
+                    </div>
+                  ) : null}
                   {privateFixedSlotAssignmentPreview.mode === 'created' &&
                   Number.isFinite(Number(privateFixedSlotAssignmentPreview.availableAssignmentCount)) ? (
                     <div>
@@ -1992,6 +1998,21 @@ export default function PrivateLessonSlotsSection({
                           {date} {privateAvailabilityTemplates.find(
                             (row) => row.id === privateFixedSlotAssignmentForm.templateId
                           )?.time || ''}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {privateFixedSlotAssignmentPreview.excludedDates?.length > 0 ? (
+                    <div style={{ display: 'grid', gap: 4, color: '#f5c17a' }}>
+                      <strong style={{ color: '#f5c17a' }}>
+                        제외 {privateFixedSlotAssignmentPreview.excludedDates.length}회
+                      </strong>
+                      {privateFixedSlotAssignmentPreview.excludedDates.map((row) => (
+                        <span
+                          key={`${row.date}-${row.time}-${row.reason}`}
+                          data-testid="private-fixed-assignment-excluded-date"
+                        >
+                          {row.date} {row.time || ''} · {row.reason || '제외'}
                         </span>
                       ))}
                     </div>
