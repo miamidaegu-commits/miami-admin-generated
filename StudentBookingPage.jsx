@@ -4186,6 +4186,14 @@ export default function StudentBookingPage() {
 	                          <span data-testid="student-private-ticket-summary-usage">
 	                            {summary.teacherLabel} · {summary.usageText}
 	                          </span>
+	                          {summary.coverageText ? (
+	                            <span
+	                              data-testid="student-private-ticket-summary-coverage"
+	                              style={{ opacity: 0.86, fontSize: 14 }}
+	                            >
+	                              {summary.coverageText}
+	                            </span>
+	                          ) : null}
 	                          {summary.scheduleText ? (
 	                            <span
 	                              data-testid="student-private-ticket-summary-schedule"

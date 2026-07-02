@@ -5,6 +5,7 @@ import {
   buildStudentPrivateTicketSummaries,
   buildStudentPrivateTicketSummariesFromCallablePackages,
   buildStudentTicketSummaryViewModel,
+  formatPrivatePackageCoveragePeriodSummary,
   formatGroupTicketScheduleSummary,
   formatPrivateTicketScheduleSummary,
   formatStudentBookingIdentityLine,
@@ -61,6 +62,8 @@ test('student ticket summary helpers match admin-style private labels', () => {
     usedCount: 0,
     remainingCount: 4,
     status: 'active',
+    registrationStartDate: '2026-07-02',
+    expiresAt: '2026-08-31',
     topUpCount: 1,
     registrationHistory: [
       { registrationRound: 1, deltaCount: 4 },
@@ -105,7 +108,9 @@ test('student ticket summary helpers match admin-style private labels', () => {
   expect(beforeBooking[0]).toMatchObject({
     teacherLabel: 'don1',
     usageText: '총 4회 · 사용 0회 · 남은 4회',
+    coverageText: '수강기간 2026-07-02 ~ 2026-08-31',
     scheduleText: '주간 배정 3회 · 직접 예약 가능 1회',
+    cancelUsageText: '취소 사용 0/1회',
     registrationSummaryText: '등록 내역: 1회차 +4회, 5개월 할인 등록 +5회',
   });
 
@@ -126,6 +131,52 @@ test('student ticket summary helpers match admin-style private labels', () => {
     studentId: STUDENT_ID,
   });
   expect(afterCancel[0].scheduleText).toBe('주간 배정 3회 · 직접 예약 가능 1회');
+});
+
+test('private ticket summary formats package coverage period', () => {
+  expect(formatPrivatePackageCoveragePeriodSummary({
+    registrationStartDate: '2026-07-02',
+    expiresAt: '2026-08-31',
+  })).toBe('수강기간 2026-07-02 ~ 2026-08-31');
+
+  expect(formatPrivatePackageCoveragePeriodSummary({
+    startDate: '2026-06-20',
+  })).toBe('수강기간 2026-06-20 ~ 만료일 없음');
+
+  expect(formatPrivatePackageCoveragePeriodSummary({
+    endDate: '2026-08-31',
+  })).toBe('수강기간 시작일 미설정 ~ 2026-08-31');
+
+  expect(formatPrivatePackageCoveragePeriodSummary({
+    registrationStartDate: 'not-a-date',
+    expiresAt: 'also-not-a-date',
+  })).toBe('수강기간 미설정');
+
+  const timestampLike = { seconds: Date.UTC(2026, 6, 2, 0, 0, 0) / 1000 };
+  expect(formatPrivatePackageCoveragePeriodSummary({
+    packageStartDate: timestampLike,
+    validUntil: { toDate: () => new Date(Date.UTC(2026, 7, 31, 0, 0, 0)) },
+  })).toBe('수강기간 2026-07-02 ~ 2026-08-31');
+
+  const fallback = buildStudentPrivateTicketSummariesFromCallablePackages([
+    {
+      id: 'slot-for-package',
+      teacher: 'don1',
+      packageId: 'private-ticket-fallback',
+      packageSummary: {
+        packageId: 'private-ticket-fallback',
+        totalCount: 4,
+        usedDeductedCount: 1,
+        remainingCount: 3,
+        makeupAvailableCount: 3,
+        registrationStartDate: '2026-06-20',
+      },
+    },
+  ]);
+  expect(fallback[0]).toMatchObject({
+    coverageText: '수강기간 2026-06-20 ~ 만료일 없음',
+    usageText: '총 4회 · 사용 1회 · 남은 3회',
+  });
 });
 
 test('general unused private package shows direct booking availability', () => {
@@ -272,10 +323,21 @@ test('student booking identity line prefers linked student name', () => {
 
 test('student booking page wiring exposes identity and ticket summary without billing fields', () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
+  const privateSlotTestSource = fs.readFileSync(
+    path.join(process.cwd(), 'tests/private-slot-reservation-intended.spec.js'),
+    'utf8'
+  );
   expect(source).toContain('data-testid="student-booking-identity-line"');
   expect(source).toContain('data-testid="student-ticket-summary-section"');
   expect(source).toContain('data-testid="student-private-ticket-summary-schedule"');
+  expect(source).toContain('data-testid="student-private-ticket-summary-coverage"');
+  expect(source).toContain('coverageText');
   expect(source).toContain('사용 가능한 개인 수강권이 없습니다.');
   expect(source).toContain('buildStudentTicketSummaryViewModel');
+  expect(source).toContain('privateCalendarWeeks');
+  expect(source).toContain('전체 시간 보기');
+  expect(source).toContain('예약 오픈 대기');
+  expect(privateSlotTestSource).toContain('package_date_out_of_range');
+  expect(privateSlotTestSource).toContain('수강권 기간 밖');
   expect(source).not.toMatch(/amountPaid|결제 금액|payment|billingAmount/i);
 });
