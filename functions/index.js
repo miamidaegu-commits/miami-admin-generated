@@ -1159,12 +1159,64 @@ function getPrivatePackageTeacherKeys(pkg) {
   return getPrivateTeacherScopeKeys(pkg);
 }
 
+function formatPrivatePackageDateValueYmd(value) {
+  if (!value) return "";
+  if (typeof value === "string") {
+    const match = value.trim().match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : "";
+  }
+  let date = null;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value.toDate === "function") {
+    date = value.toDate();
+  } else if (typeof value.seconds === "number") {
+    date = new Date(value.seconds * 1000);
+  } else if (typeof value === "number" && Number.isFinite(value)) {
+    date = new Date(value);
+  }
+  if (!date || Number.isNaN(date.getTime())) return "";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+}
+
+function getPrivatePackageDateBounds(pkg) {
+  const startDate =
+    formatPrivatePackageDateValueYmd(pkg && pkg.registrationStartDate) ||
+    formatPrivatePackageDateValueYmd(pkg && pkg.startDate) ||
+    formatPrivatePackageDateValueYmd(pkg && pkg.packageStartDate) ||
+    formatPrivatePackageDateValueYmd(pkg && pkg.validFrom);
+  const endDate =
+    formatPrivatePackageDateValueYmd(pkg && pkg.expiresAt) ||
+    formatPrivatePackageDateValueYmd(pkg && pkg.endDate) ||
+    formatPrivatePackageDateValueYmd(pkg && pkg.coverageEndDate) ||
+    formatPrivatePackageDateValueYmd(pkg && pkg.packageEndDate) ||
+    formatPrivatePackageDateValueYmd(pkg && pkg.validUntil);
+  return {startDate, endDate};
+}
+
+function privatePackageCoversDate(pkg, date) {
+  const ymd = normalizeId(date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;
+  const {startDate, endDate} = getPrivatePackageDateBounds(pkg);
+  if (startDate && ymd < startDate) return false;
+  if (endDate && ymd > endDate) return false;
+  return true;
+}
+
 function getPrivatePackageRejectReason({
   pkg,
   academyId,
   studentId,
   teacherKey,
   teacherKeys = [],
+  lessonDate = "",
 }) {
   if (!pkg) return "package_missing";
   if (normalizeId(pkg.academyId) !== academyId) return "academy_mismatch";
@@ -1198,16 +1250,23 @@ function getPrivatePackageRejectReason({
   if (!requestedTeacherKeys.some((key) => packageTeacherKeys.includes(key))) {
     return "teacher_mismatch";
   }
+  if (lessonDate && !privatePackageCoversDate(pkg, lessonDate)) {
+    return "package_date_out_of_range";
+  }
   return null;
 }
 
 function isPrivatePackageForReservation(pkg, reservation, slot) {
+  const lessonDate = normalizeId(
+      (reservation && reservation.date) || (slot && slot.date),
+  );
   return !getPrivatePackageRejectReason({
     pkg,
     academyId: normalizeId(reservation && reservation.academyId),
     studentId: normalizeId(reservation && reservation.studentId),
     teacherKey: getReservationTeacherKey(reservation, slot),
     teacherKeys: getReservationTeacherKeys(reservation, slot),
+    lessonDate,
   });
 }
 
@@ -1228,6 +1287,7 @@ async function findActivePrivatePackageForTeacher({
   teacherKey,
   teacherKeys = [],
   candidatePackageIds = [],
+  lessonDate = "",
 }) {
   const normalizedAcademyId = normalizeId(academyId);
   const normalizedStudentId = normalizeId(studentId);
@@ -1258,6 +1318,7 @@ async function findActivePrivatePackageForTeacher({
       studentId: normalizedStudentId,
       teacherKey: normalizedTeacherKey,
       teacherKeys: normalizedTeacherKeys,
+      lessonDate,
     });
     checkedPackages.push({
       packageId,
@@ -1294,6 +1355,7 @@ async function findActivePrivatePackageForTeacher({
           studentId: normalizedStudentId,
           teacherKey: normalizedTeacherKey,
           teacherKeys: normalizedTeacherKeys,
+          lessonDate,
         });
         checkedPackages.push({
           packageId: docSnap.id,
@@ -2011,6 +2073,7 @@ function getPrivateBookingStatusLabel(status) {
   if (status === "blocked") return "수업 있음";
   if (status === "no_ticket") return "수업 있음";
   if (status === "no_package") return "수강권 등록 필요";
+  if (status === "package_date_out_of_range") return "수강권 기간 밖";
   if (status === "no_makeup") return "보충 가능 0회";
   return "예약 중지";
 }
@@ -2046,6 +2109,9 @@ function computePrivateBookingStatus({
   if (!packageSummary) {
     return "no_ticket";
   }
+  if (packageSummary.dateOutOfRange === true) {
+    return "package_date_out_of_range";
+  }
   if (Number(packageSummary.remainingCount || 0) <= 0) return "no_makeup";
   const window = computePrivateBookingWindow(slot);
   if (!window || window.weekday < 1 || window.weekday > 6) return "closed";
@@ -2059,6 +2125,7 @@ function getPrivateSlotStudentVisibleStatus(bookingStatus) {
   if (bookingStatus === "available") return "available";
   if (
     bookingStatus === "no_ticket" ||
+    bookingStatus === "package_date_out_of_range" ||
     bookingStatus === "no_makeup" ||
     bookingStatus === "busy" ||
     bookingStatus === "reserved" ||
@@ -2071,6 +2138,9 @@ function getPrivateSlotStudentVisibleStatus(bookingStatus) {
 
 function getPrivateSlotDisabledReason(bookingStatus) {
   if (bookingStatus === "no_ticket") return "no_ticket";
+  if (bookingStatus === "package_date_out_of_range") {
+    return "package_date_out_of_range";
+  }
   if (bookingStatus === "no_makeup") return "no_makeup";
   if (bookingStatus === "closed") return "booking_window_closed";
   if (bookingStatus === "not_open") return "booking_window_not_open";
@@ -3369,6 +3439,7 @@ function sanitizePrivateSlotAvailabilityRow({
     noDeductionReleasedCount:
       Number(packageSummary.noDeductionReleasedCount || 0),
     makeupAvailableCount: packageRemainingCount,
+    dateOutOfRange: packageSummary.dateOutOfRange === true,
   } : null;
 
   return {
@@ -3587,6 +3658,7 @@ function buildBusyPrivateScheduleRow({
       noDeductionReleasedCount:
         Number(packageSummary.noDeductionReleasedCount || 0),
       makeupAvailableCount: packageRemainingCount,
+      dateOutOfRange: packageSummary.dateOutOfRange === true,
     } : null,
     slotType: "busy",
     availabilityTemplateId: "",
@@ -3625,7 +3697,10 @@ function addBusyRowsFromQuerySnapshot({
     if (!isPrivateScheduleDateInRange(date, rangeStart, rangeEnd)) return;
     if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) return;
     const teacherKey = getPrivateScheduleTeacherKey(row);
-    const packageSummary = packageByTeacherKey.get(teacherKey);
+    const packageSummary = getSlotTeacherPackageSummary(
+        row,
+        packageByTeacherKey,
+    );
     if (!teacherKey) return;
     const teacherUid = normalizeId(row.teacherUid || row.teacherUID);
     const key = getPrivateSlotConflictKey({
@@ -3962,6 +4037,7 @@ function getPackageSummaryByTeacherKey(packageSnap, {
     const summary = {
       packageId: docSnap.id,
       teacherKey,
+      packageData,
       remainingCount: safeRemainingCount,
       makeupAvailableCount: safeRemainingCount,
       totalCount: usage.totalCount,
@@ -3981,10 +4057,16 @@ function getPackageSummaryByTeacherKey(packageSnap, {
     };
     const packageTeacherKeys = getPrivatePackageTeacherKeys(packageData);
     packageTeacherKeys.forEach((packageTeacherKey) => {
-      const existing = byTeacherKey.get(packageTeacherKey);
-      if (!existing || safeRemainingCount > existing.remainingCount) {
-        byTeacherKey.set(packageTeacherKey, summary);
-      }
+      const summaries = byTeacherKey.get(packageTeacherKey) || [];
+      summaries.push(summary);
+      summaries.sort((a, b) => {
+        const br = Number(b.remainingCount || 0);
+        const ar = Number(a.remainingCount || 0);
+        if (ar !== br) return br - ar;
+        return String(a.packageId || "")
+            .localeCompare(String(b.packageId || ""));
+      });
+      byTeacherKey.set(packageTeacherKey, summaries);
     });
     if (safeRemainingCount > 0) activePackageIds.push(docSnap.id);
   });
@@ -3992,10 +4074,32 @@ function getPackageSummaryByTeacherKey(packageSnap, {
 }
 
 function getSlotTeacherPackageSummary(slot, packageByTeacherKey) {
+  const slotDate = normalizeId(slot && slot.date);
   const teacherKeys = getPrivateTeacherScopeKeys(slot);
   for (const teacherKey of teacherKeys) {
-    const summary = packageByTeacherKey.get(teacherKey);
+    const summaries = packageByTeacherKey.get(teacherKey);
+    const list = Array.isArray(summaries) ?
+      summaries :
+      summaries ? [summaries] : [];
+    const summary = list.find((candidate) => {
+      if (!candidate) return false;
+      return !slotDate ||
+        privatePackageCoversDate(candidate.packageData, slotDate);
+    });
     if (summary) return summary;
+    const fallbackSummary =
+      list.find((candidate) =>
+        candidate && Number(candidate.remainingCount || 0) > 0,
+      ) ||
+      list.find(Boolean);
+    if (slotDate && fallbackSummary) {
+      return {
+        ...fallbackSummary,
+        remainingCount: 0,
+        makeupAvailableCount: 0,
+        dateOutOfRange: true,
+      };
+    }
   }
   return null;
 }
@@ -4435,7 +4539,6 @@ function buildTemplateSlots({
     const teacher = normalizeTeacherKey(
         data.teacherKey || data.teacher || data.teacherUid,
     );
-    const packageSummary = packageByTeacherKey.get(teacher);
     if (!teacher || !teacherKeys.includes(teacher)) return;
     const weekday = Number(data.weekday);
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) return;
@@ -4465,6 +4568,10 @@ function buildTemplateSlots({
         openForStudentBooking: true,
         useForFixedAssignment: data.useForFixedAssignment !== false,
       };
+      const packageSummary = getSlotTeacherPackageSummary(
+          slot,
+          packageByTeacherKey,
+      );
       const conflictKey = getPrivateSlotConflictKey(slot);
       if (conflictKeys.has(conflictKey)) return;
       if (slotOverlapsBusySchedule(slot, conflictSchedules)) return;
@@ -5313,6 +5420,8 @@ exports.listPrivateLessonSlotAvailability = onCall(
           })),
           nowMillis,
         });
+        // Slot-date package matching keeps 수강권 기간 밖 dates unbookable
+        // even when another private package has remainingCount.
         const packageTeacherKeys = Array.from(
             packageSummary.byTeacherKey.keys(),
         );
@@ -5883,7 +5992,10 @@ exports.reservePrivateLessonSlot = onCall(
             teacherKey,
             teacherKeys,
             candidatePackageIds: summary && summary.activePackageIds,
+            lessonDate: date,
           });
+          // The transaction repeats the slot lessonDate guard so 수강권 기간 밖
+          // dates cannot reserve against an unrelated remainingCount.
           const hasAccess = hasSlotAccess({slot, summary, slotId, studentId});
 
           if (hasExplicitSlotEligibility(slot) && !hasAccess) {

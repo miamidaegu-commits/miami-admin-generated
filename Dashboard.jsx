@@ -386,6 +386,58 @@ function isYmd(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim())
 }
 
+function formatDateValueAsPrivatePackageYmd(value) {
+  if (!value) return ''
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})/)
+    return match ? match[1] : ''
+  }
+  const date =
+    value instanceof Date
+      ? value
+      : typeof value.toDate === 'function'
+        ? value.toDate()
+        : typeof value.seconds === 'number'
+          ? new Date(value.seconds * 1000)
+          : typeof value === 'number' && Number.isFinite(value)
+            ? new Date(value)
+            : null
+  if (!date || Number.isNaN(date.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function getPrivatePackageDateBounds(pkg) {
+  const startDate =
+    formatDateValueAsPrivatePackageYmd(pkg?.registrationStartDate) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.startDate) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.packageStartDate) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.validFrom)
+  const endDate =
+    formatDateValueAsPrivatePackageYmd(pkg?.expiresAt) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.endDate) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.coverageEndDate) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.packageEndDate) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.validUntil)
+  return { startDate, endDate }
+}
+
+function isPrivatePackageValidForDate(pkg, date) {
+  const ymd = String(date || '').trim()
+  if (!isYmd(ymd)) return false
+  const { startDate, endDate } = getPrivatePackageDateBounds(pkg)
+  if (startDate && ymd < startDate) return false
+  if (endDate && ymd > endDate) return false
+  return true
+}
+
 function addDaysToStorageYmd(ymd, days) {
   const base = parseYmdToLocalDate(ymd)
   if (!base) return ''
@@ -4979,6 +5031,8 @@ export default function Dashboard() {
     if (packageId && !selectedPackage) errors.packageId = '선택한 개인 수강권을 찾을 수 없습니다'
 
     let dates = []
+    let assignableDates = []
+    const excludedDates = []
     if (template && isYmd(startDate) && isYmd(endDate) && endDate >= startDate) {
       dates = generatePrivateFixedAssignmentDates({ template, startDate, endDate })
       if (dates.length === 0) errors.dateRange = '기간 안에 생성할 수업이 없습니다'
@@ -5020,6 +5074,20 @@ export default function Dashboard() {
         errors.packageId = '선택한 학생/선생님에 연결된 개인 수강권을 선택해 주세요'
       }
 
+      const candidateTime = String(template.time || '').trim()
+      const packageDateEligibleDates = []
+      dates.forEach((date) => {
+        if (!isPrivatePackageValidForDate(selectedPackage, date)) {
+          excludedDates.push({
+            date,
+            time: candidateTime,
+            reason: '수강권 기간 밖',
+          })
+          return
+        }
+        packageDateEligibleDates.push(date)
+      })
+
       const blockingRows = [
         ...lessons.map((lesson) => ({ source: 'lessons', row: lesson })),
         ...privateLessonReservations.map((reservation) => ({
@@ -5029,12 +5097,13 @@ export default function Dashboard() {
         ...privateLessonSlots.map((slot) => ({ source: 'privateLessonSlots', row: slot })),
       ].filter(({ row }) => isTeacherBlockingScheduleRow(row))
 
-      dates.forEach((date) => {
+      const conflictFreeDates = []
+      packageDateEligibleDates.forEach((date) => {
         const candidate = {
           academyId: scopedAcademyId,
           ...teacherFields,
           date,
-          time: String(template.time || '').trim(),
+          time: candidateTime,
           durationMinutes: safeDurationMinutes,
         }
         const duplicate = lessons.find((lesson) => {
@@ -5047,7 +5116,15 @@ export default function Dashboard() {
             privateSchedulesOverlap(candidate, lesson)
           )
         })
-        if (duplicate) duplicateDetails.push(`${date} ${candidate.time}`)
+        if (duplicate) {
+          duplicateDetails.push(`${date} ${candidate.time}`)
+          excludedDates.push({
+            date,
+            time: candidate.time,
+            reason: '이미 같은 학생에게 같은 날짜/시간 고정수업이 있습니다',
+          })
+          return
+        }
 
         const conflict = blockingRows.find(({ row }) => privateSchedulesOverlap(candidate, row))
         if (conflict) {
@@ -5057,7 +5134,14 @@ export default function Dashboard() {
             source: conflict.source,
             id: conflict.row.id || '',
           })
+          excludedDates.push({
+            date,
+            time: candidate.time,
+            reason: '이미 같은 시간에 수업이 있습니다',
+          })
+          return
         }
+        conflictFreeDates.push(date)
       })
 
       balance = computePrivateTeacherPackageUsage({
@@ -5073,24 +5157,22 @@ export default function Dashboard() {
         teacherId: teacherFields.teacherId,
       })
       availableAssignmentCount = Math.max(0, Number(balance.makeupAvailableCount) || 0)
-      if (dates.length > 0 && availableAssignmentCount < dates.length) {
-        const fixedAllocated = Math.max(0, Number(balance.futureFixedAllocatedCount) || 0)
-        const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
-        const capacityMessage = [
-          '수강권 새 배정 가능 횟수가 부족합니다.',
-          `필요 ${dates.length}회 · 새 배정 가능 ${availableAssignmentCount}회`,
-          `현재 고정 예정 ${fixedAllocated}회 · 예약 ${activeReservations}회`,
-        ].join(' ')
-        blockingReasons.push(capacityMessage)
-        errors.packageId = capacityMessage
+      assignableDates = conflictFreeDates.slice(0, availableAssignmentCount)
+      conflictFreeDates.slice(availableAssignmentCount).forEach((date) => {
+        excludedDates.push({
+          date,
+          time: candidateTime,
+          reason: '남은 횟수 부족',
+        })
+      })
+      if (
+        dates.length > 0 &&
+        assignableDates.length === 0 &&
+        !errors.packageId &&
+        !errors.dateRange
+      ) {
+        errors.packageId = '수강권 기간 안에 배정 가능한 날짜가 없습니다.'
       }
-    }
-
-    if (conflictDetails.length > 0) {
-      blockingReasons.push('이미 같은 시간에 수업이 있습니다')
-    }
-    if (duplicateDetails.length > 0) {
-      blockingReasons.push('이미 같은 학생에게 같은 날짜/시간 고정수업이 있습니다')
     }
 
     const uniqueBlockingReasons = Array.from(new Set(blockingReasons))
@@ -5103,7 +5185,10 @@ export default function Dashboard() {
       student,
       selectedPackage,
       subject,
-      dates,
+      dates: assignableDates,
+      requestedDates: dates,
+      assignableDates,
+      excludedDates,
       durationMinutes: safeDurationMinutes,
       blockingReasons: uniqueBlockingReasons,
       conflictDetails,
@@ -5117,15 +5202,19 @@ export default function Dashboard() {
     const errorReasons = Object.values(plan.errors || {}).filter(Boolean)
     const blockingReasons = Array.from(new Set([...errorReasons, ...plan.blockingReasons]))
     const missingPackage = plan.errors?.packageId === '개인 수강권을 선택해 주세요.'
-    const previewDates = missingPackage ? [] : plan.dates
+    const previewDates = missingPackage ? [] : plan.assignableDates || plan.dates
     return {
       mode,
       dates: previewDates,
+      assignableDates: previewDates,
+      excludedDates: plan.excludedDates || [],
       blockingReasons,
       conflictDetails: plan.conflictDetails,
       duplicateDetails: plan.duplicateDetails,
       availableAssignmentCount: plan.availableAssignmentCount,
       requestedCount: previewDates.length,
+      candidateCount: (plan.requestedDates || []).length,
+      excludedCount: (plan.excludedDates || []).length,
       canCreate: plan.valid,
     }
   }
@@ -5160,7 +5249,7 @@ export default function Dashboard() {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       const studentName = String(plan.student?.name || plan.student?.studentName || '').trim() || '-'
       const packageTitle = String(plan.selectedPackage?.title || '고정 1:1').trim()
-      plan.dates.forEach((date) => {
+      plan.assignableDates.forEach((date) => {
         const start = parseLegacyLessonToDate(date, plan.template.time)
         const slotRef = doc(collection(db, 'privateLessonSlots'))
         const lessonRef = doc(collection(db, 'lessons'))
@@ -5296,12 +5385,16 @@ export default function Dashboard() {
       await batch.commit()
       setPrivateFixedSlotAssignmentPreview({
         mode: 'created',
-        dates: plan.dates,
+        dates: plan.assignableDates,
+        assignableDates: plan.assignableDates,
+        excludedDates: plan.excludedDates,
         blockingReasons: [],
         conflictDetails: [],
         duplicateDetails: [],
-        availableAssignmentCount: plan.availableAssignmentCount - plan.dates.length,
-        requestedCount: plan.dates.length,
+        availableAssignmentCount: plan.availableAssignmentCount - plan.assignableDates.length,
+        requestedCount: plan.assignableDates.length,
+        candidateCount: (plan.requestedDates || []).length,
+        excludedCount: (plan.excludedDates || []).length,
         canCreate: false,
       })
       setPrivateFixedSlotAssignmentForm((prev) => ({

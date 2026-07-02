@@ -1472,6 +1472,25 @@ test('weekly private booking templates are wired through UI, rules, and callable
 test('released fixed private slot behavior is wired server-side', async () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   expect(source).toContain('function findActivePrivatePackageForTeacher');
+  expect(source).toContain('function formatPrivatePackageDateValueYmd');
+  expect(source).toContain('function getPrivatePackageDateBounds');
+  expect(source).toContain('function privatePackageCoversDate');
+  expect(source).toContain('registrationStartDate');
+  expect(source).toContain('packageStartDate');
+  expect(source).toContain('validFrom');
+  expect(source).toContain('expiresAt');
+  expect(source).toContain('coverageEndDate');
+  expect(source).toContain('packageEndDate');
+  expect(source).toContain('validUntil');
+  expect(source).toContain('package_date_out_of_range');
+  expect(source).toContain('수강권 기간 밖');
+  expect(source).toMatch(/getPrivatePackageRejectReason\(\{[\s\S]*lessonDate = ""/);
+  expect(source).toMatch(/privatePackageCoversDate\(pkg, lessonDate\)/);
+  expect(source).toMatch(/findUsablePrivatePackageForTeacher\(\{[\s\S]*lessonDate: date/);
+  expect(source).toMatch(
+    /function getSlotTeacherPackageSummary[\s\S]*privatePackageCoversDate\(candidate\.packageData, slotDate\)/
+  );
+  expect(source).toMatch(/dateOutOfRange: true/);
   expect(source).toMatch(/Number\(pkg\.remainingCount \|\| 0\)[\s\S]*<= 0/);
   expect(source).toMatch(
     /function getReservationTeacherKey[\s\S]*getPrivateTeacherScopeKeys\(reservation, slot\)/
