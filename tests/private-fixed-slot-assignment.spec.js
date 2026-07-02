@@ -596,6 +596,29 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-fixed-assignment-excluded-date');
   expect(privateSlotsSectionSource).toContain('배정 가능');
   expect(privateSlotsSectionSource).toContain('제외');
+  expect(privateSlotsSectionSource).toContain('private-time-management-teacher-time-group');
+  expect(privateSlotsSectionSource).toContain('private-time-management-student-assignment-group');
+  expect(privateSlotsSectionSource).toContain('private-time-management-teacher-time-copy');
+  expect(privateSlotsSectionSource).toContain('private-time-management-student-assignment-copy');
+  expect(privateSlotsSectionSource).toContain('private-time-extension-placeholder');
+  expect(privateSlotsSectionSource).toContain('선생님 1:1 시간 만들기');
+  expect(privateSlotsSectionSource).toContain('학생 고정 배정 / 연장');
+  expect(privateSlotsSectionSource).toContain('선생님별 1:1 시간표/예약판');
+  expect(privateSlotsSectionSource).toContain('주간 1:1 시간표 일괄 등록');
+  expect(privateSlotsSectionSource).toContain('선생님 주간 1:1 시간표');
+  expect(privateSlotsSectionSource).toContain('주간 시간에 학생 고정 배정');
+  expect(privateSlotsSectionSource).toContain('날짜별 1:1 예약 가능 시간');
+  expect(privateSlotsSectionSource).toContain('기존 고정 1:1 수업 일정');
+  expect(privateSlotsSectionSource).toContain('학생 수강권 기간과 상관없이 미리 길게 등록');
+  expect(privateSlotsSectionSource).toContain('학생 직접 예약 허용');
+  expect(privateSlotsSectionSource).toContain('수강권 기간 안 날짜만 배정');
+  expect(privateSlotsSectionSource).toContain('같은 시간으로 연장 기능은 추후 제공 예정');
+  expect(privateSlotsSectionSource).toMatch(
+    /private-time-management-teacher-time-group[\s\S]*private-weekly-slot-bulk-section[\s\S]*private-availability-template-section[\s\S]*private-dated-availability-helper[\s\S]*private-slot-create-button/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /private-time-management-student-assignment-group[\s\S]*private-fixed-slot-assignment-section[\s\S]*private-fixed-lessons-management-section/
+  );
   expect(functionsSource).toContain('const countedFixedLessonIds = new Set();');
   expect(functionsSource).toContain('reservation.lessonId || reservation.fixedLessonId');
   expect(functionsSource).toContain('countedFixedLessonIds.has(linkedLessonId)');
