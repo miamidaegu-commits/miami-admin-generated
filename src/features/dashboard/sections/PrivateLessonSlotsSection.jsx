@@ -441,6 +441,17 @@ export default function PrivateLessonSlotsSection({
   previewPrivateFixedSlotAssignment,
   createPrivateFixedSlotAssignment,
   busyPrivateFixedSlotAssignment,
+  fixedPrivateRenewalSeedLessonId = '',
+  setFixedPrivateRenewalSeedLessonId,
+  fixedPrivateRenewalPackageId = '',
+  setFixedPrivateRenewalPackageId,
+  fixedPrivateRenewalStartDate = '',
+  setFixedPrivateRenewalStartDate,
+  fixedPrivateRenewalEndDate = '',
+  setFixedPrivateRenewalEndDate,
+  fixedPrivateRenewalSeedOptions = [],
+  fixedPrivateRenewalPackageOptions = [],
+  fixedPrivateRenewalPlan = null,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -2609,8 +2620,10 @@ export default function PrivateLessonSlotsSection({
           <div
             data-testid="private-time-extension-placeholder"
             style={{
-              padding: 12,
-              border: '1px dashed #3b4152',
+              display: 'grid',
+              gap: 12,
+              padding: 16,
+              border: '1px solid #2e3240',
               borderRadius: 8,
               background: '#111722',
               color: '#d7def0',
@@ -2618,7 +2631,147 @@ export default function PrivateLessonSlotsSection({
               lineHeight: 1.5,
             }}
           >
-            같은 시간으로 연장 기능은 추후 제공 예정입니다.
+            <section
+              data-testid="private-fixed-renewal-preview-section"
+              style={{ display: 'grid', gap: 12 }}
+            >
+              <div>
+                <h3 style={{ margin: 0, fontSize: 16 }}>같은 시간으로 연장 미리보기</h3>
+                <p
+                  data-testid="private-fixed-renewal-preview-only-note"
+                  style={{ margin: '6px 0 0 0', opacity: 0.76, fontSize: 12, lineHeight: 1.6 }}
+                >
+                  기존 고정 수업을 기준으로 같은 선생님, 같은 요일, 같은 시간에 연장 가능한
+                  날짜를 확인합니다.
+                  <br />
+                  이번 단계에서는 저장하지 않고 미리보기만 제공합니다.
+                  <br />
+                  실제 연장 저장 기능은 다음 단계에서 제공됩니다.
+                </p>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  기존 고정 수업 선택
+                  <select
+                    value={fixedPrivateRenewalSeedLessonId}
+                    data-testid="private-fixed-renewal-seed-select"
+                    onChange={(event) => {
+                      setFixedPrivateRenewalSeedLessonId?.(event.target.value)
+                      setFixedPrivateRenewalPackageId?.('')
+                    }}
+                  >
+                    <option value="">선택</option>
+                    {fixedPrivateRenewalSeedOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {fixedPrivateRenewalSeedOptions.length === 0 ? (
+                    <span style={{ opacity: 0.72 }}>연장 기준으로 사용할 기존 고정 수업이 없습니다.</span>
+                  ) : null}
+                </label>
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  새 개인 수강권
+                  <select
+                    value={fixedPrivateRenewalPackageId}
+                    data-testid="private-fixed-renewal-package-select"
+                    disabled={!fixedPrivateRenewalSeedLessonId}
+                    onChange={(event) => setFixedPrivateRenewalPackageId?.(event.target.value)}
+                  >
+                    <option value="">선택</option>
+                    {fixedPrivateRenewalPackageOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {fixedPrivateRenewalSeedLessonId &&
+                  fixedPrivateRenewalPackageOptions.length === 0 ? (
+                    <span style={{ color: '#f4a7a7' }}>
+                      선택한 고정 수업의 학생/선생님에 맞는 개인 수강권이 없습니다.
+                    </span>
+                  ) : null}
+                </label>
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  연장 시작일
+                  <input
+                    type="date"
+                    value={fixedPrivateRenewalStartDate}
+                    data-testid="private-fixed-renewal-start-date"
+                    onChange={(event) => setFixedPrivateRenewalStartDate?.(event.target.value)}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  연장 종료일
+                  <input
+                    type="date"
+                    value={fixedPrivateRenewalEndDate}
+                    data-testid="private-fixed-renewal-end-date"
+                    onChange={(event) => setFixedPrivateRenewalEndDate?.(event.target.value)}
+                  />
+                </label>
+              </div>
+              <div
+                data-testid="private-fixed-renewal-plan"
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  border: '1px solid #293246',
+                  borderRadius: 8,
+                  padding: 12,
+                  background: '#151922',
+                }}
+              >
+                <strong>연장 미리보기 결과</strong>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <span>
+                    연장 예정 {Number(fixedPrivateRenewalPlan?.candidateCount || 0)}회
+                  </span>
+                  <span data-testid="private-fixed-renewal-assignable-count">
+                    연장 가능 {Number(fixedPrivateRenewalPlan?.assignableCount || 0)}회
+                  </span>
+                  <span data-testid="private-fixed-renewal-excluded-count">
+                    제외 {Number(fixedPrivateRenewalPlan?.excludedCount || 0)}회
+                  </span>
+                </div>
+                {fixedPrivateRenewalPlan?.blockingReasons?.length > 0 ? (
+                  <div style={{ color: '#f5c17a', display: 'grid', gap: 4 }}>
+                    {fixedPrivateRenewalPlan.blockingReasons.map((reason) => (
+                      <span key={reason}>{reason}</span>
+                    ))}
+                  </div>
+                ) : null}
+                {fixedPrivateRenewalPlan?.assignableDates?.length > 0 ? (
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <strong>가능 날짜</strong>
+                    {fixedPrivateRenewalPlan.assignableDates.map((date) => (
+                      <span key={date}>{date}</span>
+                    ))}
+                  </div>
+                ) : null}
+                {fixedPrivateRenewalPlan?.excludedDates?.length > 0 ? (
+                  <div style={{ display: 'grid', gap: 4, color: '#f5c17a' }}>
+                    <strong>제외 날짜</strong>
+                    {fixedPrivateRenewalPlan.excludedDates.map((row) => (
+                      <span key={`${row.date}-${row.time}-${row.reason}`}>
+                        {row.date} {row.time || ''} · {row.reason || '제외'}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+                <span style={{ opacity: 0.72 }}>
+                  저장하지 않고 미리보기만 제공되며, 실제 고정 수업 생성은 다음 단계에서
+                  진행합니다.
+                </span>
+              </div>
+            </section>
           </div>
           <section
             data-testid="private-fixed-slot-assignment-section"

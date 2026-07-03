@@ -469,6 +469,123 @@ function generatePrivateFixedAssignmentDates({ template, startDate, endDate }) {
   return dates
 }
 
+const PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일']
+
+function getPrivateFixedLessonStudentId(lesson) {
+  return String(lesson?.studentId || lesson?.studentID || '').trim()
+}
+
+function getPrivateFixedLessonDate(lesson) {
+  return String(lesson?.date || lesson?.lessonDate || lesson?.scheduleDate || '').trim()
+}
+
+function getPrivateFixedLessonTime(lesson) {
+  return String(lesson?.time || lesson?.startTime || lesson?.scheduleTime || '').trim()
+}
+
+function getPrivateFixedLessonWeekday(lesson) {
+  const date = getPrivateFixedLessonDate(lesson)
+  const parsed = parseYmdToLocalDate(date)
+  return parsed ? parsed.getDay() : null
+}
+
+function getPrivateFixedLessonDurationMinutes(lesson) {
+  const duration = Number(
+    lesson?.durationMinutes ||
+      lesson?.duration ||
+      lesson?.lessonDurationMinutes ||
+      lesson?.classDurationMinutes
+  )
+  return Number.isFinite(duration) && duration > 0 ? Math.floor(duration) : 60
+}
+
+function isRenewableFixedPrivateLesson(lesson) {
+  if (String(lesson?.packageType || '').trim() !== 'private') return false
+  if (String(lesson?.sourceType || '').trim() !== 'fixed-private-slot-assignment') return false
+  if (lesson?.cancelledAt) return false
+  const status = String(lesson?.status || 'active').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  if (['cancelled', 'canceled', 'deleted'].includes(status)) return false
+  if (['seat_released', 'lesson_cancelled'].includes(cancellationType)) return false
+  if (lesson?.isSeatReleased === true || lesson?.releasedForPrivateBooking === true) return false
+  return true
+}
+
+function getPrivateFixedRenewalSeedKey(lesson) {
+  const batchId = String(lesson?.fixedPrivateAssignmentBatchId || '').trim()
+  if (batchId) return `batch:${batchId}`
+  const studentId = getPrivateFixedLessonStudentId(lesson)
+  const teacherFields = buildPrivateTemplateTeacherFields(lesson)
+  const weekday = getPrivateFixedLessonWeekday(lesson)
+  const time = getPrivateFixedLessonTime(lesson)
+  const durationMinutes = getPrivateFixedLessonDurationMinutes(lesson)
+  const templateId = String(lesson?.privateLessonAvailabilityTemplateId || '').trim()
+  return [
+    'fallback',
+    studentId,
+    teacherFields.teacherUid || teacherFields.teacherId || teacherFields.teacherKey || teacherFields.teacher,
+    weekday ?? '',
+    time,
+    durationMinutes,
+    templateId,
+  ].join(':')
+}
+
+function privateFixedRenewalTeacherMatchesTemplate(seedLesson, template) {
+  const seedFields = buildPrivateTemplateTeacherFields(seedLesson)
+  const templateFields = buildPrivateTemplateTeacherFields(template)
+  const seedKeys = [
+    seedFields.teacherUid,
+    seedFields.teacherId,
+    seedFields.teacherKey,
+    seedFields.teacher,
+    seedFields.teacherName,
+  ]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  const templateKeys = [
+    templateFields.teacherUid,
+    templateFields.teacherId,
+    templateFields.teacherKey,
+    templateFields.teacher,
+    templateFields.teacherName,
+  ]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  return seedKeys.some((key) => templateKeys.includes(key))
+}
+
+function privateFixedRenewalTemplateMatchesSeed(template, seedLesson) {
+  if (!template || !seedLesson) return false
+  const weekday = getPrivateFixedLessonWeekday(seedLesson)
+  const time = getPrivateFixedLessonTime(seedLesson)
+  const durationMinutes = getPrivateFixedLessonDurationMinutes(seedLesson)
+  return (
+    Number(template.weekday) === weekday &&
+    String(template.time || '').trim() === time &&
+    getPrivateFixedLessonDurationMinutes(template) === durationMinutes &&
+    privateFixedRenewalTeacherMatchesTemplate(seedLesson, template)
+  )
+}
+
+function formatPrivatePackageCoverageForOption(pkg) {
+  const { startDate, endDate } = getPrivatePackageDateBounds(pkg)
+  if (startDate && endDate) return `수강기간 ${startDate} ~ ${endDate}`
+  if (startDate) return `수강기간 ${startDate} ~ 만료일 없음`
+  if (endDate) return `수강기간 시작일 미설정 ~ ${endDate}`
+  return '수강기간 미설정'
+}
+
+function formatPrivatePackageRenewalOption(pkg, availableCount) {
+  const startDate =
+    formatDateValueAsPrivatePackageYmd(pkg?.registrationStartDate) ||
+    formatDateValueAsPrivatePackageYmd(pkg?.startDate)
+  const teacherDisplay = String(pkg?.teacherName || pkg?.teacherKey || pkg?.teacher || '').trim()
+  const prefix = startDate ? `${startDate} 시작` : String(pkg?.title || '개인 수강권').trim()
+  const remaining = Math.max(0, Number(availableCount ?? pkg?.remainingCount ?? 0) || 0)
+  return `${prefix} · ${teacherDisplay || '선생님 미지정'} · 남은 ${remaining}회 · ${formatPrivatePackageCoverageForOption(pkg)}`
+}
+
 function formatPrivatePackageAssignmentOption(pkg, availableCount) {
   const title = String(pkg?.title || '개인 수강권').trim()
   const total = Number(pkg?.totalCount ?? 0)
@@ -951,6 +1068,10 @@ export default function Dashboard() {
   const [privateFixedSlotAssignmentErrors, setPrivateFixedSlotAssignmentErrors] = useState({})
   const [privateFixedSlotAssignmentPreview, setPrivateFixedSlotAssignmentPreview] = useState(null)
   const [busyPrivateFixedSlotAssignment, setBusyPrivateFixedSlotAssignment] = useState(false)
+  const [fixedPrivateRenewalSeedLessonId, setFixedPrivateRenewalSeedLessonId] = useState('')
+  const [fixedPrivateRenewalPackageId, setFixedPrivateRenewalPackageId] = useState('')
+  const [fixedPrivateRenewalStartDate, setFixedPrivateRenewalStartDate] = useState('')
+  const [fixedPrivateRenewalEndDate, setFixedPrivateRenewalEndDate] = useState('')
   const [busyFixedPrivateLessonCancelId, setBusyFixedPrivateLessonCancelId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
@@ -6139,6 +6260,337 @@ export default function Dashboard() {
     studentPackages,
   ])
 
+  const fixedPrivateRenewalSeedOptions = useMemo(() => {
+    const seedsByKey = new Map()
+    ;(Array.isArray(lessons) ? lessons : [])
+      .filter(isRenewableFixedPrivateLesson)
+      .forEach((lesson) => {
+        const date = getPrivateFixedLessonDate(lesson)
+        const time = getPrivateFixedLessonTime(lesson)
+        const studentId = getPrivateFixedLessonStudentId(lesson)
+        const weekday = getPrivateFixedLessonWeekday(lesson)
+        const teacherFields = buildPrivateTemplateTeacherFields(lesson)
+        if (!isYmd(date) || !time || !studentId || weekday === null || !teacherFields.teacher) return
+        const key = getPrivateFixedRenewalSeedKey(lesson)
+        const current = seedsByKey.get(key)
+        if (!current || date > current.latestDate) {
+          seedsByKey.set(key, {
+            key,
+            lesson,
+            latestDate: date,
+            count: (current?.count || 0) + 1,
+          })
+        } else {
+          current.count += 1
+        }
+      })
+
+    return Array.from(seedsByKey.values())
+      .map((seed) => {
+        const lesson = seed.lesson
+        const weekday = getPrivateFixedLessonWeekday(lesson)
+        const durationMinutes = getPrivateFixedLessonDurationMinutes(lesson)
+        const studentName =
+          String(lesson.studentName || lesson.student || getPrivateFixedLessonStudentId(lesson)).trim() ||
+          '학생 미상'
+        const teacherLabel = getPrivateSlotTeacherDisplay(lesson)
+        return {
+          id: String(lesson.id || lesson.lessonId || lesson.fixedLessonId || seed.key).trim(),
+          key: seed.key,
+          lesson,
+          latestDate: seed.latestDate,
+          label: `${studentName} · ${teacherLabel} · ${PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS[weekday] || '요일 미상'} ${getPrivateFixedLessonTime(lesson)} · ${durationMinutes}분 · 최근 ${seed.latestDate}`,
+        }
+      })
+      .filter((option) => option.id)
+      .sort((a, b) => b.latestDate.localeCompare(a.latestDate) || a.label.localeCompare(b.label, 'ko'))
+  }, [lessons])
+
+  const selectedFixedPrivateRenewalSeed =
+    fixedPrivateRenewalSeedOptions.find((option) => option.id === fixedPrivateRenewalSeedLessonId) ||
+    null
+  const selectedFixedPrivateRenewalSeedLesson = selectedFixedPrivateRenewalSeed?.lesson || null
+
+  const fixedPrivateRenewalPackageOptions = useMemo(() => {
+    const seedLesson = selectedFixedPrivateRenewalSeedLesson
+    if (!seedLesson || !isValidOperationalAcademyId(currentAcademyId)) return []
+    const studentId = getPrivateFixedLessonStudentId(seedLesson)
+    const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
+    if (!studentId || !teacherFields.teacher) return []
+    return studentPackages
+      .filter((pkg) =>
+        isActivePrivatePackageForTeacher({
+          pkg,
+          academyId: currentAcademyId,
+          studentId,
+          teacher: teacherFields.teacher,
+          teacherKey: teacherFields.teacherKey,
+          teacherUid: teacherFields.teacherUid,
+        })
+      )
+      .map((pkg) => {
+        const balance = computePrivateTeacherPackageUsage({
+          privatePackage: pkg,
+          privateLessons: lessons,
+          privateReservations: privateLessonReservations,
+          academyId: currentAcademyId,
+          studentId,
+          teacher: teacherFields.teacher,
+          teacherKey: teacherFields.teacherKey,
+          teacherUid: teacherFields.teacherUid,
+          teacherUID: teacherFields.teacherUID,
+          teacherId: teacherFields.teacherId,
+        })
+        const availableCount = Math.max(0, Number(balance.makeupAvailableCount) || 0)
+        return {
+          id: String(pkg.id || '').trim(),
+          label: formatPrivatePackageRenewalOption(pkg, availableCount),
+          availableCount,
+        }
+      })
+      .filter((option) => option.id)
+      .sort((a, b) => {
+        const bHasAvailable = b.availableCount > 0 ? 1 : 0
+        const aHasAvailable = a.availableCount > 0 ? 1 : 0
+        return bHasAvailable - aHasAvailable || b.availableCount - a.availableCount || a.label.localeCompare(b.label, 'ko')
+      })
+  }, [
+    currentAcademyId,
+    lessons,
+    privateLessonReservations,
+    selectedFixedPrivateRenewalSeedLesson,
+    studentPackages,
+  ])
+
+  const fixedPrivateRenewalPlan = useMemo(() => {
+    const seedLesson = selectedFixedPrivateRenewalSeedLesson
+    const packageId = String(fixedPrivateRenewalPackageId || '').trim()
+    const startDate = String(fixedPrivateRenewalStartDate || '').trim()
+    const endDate = String(fixedPrivateRenewalEndDate || '').trim()
+    const selectedPackage =
+      studentPackages.find((pkg) => String(pkg.id || '').trim() === packageId) || null
+    const basePlan = {
+      previewOnly: true,
+      seedLesson,
+      selectedPackage,
+      template: null,
+      candidateDates: [],
+      assignableDates: [],
+      excludedDates: [],
+      blockingReasons: [],
+      candidateCount: 0,
+      assignableCount: 0,
+      excludedCount: 0,
+      availableAssignmentCount: 0,
+    }
+
+    if (!seedLesson) {
+      return {
+        ...basePlan,
+        blockingReasons: ['기존 고정 수업을 선택해 주세요.'],
+      }
+    }
+
+    const studentId = getPrivateFixedLessonStudentId(seedLesson)
+    const weekday = getPrivateFixedLessonWeekday(seedLesson)
+    const time = getPrivateFixedLessonTime(seedLesson)
+    const durationMinutes = getPrivateFixedLessonDurationMinutes(seedLesson)
+    const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
+    if (!studentId || weekday === null || !time || !teacherFields.teacher) {
+      return {
+        ...basePlan,
+        blockingReasons: ['기존 고정 수업 정보 부족'],
+      }
+    }
+
+    const blockingReasons = []
+    if (!selectedPackage) blockingReasons.push('수강권 선택 필요')
+    if (!isYmd(startDate) || !isYmd(endDate) || endDate < startDate) {
+      blockingReasons.push('연장 기간 선택 필요')
+    }
+
+    const seedTemplateId = String(seedLesson.privateLessonAvailabilityTemplateId || '').trim()
+    const templateFromSeedId = seedTemplateId
+      ? privateAvailabilityTemplates.find(
+          (template) => String(template.id || '').trim() === seedTemplateId
+        ) || null
+      : null
+    const fallbackTemplateCandidates = privateAvailabilityTemplates.filter((template) =>
+      privateFixedRenewalTemplateMatchesSeed(template, seedLesson)
+    )
+    const fallbackTemplate =
+      fallbackTemplateCandidates.find(
+        (template) =>
+          String(template.status || 'active').trim() === 'active' &&
+          isPrivateAvailabilityTemplateForFixedAssignment(template)
+      ) ||
+      fallbackTemplateCandidates[0] ||
+      null
+    const template = templateFromSeedId || fallbackTemplate
+    const templateIsActive =
+      template &&
+      String(template.status || 'active').trim() === 'active' &&
+      isPrivateAvailabilityTemplateForFixedAssignment(template)
+    const virtualTemplate = {
+      ...(template || {}),
+      weekday,
+      time,
+      durationMinutes,
+      effectiveStartDate: template?.effectiveStartDate || '',
+      effectiveEndDate: template?.effectiveEndDate || '',
+    }
+    const hasValidRenewalRange = isYmd(startDate) && isYmd(endDate) && endDate >= startDate
+    const candidateDates = hasValidRenewalRange
+      ? generatePrivateFixedAssignmentDates({ template: virtualTemplate, startDate, endDate })
+      : []
+    const excludedDates = []
+
+    if (!template) {
+      candidateDates.forEach((date) => {
+        excludedDates.push({ date, time, reason: '선생님 시간 없음' })
+      })
+      return {
+        ...basePlan,
+        template: null,
+        candidateDates,
+        excludedDates,
+        blockingReasons: Array.from(new Set([...blockingReasons, '선생님 시간 없음'])),
+        candidateCount: candidateDates.length,
+        excludedCount: excludedDates.length,
+      }
+    }
+
+    if (!templateIsActive) {
+      candidateDates.forEach((date) => {
+        excludedDates.push({ date, time, reason: '비활성 시간표' })
+      })
+      return {
+        ...basePlan,
+        template,
+        candidateDates,
+        excludedDates,
+        blockingReasons: Array.from(new Set([...blockingReasons, '비활성 시간표'])),
+        candidateCount: candidateDates.length,
+        excludedCount: excludedDates.length,
+      }
+    }
+
+    if (hasValidRenewalRange && candidateDates.length === 0) {
+      return {
+        ...basePlan,
+        template,
+        candidateDates,
+        blockingReasons: Array.from(new Set([...blockingReasons, '선생님 시간 없음'])),
+      }
+    }
+
+    if (!selectedPackage || blockingReasons.length > 0) {
+      return {
+        ...basePlan,
+        template,
+        candidateDates,
+        blockingReasons: Array.from(new Set(blockingReasons)),
+        candidateCount: candidateDates.length,
+      }
+    }
+
+    const packageMatchesTeacher = isActivePrivatePackageForTeacher({
+      pkg: selectedPackage,
+      academyId: currentAcademyId,
+      studentId,
+      teacher: teacherFields.teacher,
+      teacherKey: teacherFields.teacherKey,
+      teacherUid: teacherFields.teacherUid,
+    })
+    if (!packageMatchesTeacher) {
+      return {
+        ...basePlan,
+        template,
+        candidateDates,
+        blockingReasons: ['선택한 학생/선생님에 연결된 개인 수강권을 선택해 주세요'],
+        candidateCount: candidateDates.length,
+      }
+    }
+
+    const packageDateEligibleDates = []
+    candidateDates.forEach((date) => {
+      if (!isPrivatePackageValidForDate(selectedPackage, date)) {
+        excludedDates.push({ date, time, reason: '수강권 기간 밖' })
+        return
+      }
+      packageDateEligibleDates.push(date)
+    })
+
+    const blockingRows = [
+      ...lessons.map((lesson) => ({ source: 'lessons', row: lesson })),
+      ...privateLessonReservations.map((reservation) => ({
+        source: 'privateLessonReservations',
+        row: reservation,
+      })),
+      ...privateLessonSlots.map((slot) => ({ source: 'privateLessonSlots', row: slot })),
+    ].filter(({ row }) => isTeacherBlockingScheduleRow(row))
+
+    const conflictFreeDates = []
+    packageDateEligibleDates.forEach((date) => {
+      const candidate = {
+        academyId: currentAcademyId,
+        ...teacherFields,
+        date,
+        time,
+        durationMinutes,
+      }
+      const conflict = blockingRows.find(({ row }) => privateSchedulesOverlap(candidate, row))
+      if (conflict) {
+        excludedDates.push({ date, time, reason: '이미 예약/배정된 시간' })
+        return
+      }
+      conflictFreeDates.push(date)
+    })
+
+    const balance = computePrivateTeacherPackageUsage({
+      privatePackage: selectedPackage,
+      privateLessons: lessons,
+      privateReservations: privateLessonReservations,
+      academyId: currentAcademyId,
+      studentId,
+      teacher: teacherFields.teacher,
+      teacherKey: teacherFields.teacherKey,
+      teacherUid: teacherFields.teacherUid,
+      teacherUID: teacherFields.teacherUID,
+      teacherId: teacherFields.teacherId,
+    })
+    const availableAssignmentCount = Math.max(0, Number(balance.makeupAvailableCount) || 0)
+    const assignableDates = conflictFreeDates.slice(0, availableAssignmentCount)
+    conflictFreeDates.slice(availableAssignmentCount).forEach((date) => {
+      excludedDates.push({ date, time, reason: '남은 횟수 부족' })
+    })
+
+    return {
+      ...basePlan,
+      template,
+      selectedPackage,
+      candidateDates,
+      assignableDates,
+      excludedDates,
+      blockingReasons: Array.from(new Set(blockingReasons)),
+      candidateCount: candidateDates.length,
+      assignableCount: assignableDates.length,
+      excludedCount: excludedDates.length,
+      availableAssignmentCount,
+    }
+  }, [
+    currentAcademyId,
+    fixedPrivateRenewalEndDate,
+    fixedPrivateRenewalPackageId,
+    fixedPrivateRenewalStartDate,
+    lessons,
+    privateAvailabilityTemplates,
+    privateLessonReservations,
+    privateLessonSlots,
+    selectedFixedPrivateRenewalSeedLesson,
+    studentPackages,
+  ])
+
   const privateLessonTeacherSelectOptions = isAdmin
     ? teacherSelectOptions
     : teacherGroupClassKey
@@ -6184,6 +6636,17 @@ export default function Dashboard() {
     previewPrivateFixedSlotAssignment,
     createPrivateFixedSlotAssignment,
     busyPrivateFixedSlotAssignment,
+    fixedPrivateRenewalSeedLessonId,
+    setFixedPrivateRenewalSeedLessonId,
+    fixedPrivateRenewalPackageId,
+    setFixedPrivateRenewalPackageId,
+    fixedPrivateRenewalStartDate,
+    setFixedPrivateRenewalStartDate,
+    fixedPrivateRenewalEndDate,
+    setFixedPrivateRenewalEndDate,
+    fixedPrivateRenewalSeedOptions,
+    fixedPrivateRenewalPackageOptions,
+    fixedPrivateRenewalPlan,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',

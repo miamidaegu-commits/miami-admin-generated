@@ -562,8 +562,24 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain('function isPrivatePackageValidForDate');
   expect(dashboardSource).toContain('assignableDates');
   expect(dashboardSource).toContain('excludedDates');
+  expect(dashboardSource).toContain('fixedPrivateRenewalSeedLessonId');
+  expect(dashboardSource).toContain('fixedPrivateRenewalPackageId');
+  expect(dashboardSource).toContain('fixedPrivateRenewalStartDate');
+  expect(dashboardSource).toContain('fixedPrivateRenewalEndDate');
+  expect(dashboardSource).toContain('fixedPrivateRenewalPlan');
+  expect(dashboardSource).toContain('fixedPrivateRenewalSeedOptions');
+  expect(dashboardSource).toContain('fixedPrivateRenewalPackageOptions');
+  expect(dashboardSource).toContain('isRenewableFixedPrivateLesson');
+  expect(dashboardSource).toContain('privateFixedRenewalTemplateMatchesSeed');
   expect(dashboardSource).toContain("reason: '수강권 기간 밖'");
   expect(dashboardSource).toContain("reason: '남은 횟수 부족'");
+  expect(dashboardSource).toContain("reason: '선생님 시간 없음'");
+  expect(dashboardSource).toContain("reason: '이미 예약/배정된 시간'");
+  expect(dashboardSource).toContain("reason: '비활성 시간표'");
+  expect(dashboardSource).toContain('기존 고정 수업 정보 부족');
+  expect(dashboardSource).toContain('수강권 선택 필요');
+  expect(dashboardSource).toContain('연장 기간 선택 필요');
+  expect(dashboardSource).toContain('previewOnly: true');
   expect(dashboardSource).toContain("'수강권 기간 안에 배정 가능한 날짜가 없습니다.'");
   expect(dashboardSource).toContain('const previewDates = missingPackage ? [] : plan.assignableDates || plan.dates');
   expect(dashboardSource).toMatch(/plan\.assignableDates\.forEach\(\(date\) => \{[\s\S]*batch\.set\(slotRef/);
@@ -617,6 +633,15 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-dated-slot-hidden-count');
   expect(privateSlotsSectionSource).toContain('private-fixed-lesson-history-toggle');
   expect(privateSlotsSectionSource).toContain('private-fixed-lesson-hidden-count');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-preview-section');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-seed-select');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-package-select');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-start-date');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-end-date');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-plan');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-preview-only-note');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-assignable-count');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-excluded-count');
   expect(privateSlotsSectionSource).toContain('선생님 1:1 시간 만들기');
   expect(privateSlotsSectionSource).toContain('학생 고정 배정 / 연장');
   expect(privateSlotsSectionSource).toContain('선생님별 시간표/예약판');
@@ -632,7 +657,13 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('학생 수강권 기간과 상관없이 미리 길게 등록');
   expect(privateSlotsSectionSource).toContain('학생 직접 예약 허용');
   expect(privateSlotsSectionSource).toContain('수강권 기간 안 날짜만 배정');
-  expect(privateSlotsSectionSource).toContain('같은 시간으로 연장 기능은 추후 제공 예정');
+  expect(privateSlotsSectionSource).toContain('같은 시간으로 연장 미리보기');
+  expect(privateSlotsSectionSource).toContain(
+    '기존 고정 수업을 기준으로 같은 선생님, 같은 요일, 같은 시간'
+  );
+  expect(privateSlotsSectionSource).toContain('이번 단계에서는 저장하지 않고 미리보기만 제공합니다');
+  expect(privateSlotsSectionSource).toContain('실제 연장 저장 기능은 다음 단계에서 제공됩니다');
+  expect(privateSlotsSectionSource).toContain('저장하지 않고 미리보기');
   expect(privateSlotsSectionSource).toContain('여러 요일과 여러 시간을 한 번에 등록합니다.');
   expect(privateSlotsSectionSource).toContain('요일 1개와 시간 1개만 입력하면 개별 추가처럼 사용할 수 있습니다.');
   expect(privateSlotsSectionSource).toContain('등록된 선생님의 반복 1:1 시간을 확인하고 수정/비활성화합니다.');
