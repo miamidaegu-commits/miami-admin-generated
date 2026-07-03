@@ -662,6 +662,33 @@ export default function PrivateLessonSlotsSection({
               고정 수업 배정용은 학생 고정 배정에서 사용할 수 있는 시간입니다.
             </p>
           </div>
+          <details
+            open
+            data-testid="private-time-management-teacher-board-panel"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 14,
+              border: '1px solid #2e3240',
+              borderRadius: 10,
+              background: '#111722',
+            }}
+          >
+            <summary
+              style={{
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: 15,
+                color: '#f2f5ff',
+              }}
+            >
+              선생님별 시간표/예약판
+            </summary>
+            <p
+              style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.55 }}
+            >
+              선생님별 주간 1:1 시간표와 예약판을 확인합니다. 예약된 수업과 빈 시간을 한 화면에서 관리합니다.
+            </p>
       {isAdmin || selectedPrivateBoardTeacherOption ? (
           <section
             data-testid="private-teacher-weekly-board-section"
@@ -910,6 +937,41 @@ export default function PrivateLessonSlotsSection({
             </p>
           </section>
       ) : null}
+          </details>
+
+          <details
+            data-testid="private-time-management-bulk-create-panel"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 14,
+              border: '1px solid #2e3240',
+              borderRadius: 10,
+              background: '#111722',
+            }}
+          >
+            <summary
+              data-testid="private-time-management-bulk-create-summary"
+              style={{
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: 15,
+                color: '#f2f5ff',
+              }}
+            >
+              빠른 일괄 추가
+            </summary>
+            <p
+              style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.55 }}
+            >
+              여러 요일과 여러 시간을 한 번에 등록합니다.
+              <br />
+              요일 1개와 시간 1개만 입력하면 개별 추가처럼 사용할 수 있습니다.
+              <br />
+              학생 직접 예약 허용을 켠 시간만 학생 화면에 공개됩니다.
+              <br />
+              고정 수업 배정용은 학생 고정 배정에서 사용할 수 있습니다.
+            </p>
 
           <section
             data-testid="private-weekly-slot-bulk-section"
@@ -1227,6 +1289,36 @@ export default function PrivateLessonSlotsSection({
               ) : null}
             </form>
           </section>
+          </details>
+
+          <details
+            open
+            data-testid="private-time-management-weekly-template-panel"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 14,
+              border: '1px solid #2e3240',
+              borderRadius: 10,
+              background: '#111722',
+            }}
+          >
+            <summary
+              data-testid="private-time-management-weekly-template-summary"
+              style={{
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: 15,
+                color: '#f2f5ff',
+              }}
+            >
+              기존 반복 시간표
+            </summary>
+            <p
+              style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.55 }}
+            >
+              등록된 선생님의 반복 1:1 시간을 확인하고 수정/비활성화합니다.
+            </p>
 
           <section
             data-testid="private-availability-template-section"
@@ -1728,6 +1820,39 @@ export default function PrivateLessonSlotsSection({
               </div>
             )}
           </section>
+          </details>
+
+          <details
+            data-testid="private-time-management-dated-slot-panel"
+            style={{
+              display: 'grid',
+              gap: 12,
+              padding: 14,
+              border: '1px solid #2e3240',
+              borderRadius: 10,
+              background: '#111722',
+            }}
+          >
+            <summary
+              data-testid="private-time-management-dated-slot-summary"
+              style={{
+                cursor: 'pointer',
+                fontWeight: 700,
+                fontSize: 15,
+                color: '#f2f5ff',
+              }}
+            >
+              날짜별/임시 예약 가능 시간
+            </summary>
+            <p
+              style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.55 }}
+            >
+              반복 시간표가 아닌 특정 날짜의 예외 시간을 관리합니다.
+              <br />
+              보충수업, 임시 오픈, 특별 예약 가능 시간에 사용하세요.
+              <br />
+              반복되는 시간은 빠른 일괄 추가 또는 기존 반복 시간표를 사용하세요.
+            </p>
 
           <div
             data-testid="private-dated-availability-helper"
@@ -2178,6 +2303,7 @@ export default function PrivateLessonSlotsSection({
           </div>
         )
       ) : null}
+          </details>
           </section>
 
           <section

@@ -601,8 +601,19 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-time-management-teacher-time-copy');
   expect(privateSlotsSectionSource).toContain('private-time-management-student-assignment-copy');
   expect(privateSlotsSectionSource).toContain('private-time-extension-placeholder');
+  expect(privateSlotsSectionSource).toContain('private-time-management-teacher-board-panel');
+  expect(privateSlotsSectionSource).toContain('private-time-management-bulk-create-panel');
+  expect(privateSlotsSectionSource).toContain('private-time-management-weekly-template-panel');
+  expect(privateSlotsSectionSource).toContain('private-time-management-dated-slot-panel');
+  expect(privateSlotsSectionSource).toContain('private-time-management-bulk-create-summary');
+  expect(privateSlotsSectionSource).toContain('private-time-management-weekly-template-summary');
+  expect(privateSlotsSectionSource).toContain('private-time-management-dated-slot-summary');
   expect(privateSlotsSectionSource).toContain('선생님 1:1 시간 만들기');
   expect(privateSlotsSectionSource).toContain('학생 고정 배정 / 연장');
+  expect(privateSlotsSectionSource).toContain('선생님별 시간표/예약판');
+  expect(privateSlotsSectionSource).toContain('빠른 일괄 추가');
+  expect(privateSlotsSectionSource).toContain('기존 반복 시간표');
+  expect(privateSlotsSectionSource).toContain('날짜별/임시 예약 가능 시간');
   expect(privateSlotsSectionSource).toContain('선생님별 1:1 시간표/예약판');
   expect(privateSlotsSectionSource).toContain('주간 1:1 시간표 일괄 등록');
   expect(privateSlotsSectionSource).toContain('선생님 주간 1:1 시간표');
@@ -613,8 +624,20 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('학생 직접 예약 허용');
   expect(privateSlotsSectionSource).toContain('수강권 기간 안 날짜만 배정');
   expect(privateSlotsSectionSource).toContain('같은 시간으로 연장 기능은 추후 제공 예정');
+  expect(privateSlotsSectionSource).toContain('여러 요일과 여러 시간을 한 번에 등록합니다.');
+  expect(privateSlotsSectionSource).toContain('요일 1개와 시간 1개만 입력하면 개별 추가처럼 사용할 수 있습니다.');
+  expect(privateSlotsSectionSource).toContain('등록된 선생님의 반복 1:1 시간을 확인하고 수정/비활성화합니다.');
+  expect(privateSlotsSectionSource).toContain('반복 시간표가 아닌 특정 날짜의 예외 시간을 관리합니다.');
+  expect(privateSlotsSectionSource).toContain('보충수업, 임시 오픈, 특별 예약 가능 시간에 사용하세요.');
+  expect(privateSlotsSectionSource).toContain('반복되는 시간은 빠른 일괄 추가 또는 기존 반복 시간표를 사용하세요.');
   expect(privateSlotsSectionSource).toMatch(
-    /private-time-management-teacher-time-group[\s\S]*private-weekly-slot-bulk-section[\s\S]*private-availability-template-section[\s\S]*private-dated-availability-helper[\s\S]*private-slot-create-button/
+    /<details[\s\S]*open[\s\S]*private-time-management-teacher-board-panel/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /<details[\s\S]*open[\s\S]*private-time-management-weekly-template-panel/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /private-time-management-teacher-time-group[\s\S]*private-time-management-teacher-board-panel[\s\S]*private-weekly-slot-bulk-section[\s\S]*private-time-management-weekly-template-panel[\s\S]*private-availability-template-section[\s\S]*private-time-management-dated-slot-panel[\s\S]*private-dated-availability-helper[\s\S]*private-slot-create-button/
   );
   expect(privateSlotsSectionSource).toMatch(
     /private-time-management-student-assignment-group[\s\S]*private-fixed-slot-assignment-section[\s\S]*private-fixed-lessons-management-section/
