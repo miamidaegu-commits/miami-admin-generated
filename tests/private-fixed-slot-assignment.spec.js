@@ -613,6 +613,10 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-weekly-template-visible-list');
   expect(privateSlotsSectionSource).toContain('private-weekly-template-empty-current');
   expect(privateSlotsSectionSource).toContain('private-weekly-template-empty-all');
+  expect(privateSlotsSectionSource).toContain('private-dated-slot-history-toggle');
+  expect(privateSlotsSectionSource).toContain('private-dated-slot-hidden-count');
+  expect(privateSlotsSectionSource).toContain('private-fixed-lesson-history-toggle');
+  expect(privateSlotsSectionSource).toContain('private-fixed-lesson-hidden-count');
   expect(privateSlotsSectionSource).toContain('선생님 1:1 시간 만들기');
   expect(privateSlotsSectionSource).toContain('학생 고정 배정 / 연장');
   expect(privateSlotsSectionSource).toContain('선생님별 시간표/예약판');
@@ -636,16 +640,40 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('보충수업, 임시 오픈, 특별 예약 가능 시간에 사용하세요.');
   expect(privateSlotsSectionSource).toContain('반복되는 시간은 빠른 일괄 추가 또는 기존 반복 시간표를 사용하세요.');
   expect(privateSlotsSectionSource).toContain('지난/비활성 포함');
+  expect(privateSlotsSectionSource).toContain('지난 날짜별 시간 포함');
+  expect(privateSlotsSectionSource).toContain('지난 고정 일정 포함');
   expect(privateSlotsSectionSource).toContain('현재 사용 중이거나 앞으로 사용할 반복 시간표');
   expect(privateSlotsSectionSource).toContain('지난 기간 또는 비활성 시간표');
+  expect(privateSlotsSectionSource).toContain('기본 화면에는 오늘 이후 날짜별/임시 시간만 표시됩니다');
+  expect(privateSlotsSectionSource).toContain('지난 날짜별 시간은 삭제되지 않으며, 필요할 때 포함해서 볼 수 있습니다');
+  expect(privateSlotsSectionSource).toContain(
+    '기본 화면에는 현재 또는 앞으로 예정된 고정 일정만 표시됩니다'
+  );
+  expect(privateSlotsSectionSource).toContain(
+    '지난 고정 일정은 삭제되지 않으며, 필요할 때 포함해서 볼 수 있습니다'
+  );
   expect(privateSlotsSectionSource).toContain('normalizePrivateWeeklyTemplateStatus');
   expect(privateSlotsSectionSource).toContain('formatPrivateWeeklyTemplateDateValueYmd');
   expect(privateSlotsSectionSource).toContain('getKstTodayYmd');
   expect(privateSlotsSectionSource).toContain('shouldHidePrivateWeeklyTemplateByDefault');
+  expect(privateSlotsSectionSource).toContain('PRIVATE_LESSON_SLOT_DATE_FIELDS');
+  expect(privateSlotsSectionSource).toContain('FIXED_PRIVATE_LESSON_DATE_FIELDS');
+  expect(privateSlotsSectionSource).toContain('getPrivateRecordDateYmd');
+  expect(privateSlotsSectionSource).toContain('shouldHidePastPrivateRecordByDefault');
   expect(privateSlotsSectionSource).toContain('effectiveEndDate');
   expect(privateSlotsSectionSource).toContain('status');
   expect(privateSlotsSectionSource).toContain('visiblePrivateAvailabilityTemplates');
   expect(privateSlotsSectionSource).toContain('hiddenPrivateAvailabilityTemplateCount');
+  expect(privateSlotsSectionSource).toContain('showPastPrivateLessonSlots');
+  expect(privateSlotsSectionSource).toContain('visiblePrivateLessonSlots');
+  expect(privateSlotsSectionSource).toContain('hiddenPrivateLessonSlotCount');
+  expect(privateSlotsSectionSource).toContain('showPastFixedPrivateLessons');
+  expect(privateSlotsSectionSource).toContain('visibleFixedPrivateLessons');
+  expect(privateSlotsSectionSource).toContain('hiddenFixedPrivateLessonCount');
+  expect(privateSlotsSectionSource).toContain(
+    "'date', 'lessonDate', 'slotDate', 'startAt', 'startsAt'"
+  );
+  expect(privateSlotsSectionSource).toContain("'date', 'lessonDate', 'startAt', 'startsAt'");
   expect(privateSlotsSectionSource).toMatch(
     /<details[\s\S]*open[\s\S]*private-time-management-teacher-board-panel/
   );
@@ -660,6 +688,18 @@ test('fixed private assignment source requires package and links generated docum
   );
   expect(privateSlotsSectionSource).toMatch(
     /showPastPrivateWeeklyTemplates[\s\S]*visiblePrivateAvailabilityTemplates/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /showPastPrivateLessonSlots[\s\S]*visiblePrivateLessonSlots/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /showPastFixedPrivateLessons[\s\S]*visibleFixedPrivateLessons/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /visiblePrivateLessonSlots\.map/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /visibleFixedPrivateLessons\.map/
   );
   expect(privateSlotsSectionSource).toMatch(
     /formatDateAsKstYmd[\s\S]*timeZone: 'Asia\/Seoul'/

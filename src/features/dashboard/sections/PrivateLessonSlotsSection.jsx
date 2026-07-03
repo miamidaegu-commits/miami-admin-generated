@@ -283,6 +283,22 @@ function shouldHidePrivateWeeklyTemplateByDefault(template, todayYmd) {
   return Boolean(effectiveEndDate && todayYmd && effectiveEndDate < todayYmd)
 }
 
+const PRIVATE_LESSON_SLOT_DATE_FIELDS = ['date', 'lessonDate', 'slotDate', 'startAt', 'startsAt']
+const FIXED_PRIVATE_LESSON_DATE_FIELDS = ['date', 'lessonDate', 'startAt', 'startsAt']
+
+function getPrivateRecordDateYmd(record, fields) {
+  for (const field of fields) {
+    const ymd = formatPrivateWeeklyTemplateDateValueYmd(record?.[field])
+    if (ymd) return ymd
+  }
+  return ''
+}
+
+function shouldHidePastPrivateRecordByDefault(record, fields, todayYmd) {
+  const recordDate = getPrivateRecordDateYmd(record, fields)
+  return Boolean(recordDate && todayYmd && recordDate < todayYmd)
+}
+
 function addDaysToYmd(ymd, days) {
   const base = new Date(`${ymd}T00:00:00`)
   if (Number.isNaN(base.getTime())) return ''
@@ -456,6 +472,8 @@ export default function PrivateLessonSlotsSection({
   const [privateBoardTeacherValue, setPrivateBoardTeacherValue] = useState('')
   const [privateBoardWeekStart, setPrivateBoardWeekStart] = useState(() => getMondayYmd())
   const [showPastPrivateWeeklyTemplates, setShowPastPrivateWeeklyTemplates] = useState(false)
+  const [showPastPrivateLessonSlots, setShowPastPrivateLessonSlots] = useState(false)
+  const [showPastFixedPrivateLessons, setShowPastFixedPrivateLessons] = useState(false)
 
   function openAvailabilityTemplateEdit(template) {
     setEditingAvailabilityTemplateId(String(template?.id || ''))
@@ -541,6 +559,33 @@ export default function PrivateLessonSlotsSection({
   const hiddenPrivateAvailabilityTemplateCount =
     privateAvailabilityTemplateView.hiddenByDefaultCount
 
+  const privateLessonSlotView = useMemo(() => {
+    const allSlots = Array.isArray(privateLessonSlots) ? privateLessonSlots : []
+    const hiddenByDefault = allSlots.filter((slot) =>
+      shouldHidePastPrivateRecordByDefault(
+        slot,
+        PRIVATE_LESSON_SLOT_DATE_FIELDS,
+        privateWeeklyTemplateTodayYmd
+      )
+    )
+    return {
+      allSlots,
+      hiddenByDefaultCount: hiddenByDefault.length,
+      visibleSlots: showPastPrivateLessonSlots
+        ? allSlots
+        : allSlots.filter(
+            (slot) =>
+              !shouldHidePastPrivateRecordByDefault(
+                slot,
+                PRIVATE_LESSON_SLOT_DATE_FIELDS,
+                privateWeeklyTemplateTodayYmd
+              )
+          ),
+    }
+  }, [privateLessonSlots, privateWeeklyTemplateTodayYmd, showPastPrivateLessonSlots])
+  const visiblePrivateLessonSlots = privateLessonSlotView.visibleSlots
+  const hiddenPrivateLessonSlotCount = privateLessonSlotView.hiddenByDefaultCount
+
   const reservationsBySlotId = new Map()
   privateLessonReservations.forEach((reservation) => {
     const slotId = String(reservation.slotId || '').trim()
@@ -549,15 +594,9 @@ export default function PrivateLessonSlotsSection({
     reservationsBySlotId.get(slotId).push(reservation)
   })
 
-  const futureFixedPrivateLessons = useMemo(() => {
-    const today = new Date()
-    const y = today.getFullYear()
-    const m = String(today.getMonth() + 1).padStart(2, '0')
-    const d = String(today.getDate()).padStart(2, '0')
-    const todayYmd = `${y}-${m}-${d}`
+  const sortedFixedPrivateLessons = useMemo(() => {
     return (Array.isArray(privateFixedLessons) ? privateFixedLessons : [])
       .filter((lesson) => isFixedPrivateLesson(lesson))
-      .filter((lesson) => String(lesson.date || '').trim() >= todayYmd)
       .sort((a, b) =>
         `${a.date || ''} ${a.time || ''} ${a.teacherName || a.teacher || ''}`.localeCompare(
           `${b.date || ''} ${b.time || ''} ${b.teacherName || b.teacher || ''}`,
@@ -565,6 +604,40 @@ export default function PrivateLessonSlotsSection({
         )
       )
   }, [privateFixedLessons])
+
+  const futureFixedPrivateLessons = useMemo(() => {
+    return sortedFixedPrivateLessons.filter(
+      (lesson) =>
+        !shouldHidePastPrivateRecordByDefault(
+          lesson,
+          FIXED_PRIVATE_LESSON_DATE_FIELDS,
+          privateWeeklyTemplateTodayYmd
+        )
+    )
+  }, [privateWeeklyTemplateTodayYmd, sortedFixedPrivateLessons])
+  const fixedPrivateLessonView = useMemo(() => {
+    const hiddenByDefault = sortedFixedPrivateLessons.filter((lesson) =>
+      shouldHidePastPrivateRecordByDefault(
+        lesson,
+        FIXED_PRIVATE_LESSON_DATE_FIELDS,
+        privateWeeklyTemplateTodayYmd
+      )
+    )
+    return {
+      allLessons: sortedFixedPrivateLessons,
+      hiddenByDefaultCount: hiddenByDefault.length,
+      visibleLessons: showPastFixedPrivateLessons
+        ? sortedFixedPrivateLessons
+        : futureFixedPrivateLessons,
+    }
+  }, [
+    futureFixedPrivateLessons,
+    privateWeeklyTemplateTodayYmd,
+    showPastFixedPrivateLessons,
+    sortedFixedPrivateLessons,
+  ])
+  const visibleFixedPrivateLessons = fixedPrivateLessonView.visibleLessons
+  const hiddenFixedPrivateLessonCount = fixedPrivateLessonView.hiddenByDefaultCount
 
   const selectedPrivateBoardTeacherOption = useMemo(() => {
     if (teacherSelectOptions.length === 0) return null
@@ -2220,12 +2293,54 @@ export default function PrivateLessonSlotsSection({
           ) : null}
           </form>
       {isAdmin ? (
-        privateLessonSlotsLoading || privateLessonReservationsLoading ? (
-          <p>불러오는 중...</p>
-        ) : privateLessonSlots.length === 0 ? (
-          <p style={{ opacity: 0.8 }}>등록된 1:1 수업 시간이 없습니다.</p>
-        ) : (
-          <div className="activity-table">
+        <>
+          <div
+            style={{
+              display: 'grid',
+              gap: 6,
+              margin: '12px 0',
+              padding: '10px 12px',
+              border: '1px solid #293246',
+              borderRadius: 8,
+              background: '#111722',
+            }}
+          >
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={showPastPrivateLessonSlots}
+                data-testid="private-dated-slot-history-toggle"
+                onChange={(event) => setShowPastPrivateLessonSlots(event.target.checked)}
+              />
+              지난 날짜별 시간 포함
+            </label>
+            <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+              기본 화면에는 오늘 이후 날짜별/임시 시간만 표시됩니다.
+              <br />
+              지난 날짜별 시간은 삭제되지 않으며, 필요할 때 포함해서 볼 수 있습니다.
+            </p>
+            {!showPastPrivateLessonSlots && hiddenPrivateLessonSlotCount > 0 ? (
+              <p
+                data-testid="private-dated-slot-hidden-count"
+                style={{ margin: 0, opacity: 0.72, fontSize: 12, color: '#d7def0' }}
+              >
+                숨김 {hiddenPrivateLessonSlotCount}개 · 지난 날짜별 시간 포함을 켜면
+                표시됩니다.
+              </p>
+            ) : null}
+          </div>
+          {privateLessonSlotsLoading || privateLessonReservationsLoading ? (
+            <p>불러오는 중...</p>
+          ) : privateLessonSlotView.allSlots.length === 0 ? (
+            <p style={{ opacity: 0.8 }}>등록된 1:1 수업 시간이 없습니다.</p>
+          ) : visiblePrivateLessonSlots.length === 0 ? (
+            <p style={{ opacity: 0.8, lineHeight: 1.5 }}>
+              현재/예정 날짜별 1:1 수업 시간이 없습니다.
+              <br />
+              지난 날짜별 시간 포함을 켜면 과거 시간을 확인할 수 있습니다.
+            </p>
+          ) : (
+            <div className="activity-table">
           <div
             className="table-head"
             style={{ gridTemplateColumns: '1fr 0.9fr 0.8fr 1fr 1fr minmax(160px, auto)' }}
@@ -2237,7 +2352,7 @@ export default function PrivateLessonSlotsSection({
             <span>예약</span>
             <span>작업</span>
           </div>
-          {privateLessonSlots.map((slot) => {
+          {visiblePrivateLessonSlots.map((slot) => {
             const slotReservations = reservationsBySlotId.get(slot.id) || []
             const activeReservation =
               slotReservations.find((reservation) => reservation.status === 'active') || null
@@ -2458,7 +2573,8 @@ export default function PrivateLessonSlotsSection({
             )
           })}
           </div>
-        )
+          )}
+        </>
       ) : null}
           </details>
           </section>
@@ -2852,8 +2968,47 @@ export default function PrivateLessonSlotsSection({
                 시간에 학생 고정 배정에서 관리합니다.
               </p>
             </div>
-            {futureFixedPrivateLessons.length === 0 ? (
+            <div
+              style={{
+                display: 'grid',
+                gap: 6,
+                padding: '10px 12px',
+                border: '1px solid #293246',
+                borderRadius: 8,
+                background: '#111722',
+              }}
+            >
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <input
+                  type="checkbox"
+                  checked={showPastFixedPrivateLessons}
+                  data-testid="private-fixed-lesson-history-toggle"
+                  onChange={(event) => setShowPastFixedPrivateLessons(event.target.checked)}
+                />
+                지난 고정 일정 포함
+              </label>
+              <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+                기본 화면에는 현재 또는 앞으로 예정된 고정 일정만 표시됩니다.
+                <br />
+                지난 고정 일정은 삭제되지 않으며, 필요할 때 포함해서 볼 수 있습니다.
+              </p>
+              {!showPastFixedPrivateLessons && hiddenFixedPrivateLessonCount > 0 ? (
+                <p
+                  data-testid="private-fixed-lesson-hidden-count"
+                  style={{ margin: 0, opacity: 0.72, fontSize: 12, color: '#d7def0' }}
+                >
+                  숨김 {hiddenFixedPrivateLessonCount}개 · 지난 고정 일정 포함을 켜면 표시됩니다.
+                </p>
+              ) : null}
+            </div>
+            {fixedPrivateLessonView.allLessons.length === 0 ? (
               <p style={{ margin: 0, opacity: 0.78 }}>예정된 기존 고정 1:1 수업이 없습니다.</p>
+            ) : visibleFixedPrivateLessons.length === 0 ? (
+              <p style={{ margin: 0, opacity: 0.78, lineHeight: 1.5 }}>
+                예정된 기존 고정 1:1 수업이 없습니다.
+                <br />
+                지난 고정 일정 포함을 켜면 과거 고정 일정을 확인할 수 있습니다.
+              </p>
             ) : (
               <div className="activity-table">
                 <div
@@ -2868,7 +3023,7 @@ export default function PrivateLessonSlotsSection({
                   <span>상태</span>
                   <span>작업</span>
                 </div>
-                {futureFixedPrivateLessons.map((lesson) => {
+                {visibleFixedPrivateLessons.map((lesson) => {
                   const statusLabel = fixedLessonStatusLabel(lesson)
                   const isCancelled = statusLabel !== '배정됨'
                   const matchingReservation = privateLessonReservations.find(
