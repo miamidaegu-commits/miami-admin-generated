@@ -185,6 +185,30 @@ function getTemplateUsageLabel(template) {
   return labels.join(' · ') || '용도 없음'
 }
 
+function normalizePrivateWeeklyTemplateStatus(template) {
+  const status = String(template?.status || '').trim().toLowerCase()
+  if (!status) return 'active'
+  if (['active', 'enabled', 'enable', 'use', 'using', 'used', '사용'].includes(status)) {
+    return 'active'
+  }
+  if (
+    [
+      'inactive',
+      'disabled',
+      'disable',
+      'stop',
+      'stopped',
+      'pause',
+      'paused',
+      '비활성',
+      '중지',
+    ].includes(status)
+  ) {
+    return 'inactive'
+  }
+  return 'active'
+}
+
 function normalizeEligibleStudentIds(values) {
   const out = []
   const seen = new Set()
@@ -211,6 +235,52 @@ function formatYmd(date) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function formatDateAsKstYmd(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function formatPrivateWeeklyTemplateDateValueYmd(value) {
+  if (!value) return ''
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (isYmd(trimmed)) return trimmed
+    const parsed = new Date(trimmed)
+    return Number.isNaN(parsed.getTime()) ? '' : formatDateAsKstYmd(parsed)
+  }
+  if (value instanceof Date) {
+    return formatDateAsKstYmd(value)
+  }
+  if (typeof value?.toDate === 'function') {
+    return formatDateAsKstYmd(value.toDate())
+  }
+  const seconds = Number.isFinite(value?.seconds) ? value.seconds : value?._seconds
+  if (Number.isFinite(seconds)) {
+    return formatDateAsKstYmd(new Date(seconds * 1000))
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return formatDateAsKstYmd(new Date(value < 10000000000 ? value * 1000 : value))
+  }
+  return ''
+}
+
+function getKstTodayYmd() {
+  return formatDateAsKstYmd(new Date())
+}
+
+function shouldHidePrivateWeeklyTemplateByDefault(template, todayYmd) {
+  if (normalizePrivateWeeklyTemplateStatus(template) === 'inactive') return true
+  const effectiveEndDate = formatPrivateWeeklyTemplateDateValueYmd(template?.effectiveEndDate)
+  return Boolean(effectiveEndDate && todayYmd && effectiveEndDate < todayYmd)
 }
 
 function addDaysToYmd(ymd, days) {
@@ -385,13 +455,14 @@ export default function PrivateLessonSlotsSection({
   const [editingAvailabilityTemplateErrors, setEditingAvailabilityTemplateErrors] = useState({})
   const [privateBoardTeacherValue, setPrivateBoardTeacherValue] = useState('')
   const [privateBoardWeekStart, setPrivateBoardWeekStart] = useState(() => getMondayYmd())
+  const [showPastPrivateWeeklyTemplates, setShowPastPrivateWeeklyTemplates] = useState(false)
 
   function openAvailabilityTemplateEdit(template) {
     setEditingAvailabilityTemplateId(String(template?.id || ''))
     setEditingAvailabilityTemplateForm({
       effectiveStartDate: isYmd(template?.effectiveStartDate) ? String(template.effectiveStartDate) : '',
       effectiveEndDate: isYmd(template?.effectiveEndDate) ? String(template.effectiveEndDate) : '',
-      status: String(template?.status || 'active') === 'active' ? 'active' : 'inactive',
+      status: normalizePrivateWeeklyTemplateStatus(template),
       useForFixedAssignment: isTemplateForFixedAssignment(template),
       openForStudentBooking: isTemplateOpenForStudentBooking(template),
     })
@@ -446,6 +517,29 @@ export default function PrivateLessonSlotsSection({
         return aKey.localeCompare(bKey, 'ko')
       })
   }, [privateAvailabilityTemplates, selectedAssignmentTeacherOption])
+
+  const privateWeeklyTemplateTodayYmd = useMemo(() => getKstTodayYmd(), [])
+  const privateAvailabilityTemplateView = useMemo(() => {
+    const allTemplates = Array.isArray(privateAvailabilityTemplates)
+      ? privateAvailabilityTemplates
+      : []
+    const hiddenByDefault = allTemplates.filter((template) =>
+      shouldHidePrivateWeeklyTemplateByDefault(template, privateWeeklyTemplateTodayYmd)
+    )
+    return {
+      allTemplates,
+      hiddenByDefaultCount: hiddenByDefault.length,
+      visibleTemplates: showPastPrivateWeeklyTemplates
+        ? allTemplates
+        : allTemplates.filter(
+            (template) =>
+              !shouldHidePrivateWeeklyTemplateByDefault(template, privateWeeklyTemplateTodayYmd)
+          ),
+    }
+  }, [privateAvailabilityTemplates, privateWeeklyTemplateTodayYmd, showPastPrivateWeeklyTemplates])
+  const visiblePrivateAvailabilityTemplates = privateAvailabilityTemplateView.visibleTemplates
+  const hiddenPrivateAvailabilityTemplateCount =
+    privateAvailabilityTemplateView.hiddenByDefaultCount
 
   const reservationsBySlotId = new Map()
   privateLessonReservations.forEach((reservation) => {
@@ -1560,12 +1654,75 @@ export default function PrivateLessonSlotsSection({
                 </div>
               ) : null}
             </form>
+            <div
+              style={{
+                display: 'grid',
+                gap: 8,
+                padding: 12,
+                border: '1px solid #2e3240',
+                borderRadius: 8,
+                background: '#111722',
+              }}
+            >
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
+                <input
+                  type="checkbox"
+                  checked={showPastPrivateWeeklyTemplates}
+                  data-testid="private-weekly-template-history-toggle"
+                  onChange={(event) => setShowPastPrivateWeeklyTemplates(event.target.checked)}
+                />
+                지난/비활성 포함
+              </label>
+              <p style={{ margin: 0, opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
+                기본으로 현재 사용 중이거나 앞으로 사용할 반복 시간표만 표시합니다.
+                <br />
+                지난 기간 또는 비활성 시간표는 “지난/비활성 포함”을 켜면 다시 볼 수 있습니다.
+              </p>
+              {!showPastPrivateWeeklyTemplates && hiddenPrivateAvailabilityTemplateCount > 0 ? (
+                <p
+                  data-testid="private-weekly-template-hidden-count"
+                  style={{ margin: 0, opacity: 0.72, fontSize: 12, color: '#d7def0' }}
+                >
+                  숨김 {hiddenPrivateAvailabilityTemplateCount}개 · 지난/비활성 포함을 켜면
+                  표시됩니다.
+                </p>
+              ) : null}
+            </div>
             {privateAvailabilityTemplatesLoading ? (
               <p style={{ margin: 0, opacity: 0.76 }}>불러오는 중...</p>
             ) : privateAvailabilityTemplates.length === 0 ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>등록된 주간 1:1 시간이 없습니다.</p>
+              <p
+                data-testid={
+                  showPastPrivateWeeklyTemplates
+                    ? 'private-weekly-template-empty-all'
+                    : 'private-weekly-template-empty-current'
+                }
+                style={{ margin: 0, opacity: 0.76, lineHeight: 1.5 }}
+              >
+                {showPastPrivateWeeklyTemplates
+                  ? '등록된 반복 시간표가 없습니다.'
+                  : '현재/예정 반복 시간표가 없습니다.'}
+                {!showPastPrivateWeeklyTemplates ? (
+                  <>
+                    <br />
+                    지난/비활성 포함을 켜면 과거/비활성 시간표를 확인할 수 있습니다.
+                  </>
+                ) : null}
+              </p>
+            ) : visiblePrivateAvailabilityTemplates.length === 0 ? (
+              <p
+                data-testid="private-weekly-template-empty-current"
+                style={{ margin: 0, opacity: 0.76, lineHeight: 1.5 }}
+              >
+                현재/예정 반복 시간표가 없습니다.
+                <br />
+                지난/비활성 포함을 켜면 과거/비활성 시간표를 확인할 수 있습니다.
+              </p>
             ) : (
-              <div style={{ display: 'grid', gap: 8 }}>
+              <div
+                data-testid="private-weekly-template-visible-list"
+                style={{ display: 'grid', gap: 8 }}
+              >
                 <div
                   style={{
                     display: 'grid',
@@ -1586,9 +1743,9 @@ export default function PrivateLessonSlotsSection({
                   <span>기간</span>
                   <span>작업</span>
                 </div>
-                {privateAvailabilityTemplates.map((template) => {
+                {visiblePrivateAvailabilityTemplates.map((template) => {
                   const busy = busyPrivateAvailabilityTemplateId === template.id
-                  const status = String(template.status || 'active') === 'active' ? 'active' : 'inactive'
+                  const status = normalizePrivateWeeklyTemplateStatus(template)
                   const editing = editingAvailabilityTemplateId === template.id
                   return (
                     <Fragment key={template.id}>

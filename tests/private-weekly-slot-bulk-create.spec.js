@@ -376,6 +376,8 @@ test('admin creates a single weekly default slot with an effective date range', 
       openForStudentBooking: true,
     });
 
+    await expect(singleSection).toContainText('지난/비활성 포함');
+    await singleSection.getByTestId('private-weekly-template-history-toggle').check();
     const row = page
       .locator('[data-testid="private-availability-template-row"]')
       .filter({ hasText: teacherName })

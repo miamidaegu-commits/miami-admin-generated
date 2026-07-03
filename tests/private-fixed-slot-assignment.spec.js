@@ -608,6 +608,11 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-time-management-bulk-create-summary');
   expect(privateSlotsSectionSource).toContain('private-time-management-weekly-template-summary');
   expect(privateSlotsSectionSource).toContain('private-time-management-dated-slot-summary');
+  expect(privateSlotsSectionSource).toContain('private-weekly-template-history-toggle');
+  expect(privateSlotsSectionSource).toContain('private-weekly-template-hidden-count');
+  expect(privateSlotsSectionSource).toContain('private-weekly-template-visible-list');
+  expect(privateSlotsSectionSource).toContain('private-weekly-template-empty-current');
+  expect(privateSlotsSectionSource).toContain('private-weekly-template-empty-all');
   expect(privateSlotsSectionSource).toContain('선생님 1:1 시간 만들기');
   expect(privateSlotsSectionSource).toContain('학생 고정 배정 / 연장');
   expect(privateSlotsSectionSource).toContain('선생님별 시간표/예약판');
@@ -630,6 +635,17 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('반복 시간표가 아닌 특정 날짜의 예외 시간을 관리합니다.');
   expect(privateSlotsSectionSource).toContain('보충수업, 임시 오픈, 특별 예약 가능 시간에 사용하세요.');
   expect(privateSlotsSectionSource).toContain('반복되는 시간은 빠른 일괄 추가 또는 기존 반복 시간표를 사용하세요.');
+  expect(privateSlotsSectionSource).toContain('지난/비활성 포함');
+  expect(privateSlotsSectionSource).toContain('현재 사용 중이거나 앞으로 사용할 반복 시간표');
+  expect(privateSlotsSectionSource).toContain('지난 기간 또는 비활성 시간표');
+  expect(privateSlotsSectionSource).toContain('normalizePrivateWeeklyTemplateStatus');
+  expect(privateSlotsSectionSource).toContain('formatPrivateWeeklyTemplateDateValueYmd');
+  expect(privateSlotsSectionSource).toContain('getKstTodayYmd');
+  expect(privateSlotsSectionSource).toContain('shouldHidePrivateWeeklyTemplateByDefault');
+  expect(privateSlotsSectionSource).toContain('effectiveEndDate');
+  expect(privateSlotsSectionSource).toContain('status');
+  expect(privateSlotsSectionSource).toContain('visiblePrivateAvailabilityTemplates');
+  expect(privateSlotsSectionSource).toContain('hiddenPrivateAvailabilityTemplateCount');
   expect(privateSlotsSectionSource).toMatch(
     /<details[\s\S]*open[\s\S]*private-time-management-teacher-board-panel/
   );
@@ -641,6 +657,12 @@ test('fixed private assignment source requires package and links generated docum
   );
   expect(privateSlotsSectionSource).toMatch(
     /private-time-management-student-assignment-group[\s\S]*private-fixed-slot-assignment-section[\s\S]*private-fixed-lessons-management-section/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /showPastPrivateWeeklyTemplates[\s\S]*visiblePrivateAvailabilityTemplates/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /formatDateAsKstYmd[\s\S]*timeZone: 'Asia\/Seoul'/
   );
   expect(functionsSource).toContain('const countedFixedLessonIds = new Set();');
   expect(functionsSource).toContain('reservation.lessonId || reservation.fixedLessonId');
@@ -1111,6 +1133,7 @@ test('admin edits inactive whole-period weekly default slot for fixed assignment
     await openDashboardSection(page, '1:1 예약 시간 관리');
 
     const singleSection = page.getByTestId('private-availability-template-section');
+    await singleSection.getByTestId('private-weekly-template-history-toggle').check();
     const row = singleSection
       .locator('[data-testid="private-availability-template-row"]')
       .filter({ hasText: fixture.teacher.name })
