@@ -572,9 +572,11 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftPackageOption');
   expect(dashboardSource).toContain('fixedPrivateRenewalExistingPackageOptions');
   expect(dashboardSource).toContain('showExistingRenewalPackageChoice');
+  expect(dashboardSource).toContain('handleUseFixedPrivateRenewalDraftPackage');
   expect(dashboardSource).toContain('setShowExistingRenewalPackageChoice(false)');
   expect(dashboardSource).toContain('setFixedPrivateRenewalPackageId(FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID)');
   expect(dashboardSource).toContain('FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID');
+  expect(dashboardSource).toContain('shouldUseDraftPackage');
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftCount');
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftPackage');
   expect(dashboardSource).toContain('fixedPrivateRenewalAutoSuggestion');
@@ -707,6 +709,7 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-existing-package-select');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-use-draft-package');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-existing-package-note');
+  expect(privateSlotsSectionSource).toContain('handleUseFixedPrivateRenewalDraftPackage');
   expect(privateSlotsSectionSource).toContain('기존 남은 수강권으로 미리보기');
   expect(privateSlotsSectionSource).toContain(
     '기존 수강권을 선택하면 새 수강권 초안 대신 해당 수강권의 남은 횟수와 기간으로 미리보기합니다'
@@ -714,14 +717,25 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain(
     '일반적인 연장은 새 수강권 초안을 사용하는 것을 권장합니다'
   );
+  expect(privateSlotsSectionSource).toContain('패널을 닫으면 새 수강권 초안 기준으로 돌아갑니다');
+  expect(privateSlotsSectionSource).toContain(
+    '기존 수강권 선택을 취소하고 새 수강권 초안 기준으로 미리보기합니다'
+  );
   expect(privateSlotsSectionSource).toContain('새 수강권 초안은 기본 연장 방식입니다');
   expect(privateSlotsSectionSource).toContain(
     '이 화면에서는 수강권을 발행하거나 수업을 저장하지 않습니다'
   );
   expect(privateSlotsSectionSource).toContain('새 수강권 초안으로 돌아가기');
   expect(privateSlotsSectionSource).toMatch(
+    /data-testid="private-fixed-renewal-use-draft-package"[\s\S]*onClick=\{\(\) => \{[\s\S]*handleUseFixedPrivateRenewalDraftPackage\?\.\(\)/
+  );
+  expect(privateSlotsSectionSource).toMatch(
+    /type="button"[\s\S]*data-testid="private-fixed-renewal-use-draft-package"/
+  );
+  expect(privateSlotsSectionSource).toMatch(
     /private-fixed-renewal-existing-package-panel[\s\S]*private-fixed-renewal-package-select/
   );
+  expect(privateSlotsSectionSource).not.toContain('새 수강권 초안 사용');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-preparation');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-status');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-action');

@@ -447,6 +447,7 @@ export default function PrivateLessonSlotsSection({
   setFixedPrivateRenewalPackageId,
   showExistingRenewalPackageChoice = false,
   setShowExistingRenewalPackageChoice,
+  handleUseFixedPrivateRenewalDraftPackage,
   fixedPrivateRenewalStartDate = '',
   setFixedPrivateRenewalStartDate,
   fixedPrivateRenewalEndDate = '',
@@ -2826,14 +2827,11 @@ export default function PrivateLessonSlotsSection({
                     data-testid="private-fixed-renewal-existing-package-toggle"
                     onClick={() => {
                       const nextOpen = !showExistingRenewalPackageChoice
-                      setShowExistingRenewalPackageChoice?.(nextOpen)
                       if (!nextOpen) {
-                        setFixedPrivateRenewalPackageId?.(
-                          fixedPrivateRenewalDraftPackageOption?.id ||
-                            fixedPrivateRenewalDraftPackage?.id ||
-                            ''
-                        )
+                        handleUseFixedPrivateRenewalDraftPackage?.()
+                        return
                       }
+                      setShowExistingRenewalPackageChoice?.(true)
                     }}
                     style={{
                       justifySelf: 'start',
@@ -2866,6 +2864,8 @@ export default function PrivateLessonSlotsSection({
                         {'기존 수강권을 선택하면 새 수강권 초안 대신 해당 수강권의 남은 횟수와 기간으로 미리보기합니다.'}
                         <br />
                         일반적인 연장은 새 수강권 초안을 사용하는 것을 권장합니다.
+                        <br />
+                        패널을 닫으면 새 수강권 초안 기준으로 돌아갑니다.
                       </span>
                       <label
                         data-testid="private-fixed-renewal-existing-package-select"
@@ -2882,15 +2882,17 @@ export default function PrivateLessonSlotsSection({
                           }
                           data-testid="private-fixed-renewal-package-select"
                           onChange={(event) => {
-                            setFixedPrivateRenewalPackageId?.(
-                              event.target.value ||
-                                fixedPrivateRenewalDraftPackageOption?.id ||
-                                fixedPrivateRenewalDraftPackage?.id ||
-                                ''
-                            )
+                            const nextPackageId = event.target.value
+                            if (!nextPackageId) {
+                              handleUseFixedPrivateRenewalDraftPackage?.()
+                              return
+                            }
+                            setFixedPrivateRenewalPackageId?.(nextPackageId)
                           }}
                         >
-                          <option value="">새 수강권 초안 사용</option>
+                          <option value="" disabled>
+                            기존 수강권을 선택해 주세요
+                          </option>
                           {fixedPrivateRenewalExistingPackageOptions.map((option) => (
                             <option key={option.id} value={option.id}>
                               {option.label}
@@ -2907,11 +2909,7 @@ export default function PrivateLessonSlotsSection({
                         type="button"
                         data-testid="private-fixed-renewal-use-draft-package"
                         onClick={() => {
-                          setFixedPrivateRenewalPackageId?.(
-                            fixedPrivateRenewalDraftPackageOption?.id ||
-                              fixedPrivateRenewalDraftPackage?.id ||
-                              ''
-                          )
+                          handleUseFixedPrivateRenewalDraftPackage?.()
                         }}
                         style={{
                           justifySelf: 'start',
@@ -2925,6 +2923,9 @@ export default function PrivateLessonSlotsSection({
                       >
                         새 수강권 초안으로 돌아가기
                       </button>
+                      <span style={{ opacity: 0.74 }}>
+                        기존 수강권 선택을 취소하고 새 수강권 초안 기준으로 미리보기합니다.
+                      </span>
                     </div>
                   ) : null}
                 </div>
