@@ -569,6 +569,11 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain('fixedPrivateRenewalPlan');
   expect(dashboardSource).toContain('fixedPrivateRenewalSeedOptions');
   expect(dashboardSource).toContain('fixedPrivateRenewalPackageOptions');
+  expect(dashboardSource).toContain('fixedPrivateRenewalDraftPackageOption');
+  expect(dashboardSource).toContain('fixedPrivateRenewalExistingPackageOptions');
+  expect(dashboardSource).toContain('showExistingRenewalPackageChoice');
+  expect(dashboardSource).toContain('setShowExistingRenewalPackageChoice(false)');
+  expect(dashboardSource).toContain('setFixedPrivateRenewalPackageId(FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID)');
   expect(dashboardSource).toContain('FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID');
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftCount');
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftPackage');
@@ -697,6 +702,26 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-draft-package-label');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-auto-prefill-note');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-draft-preview-only-note');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-existing-package-toggle');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-existing-package-panel');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-existing-package-select');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-use-draft-package');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-existing-package-note');
+  expect(privateSlotsSectionSource).toContain('기존 남은 수강권으로 미리보기');
+  expect(privateSlotsSectionSource).toContain(
+    '기존 수강권을 선택하면 새 수강권 초안 대신 해당 수강권의 남은 횟수와 기간으로 미리보기합니다'
+  );
+  expect(privateSlotsSectionSource).toContain(
+    '일반적인 연장은 새 수강권 초안을 사용하는 것을 권장합니다'
+  );
+  expect(privateSlotsSectionSource).toContain('새 수강권 초안은 기본 연장 방식입니다');
+  expect(privateSlotsSectionSource).toContain(
+    '이 화면에서는 수강권을 발행하거나 수업을 저장하지 않습니다'
+  );
+  expect(privateSlotsSectionSource).toContain('새 수강권 초안으로 돌아가기');
+  expect(privateSlotsSectionSource).toMatch(
+    /private-fixed-renewal-existing-package-panel[\s\S]*private-fixed-renewal-package-select/
+  );
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-preparation');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-status');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-action');
@@ -717,13 +742,13 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain(
     '기존 고정 수업을 선택하면 연장 시작일, 종료일, 회수, 새 수강권 초안을 자동으로 채웁니다'
   );
-  expect(privateSlotsSectionSource).toContain('새 수강권 초안은 저장되지 않으며');
+  expect(privateSlotsSectionSource).toContain('이 초안은 저장되지 않았으며');
   expect(privateSlotsSectionSource).toContain('실제 발행은 다음 단계에서 진행됩니다');
   expect(privateSlotsSectionSource).toContain(
     '필요한 경우 연장 회수와 기간을 수정해 미리보기를 다시 확인할 수 있습니다'
   );
   expect(privateSlotsSectionSource).toContain('연장 회수');
-  expect(privateSlotsSectionSource).toContain('연장 수강권 또는 새 수강권 초안');
+  expect(privateSlotsSectionSource).not.toContain('연장 수강권 또는 새 수강권 초안');
   expect(privateSlotsSectionSource).not.toContain('data-testid="private-fixed-renewal-submit-button"');
   expect(privateSlotsSectionSource).not.toContain('onClick={createFixedPrivateRenewal');
   expect(privateSlotsSectionSource).not.toContain('createFixedPrivateRenewal(');

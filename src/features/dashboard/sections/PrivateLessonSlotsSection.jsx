@@ -445,6 +445,8 @@ export default function PrivateLessonSlotsSection({
   setFixedPrivateRenewalSeedLessonId,
   fixedPrivateRenewalPackageId = '',
   setFixedPrivateRenewalPackageId,
+  showExistingRenewalPackageChoice = false,
+  setShowExistingRenewalPackageChoice,
   fixedPrivateRenewalStartDate = '',
   setFixedPrivateRenewalStartDate,
   fixedPrivateRenewalEndDate = '',
@@ -455,6 +457,8 @@ export default function PrivateLessonSlotsSection({
   fixedPrivateRenewalDraftNote = '',
   fixedPrivateRenewalAutoSuggestion = null,
   fixedPrivateRenewalSeedOptions = [],
+  fixedPrivateRenewalDraftPackageOption = null,
+  fixedPrivateRenewalExistingPackageOptions = [],
   fixedPrivateRenewalPackageOptions = [],
   fixedPrivateRenewalPlan = null,
   createPrivateSlot,
@@ -2680,6 +2684,7 @@ export default function PrivateLessonSlotsSection({
                     onChange={(event) => {
                       setFixedPrivateRenewalSeedLessonId?.(event.target.value)
                       setFixedPrivateRenewalPackageId?.('')
+                      setShowExistingRenewalPackageChoice?.(false)
                     }}
                   >
                     <option value="">선택</option>
@@ -2691,28 +2696,6 @@ export default function PrivateLessonSlotsSection({
                   </select>
                   {fixedPrivateRenewalSeedOptions.length === 0 ? (
                     <span style={{ opacity: 0.72 }}>연장 기준으로 사용할 기존 고정 수업이 없습니다.</span>
-                  ) : null}
-                </label>
-                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                  연장 수강권 또는 새 수강권 초안
-                  <select
-                    value={fixedPrivateRenewalPackageId}
-                    data-testid="private-fixed-renewal-package-select"
-                    disabled={!fixedPrivateRenewalSeedLessonId}
-                    onChange={(event) => setFixedPrivateRenewalPackageId?.(event.target.value)}
-                  >
-                    <option value="">선택</option>
-                    {fixedPrivateRenewalPackageOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  {fixedPrivateRenewalSeedLessonId &&
-                  fixedPrivateRenewalPackageOptions.length === 0 ? (
-                    <span style={{ color: '#f4a7a7' }}>
-                      선택한 고정 수업의 학생/선생님에 맞는 개인 수강권이 없습니다.
-                    </span>
                   ) : null}
                 </label>
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
@@ -2802,11 +2785,23 @@ export default function PrivateLessonSlotsSection({
                     {fixedPrivateRenewalDraftPackage.endDate || '-'}
                   </span>
                   <span>메모: {fixedPrivateRenewalDraftNote || '연장 자동 초안 · 저장 전'}</span>
+                  <span style={{ opacity: 0.78 }}>
+                    새 수강권 초안은 기본 연장 방식입니다.
+                  </span>
+                  {fixedPrivateRenewalPackageId &&
+                  fixedPrivateRenewalPackageId !==
+                    (fixedPrivateRenewalDraftPackageOption?.id || fixedPrivateRenewalDraftPackage.id) ? (
+                    <span style={{ color: '#f5c17a' }}>
+                      현재 미리보기: 기존 수강권 기준
+                    </span>
+                  ) : null}
                   <span
                     data-testid="private-fixed-renewal-draft-preview-only-note"
                     style={{ opacity: 0.74 }}
                   >
-                    새 수강권 초안은 저장되지 않으며, 실제 발행은 다음 단계에서 진행됩니다.
+                    이 초안은 저장되지 않았으며, 실제 발행은 다음 단계에서 진행됩니다.
+                    <br />
+                    이 화면에서는 수강권을 발행하거나 수업을 저장하지 않습니다.
                   </span>
                 </div>
               ) : fixedPrivateRenewalSeedLessonId ? (
@@ -2822,6 +2817,116 @@ export default function PrivateLessonSlotsSection({
                 >
                   연장 시작일을 선택해 주세요. 새 수강권 초안은 저장 전 미리보기 용도로만
                   사용됩니다.
+                </div>
+              ) : null}
+              {fixedPrivateRenewalSeedLessonId ? (
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <button
+                    type="button"
+                    data-testid="private-fixed-renewal-existing-package-toggle"
+                    onClick={() => {
+                      const nextOpen = !showExistingRenewalPackageChoice
+                      setShowExistingRenewalPackageChoice?.(nextOpen)
+                      if (!nextOpen) {
+                        setFixedPrivateRenewalPackageId?.(
+                          fixedPrivateRenewalDraftPackageOption?.id ||
+                            fixedPrivateRenewalDraftPackage?.id ||
+                            ''
+                        )
+                      }
+                    }}
+                    style={{
+                      justifySelf: 'start',
+                      border: '1px solid #3b4252',
+                      borderRadius: 6,
+                      background: showExistingRenewalPackageChoice ? '#253047' : '#151922',
+                      color: '#d7def0',
+                      padding: '8px 10px',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    기존 남은 수강권으로 미리보기
+                  </button>
+                  {showExistingRenewalPackageChoice ? (
+                    <div
+                      data-testid="private-fixed-renewal-existing-package-panel"
+                      style={{
+                        display: 'grid',
+                        gap: 8,
+                        border: '1px solid #293246',
+                        borderRadius: 8,
+                        padding: 12,
+                        background: '#151922',
+                      }}
+                    >
+                      <span
+                        data-testid="private-fixed-renewal-existing-package-note"
+                        style={{ opacity: 0.78, lineHeight: 1.6 }}
+                      >
+                        {'기존 수강권을 선택하면 새 수강권 초안 대신 해당 수강권의 남은 횟수와 기간으로 미리보기합니다.'}
+                        <br />
+                        일반적인 연장은 새 수강권 초안을 사용하는 것을 권장합니다.
+                      </span>
+                      <label
+                        data-testid="private-fixed-renewal-existing-package-select"
+                        style={{ display: 'grid', gap: 6, fontSize: 13 }}
+                      >
+                        기존 수강권 선택
+                        <select
+                          value={
+                            fixedPrivateRenewalExistingPackageOptions.some(
+                              (option) => option.id === fixedPrivateRenewalPackageId
+                            )
+                              ? fixedPrivateRenewalPackageId
+                              : ''
+                          }
+                          data-testid="private-fixed-renewal-package-select"
+                          onChange={(event) => {
+                            setFixedPrivateRenewalPackageId?.(
+                              event.target.value ||
+                                fixedPrivateRenewalDraftPackageOption?.id ||
+                                fixedPrivateRenewalDraftPackage?.id ||
+                                ''
+                            )
+                          }}
+                        >
+                          <option value="">새 수강권 초안 사용</option>
+                          {fixedPrivateRenewalExistingPackageOptions.map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        {fixedPrivateRenewalExistingPackageOptions.length === 0 ? (
+                          <span style={{ color: '#f4a7a7' }}>
+                            선택한 고정 수업의 학생/선생님에 맞는 기존 남은 수강권이 없습니다.
+                          </span>
+                        ) : null}
+                      </label>
+                      <button
+                        type="button"
+                        data-testid="private-fixed-renewal-use-draft-package"
+                        onClick={() => {
+                          setFixedPrivateRenewalPackageId?.(
+                            fixedPrivateRenewalDraftPackageOption?.id ||
+                              fixedPrivateRenewalDraftPackage?.id ||
+                              ''
+                          )
+                        }}
+                        style={{
+                          justifySelf: 'start',
+                          border: '1px solid #3b4252',
+                          borderRadius: 6,
+                          background: '#111722',
+                          color: '#d7def0',
+                          padding: '8px 10px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        새 수강권 초안으로 돌아가기
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               {fixedPrivateRenewalPlan?.teacherTimePreparation ? (

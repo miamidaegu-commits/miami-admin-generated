@@ -1434,6 +1434,7 @@ export default function Dashboard() {
   const [fixedPrivateRenewalEndDate, setFixedPrivateRenewalEndDate] = useState('')
   const [fixedPrivateRenewalDraftCount, setFixedPrivateRenewalDraftCount] = useState('')
   const [fixedPrivateRenewalAutoSuggestion, setFixedPrivateRenewalAutoSuggestion] = useState(null)
+  const [showExistingRenewalPackageChoice, setShowExistingRenewalPackageChoice] = useState(false)
   const [busyFixedPrivateLessonCancelId, setBusyFixedPrivateLessonCancelId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
@@ -6739,6 +6740,7 @@ export default function Dashboard() {
       setFixedPrivateRenewalStartDate('')
       setFixedPrivateRenewalEndDate('')
       setFixedPrivateRenewalPackageId('')
+      setShowExistingRenewalPackageChoice(false)
       setFixedPrivateRenewalAutoSuggestion(null)
       return
     }
@@ -6782,6 +6784,7 @@ export default function Dashboard() {
     setFixedPrivateRenewalStartDate(startDate)
     setFixedPrivateRenewalEndDate(endDate)
     setFixedPrivateRenewalPackageId(FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID)
+    setShowExistingRenewalPackageChoice(false)
     setFixedPrivateRenewalAutoSuggestion({
       latestDate,
       startDate,
@@ -6837,23 +6840,23 @@ export default function Dashboard() {
     selectedFixedPrivateRenewalSeedLesson,
   ])
 
-  const fixedPrivateRenewalPackageOptions = useMemo(() => {
+  const fixedPrivateRenewalDraftPackageOption = useMemo(() => {
+    if (!fixedPrivateRenewalDraftPackage) return null
+    return {
+      id: FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID,
+      label: formatPrivateFixedRenewalDraftOption(fixedPrivateRenewalDraftPackage),
+      availableCount: Number(fixedPrivateRenewalDraftPackage.remainingCount || 0) || 0,
+      previewOnly: true,
+    }
+  }, [fixedPrivateRenewalDraftPackage])
+
+  const fixedPrivateRenewalExistingPackageOptions = useMemo(() => {
     const seedLesson = selectedFixedPrivateRenewalSeedLesson
     if (!seedLesson || !isValidOperationalAcademyId(currentAcademyId)) return []
     const studentId = getPrivateFixedLessonStudentId(seedLesson)
     const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
     if (!studentId || !teacherFields.teacher) return []
-    const draftOption = fixedPrivateRenewalDraftPackage
-      ? [
-          {
-            id: FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID,
-            label: formatPrivateFixedRenewalDraftOption(fixedPrivateRenewalDraftPackage),
-            availableCount: Number(fixedPrivateRenewalDraftPackage.remainingCount || 0) || 0,
-            previewOnly: true,
-          },
-        ]
-      : []
-    const existingOptions = studentPackages
+    return studentPackages
       .filter((pkg) =>
         isActivePrivatePackageForTeacher({
           pkg,
@@ -6890,15 +6893,22 @@ export default function Dashboard() {
         const aHasAvailable = a.availableCount > 0 ? 1 : 0
         return bHasAvailable - aHasAvailable || b.availableCount - a.availableCount || a.label.localeCompare(b.label, 'ko')
       })
-    return [...draftOption, ...existingOptions]
   }, [
     currentAcademyId,
-    fixedPrivateRenewalDraftPackage,
     lessons,
     privateLessonReservations,
     selectedFixedPrivateRenewalSeedLesson,
     studentPackages,
   ])
+
+  const fixedPrivateRenewalPackageOptions = useMemo(
+    () =>
+      [
+        fixedPrivateRenewalDraftPackageOption,
+        ...fixedPrivateRenewalExistingPackageOptions,
+      ].filter(Boolean),
+    [fixedPrivateRenewalDraftPackageOption, fixedPrivateRenewalExistingPackageOptions]
+  )
 
   const fixedPrivateRenewalPlan = useMemo(() => {
     const seedLesson = selectedFixedPrivateRenewalSeedLesson
@@ -7199,6 +7209,8 @@ export default function Dashboard() {
     setFixedPrivateRenewalSeedLessonId,
     fixedPrivateRenewalPackageId,
     setFixedPrivateRenewalPackageId,
+    showExistingRenewalPackageChoice,
+    setShowExistingRenewalPackageChoice,
     fixedPrivateRenewalStartDate,
     setFixedPrivateRenewalStartDate,
     fixedPrivateRenewalEndDate,
@@ -7209,6 +7221,8 @@ export default function Dashboard() {
     fixedPrivateRenewalDraftNote,
     fixedPrivateRenewalAutoSuggestion,
     fixedPrivateRenewalSeedOptions,
+    fixedPrivateRenewalDraftPackageOption,
+    fixedPrivateRenewalExistingPackageOptions,
     fixedPrivateRenewalPackageOptions,
     fixedPrivateRenewalPlan,
     createPrivateSlot,
