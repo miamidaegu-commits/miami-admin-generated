@@ -2824,6 +2824,68 @@ export default function PrivateLessonSlotsSection({
                   사용됩니다.
                 </div>
               ) : null}
+              {fixedPrivateRenewalPlan?.teacherTimePreparation ? (
+                <div
+                  data-testid="private-fixed-renewal-teacher-time-preparation"
+                  style={{
+                    display: 'grid',
+                    gap: 8,
+                    border: '1px solid #293246',
+                    borderRadius: 8,
+                    padding: 12,
+                    background: '#151922',
+                  }}
+                >
+                  <strong>선생님 시간 준비</strong>
+                  <span data-testid="private-fixed-renewal-teacher-time-status">
+                    상태: {fixedPrivateRenewalPlan.teacherTimePreparation.statusLabel || '-'}
+                  </span>
+                  <span data-testid="private-fixed-renewal-teacher-time-action">
+                    처리 예정: {fixedPrivateRenewalPlan.teacherTimePreparation.actionLabel || '-'}
+                  </span>
+                  <span data-testid="private-fixed-renewal-teacher-time-target">
+                    선생님: {fixedPrivateRenewalPlan.teacherTimePreparation.teacherName || '-'} ·{' '}
+                    {fixedPrivateRenewalPlan.teacherTimePreparation.weekdayLabel || '-'}{' '}
+                    {fixedPrivateRenewalPlan.teacherTimePreparation.time || '-'} ·{' '}
+                    {Number(fixedPrivateRenewalPlan.teacherTimePreparation.durationMinutes || 0)}분 ·{' '}
+                    기간 {fixedPrivateRenewalPlan.teacherTimePreparation.startDate || '-'} ~{' '}
+                    {fixedPrivateRenewalPlan.teacherTimePreparation.endDate || '-'}
+                  </span>
+                  <span data-testid="private-fixed-renewal-teacher-time-fixed-assignment">
+                    고정 수업 배정용: 켬
+                  </span>
+                  <span data-testid="private-fixed-renewal-teacher-time-direct-booking">
+                    학생 직접 예약 허용: 끔
+                  </span>
+                  {fixedPrivateRenewalPlan.teacherTimePreparation.overlappingTemplates?.length > 0 ||
+                  fixedPrivateRenewalPlan.teacherTimePreparation.blockingConflicts?.length > 0 ? (
+                    <div
+                      data-testid="private-fixed-renewal-teacher-time-conflicts"
+                      style={{ color: '#f5c17a', display: 'grid', gap: 4 }}
+                    >
+                      <strong>시간 겹침 충돌</strong>
+                      {fixedPrivateRenewalPlan.teacherTimePreparation.overlappingTemplates.map(
+                        (template) => (
+                          <span key={template.id || `${template.weekday}-${template.time}`}>
+                            {template.teacherName || template.teacher || '선생님'} ·{' '}
+                            {template.time || '-'} · {Number(template.durationMinutes || 0)}분
+                          </span>
+                        )
+                      )}
+                    </div>
+                  ) : null}
+                  <span
+                    data-testid="private-fixed-renewal-teacher-time-preview-only-note"
+                    style={{ opacity: 0.74, lineHeight: 1.6 }}
+                  >
+                    이 단계에서는 선생님 시간을 실제로 만들거나 변경하지 않습니다.
+                    <br />
+                    실제 저장 단계에서 필요한 선생님 시간을 함께 준비할 예정입니다.
+                    <br />
+                    학생 직접 예약 허용은 자동으로 켜지지 않습니다.
+                  </span>
+                </div>
+              ) : null}
               <div
                 data-testid="private-fixed-renewal-plan"
                 style={{
@@ -2847,6 +2909,19 @@ export default function PrivateLessonSlotsSection({
                     제외 {Number(fixedPrivateRenewalPlan?.excludedCount || 0)}회
                   </span>
                 </div>
+                {['conflict', 'missing_info'].includes(
+                  fixedPrivateRenewalPlan?.teacherTimePreparation?.status
+                ) ? (
+                  <div style={{ color: '#f5c17a' }}>
+                    {fixedPrivateRenewalPlan.teacherTimePreparation.statusLabel} · 저장 전
+                    미리보기이며, 실제 선생님 시간 변경은 아직 발생하지 않았습니다.
+                  </div>
+                ) : fixedPrivateRenewalPlan?.teacherTimePreparation?.status ? (
+                  <div style={{ opacity: 0.78 }}>
+                    {fixedPrivateRenewalPlan.teacherTimePreparation.statusLabel} · 저장 전
+                    미리보기이며, 실제 선생님 시간 변경은 아직 발생하지 않았습니다.
+                  </div>
+                ) : null}
                 {fixedPrivateRenewalPlan?.blockingReasons?.length > 0 ? (
                   <div style={{ color: '#f5c17a', display: 'grid', gap: 4 }}>
                     {fixedPrivateRenewalPlan.blockingReasons.map((reason) => (

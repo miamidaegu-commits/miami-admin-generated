@@ -573,17 +573,35 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftCount');
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftPackage');
   expect(dashboardSource).toContain('fixedPrivateRenewalAutoSuggestion');
+  expect(dashboardSource).toContain('teacherTimePreparation');
+  expect(dashboardSource).toContain('fixedPrivateRenewalTeacherTimePreparation');
+  expect(dashboardSource).toContain('buildFixedPrivateRenewalTeacherTimePreparation');
+  expect(dashboardSource).toContain('FIXED_PRIVATE_RENEWAL_TEACHER_TIME_DRAFT_TEMPLATE_ID');
+  expect(dashboardSource).toContain("source: 'fixed-private-renewal-teacher-time-draft'");
   expect(dashboardSource).toContain('연장 자동 초안');
   expect(dashboardSource).toContain('새 수강권 초안');
   expect(dashboardSource).toContain('저장 전');
   expect(dashboardSource).toContain("source: 'fixed-private-renewal-draft'");
+  expect(dashboardSource).toContain('기존 활성 시간표 사용');
+  expect(dashboardSource).toContain('비활성 시간표 재활성화 예정');
+  expect(dashboardSource).toContain('새 선생님 시간표 생성 예정');
+  expect(dashboardSource).toContain('중복 시간표 있음');
+  expect(dashboardSource).toContain('시간 겹침 충돌');
+  expect(dashboardSource).toContain('선생님 시간 정보 부족');
+  expect(dashboardSource).toContain('이미 사용 중인 고정 수업 배정용 시간표를 사용합니다.');
+  expect(dashboardSource).toContain('저장 단계에서 이 시간표를 다시 사용으로 변경할 예정입니다.');
+  expect(dashboardSource).toContain('저장 단계에서 고정 수업 배정용 선생님 시간을 새로 만들 예정입니다.');
+  expect(dashboardSource).toContain('같은 요일에 겹치는 선생님 시간이 있어 새 시간표를 자동 준비할 수 없습니다.');
+  expect(dashboardSource).toContain(
+    '선생님/요일/시간/길이 정보가 부족해 연장 시간표를 준비할 수 없습니다.'
+  );
   expect(dashboardSource).toContain('isRenewableFixedPrivateLesson');
   expect(dashboardSource).toContain('privateFixedRenewalTemplateMatchesSeed');
   expect(dashboardSource).toContain("reason: '수강권 기간 밖'");
   expect(dashboardSource).toContain("reason: '남은 횟수 부족'");
   expect(dashboardSource).toContain("reason: '선생님 시간 없음'");
   expect(dashboardSource).toContain("reason: '이미 예약/배정된 시간'");
-  expect(dashboardSource).toContain("reason: '비활성 시간표'");
+  expect(dashboardSource).toContain('비활성 시간표');
   expect(dashboardSource).toContain('기존 고정 수업 정보 부족');
   expect(dashboardSource).toContain('수강권 선택 필요');
   expect(dashboardSource).toContain('연장 기간 선택 필요');
@@ -595,6 +613,9 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain('isSeatReleased');
   expect(dashboardSource).toContain("'자리 공개됨'");
   expect(dashboardSource).toContain("'자리 공개 기준'");
+  expect(dashboardSource).toContain("'예약 기준'");
+  expect(dashboardSource).toContain("'슬롯 기준'");
+  expect(dashboardSource).toContain("'기존 일정 기준'");
   expect(dashboardSource).toContain("'lesson_cancelled'");
   expect(dashboardSource).toContain("'fixed_lesson_cancelled'");
   expect(dashboardSource).toContain("['deleted', 'archived'].includes(status)");
@@ -676,6 +697,23 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-draft-package-label');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-auto-prefill-note');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-draft-preview-only-note');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-preparation');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-status');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-action');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-target');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-fixed-assignment');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-direct-booking');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-conflicts');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-teacher-time-preview-only-note');
+  expect(privateSlotsSectionSource).toContain('선생님 시간 준비');
+  expect(privateSlotsSectionSource).toContain('고정 수업 배정용: 켬');
+  expect(privateSlotsSectionSource).toContain('학생 직접 예약 허용: 끔');
+  expect(privateSlotsSectionSource).toContain('이 단계에서는 선생님 시간을 실제로 만들거나 변경하지 않습니다');
+  expect(privateSlotsSectionSource).toContain(
+    '실제 저장 단계에서 필요한 선생님 시간을 함께 준비할 예정입니다'
+  );
+  expect(privateSlotsSectionSource).toContain('학생 직접 예약 허용은 자동으로 켜지지 않습니다');
+  expect(privateSlotsSectionSource).toContain('실제 선생님 시간 변경은 아직 발생하지 않았습니다');
   expect(privateSlotsSectionSource).toContain(
     '기존 고정 수업을 선택하면 연장 시작일, 종료일, 회수, 새 수강권 초안을 자동으로 채웁니다'
   );
@@ -692,6 +730,8 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).not.toContain('>연장 저장<');
   expect(privateSlotsSectionSource).not.toContain('>연장 생성<');
   expect(privateSlotsSectionSource).not.toContain('>수강권 발행<');
+  expect(privateSlotsSectionSource).not.toContain('>선생님 시간 생성<');
+  expect(privateSlotsSectionSource).not.toContain('>시간표 활성화<');
   expect(privateSlotsSectionSource).not.toContain('>저장하고 연장<');
   expect(privateSlotsSectionSource).not.toContain('>저장 후 생성<');
   expect(privateSlotsSectionSource).toContain('선생님 1:1 시간 만들기');

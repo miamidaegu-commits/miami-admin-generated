@@ -471,6 +471,8 @@ function generatePrivateFixedAssignmentDates({ template, startDate, endDate }) {
 
 const PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일']
 const FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID = '__fixed_private_renewal_draft_package__'
+const FIXED_PRIVATE_RENEWAL_TEACHER_TIME_DRAFT_TEMPLATE_ID =
+  '__fixed_private_renewal_teacher_time_draft__'
 const FIXED_PRIVATE_RENEWAL_DRAFT_NOTE = '연장 자동 초안 · 저장 전'
 
 function getPrivateFixedLessonStudentId(lesson) {
@@ -711,6 +713,211 @@ function privateFixedRenewalTemplateMatchesSeed(template, seedLesson) {
     getPrivateFixedLessonDurationMinutes(template) === durationMinutes &&
     privateFixedRenewalTeacherMatchesTemplate(seedLesson, template)
   )
+}
+
+function normalizeFixedPrivateRenewalTemplateStatus(template) {
+  const status = String(template?.status || '').trim().toLowerCase()
+  if (!status) return 'active'
+  if (['active', 'enabled', 'enable', 'use', 'using', 'used', '사용'].includes(status)) {
+    return 'active'
+  }
+  if (
+    [
+      'inactive',
+      'disabled',
+      'disable',
+      'stop',
+      'stopped',
+      'pause',
+      'paused',
+      '비활성',
+      '중지',
+    ].includes(status)
+  ) {
+    return 'inactive'
+  }
+  return status
+}
+
+function isActiveFixedPrivateRenewalTeacherTime(template) {
+  return (
+    normalizeFixedPrivateRenewalTemplateStatus(template) === 'active' &&
+    isPrivateAvailabilityTemplateForFixedAssignment(template)
+  )
+}
+
+function buildFixedPrivateRenewalTeacherTimeDraftTemplate({
+  seedLesson,
+  teacherFields,
+  weekday,
+  time,
+  durationMinutes,
+  startDate,
+  endDate,
+  sourceTemplate = null,
+}) {
+  return {
+    ...(sourceTemplate || {}),
+    id: FIXED_PRIVATE_RENEWAL_TEACHER_TIME_DRAFT_TEMPLATE_ID,
+    previewOnly: true,
+    source: 'fixed-private-renewal-teacher-time-draft',
+    academyId: seedLesson?.academyId || sourceTemplate?.academyId || '',
+    ...teacherFields,
+    weekday,
+    time,
+    durationMinutes,
+    status: 'active',
+    useForFixedAssignment: true,
+    openForStudentBooking: false,
+    effectiveStartDate: isYmd(startDate) ? startDate : '',
+    effectiveEndDate: isYmd(endDate) ? endDate : '',
+  }
+}
+
+function buildFixedPrivateRenewalTeacherTimePreparation({
+  seedLesson,
+  privateAvailabilityTemplates,
+  startDate,
+  endDate,
+}) {
+  const weekday = getPrivateFixedLessonWeekday(seedLesson)
+  const time = getPrivateFixedLessonTime(seedLesson)
+  const durationMinutes = getPrivateFixedLessonDurationMinutes(seedLesson)
+  const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
+  const weekdayLabel = weekday === null ? '요일 정보 부족' : PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS[weekday] || '요일 미상'
+  const teacherName =
+    String(seedLesson?.teacherName || seedLesson?.teacher || teacherFields.teacherName || teacherFields.teacher).trim() ||
+    '선생님 정보 부족'
+  const base = {
+    status: 'missing_info',
+    statusLabel: '선생님 시간 정보 부족',
+    actionLabel: '선생님/요일/시간/길이 정보가 부족해 연장 시간표를 준비할 수 없습니다.',
+    template: null,
+    templateForPreview: null,
+    virtualTemplate: null,
+    matchingTemplates: [],
+    overlappingTemplates: [],
+    blockingConflicts: [],
+    canPreviewDates: false,
+    previewOnly: true,
+    teacherName,
+    weekday,
+    weekdayLabel,
+    time,
+    durationMinutes,
+    startDate,
+    endDate,
+    useForFixedAssignment: true,
+    openForStudentBooking: false,
+    teacherFields,
+  }
+
+  if (!seedLesson || !teacherFields.teacher || weekday === null || !time || !durationMinutes) {
+    return base
+  }
+
+  const matchingTemplates = (Array.isArray(privateAvailabilityTemplates) ? privateAvailabilityTemplates : [])
+    .filter((template) => privateFixedRenewalTemplateMatchesSeed(template, seedLesson))
+  const activeFixedTemplates = matchingTemplates.filter(isActiveFixedPrivateRenewalTeacherTime)
+  const draftTemplate = buildFixedPrivateRenewalTeacherTimeDraftTemplate({
+    seedLesson,
+    teacherFields,
+    weekday,
+    time,
+    durationMinutes,
+    startDate,
+    endDate,
+  })
+
+  if (matchingTemplates.length > 1) {
+    const template = activeFixedTemplates[0] || matchingTemplates[0]
+    const templateForPreview = activeFixedTemplates[0] || buildFixedPrivateRenewalTeacherTimeDraftTemplate({
+      seedLesson,
+      teacherFields,
+      weekday,
+      time,
+      durationMinutes,
+      startDate,
+      endDate,
+      sourceTemplate: template,
+    })
+    const hasActive = activeFixedTemplates.length > 0
+    return {
+      ...base,
+      status: 'duplicate',
+      statusLabel: '중복 시간표 있음',
+      actionLabel: hasActive
+        ? '기존 활성 시간표를 사용하고 중복 시간표는 새로 만들지 않습니다.'
+        : '재활성화 후보가 여러 개 있어 저장 단계에서 사용할 시간표를 확인해야 합니다.',
+      template,
+      templateForPreview,
+      virtualTemplate: templateForPreview.previewOnly ? templateForPreview : null,
+      matchingTemplates,
+      canPreviewDates: true,
+    }
+  }
+
+  if (activeFixedTemplates.length === 1) {
+    return {
+      ...base,
+      status: 'ready',
+      statusLabel: '기존 활성 시간표 사용',
+      actionLabel: '이미 사용 중인 고정 수업 배정용 시간표를 사용합니다.',
+      template: activeFixedTemplates[0],
+      templateForPreview: activeFixedTemplates[0],
+      matchingTemplates,
+      canPreviewDates: true,
+    }
+  }
+
+  if (matchingTemplates.length === 1) {
+    const template = matchingTemplates[0]
+    const virtualTemplate = buildFixedPrivateRenewalTeacherTimeDraftTemplate({
+      seedLesson,
+      teacherFields,
+      weekday,
+      time,
+      durationMinutes,
+      startDate,
+      endDate,
+      sourceTemplate: template,
+    })
+    return {
+      ...base,
+      status: 'reactivate',
+      statusLabel: '비활성 시간표 재활성화 예정',
+      actionLabel: '저장 단계에서 이 시간표를 다시 사용으로 변경할 예정입니다.',
+      template,
+      templateForPreview: virtualTemplate,
+      virtualTemplate,
+      matchingTemplates,
+      canPreviewDates: true,
+    }
+  }
+
+  const overlapConflict = findPrivateWeeklyTemplateOverlap(draftTemplate, privateAvailabilityTemplates)
+  if (overlapConflict) {
+    return {
+      ...base,
+      status: 'conflict',
+      statusLabel: '시간 겹침 충돌',
+      actionLabel: '같은 요일에 겹치는 선생님 시간이 있어 새 시간표를 자동 준비할 수 없습니다.',
+      virtualTemplate: draftTemplate,
+      overlappingTemplates: overlapConflict.existing ? [overlapConflict.existing] : [],
+      blockingConflicts: [overlapConflict],
+      canPreviewDates: false,
+    }
+  }
+
+  return {
+    ...base,
+    status: 'create',
+    statusLabel: '새 선생님 시간표 생성 예정',
+    actionLabel: '저장 단계에서 고정 수업 배정용 선생님 시간을 새로 만들 예정입니다.',
+    templateForPreview: draftTemplate,
+    virtualTemplate: draftTemplate,
+    canPreviewDates: true,
+  }
 }
 
 function formatPrivatePackageCoverageForOption(pkg) {
@@ -6707,6 +6914,7 @@ export default function Dashboard() {
       seedLesson,
       selectedPackage,
       template: null,
+      teacherTimePreparation: null,
       candidateDates: [],
       assignableDates: [],
       excludedDates: [],
@@ -6748,35 +6956,62 @@ export default function Dashboard() {
           (template) => String(template.id || '').trim() === seedTemplateId
         ) || null
       : null
-    const fallbackTemplateCandidates = privateAvailabilityTemplates.filter((template) =>
-      privateFixedRenewalTemplateMatchesSeed(template, seedLesson)
-    )
-    const fallbackTemplate =
-      fallbackTemplateCandidates.find(
-        (template) =>
-          String(template.status || 'active').trim() === 'active' &&
-          isPrivateAvailabilityTemplateForFixedAssignment(template)
-      ) ||
-      fallbackTemplateCandidates[0] ||
-      null
-    const template = templateFromSeedId || fallbackTemplate
-    const templateIsActive =
-      template &&
-      String(template.status || 'active').trim() === 'active' &&
-      isPrivateAvailabilityTemplateForFixedAssignment(template)
+    const fixedPrivateRenewalTeacherTimePreparation = buildFixedPrivateRenewalTeacherTimePreparation({
+      seedLesson,
+      privateAvailabilityTemplates,
+      startDate,
+      endDate,
+    })
+    const teacherTimePreparation = fixedPrivateRenewalTeacherTimePreparation
+    const template =
+      templateFromSeedId && isActiveFixedPrivateRenewalTeacherTime(templateFromSeedId)
+        ? templateFromSeedId
+        : teacherTimePreparation.templateForPreview || teacherTimePreparation.template || null
     const virtualTemplate = {
       ...(template || {}),
       weekday,
       time,
       durationMinutes,
-      effectiveStartDate: template?.effectiveStartDate || '',
-      effectiveEndDate: template?.effectiveEndDate || '',
+      effectiveStartDate:
+        template?.effectiveStartDate || (teacherTimePreparation.canPreviewDates ? startDate : ''),
+      effectiveEndDate:
+        template?.effectiveEndDate || (teacherTimePreparation.canPreviewDates ? endDate : ''),
+      status: teacherTimePreparation.canPreviewDates ? 'active' : template?.status || 'inactive',
+      useForFixedAssignment: teacherTimePreparation.canPreviewDates
+        ? true
+        : template?.useForFixedAssignment,
+      openForStudentBooking: false,
     }
     const hasValidRenewalRange = isYmd(startDate) && isYmd(endDate) && endDate >= startDate
-    const candidateDates = hasValidRenewalRange
+    const candidateDates = hasValidRenewalRange && teacherTimePreparation.canPreviewDates
       ? generatePrivateFixedAssignmentDates({ template: virtualTemplate, startDate, endDate })
       : []
     const excludedDates = []
+
+    if (teacherTimePreparation.status === 'missing_info') {
+      return {
+        ...basePlan,
+        teacherTimePreparation,
+        template: null,
+        blockingReasons: Array.from(new Set([...blockingReasons, teacherTimePreparation.statusLabel])),
+      }
+    }
+
+    if (teacherTimePreparation.status === 'conflict') {
+      candidateDates.forEach((date) => {
+        excludedDates.push({ date, time, reason: '시간 겹침 충돌' })
+      })
+      return {
+        ...basePlan,
+        teacherTimePreparation,
+        template,
+        candidateDates,
+        excludedDates,
+        blockingReasons: Array.from(new Set([...blockingReasons, '시간 겹침 충돌'])),
+        candidateCount: candidateDates.length,
+        excludedCount: excludedDates.length,
+      }
+    }
 
     if (!template) {
       candidateDates.forEach((date) => {
@@ -6784,6 +7019,7 @@ export default function Dashboard() {
       })
       return {
         ...basePlan,
+        teacherTimePreparation,
         template: null,
         candidateDates,
         excludedDates,
@@ -6793,24 +7029,10 @@ export default function Dashboard() {
       }
     }
 
-    if (!templateIsActive) {
-      candidateDates.forEach((date) => {
-        excludedDates.push({ date, time, reason: '비활성 시간표' })
-      })
-      return {
-        ...basePlan,
-        template,
-        candidateDates,
-        excludedDates,
-        blockingReasons: Array.from(new Set([...blockingReasons, '비활성 시간표'])),
-        candidateCount: candidateDates.length,
-        excludedCount: excludedDates.length,
-      }
-    }
-
     if (hasValidRenewalRange && candidateDates.length === 0) {
       return {
         ...basePlan,
+        teacherTimePreparation,
         template,
         candidateDates,
         blockingReasons: Array.from(new Set([...blockingReasons, '선생님 시간 없음'])),
@@ -6820,6 +7042,7 @@ export default function Dashboard() {
     if (!selectedPackage || blockingReasons.length > 0) {
       return {
         ...basePlan,
+        teacherTimePreparation,
         template,
         candidateDates,
         blockingReasons: Array.from(new Set(blockingReasons)),
@@ -6838,6 +7061,7 @@ export default function Dashboard() {
     if (!packageMatchesTeacher) {
       return {
         ...basePlan,
+        teacherTimePreparation,
         template,
         candidateDates,
         blockingReasons: ['선택한 학생/선생님에 연결된 개인 수강권을 선택해 주세요'],
@@ -6900,6 +7124,7 @@ export default function Dashboard() {
 
     return {
       ...basePlan,
+      teacherTimePreparation,
       template,
       selectedPackage,
       candidateDates,
