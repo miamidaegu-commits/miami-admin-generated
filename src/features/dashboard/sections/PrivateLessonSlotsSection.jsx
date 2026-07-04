@@ -449,6 +449,11 @@ export default function PrivateLessonSlotsSection({
   setFixedPrivateRenewalStartDate,
   fixedPrivateRenewalEndDate = '',
   setFixedPrivateRenewalEndDate,
+  fixedPrivateRenewalDraftCount = '',
+  setFixedPrivateRenewalDraftCount,
+  fixedPrivateRenewalDraftPackage = null,
+  fixedPrivateRenewalDraftNote = '',
+  fixedPrivateRenewalAutoSuggestion = null,
   fixedPrivateRenewalSeedOptions = [],
   fixedPrivateRenewalPackageOptions = [],
   fixedPrivateRenewalPlan = null,
@@ -2648,6 +2653,14 @@ export default function PrivateLessonSlotsSection({
                   <br />
                   실제 연장 저장 기능은 다음 단계에서 제공됩니다.
                 </p>
+                <p
+                  data-testid="private-fixed-renewal-auto-prefill-note"
+                  style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 12, lineHeight: 1.6 }}
+                >
+                  {'기존 고정 수업을 선택하면 연장 시작일, 종료일, 회수, 새 수강권 초안을 자동으로 채웁니다.'}
+                  <br />
+                  필요한 경우 연장 회수와 기간을 수정해 미리보기를 다시 확인할 수 있습니다.
+                </p>
               </div>
               <div
                 style={{
@@ -2678,7 +2691,7 @@ export default function PrivateLessonSlotsSection({
                   ) : null}
                 </label>
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                  새 개인 수강권
+                  연장 수강권 또는 새 수강권 초안
                   <select
                     value={fixedPrivateRenewalPackageId}
                     data-testid="private-fixed-renewal-package-select"
@@ -2700,13 +2713,53 @@ export default function PrivateLessonSlotsSection({
                   ) : null}
                 </label>
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
+                  연장 회수
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={fixedPrivateRenewalDraftCount}
+                    data-testid="private-fixed-renewal-draft-count"
+                    onChange={(event) => {
+                      const nextCount = event.target.value
+                      setFixedPrivateRenewalDraftCount?.(nextCount)
+                      const parsedCount = Number.parseInt(String(nextCount || '').trim(), 10)
+                      if (
+                        Number.isInteger(parsedCount) &&
+                        parsedCount > 0 &&
+                        isYmd(fixedPrivateRenewalStartDate)
+                      ) {
+                        setFixedPrivateRenewalEndDate?.(
+                          addDaysToYmd(fixedPrivateRenewalStartDate, 7 * (parsedCount - 1))
+                        )
+                      }
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
                   연장 시작일
                   <input
                     type="date"
                     value={fixedPrivateRenewalStartDate}
                     data-testid="private-fixed-renewal-start-date"
-                    onChange={(event) => setFixedPrivateRenewalStartDate?.(event.target.value)}
+                    onChange={(event) => {
+                      const nextStartDate = event.target.value
+                      setFixedPrivateRenewalStartDate?.(nextStartDate)
+                      const parsedCount = Number.parseInt(
+                        String(fixedPrivateRenewalDraftCount || '').trim(),
+                        10
+                      )
+                      if (isYmd(nextStartDate) && Number.isInteger(parsedCount) && parsedCount > 0) {
+                        setFixedPrivateRenewalEndDate?.(
+                          addDaysToYmd(nextStartDate, 7 * (parsedCount - 1))
+                        )
+                      }
+                    }}
                   />
+                  {fixedPrivateRenewalAutoSuggestion?.startDateAdjustedToFuture ? (
+                    <span style={{ opacity: 0.72 }}>
+                      마지막 수업 다음 날짜가 과거라 오늘 이후 같은 요일로 보정했습니다.
+                    </span>
+                  ) : null}
                 </label>
                 <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
                   연장 종료일
@@ -2718,6 +2771,56 @@ export default function PrivateLessonSlotsSection({
                   />
                 </label>
               </div>
+              {fixedPrivateRenewalSeedLessonId && fixedPrivateRenewalDraftPackage ? (
+                <div
+                  data-testid="private-fixed-renewal-draft-package-card"
+                  style={{
+                    display: 'grid',
+                    gap: 6,
+                    border: '1px solid #293246',
+                    borderRadius: 8,
+                    padding: 12,
+                    background: '#151922',
+                  }}
+                >
+                  <strong data-testid="private-fixed-renewal-draft-package-label">
+                    새 수강권 초안 · 저장 전
+                  </strong>
+                  <span>학생: {fixedPrivateRenewalDraftPackage.studentName || '-'}</span>
+                  <span>
+                    선생님:{' '}
+                    {fixedPrivateRenewalDraftPackage.teacherName ||
+                      fixedPrivateRenewalDraftPackage.teacher ||
+                      '-'}
+                  </span>
+                  <span>총 회수: {Number(fixedPrivateRenewalDraftPackage.totalCount || 0)}회</span>
+                  <span>
+                    수강기간: {fixedPrivateRenewalDraftPackage.registrationStartDate || '-'} ~{' '}
+                    {fixedPrivateRenewalDraftPackage.endDate || '-'}
+                  </span>
+                  <span>메모: {fixedPrivateRenewalDraftNote || '연장 자동 초안 · 저장 전'}</span>
+                  <span
+                    data-testid="private-fixed-renewal-draft-preview-only-note"
+                    style={{ opacity: 0.74 }}
+                  >
+                    새 수강권 초안은 저장되지 않으며, 실제 발행은 다음 단계에서 진행됩니다.
+                  </span>
+                </div>
+              ) : fixedPrivateRenewalSeedLessonId ? (
+                <div
+                  data-testid="private-fixed-renewal-draft-package-card"
+                  style={{
+                    border: '1px solid #293246',
+                    borderRadius: 8,
+                    padding: 12,
+                    background: '#151922',
+                    color: '#f5c17a',
+                  }}
+                >
+                  연장 시작일을 선택해 주세요. 새 수강권 초안은 저장 전 미리보기 용도로만
+                  사용됩니다.
+                </div>
+              ) : null}
               <div
                 data-testid="private-fixed-renewal-plan"
                 style={{
