@@ -470,6 +470,8 @@ function generatePrivateFixedAssignmentDates({ template, startDate, endDate }) {
 }
 
 const PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일']
+const FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID = '__fixed_private_renewal_draft_package__'
+const FIXED_PRIVATE_RENEWAL_DRAFT_NOTE = '연장 자동 초안 · 저장 전'
 
 function getPrivateFixedLessonStudentId(lesson) {
   return String(lesson?.studentId || lesson?.studentID || '').trim()
@@ -497,6 +499,17 @@ function getPrivateFixedLessonDurationMinutes(lesson) {
       lesson?.classDurationMinutes
   )
   return Number.isFinite(duration) && duration > 0 ? Math.floor(duration) : 60
+}
+
+function getPrivateFixedLessonPackageIds(lesson) {
+  return [
+    lesson?.packageId,
+    lesson?.deductionPackageId,
+    lesson?.linkedPackageId,
+    lesson?.fixedPrivatePackageId,
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
 }
 
 function isRenewableFixedPrivateLesson(lesson) {
@@ -584,6 +597,14 @@ function formatPrivatePackageRenewalOption(pkg, availableCount) {
   const prefix = startDate ? `${startDate} 시작` : String(pkg?.title || '개인 수강권').trim()
   const remaining = Math.max(0, Number(availableCount ?? pkg?.remainingCount ?? 0) || 0)
   return `${prefix} · ${teacherDisplay || '선생님 미지정'} · 남은 ${remaining}회 · ${formatPrivatePackageCoverageForOption(pkg)}`
+}
+
+function formatPrivateFixedRenewalDraftOption(pkg) {
+  const teacherDisplay = String(pkg?.teacherName || pkg?.teacherKey || pkg?.teacher || '').trim()
+  const { startDate, endDate } = getPrivatePackageDateBounds(pkg)
+  const count = Math.max(0, Number(pkg?.totalCount || 0) || 0)
+  const range = startDate && endDate ? `${startDate} ~ ${endDate}` : '기간 선택 필요'
+  return `새 수강권 초안 · ${teacherDisplay || '선생님 미지정'} · ${count}회 · ${range} · 저장 전`
 }
 
 function formatPrivatePackageAssignmentOption(pkg, availableCount) {
@@ -1072,6 +1093,8 @@ export default function Dashboard() {
   const [fixedPrivateRenewalPackageId, setFixedPrivateRenewalPackageId] = useState('')
   const [fixedPrivateRenewalStartDate, setFixedPrivateRenewalStartDate] = useState('')
   const [fixedPrivateRenewalEndDate, setFixedPrivateRenewalEndDate] = useState('')
+  const [fixedPrivateRenewalDraftCount, setFixedPrivateRenewalDraftCount] = useState('')
+  const [fixedPrivateRenewalAutoSuggestion, setFixedPrivateRenewalAutoSuggestion] = useState(null)
   const [busyFixedPrivateLessonCancelId, setBusyFixedPrivateLessonCancelId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
@@ -6299,6 +6322,8 @@ export default function Dashboard() {
           key: seed.key,
           lesson,
           latestDate: seed.latestDate,
+          count: seed.count,
+          packageIds: getPrivateFixedLessonPackageIds(lesson),
           label: `${studentName} · ${teacherLabel} · ${PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS[weekday] || '요일 미상'} ${getPrivateFixedLessonTime(lesson)} · ${durationMinutes}분 · 최근 ${seed.latestDate}`,
         }
       })
@@ -6310,6 +6335,113 @@ export default function Dashboard() {
     fixedPrivateRenewalSeedOptions.find((option) => option.id === fixedPrivateRenewalSeedLessonId) ||
     null
   const selectedFixedPrivateRenewalSeedLesson = selectedFixedPrivateRenewalSeed?.lesson || null
+  const fixedPrivateRenewalDraftNote = FIXED_PRIVATE_RENEWAL_DRAFT_NOTE
+
+  useEffect(() => {
+    const seed = selectedFixedPrivateRenewalSeed
+    const seedLesson = seed?.lesson || null
+    if (!seedLesson) {
+      setFixedPrivateRenewalDraftCount('')
+      setFixedPrivateRenewalStartDate('')
+      setFixedPrivateRenewalEndDate('')
+      setFixedPrivateRenewalPackageId('')
+      setFixedPrivateRenewalAutoSuggestion(null)
+      return
+    }
+
+    const packageIds = getPrivateFixedLessonPackageIds(seedLesson)
+    const sourcePackage =
+      studentPackages.find((pkg) => packageIds.includes(String(pkg.id || '').trim())) || null
+    const sourceTotalCount = Number(sourcePackage?.totalCount)
+    const seedSeriesCount = Number(seed.count)
+    const draftCount =
+      Number.isFinite(sourceTotalCount) && sourceTotalCount > 0
+        ? Math.floor(sourceTotalCount)
+        : Number.isFinite(seedSeriesCount) && seedSeriesCount > 0
+          ? Math.floor(seedSeriesCount)
+          : 4
+    const countText = String(draftCount)
+    const weekday = getPrivateFixedLessonWeekday(seedLesson)
+    const latestDate = String(seed.latestDate || '').trim()
+    const today = getTodayStorageDateString()
+    let startDate = ''
+    let startDateAdjustedToFuture = false
+
+    if (isYmd(latestDate) && weekday !== null) {
+      const nextAfterLatest = addDaysToStorageYmd(latestDate, 7)
+      if (isYmd(nextAfterLatest) && (!today || nextAfterLatest >= today)) {
+        startDate = nextAfterLatest
+      } else if (isYmd(today)) {
+        const todayDate = parseYmdToLocalDate(today)
+        if (todayDate) {
+          const offset = (weekday - todayDate.getDay() + 7) % 7
+          startDate = addDaysToStorageYmd(today, offset)
+          startDateAdjustedToFuture = Boolean(startDate)
+        }
+      }
+    }
+
+    const endDate =
+      startDate && draftCount > 0 ? addDaysToStorageYmd(startDate, 7 * (draftCount - 1)) : ''
+
+    setFixedPrivateRenewalDraftCount(countText)
+    setFixedPrivateRenewalStartDate(startDate)
+    setFixedPrivateRenewalEndDate(endDate)
+    setFixedPrivateRenewalPackageId(FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID)
+    setFixedPrivateRenewalAutoSuggestion({
+      latestDate,
+      startDate,
+      endDate,
+      count: draftCount,
+      countSource: sourcePackage ? 'existingPackageTotalCount' : seedSeriesCount > 0 ? 'seedSeriesCount' : 'fallback',
+      startDateAdjustedToFuture,
+      sourcePackageId: sourcePackage?.id || '',
+    })
+  }, [fixedPrivateRenewalSeedLessonId])
+
+  const fixedPrivateRenewalDraftPackage = useMemo(() => {
+    const seedLesson = selectedFixedPrivateRenewalSeedLesson
+    const draftCount = Number.parseInt(String(fixedPrivateRenewalDraftCount || '').trim(), 10)
+    const startDate = String(fixedPrivateRenewalStartDate || '').trim()
+    const endDate = String(fixedPrivateRenewalEndDate || '').trim()
+    if (!seedLesson || !Number.isInteger(draftCount) || draftCount < 1) return null
+    if (!isYmd(startDate) || !isYmd(endDate) || endDate < startDate) return null
+
+    const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
+    const studentId = getPrivateFixedLessonStudentId(seedLesson)
+    if (!studentId || !teacherFields.teacher) return null
+    const studentName =
+      String(seedLesson.studentName || seedLesson.student || studentId).trim() || '학생 미상'
+
+    return {
+      id: FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID,
+      packageType: 'private',
+      status: 'active',
+      academyId: currentAcademyId,
+      studentId,
+      studentID: studentId,
+      studentName,
+      ...teacherFields,
+      totalCount: draftCount,
+      usedCount: 0,
+      remainingCount: draftCount,
+      registrationStartDate: startDate,
+      startDate,
+      expiresAt: endDate,
+      endDate,
+      title: '연장 자동 초안',
+      memo: fixedPrivateRenewalDraftNote,
+      previewOnly: true,
+      source: 'fixed-private-renewal-draft',
+    }
+  }, [
+    currentAcademyId,
+    fixedPrivateRenewalDraftCount,
+    fixedPrivateRenewalDraftNote,
+    fixedPrivateRenewalEndDate,
+    fixedPrivateRenewalStartDate,
+    selectedFixedPrivateRenewalSeedLesson,
+  ])
 
   const fixedPrivateRenewalPackageOptions = useMemo(() => {
     const seedLesson = selectedFixedPrivateRenewalSeedLesson
@@ -6317,7 +6449,17 @@ export default function Dashboard() {
     const studentId = getPrivateFixedLessonStudentId(seedLesson)
     const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
     if (!studentId || !teacherFields.teacher) return []
-    return studentPackages
+    const draftOption = fixedPrivateRenewalDraftPackage
+      ? [
+          {
+            id: FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID,
+            label: formatPrivateFixedRenewalDraftOption(fixedPrivateRenewalDraftPackage),
+            availableCount: Number(fixedPrivateRenewalDraftPackage.remainingCount || 0) || 0,
+            previewOnly: true,
+          },
+        ]
+      : []
+    const existingOptions = studentPackages
       .filter((pkg) =>
         isActivePrivatePackageForTeacher({
           pkg,
@@ -6354,8 +6496,10 @@ export default function Dashboard() {
         const aHasAvailable = a.availableCount > 0 ? 1 : 0
         return bHasAvailable - aHasAvailable || b.availableCount - a.availableCount || a.label.localeCompare(b.label, 'ko')
       })
+    return [...draftOption, ...existingOptions]
   }, [
     currentAcademyId,
+    fixedPrivateRenewalDraftPackage,
     lessons,
     privateLessonReservations,
     selectedFixedPrivateRenewalSeedLesson,
@@ -6368,7 +6512,9 @@ export default function Dashboard() {
     const startDate = String(fixedPrivateRenewalStartDate || '').trim()
     const endDate = String(fixedPrivateRenewalEndDate || '').trim()
     const selectedPackage =
-      studentPackages.find((pkg) => String(pkg.id || '').trim() === packageId) || null
+      packageId === FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID
+        ? fixedPrivateRenewalDraftPackage
+        : studentPackages.find((pkg) => String(pkg.id || '').trim() === packageId) || null
     const basePlan = {
       previewOnly: true,
       seedLesson,
@@ -6583,6 +6729,7 @@ export default function Dashboard() {
     fixedPrivateRenewalEndDate,
     fixedPrivateRenewalPackageId,
     fixedPrivateRenewalStartDate,
+    fixedPrivateRenewalDraftPackage,
     lessons,
     privateAvailabilityTemplates,
     privateLessonReservations,
@@ -6644,6 +6791,11 @@ export default function Dashboard() {
     setFixedPrivateRenewalStartDate,
     fixedPrivateRenewalEndDate,
     setFixedPrivateRenewalEndDate,
+    fixedPrivateRenewalDraftCount,
+    setFixedPrivateRenewalDraftCount,
+    fixedPrivateRenewalDraftPackage,
+    fixedPrivateRenewalDraftNote,
+    fixedPrivateRenewalAutoSuggestion,
     fixedPrivateRenewalSeedOptions,
     fixedPrivateRenewalPackageOptions,
     fixedPrivateRenewalPlan,
