@@ -589,6 +589,27 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain('연장 기간 선택 필요');
   expect(dashboardSource).toContain('previewOnly: true');
   expect(dashboardSource).toContain("'수강권 기간 안에 배정 가능한 날짜가 없습니다.'");
+  expect(dashboardSource).toContain('isSeatReleasedFixedPrivateSeed');
+  expect(dashboardSource).toContain("cancellationType === 'seat_released'");
+  expect(dashboardSource).toContain('releasedForPrivateBooking');
+  expect(dashboardSource).toContain('isSeatReleased');
+  expect(dashboardSource).toContain("'자리 공개됨'");
+  expect(dashboardSource).toContain("'자리 공개 기준'");
+  expect(dashboardSource).toContain("'lesson_cancelled'");
+  expect(dashboardSource).toContain("'fixed_lesson_cancelled'");
+  expect(dashboardSource).toContain("['deleted', 'archived'].includes(status)");
+  expect(dashboardSource).toContain('buildFixedPrivateRenewalReservationSeed');
+  expect(dashboardSource).toContain('isFixedPrivateRenewalReservationSeed');
+  expect(dashboardSource).toContain('buildFixedPrivateRenewalSlotSeed');
+  expect(dashboardSource).toContain('isFixedPrivateRenewalSlotSeed');
+  expect(dashboardSource).toContain('previewSeedSource');
+  expect(dashboardSource).toContain("seedSource: String(lesson.previewSeedSource || 'lesson').trim()");
+  expect(dashboardSource).toContain('occurrenceKeys');
+  expect(dashboardSource).toContain("if (linkedLessonId && includedLessonIds.has(linkedLessonId)) return");
+  expect(dashboardSource).toContain("return `batch:${batchId}`");
+  expect(dashboardSource).toContain("'fallback'");
+  expect(dashboardSource).toContain('privateLessonReservations');
+  expect(dashboardSource).toContain('privateLessonSlots');
   expect(dashboardSource).toContain('const previewDates = missingPackage ? [] : plan.assignableDates || plan.dates');
   expect(dashboardSource).toMatch(/plan\.assignableDates\.forEach\(\(date\) => \{[\s\S]*batch\.set\(slotRef/);
   expect(dashboardSource).not.toContain('plan.dates.forEach((date) => {\n        const start = parseLegacyLessonToDate');
@@ -692,6 +713,8 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain(
     '기존 고정 수업을 기준으로 같은 선생님, 같은 요일, 같은 시간'
   );
+  expect(privateSlotsSectionSource).toContain('기존 고정 일정에 표시되는 고정 수업 패턴');
+  expect(privateSlotsSectionSource).toContain('자리 공개된 수업도 같은 시간');
   expect(privateSlotsSectionSource).toContain('이번 단계에서는 저장하지 않고 미리보기만 제공합니다');
   expect(privateSlotsSectionSource).toContain('실제 연장 저장 기능은 다음 단계에서 제공됩니다');
   expect(privateSlotsSectionSource).toContain('저장하지 않고 미리보기');

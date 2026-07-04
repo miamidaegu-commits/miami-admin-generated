@@ -512,16 +512,148 @@ function getPrivateFixedLessonPackageIds(lesson) {
     .filter(Boolean)
 }
 
+function isSeatReleasedFixedPrivateSeed(row) {
+  const cancellationType = String(row?.cancellationType || '').trim().toLowerCase()
+  return (
+    cancellationType === 'seat_released' ||
+    row?.isSeatReleased === true ||
+    row?.releasedForPrivateBooking === true
+  )
+}
+
 function isRenewableFixedPrivateLesson(lesson) {
   if (String(lesson?.packageType || '').trim() !== 'private') return false
   if (String(lesson?.sourceType || '').trim() !== 'fixed-private-slot-assignment') return false
-  if (lesson?.cancelledAt) return false
   const status = String(lesson?.status || 'active').trim().toLowerCase()
   const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
-  if (['cancelled', 'canceled', 'deleted'].includes(status)) return false
-  if (['seat_released', 'lesson_cancelled'].includes(cancellationType)) return false
-  if (lesson?.isSeatReleased === true || lesson?.releasedForPrivateBooking === true) return false
+  const isSeatReleasedSeed = isSeatReleasedFixedPrivateSeed(lesson)
+  if (['deleted', 'archived'].includes(status)) return false
+  if (['lesson_cancelled', 'lesson_canceled', 'fixed_lesson_cancelled'].includes(cancellationType)) {
+    return false
+  }
+  if (['cancelled', 'canceled'].includes(status) && !isSeatReleasedSeed) return false
+  if (lesson?.cancelledAt && !isSeatReleasedSeed) return false
   return true
+}
+
+function isFixedPrivateRenewalReservationSeed(reservation) {
+  const status = String(reservation?.status || 'active').trim().toLowerCase()
+  if (!['active', 'reserved'].includes(status)) return false
+  const sourceType = String(reservation?.sourceType || '').trim()
+  const reservationType = String(reservation?.reservationType || '').trim()
+  return (
+    sourceType === 'fixed-private-slot-assignment' ||
+    sourceType === 'released_fixed_slot' ||
+    reservationType === 'fixed'
+  )
+}
+
+function isFixedPrivateRenewalSlotSeed(slot) {
+  const status = String(slot?.status || '').trim().toLowerCase()
+  const slotType = String(slot?.slotType || slot?.type || '').trim()
+  return (
+    ['reserved', 'fixed'].includes(status) &&
+    ['fixed', 'fixed_private', 'fixed-private-slot-assignment'].includes(slotType)
+  )
+}
+
+function buildFixedPrivateRenewalReservationSeed(reservation) {
+  const reservationId = String(reservation?.id || reservation?.reservationId || '').trim()
+  const packageId = String(
+    reservation?.deductionPackageId ||
+      reservation?.packageId ||
+      reservation?.linkedPackageId ||
+      reservation?.fixedPrivatePackageId ||
+      ''
+  ).trim()
+  return {
+    ...reservation,
+    id: reservationId ? `reservation-seed:${reservationId}` : '',
+    reservationId,
+    lessonId: String(reservation?.lessonId || '').trim(),
+    fixedLessonId: String(reservation?.fixedLessonId || reservation?.lessonId || '').trim(),
+    studentId: String(reservation?.studentId || reservation?.studentID || '').trim(),
+    studentID: String(reservation?.studentID || reservation?.studentId || '').trim(),
+    studentName: String(reservation?.studentName || reservation?.student || '').trim(),
+    teacher: String(reservation?.teacher || reservation?.teacherKey || reservation?.teacherName || '').trim(),
+    teacherName: String(reservation?.teacherName || reservation?.teacher || '').trim(),
+    teacherKey: String(reservation?.teacherKey || reservation?.teacher || reservation?.teacherName || '').trim(),
+    teacherUid: String(reservation?.teacherUid || reservation?.teacherUID || reservation?.teacherId || '').trim(),
+    teacherId: String(reservation?.teacherId || reservation?.teacherUid || reservation?.teacherUID || '').trim(),
+    date: String(reservation?.date || reservation?.lessonDate || reservation?.scheduleDate || '').trim(),
+    time: String(reservation?.time || reservation?.startTime || reservation?.scheduleTime || '').trim(),
+    durationMinutes: getPrivateFixedLessonDurationMinutes(reservation),
+    packageId,
+    deductionPackageId: packageId,
+    privateLessonAvailabilityTemplateId: String(
+      reservation?.privateLessonAvailabilityTemplateId || reservation?.availabilityTemplateId || ''
+    ).trim(),
+    fixedPrivateAssignmentBatchId: String(reservation?.fixedPrivateAssignmentBatchId || '').trim(),
+    slotId: String(reservation?.slotId || reservation?.privateLessonSlotId || '').trim(),
+    packageType: 'private',
+    sourceType: 'fixed-private-slot-assignment',
+    previewOnly: true,
+    previewSeedSource: 'reservation',
+  }
+}
+
+function buildFixedPrivateRenewalSlotSeed(slot) {
+  const slotId = String(slot?.id || slot?.slotId || '').trim()
+  const packageId = String(
+    slot?.deductionPackageId || slot?.packageId || slot?.linkedPackageId || slot?.fixedPrivatePackageId || ''
+  ).trim()
+  return {
+    ...slot,
+    id: slotId ? `slot-seed:${slotId}` : '',
+    slotId,
+    lessonId: String(slot?.lessonId || '').trim(),
+    fixedLessonId: String(slot?.fixedLessonId || slot?.lessonId || '').trim(),
+    studentId: String(slot?.studentId || slot?.studentID || slot?.fixedStudentId || '').trim(),
+    studentID: String(slot?.studentID || slot?.studentId || slot?.fixedStudentId || '').trim(),
+    studentName: String(slot?.studentName || slot?.student || slot?.fixedStudentName || '').trim(),
+    teacher: String(slot?.teacher || slot?.teacherKey || slot?.teacherName || '').trim(),
+    teacherName: String(slot?.teacherName || slot?.teacher || '').trim(),
+    teacherKey: String(slot?.teacherKey || slot?.teacher || slot?.teacherName || '').trim(),
+    teacherUid: String(slot?.teacherUid || slot?.teacherUID || slot?.teacherId || '').trim(),
+    teacherId: String(slot?.teacherId || slot?.teacherUid || slot?.teacherUID || '').trim(),
+    date: String(slot?.date || slot?.lessonDate || slot?.scheduleDate || '').trim(),
+    time: String(slot?.time || slot?.startTime || slot?.scheduleTime || '').trim(),
+    durationMinutes: getPrivateFixedLessonDurationMinutes(slot),
+    packageId,
+    deductionPackageId: packageId,
+    privateLessonAvailabilityTemplateId: String(
+      slot?.privateLessonAvailabilityTemplateId || slot?.availabilityTemplateId || ''
+    ).trim(),
+    fixedPrivateAssignmentBatchId: String(slot?.fixedPrivateAssignmentBatchId || '').trim(),
+    packageType: 'private',
+    sourceType: 'fixed-private-slot-assignment',
+    previewOnly: true,
+    previewSeedSource: 'slot',
+  }
+}
+
+function getFixedPrivateRenewalSeedStatusLabel(seedLesson) {
+  if (isSeatReleasedFixedPrivateSeed(seedLesson)) return '자리 공개됨'
+  return ''
+}
+
+function getFixedPrivateRenewalSeedSourceLabel(seedLesson) {
+  const source = String(seedLesson?.previewSeedSource || 'lesson').trim()
+  if (source === 'reservation') return '예약 기준'
+  if (source === 'slot') return '슬롯 기준'
+  if (isSeatReleasedFixedPrivateSeed(seedLesson)) return '자리 공개 기준'
+  return '기존 일정 기준'
+}
+
+function getFixedPrivateRenewalSeedPriority(seedLesson, todayYmd) {
+  const date = getPrivateFixedLessonDate(seedLesson)
+  const status = String(seedLesson?.status || 'active').trim().toLowerCase()
+  const source = String(seedLesson?.previewSeedSource || 'lesson').trim()
+  const activeScore = !['cancelled', 'canceled'].includes(status) ? 20 : 0
+  const futureScore = isYmd(date) && todayYmd && date >= todayYmd ? 10 : 0
+  const sourceScore = source === 'lesson' ? 3 : source === 'reservation' ? 2 : 1
+  const seatReleasedPenalty = isSeatReleasedFixedPrivateSeed(seedLesson) ? -1 : 0
+  return activeScore + futureScore + sourceScore + seatReleasedPenalty
 }
 
 function getPrivateFixedRenewalSeedKey(lesson) {
@@ -6285,27 +6417,74 @@ export default function Dashboard() {
 
   const fixedPrivateRenewalSeedOptions = useMemo(() => {
     const seedsByKey = new Map()
+    const renewalTodayYmd = getTodayStorageDateString()
+    const includedLessonIds = new Set()
+
+    function addSeedCandidate(seedLesson) {
+      const date = getPrivateFixedLessonDate(seedLesson)
+      const time = getPrivateFixedLessonTime(seedLesson)
+      const studentId = getPrivateFixedLessonStudentId(seedLesson)
+      const weekday = getPrivateFixedLessonWeekday(seedLesson)
+      const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
+      if (!isYmd(date) || !time || !studentId || weekday === null || !teacherFields.teacher) return false
+
+      const key = getPrivateFixedRenewalSeedKey(seedLesson)
+      const occurrenceKey = `${date}:${time}`
+      const current = seedsByKey.get(key)
+      const priority = getFixedPrivateRenewalSeedPriority(seedLesson, renewalTodayYmd)
+      if (!current) {
+        seedsByKey.set(key, {
+          key,
+          lesson: seedLesson,
+          latestDate: date,
+          count: 1,
+          occurrenceKeys: new Set([occurrenceKey]),
+          priority,
+        })
+        return true
+      }
+
+      if (!current.occurrenceKeys.has(occurrenceKey)) {
+        current.occurrenceKeys.add(occurrenceKey)
+        current.count += 1
+      }
+      if (date > current.latestDate) current.latestDate = date
+      if (priority > current.priority || (priority === current.priority && date > getPrivateFixedLessonDate(current.lesson))) {
+        current.lesson = seedLesson
+        current.priority = priority
+      }
+      return true
+    }
+
     ;(Array.isArray(lessons) ? lessons : [])
       .filter(isRenewableFixedPrivateLesson)
       .forEach((lesson) => {
-        const date = getPrivateFixedLessonDate(lesson)
-        const time = getPrivateFixedLessonTime(lesson)
-        const studentId = getPrivateFixedLessonStudentId(lesson)
-        const weekday = getPrivateFixedLessonWeekday(lesson)
-        const teacherFields = buildPrivateTemplateTeacherFields(lesson)
-        if (!isYmd(date) || !time || !studentId || weekday === null || !teacherFields.teacher) return
-        const key = getPrivateFixedRenewalSeedKey(lesson)
-        const current = seedsByKey.get(key)
-        if (!current || date > current.latestDate) {
-          seedsByKey.set(key, {
-            key,
-            lesson,
-            latestDate: date,
-            count: (current?.count || 0) + 1,
+        if (addSeedCandidate({ ...lesson, previewOnly: true, previewSeedSource: 'lesson' })) {
+          ;[
+            lesson?.id,
+            lesson?.lessonId,
+            lesson?.fixedLessonId,
+          ].forEach((value) => {
+            const lessonId = String(value || '').trim()
+            if (lessonId) includedLessonIds.add(lessonId)
           })
-        } else {
-          current.count += 1
         }
+      })
+
+    ;(Array.isArray(privateLessonReservations) ? privateLessonReservations : [])
+      .filter(isFixedPrivateRenewalReservationSeed)
+      .forEach((reservation) => {
+        const linkedLessonId = String(reservation?.lessonId || reservation?.fixedLessonId || '').trim()
+        if (linkedLessonId && includedLessonIds.has(linkedLessonId)) return
+        addSeedCandidate(buildFixedPrivateRenewalReservationSeed(reservation))
+      })
+
+    ;(Array.isArray(privateLessonSlots) ? privateLessonSlots : [])
+      .filter(isFixedPrivateRenewalSlotSeed)
+      .forEach((slot) => {
+        const linkedLessonId = String(slot?.lessonId || slot?.fixedLessonId || '').trim()
+        if (linkedLessonId && includedLessonIds.has(linkedLessonId)) return
+        addSeedCandidate(buildFixedPrivateRenewalSlotSeed(slot))
       })
 
     return Array.from(seedsByKey.values())
@@ -6317,6 +6496,9 @@ export default function Dashboard() {
           String(lesson.studentName || lesson.student || getPrivateFixedLessonStudentId(lesson)).trim() ||
           '학생 미상'
         const teacherLabel = getPrivateSlotTeacherDisplay(lesson)
+        const statusLabel = getFixedPrivateRenewalSeedStatusLabel(lesson)
+        const sourceLabel = getFixedPrivateRenewalSeedSourceLabel(lesson)
+        const suffix = [statusLabel, sourceLabel].filter(Boolean).join(' · ')
         return {
           id: String(lesson.id || lesson.lessonId || lesson.fixedLessonId || seed.key).trim(),
           key: seed.key,
@@ -6324,12 +6506,17 @@ export default function Dashboard() {
           latestDate: seed.latestDate,
           count: seed.count,
           packageIds: getPrivateFixedLessonPackageIds(lesson),
-          label: `${studentName} · ${teacherLabel} · ${PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS[weekday] || '요일 미상'} ${getPrivateFixedLessonTime(lesson)} · ${durationMinutes}분 · 최근 ${seed.latestDate}`,
+          statusLabel,
+          sourceLabel,
+          seedSource: String(lesson.previewSeedSource || 'lesson').trim(),
+          isSeatReleasedSeed: isSeatReleasedFixedPrivateSeed(lesson),
+          previewOnly: true,
+          label: `${studentName} · ${teacherLabel} · ${PRIVATE_FIXED_RENEWAL_WEEKDAY_LABELS[weekday] || '요일 미상'} ${getPrivateFixedLessonTime(lesson)} · ${durationMinutes}분 · 최근 ${seed.latestDate}${suffix ? ` · ${suffix}` : ''}`,
         }
       })
       .filter((option) => option.id)
       .sort((a, b) => b.latestDate.localeCompare(a.latestDate) || a.label.localeCompare(b.label, 'ko'))
-  }, [lessons])
+  }, [lessons, privateLessonReservations, privateLessonSlots])
 
   const selectedFixedPrivateRenewalSeed =
     fixedPrivateRenewalSeedOptions.find((option) => option.id === fixedPrivateRenewalSeedLessonId) ||
