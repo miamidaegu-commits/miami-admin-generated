@@ -935,6 +935,81 @@ test('fixed private assignment source requires package and links generated docum
   expect(rulesSource).toContain('slot.packageId == request.resource.data.packageId');
 });
 
+test('fixed private renewal save callable skeleton is dry-run no-write only', () => {
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const privateSlotsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+
+  const helperStart = functionsSource.indexOf('const FIXED_PRIVATE_RENEWAL_PACKAGE_MODES');
+  const helperEnd = functionsSource.indexOf('async function requireAcademyAdmin', helperStart);
+  const callableStart = functionsSource.indexOf(
+    'exports.createFixedPrivateLessonRenewal = onCall('
+  );
+  const callableEnd = functionsSource.indexOf(
+    'exports.updateStudentPrivateCancelAllowance = onCall(',
+    callableStart
+  );
+  expect(helperStart).toBeGreaterThanOrEqual(0);
+  expect(helperEnd).toBeGreaterThan(helperStart);
+  expect(callableStart).toBeGreaterThanOrEqual(0);
+  expect(callableEnd).toBeGreaterThan(callableStart);
+
+  const renewalValidationBlock = functionsSource.slice(helperStart, helperEnd);
+  const renewalCallableBlock = functionsSource.slice(callableStart, callableEnd);
+  const renewalSkeletonSource = `${renewalValidationBlock}\n${renewalCallableBlock}`;
+
+  [
+    'createFixedPrivateLessonRenewal',
+    'requireAcademyAdmin',
+    'previewOnly',
+    'dryRun',
+    'Actual fixed private renewal save is not enabled yet',
+    'requestId',
+    'renewalBatchIdCandidate',
+    'wouldCreate',
+    'teacherTimePreparation',
+    'packageMode',
+    'assignableDates',
+    'excludedDates',
+    'conflict',
+    'missing_info',
+    'HttpsError',
+  ].forEach((token) => {
+    expect(renewalSkeletonSource).toContain(token);
+  });
+  expect(renewalSkeletonSource).toContain('studentPackage: packageMode === "draft"');
+  expect(renewalSkeletonSource).toContain('teacherTemplate: teacherTimeStatus === "create"');
+  expect(renewalSkeletonSource).toContain(
+    'reactivateTeacherTemplate: teacherTimeStatus === "reactivate"'
+  );
+  expect(renewalSkeletonSource).toContain('lessons: assignableDates.length');
+  expect(renewalSkeletonSource).toContain('privateLessonSlots: assignableDates.length');
+  expect(renewalSkeletonSource).toContain('privateLessonReservations: assignableDates.length');
+  expect(renewalSkeletonSource).toContain('assignableDates.length > count');
+  expect(renewalSkeletonSource).toContain('assignableDates.length === 0');
+  expect(renewalSkeletonSource).toContain('data.previewOnly !== true');
+  expect(renewalSkeletonSource).toContain('data.dryRun !== true');
+  expect(renewalSkeletonSource).toContain('excluded_dates_include_hard_block');
+  expect(renewalSkeletonSource).toContain('Actual write will be implemented in a later PR');
+
+  expect(renewalSkeletonSource).not.toMatch(
+    /writeBatch\(|runTransaction\(|\.set\(|\.add\(|\.update\(|\.delete\(/
+  );
+
+  expect(dashboardSource).toContain('fixedPrivateRenewalPlan');
+  expect(dashboardSource).toContain('새 수강권 초안');
+  expect(dashboardSource).toContain('previewOnly');
+  expect(privateSlotsSectionSource).toContain('선생님 시간 준비');
+  expect(privateSlotsSectionSource).toContain('기존 남은 수강권으로 미리보기');
+  expect(privateSlotsSectionSource).toContain('이번 단계에서는 저장하지 않고 미리보기만 제공합니다');
+  expect(privateSlotsSectionSource).not.toContain('createFixedPrivateLessonRenewal');
+  expect(privateSlotsSectionSource).not.toContain('private-fixed-renewal-submit-button');
+  expect(privateSlotsSectionSource).not.toContain('>연장 저장<');
+});
+
 test('admin can assign fixed private lessons from a weekly template', async ({
   page,
   browser,
