@@ -514,6 +514,17 @@ function getPrivateFixedLessonPackageIds(lesson) {
     .filter(Boolean)
 }
 
+function getFixedPrivateRenewalSeedLessonDocId(seedLesson) {
+  const rawId = String(seedLesson?.id || '').trim()
+  return [
+    seedLesson?.lessonId,
+    seedLesson?.fixedLessonId,
+    rawId && !rawId.includes(':') ? rawId : '',
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)[0] || ''
+}
+
 function isSeatReleasedFixedPrivateSeed(row) {
   const cancellationType = String(row?.cancellationType || '').trim().toLowerCase()
   return (
@@ -1435,6 +1446,11 @@ export default function Dashboard() {
   const [fixedPrivateRenewalDraftCount, setFixedPrivateRenewalDraftCount] = useState('')
   const [fixedPrivateRenewalAutoSuggestion, setFixedPrivateRenewalAutoSuggestion] = useState(null)
   const [showExistingRenewalPackageChoice, setShowExistingRenewalPackageChoice] = useState(false)
+  const [fixedPrivateRenewalServerPreview, setFixedPrivateRenewalServerPreview] = useState(null)
+  const [fixedPrivateRenewalServerPreviewBusy, setFixedPrivateRenewalServerPreviewBusy] =
+    useState(false)
+  const [fixedPrivateRenewalServerPreviewError, setFixedPrivateRenewalServerPreviewError] =
+    useState('')
   const [busyFixedPrivateLessonCancelId, setBusyFixedPrivateLessonCancelId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
@@ -6733,6 +6749,17 @@ export default function Dashboard() {
   const fixedPrivateRenewalDraftNote = FIXED_PRIVATE_RENEWAL_DRAFT_NOTE
 
   useEffect(() => {
+    setFixedPrivateRenewalServerPreview(null)
+    setFixedPrivateRenewalServerPreviewError('')
+  }, [
+    fixedPrivateRenewalDraftCount,
+    fixedPrivateRenewalEndDate,
+    fixedPrivateRenewalPackageId,
+    fixedPrivateRenewalSeedLessonId,
+    fixedPrivateRenewalStartDate,
+  ])
+
+  useEffect(() => {
     const seed = selectedFixedPrivateRenewalSeed
     const seedLesson = seed?.lesson || null
     if (!seedLesson) {
@@ -7185,6 +7212,132 @@ export default function Dashboard() {
     setShowExistingRenewalPackageChoice(false)
   }
 
+  const fixedPrivateRenewalServerPreviewDisabledReason = useMemo(() => {
+    if (fixedPrivateRenewalServerPreviewBusy) return '서버 검증 중입니다.'
+    if (!isAdmin) return '관리자만 서버 검증을 실행할 수 있습니다.'
+    if (!fixedPrivateRenewalPlan) return '연장 미리보기 정보가 없습니다.'
+    if (!fixedPrivateRenewalPlan.seedLesson) return '기존 고정 수업을 선택해 주세요.'
+    if (!getFixedPrivateRenewalSeedLessonDocId(fixedPrivateRenewalPlan.seedLesson)) {
+      return '서버 검증에 사용할 기준 수업 ID가 없습니다.'
+    }
+    if (!fixedPrivateRenewalPlan.selectedPackage) return '수강권을 선택해 주세요.'
+    if ((fixedPrivateRenewalPlan.assignableDates || []).length === 0) {
+      return '연장 가능한 날짜가 없습니다.'
+    }
+    if ((fixedPrivateRenewalPlan.blockingReasons || []).length > 0) {
+      return fixedPrivateRenewalPlan.blockingReasons[0]
+    }
+    if (['conflict', 'missing_info'].includes(fixedPrivateRenewalPlan.teacherTimePreparation?.status)) {
+      return fixedPrivateRenewalPlan.teacherTimePreparation?.statusLabel || '선생님 시간 준비가 필요합니다.'
+    }
+    return ''
+  }, [
+    fixedPrivateRenewalPlan,
+    fixedPrivateRenewalServerPreviewBusy,
+    isAdmin,
+  ])
+
+  async function previewFixedPrivateRenewalOnServer() {
+    const disabledReason = fixedPrivateRenewalServerPreviewDisabledReason
+    if (disabledReason && disabledReason !== '서버 검증 중입니다.') {
+      setFixedPrivateRenewalServerPreviewError(disabledReason)
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const plan = fixedPrivateRenewalPlan
+      const seedLesson = plan?.seedLesson || selectedFixedPrivateRenewalSeedLesson
+      const seedLessonId = getFixedPrivateRenewalSeedLessonDocId(seedLesson)
+      if (!plan || !seedLesson || !seedLessonId) {
+        throw new Error('서버 검증에 사용할 기존 고정 수업 정보가 없습니다.')
+      }
+      const selectedPackage = plan.selectedPackage
+      if (!selectedPackage) throw new Error('서버 검증에 사용할 수강권 정보가 없습니다.')
+
+      const teacherFields = buildPrivateTemplateTeacherFields(seedLesson)
+      const studentId = getPrivateFixedLessonStudentId(seedLesson)
+      const weekday = getPrivateFixedLessonWeekday(seedLesson)
+      const time = getPrivateFixedLessonTime(seedLesson)
+      const durationMinutes = getPrivateFixedLessonDurationMinutes(seedLesson)
+      const count = Number.parseInt(String(fixedPrivateRenewalDraftCount || '').trim(), 10)
+      const selectedPackageId = String(selectedPackage.id || fixedPrivateRenewalPackageId || '').trim()
+      const isDraftPackage =
+        selectedPackage.previewOnly === true &&
+        selectedPackageId === FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID
+      const teacherTimePreparation = plan.teacherTimePreparation || {}
+      const requestId = `fixedPrivateRenewalDryRun_${scopedAcademyId || 'academy'}_${seedLessonId}_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`
+      const payload = {
+        academyId: scopedAcademyId,
+        requestId,
+        seedLessonId,
+        studentId,
+        teacherKey: teacherFields.teacherKey,
+        teacherId: teacherFields.teacherId,
+        teacherUid: teacherFields.teacherUid,
+        teacherName: teacherFields.teacherName,
+        weekday,
+        time,
+        durationMinutes,
+        startDate: fixedPrivateRenewalStartDate,
+        endDate: fixedPrivateRenewalEndDate,
+        count,
+        lessonName: String(
+          selectedPackage.title ||
+            selectedPackage.packageTitle ||
+            selectedPackage.name ||
+            seedLesson.subject ||
+            '고정 1:1'
+        ).trim(),
+        packageMode: isDraftPackage ? 'draft' : 'existing',
+        teacherTimePreparation: {
+          status: String(teacherTimePreparation.status || '').trim(),
+          templateId: String(
+            teacherTimePreparation.templateId ||
+              teacherTimePreparation.template?.id ||
+              teacherTimePreparation.templateForPreview?.id ||
+              ''
+          ).trim(),
+          action: String(teacherTimePreparation.action || teacherTimePreparation.actionLabel || '').trim(),
+        },
+        candidateDates: Array.isArray(plan.candidateDates) ? plan.candidateDates : [],
+        assignableDates: Array.isArray(plan.assignableDates) ? plan.assignableDates : [],
+        excludedDates: Array.isArray(plan.excludedDates)
+          ? plan.excludedDates.map((row) => ({
+              date: String(row.date || '').trim(),
+              time: String(row.time || time || '').trim(),
+              reason: String(row.reason || '제외').trim(),
+              hardBlock: row.hardBlock === true,
+            }))
+          : [],
+        previewOnly: true,
+        dryRun: true,
+        commit: false,
+      }
+      if (isDraftPackage) {
+        payload.draftPackage = fixedPrivateRenewalDraftPackage
+      } else {
+        payload.existingPackageId = selectedPackageId
+      }
+
+      setFixedPrivateRenewalServerPreviewBusy(true)
+      setFixedPrivateRenewalServerPreviewError('')
+      setFixedPrivateRenewalServerPreview(null)
+      const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonRenewal')
+      const result = await callable(payload)
+      setFixedPrivateRenewalServerPreview(result?.data || null)
+    } catch (error) {
+      console.error('고정 1:1 연장 서버 검증 실패:', error)
+      setFixedPrivateRenewalServerPreviewError(
+        error?.message || '저장 전 서버 검증에 실패했습니다.'
+      )
+    } finally {
+      setFixedPrivateRenewalServerPreviewBusy(false)
+    }
+  }
+
   const privateLessonTeacherSelectOptions = isAdmin
     ? teacherSelectOptions
     : teacherGroupClassKey
@@ -7251,6 +7404,11 @@ export default function Dashboard() {
     fixedPrivateRenewalExistingPackageOptions,
     fixedPrivateRenewalPackageOptions,
     fixedPrivateRenewalPlan,
+    fixedPrivateRenewalServerPreview,
+    fixedPrivateRenewalServerPreviewBusy,
+    fixedPrivateRenewalServerPreviewError,
+    fixedPrivateRenewalServerPreviewDisabledReason,
+    previewFixedPrivateRenewalOnServer,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',

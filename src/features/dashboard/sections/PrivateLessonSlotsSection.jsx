@@ -462,6 +462,11 @@ export default function PrivateLessonSlotsSection({
   fixedPrivateRenewalExistingPackageOptions = [],
   fixedPrivateRenewalPackageOptions = [],
   fixedPrivateRenewalPlan = null,
+  fixedPrivateRenewalServerPreview = null,
+  fixedPrivateRenewalServerPreviewBusy = false,
+  fixedPrivateRenewalServerPreviewError = '',
+  fixedPrivateRenewalServerPreviewDisabledReason = '',
+  previewFixedPrivateRenewalOnServer,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -3057,6 +3062,167 @@ export default function PrivateLessonSlotsSection({
                   저장하지 않고 미리보기만 제공되며, 실제 고정 수업 생성은 다음 단계에서
                   진행합니다.
                 </span>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  border: '1px solid #293246',
+                  borderRadius: 8,
+                  padding: 12,
+                  background: '#151922',
+                }}
+              >
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    data-testid="private-fixed-renewal-server-preview-button"
+                    onClick={() => previewFixedPrivateRenewalOnServer?.()}
+                    disabled={
+                      fixedPrivateRenewalServerPreviewBusy ||
+                      Boolean(fixedPrivateRenewalServerPreviewDisabledReason)
+                    }
+                    style={{
+                      border: '1px solid #3b4252',
+                      borderRadius: 6,
+                      background: '#253047',
+                      color: '#d7def0',
+                      padding: '8px 10px',
+                      cursor:
+                        fixedPrivateRenewalServerPreviewBusy ||
+                        fixedPrivateRenewalServerPreviewDisabledReason
+                          ? 'not-allowed'
+                          : 'pointer',
+                    }}
+                  >
+                    저장 전 서버 검증
+                  </button>
+                  {fixedPrivateRenewalServerPreviewBusy ? (
+                    <span data-testid="private-fixed-renewal-server-preview-loading">
+                      서버 검증 중...
+                    </span>
+                  ) : fixedPrivateRenewalServerPreviewDisabledReason ? (
+                    <span style={{ color: '#f5c17a' }}>
+                      {fixedPrivateRenewalServerPreviewDisabledReason}
+                    </span>
+                  ) : null}
+                </div>
+                <span
+                  data-testid="private-fixed-renewal-server-preview-no-write-note"
+                  style={{ opacity: 0.76, lineHeight: 1.6 }}
+                >
+                  이 단계에서는 저장하지 않습니다.
+                  <br />
+                  서버 기준으로 생성 예정 항목을 확인합니다.
+                  <br />
+                  실제 저장은 다음 단계에서 제공합니다.
+                  <br />
+                  수강권 발행이나 수업 저장은 아직 실행되지 않습니다.
+                </span>
+                {fixedPrivateRenewalServerPreviewError ? (
+                  <div
+                    data-testid="private-fixed-renewal-server-preview-error"
+                    style={{ color: '#f4a7a7' }}
+                  >
+                    {fixedPrivateRenewalServerPreviewError}
+                  </div>
+                ) : null}
+                {fixedPrivateRenewalServerPreview ? (
+                  <div
+                    data-testid="private-fixed-renewal-server-preview-result"
+                    style={{
+                      display: 'grid',
+                      gap: 8,
+                      border: '1px solid #3b4252',
+                      borderRadius: 8,
+                      padding: 12,
+                      background: '#111722',
+                    }}
+                  >
+                    <strong>서버 검증 결과</strong>
+                    <span>
+                      검증 상태:{' '}
+                      {fixedPrivateRenewalServerPreview.ok ? '통과' : '확인 필요'} · dryRun{' '}
+                      {fixedPrivateRenewalServerPreview.dryRun ? 'true' : 'false'} · previewOnly{' '}
+                      {fixedPrivateRenewalServerPreview.previewOnly ? 'true' : 'false'}
+                    </span>
+                    <div
+                      data-testid="private-fixed-renewal-server-preview-would-create"
+                      style={{ display: 'grid', gap: 4 }}
+                    >
+                      <strong>생성 예정 요약</strong>
+                      <span>
+                        새 수강권:{' '}
+                        {fixedPrivateRenewalServerPreview.wouldCreate?.studentPackage ? '예' : '아니오'}
+                      </span>
+                      <span>
+                        선생님 시간 생성:{' '}
+                        {fixedPrivateRenewalServerPreview.wouldCreate?.teacherTemplate ? '예' : '아니오'}
+                      </span>
+                      <span>
+                        선생님 시간 재활성화:{' '}
+                        {fixedPrivateRenewalServerPreview.wouldCreate?.reactivateTeacherTemplate
+                          ? '예'
+                          : '아니오'}
+                      </span>
+                      <span>
+                        고정 수업 {Number(fixedPrivateRenewalServerPreview.wouldCreate?.lessons || 0)}
+                        회 · 날짜별 슬롯{' '}
+                        {Number(fixedPrivateRenewalServerPreview.wouldCreate?.privateLessonSlots || 0)}
+                        개 · 예약 문서{' '}
+                        {Number(
+                          fixedPrivateRenewalServerPreview.wouldCreate?.privateLessonReservations || 0
+                        )}
+                        개
+                      </span>
+                    </div>
+                    <div style={{ display: 'grid', gap: 4 }}>
+                      <strong>서버 정규화 요약</strong>
+                      <span>
+                        기간 {fixedPrivateRenewalServerPreview.normalizedPlan?.startDate || '-'} ~{' '}
+                        {fixedPrivateRenewalServerPreview.normalizedPlan?.endDate || '-'} ·{' '}
+                        {Number(fixedPrivateRenewalServerPreview.normalizedPlan?.count || 0)}회
+                      </span>
+                      <span>
+                        배정 가능{' '}
+                        {fixedPrivateRenewalServerPreview.normalizedPlan?.assignableDates?.length || 0}
+                        회 · 제외{' '}
+                        {fixedPrivateRenewalServerPreview.normalizedPlan?.excludedDates?.length || 0}
+                        회
+                      </span>
+                      <span>
+                        선생님 시간:{' '}
+                        {fixedPrivateRenewalServerPreview.normalizedPlan?.teacherTimePreparation?.status ||
+                          '-'}
+                      </span>
+                    </div>
+                    <span data-testid="private-fixed-renewal-server-preview-batch-id">
+                      renewalBatchIdCandidate:{' '}
+                      {fixedPrivateRenewalServerPreview.renewalBatchIdCandidate || '-'}
+                    </span>
+                    <span data-testid="private-fixed-renewal-server-preview-idempotency-key">
+                      idempotencyKey: {fixedPrivateRenewalServerPreview.idempotencyKey || '-'}
+                    </span>
+                    {fixedPrivateRenewalServerPreview.warnings?.length > 0 ? (
+                      <div
+                        data-testid="private-fixed-renewal-server-preview-warning"
+                        style={{ color: '#f5c17a', display: 'grid', gap: 4 }}
+                      >
+                        <strong>서버 경고</strong>
+                        {fixedPrivateRenewalServerPreview.warnings.map((warning, index) => (
+                          <span key={`${warning.code || 'warning'}-${index}`}>
+                            {warning.message || warning.code || '확인 필요'}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {fixedPrivateRenewalServerPreview.nextStep ? (
+                      <span style={{ opacity: 0.76 }}>
+                        nextStep: 실제 저장은 다음 단계에서 제공합니다.
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </section>
           </div>

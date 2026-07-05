@@ -710,6 +710,15 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-start-date');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-end-date');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-plan');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-button');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-result');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-loading');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-error');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-warning');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-would-create');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-batch-id');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-idempotency-key');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-server-preview-no-write-note');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-preview-only-note');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-assignable-count');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-excluded-count');
@@ -775,6 +784,12 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain(
     '필요한 경우 연장 회수와 기간을 수정해 미리보기를 다시 확인할 수 있습니다'
   );
+  expect(privateSlotsSectionSource).toContain('저장 전 서버 검증');
+  expect(privateSlotsSectionSource).toContain('서버 검증 결과');
+  expect(privateSlotsSectionSource).toContain('이 단계에서는 저장하지 않습니다');
+  expect(privateSlotsSectionSource).toContain('서버 기준으로 생성 예정 항목을 확인합니다');
+  expect(privateSlotsSectionSource).toContain('실제 저장은 다음 단계에서 제공합니다');
+  expect(privateSlotsSectionSource).toContain('수강권 발행이나 수업 저장은 아직 실행되지 않습니다');
   expect(privateSlotsSectionSource).toContain('연장 회수');
   expect(privateSlotsSectionSource).not.toContain('연장 수강권 또는 새 수강권 초안');
   expect(privateSlotsSectionSource).not.toContain('data-testid="private-fixed-renewal-submit-button"');
@@ -1029,12 +1044,22 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
   expect(renewalSkeletonSource).toContain('privateReservationDocId');
 
   expect(dashboardSource).toContain('fixedPrivateRenewalPlan');
+  expect(dashboardSource).toContain('fixedPrivateRenewalServerPreview');
+  expect(dashboardSource).toContain('fixedPrivateRenewalServerPreviewBusy');
+  expect(dashboardSource).toContain('fixedPrivateRenewalServerPreviewError');
+  expect(dashboardSource).toContain("httpsCallable(firebaseFunctions, 'createFixedPrivateLessonRenewal')");
+  expect(dashboardSource).toContain('dryRun: true');
+  expect(dashboardSource).toContain('previewOnly: true');
+  expect(dashboardSource).toContain('commit: false');
   expect(dashboardSource).toContain('새 수강권 초안');
   expect(dashboardSource).toContain('previewOnly');
   expect(privateSlotsSectionSource).toContain('선생님 시간 준비');
   expect(privateSlotsSectionSource).toContain('기존 남은 수강권으로 미리보기');
   expect(privateSlotsSectionSource).toContain('이번 단계에서는 저장하지 않고 미리보기만 제공합니다');
   expect(privateSlotsSectionSource).not.toContain('createFixedPrivateLessonRenewal');
+  expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('commit: true');
+  expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('dryRun: false');
+  expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('previewOnly: false');
   expect(privateSlotsSectionSource).not.toContain('private-fixed-renewal-submit-button');
   expect(privateSlotsSectionSource).not.toContain('>연장 저장<');
 });
