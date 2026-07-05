@@ -1451,6 +1451,11 @@ export default function Dashboard() {
     useState(false)
   const [fixedPrivateRenewalServerPreviewError, setFixedPrivateRenewalServerPreviewError] =
     useState('')
+  const [fixedPrivateRenewalServerPreviewPayload, setFixedPrivateRenewalServerPreviewPayload] =
+    useState(null)
+  const [fixedPrivateRenewalCommitBusy, setFixedPrivateRenewalCommitBusy] = useState(false)
+  const [fixedPrivateRenewalCommitError, setFixedPrivateRenewalCommitError] = useState('')
+  const [fixedPrivateRenewalCommitResult, setFixedPrivateRenewalCommitResult] = useState(null)
   const [busyFixedPrivateLessonCancelId, setBusyFixedPrivateLessonCancelId] = useState('')
   const [studentSummaryGroupStudents, setStudentSummaryGroupStudents] = useState([])
   const [studentSummaryGroupLessons, setStudentSummaryGroupLessons] = useState([])
@@ -6751,6 +6756,9 @@ export default function Dashboard() {
   useEffect(() => {
     setFixedPrivateRenewalServerPreview(null)
     setFixedPrivateRenewalServerPreviewError('')
+    setFixedPrivateRenewalServerPreviewPayload(null)
+    setFixedPrivateRenewalCommitError('')
+    setFixedPrivateRenewalCommitResult(null)
   }, [
     fixedPrivateRenewalDraftCount,
     fixedPrivateRenewalEndDate,
@@ -7244,6 +7252,10 @@ export default function Dashboard() {
       return
     }
 
+    setFixedPrivateRenewalServerPreviewPayload(null)
+    setFixedPrivateRenewalCommitError('')
+    setFixedPrivateRenewalCommitResult(null)
+
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       const plan = fixedPrivateRenewalPlan
@@ -7327,7 +7339,13 @@ export default function Dashboard() {
       setFixedPrivateRenewalServerPreview(null)
       const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonRenewal')
       const result = await callable(payload)
-      setFixedPrivateRenewalServerPreview(result?.data || null)
+      const previewData = result?.data || null
+      setFixedPrivateRenewalServerPreview(previewData)
+      setFixedPrivateRenewalServerPreviewPayload(
+        previewData?.ok === true && previewData?.dryRun === true && previewData?.previewOnly === true
+          ? payload
+          : null
+      )
     } catch (error) {
       console.error('고정 1:1 연장 서버 검증 실패:', error)
       setFixedPrivateRenewalServerPreviewError(
@@ -7335,6 +7353,72 @@ export default function Dashboard() {
       )
     } finally {
       setFixedPrivateRenewalServerPreviewBusy(false)
+    }
+  }
+
+  async function handleCommitFixedPrivateRenewal() {
+    if (fixedPrivateRenewalCommitBusy) return
+
+    try {
+      const preview = fixedPrivateRenewalServerPreview
+      const payload = fixedPrivateRenewalServerPreviewPayload
+      if (!payload) {
+        throw new Error('저장에 사용할 서버 검증 payload가 없습니다. 서버 검증을 다시 실행해 주세요.')
+      }
+      if (
+        preview?.ok !== true ||
+        preview?.dryRun !== true ||
+        preview?.previewOnly !== true ||
+        !preview?.wouldCreate
+      ) {
+        throw new Error('저장 전 서버 검증 결과가 유효하지 않습니다. 서버 검증을 다시 실행해 주세요.')
+      }
+
+      const payloadRequestId = String(payload.requestId || '').trim()
+      const previewRequestId = String(preview.requestId || '').trim()
+      const previewIdempotencyKey = String(preview.idempotencyKey || '').trim()
+      const requestId = previewRequestId || payloadRequestId
+      if (!requestId) {
+        throw new Error('저장 요청 ID를 확인할 수 없습니다. 서버 검증을 다시 실행해 주세요.')
+      }
+      if (payloadRequestId && payloadRequestId !== requestId) {
+        throw new Error('서버 검증 payload와 결과의 요청 ID가 일치하지 않습니다.')
+      }
+      if (previewIdempotencyKey && previewIdempotencyKey !== requestId) {
+        throw new Error('서버 검증 idempotencyKey와 요청 ID가 일치하지 않습니다.')
+      }
+
+      const commitPayload = {
+        ...payload,
+        requestId,
+        commit: true,
+        dryRun: false,
+        previewOnly: false,
+      }
+
+      setFixedPrivateRenewalCommitBusy(true)
+      setFixedPrivateRenewalCommitError('')
+      setFixedPrivateRenewalCommitResult(null)
+      const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonRenewal')
+      const result = await callable(commitPayload)
+      const commitData = result?.data || null
+      if (
+        commitData?.ok !== true ||
+        commitData?.committed !== true ||
+        commitData?.dryRun !== false ||
+        commitData?.previewOnly !== false
+      ) {
+        throw new Error('서버 저장 결과가 유효하지 않습니다.')
+      }
+      setFixedPrivateRenewalCommitResult(commitData)
+    } catch (error) {
+      console.error('고정 1:1 연장 저장 실패:', error)
+      const errorCode = error?.code ? `[${error.code}] ` : ''
+      setFixedPrivateRenewalCommitError(
+        `${errorCode}${error?.message || '저장 중 오류가 발생했습니다.'}`
+      )
+    } finally {
+      setFixedPrivateRenewalCommitBusy(false)
     }
   }
 
@@ -7407,8 +7491,13 @@ export default function Dashboard() {
     fixedPrivateRenewalServerPreview,
     fixedPrivateRenewalServerPreviewBusy,
     fixedPrivateRenewalServerPreviewError,
+    fixedPrivateRenewalServerPreviewPayload,
+    fixedPrivateRenewalCommitBusy,
+    fixedPrivateRenewalCommitError,
+    fixedPrivateRenewalCommitResult,
     fixedPrivateRenewalServerPreviewDisabledReason,
     previewFixedPrivateRenewalOnServer,
+    onCommitFixedPrivateRenewal: handleCommitFixedPrivateRenewal,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',
