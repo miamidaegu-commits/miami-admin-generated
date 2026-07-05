@@ -1118,13 +1118,31 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
   expect(privateSlotsSectionSource).toContain('생성 후에는 기존 관리 화면에서 확인/수정할 수 있습니다');
   expect(privateSlotsSectionSource).toContain('중복 클릭을 막기 위해 처리 중에는 버튼이 잠깁니다');
   expect(privateSlotsSectionSource).toContain('연장 생성이 완료되었습니다');
+  expect(privateSlotsSectionSource).toContain('생성된 일정 보기');
+  expect(privateSlotsSectionSource).toContain('방금 생성된 연장');
+  expect(privateSlotsSectionSource).toContain('방금 생성됨');
+  expect(privateSlotsSectionSource).toContain(
+    '기존 고정 1:1 수업 일정에서 생성된 수업을 확인하세요'
+  );
+  expect(privateSlotsSectionSource).toContain('fixedPrivateLessonsSectionRef');
+  expect(privateSlotsSectionSource).toContain('scrollIntoView');
+  expect(privateSlotsSectionSource).toContain('createdRenewalLessonIds');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-button');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-loading');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-error');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result-batch-id');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result-created');
+  expect(privateSlotsSectionSource).toContain(
+    'private-fixed-renewal-commit-view-created-lessons'
+  );
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-warning-note');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-created-lessons-banner');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-created-lessons-count');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-created-lessons-note');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-created-lesson-row');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-created-lesson-badge');
+  expect(privateSlotsSectionSource).toContain('private-fixed-lesson-row');
   expect(privateSlotsSectionSource).not.toContain('private-fixed-renewal-submit-button');
   expect(privateSlotsSectionSource).not.toContain('>연장 저장<');
   expect(privateSlotsSectionSource).not.toContain('>연장 생성<');

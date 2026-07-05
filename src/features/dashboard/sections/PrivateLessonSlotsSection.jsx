@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { PRIVATE_WEEKLY_SLOT_WEEKDAYS } from '../../booking/privateWeeklySlotBulk.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 
@@ -507,6 +507,7 @@ export default function PrivateLessonSlotsSection({
   const [showPastFixedPrivateLessons, setShowPastFixedPrivateLessons] = useState(false)
   const [showFixedPrivateRenewalConfirmModal, setShowFixedPrivateRenewalConfirmModal] =
     useState(false)
+  const fixedPrivateLessonsSectionRef = useRef(null)
   const fixedPrivateRenewalConfirmationPlan =
     fixedPrivateRenewalServerPreview?.normalizedPlan || {}
   const fixedPrivateRenewalConfirmationWouldCreate =
@@ -558,6 +559,21 @@ export default function PrivateLessonSlotsSection({
   )
     ? fixedPrivateRenewalCommitCreated.lessons
     : []
+  const createdRenewalLessonIds = useMemo(
+    () =>
+      new Set(
+        fixedPrivateRenewalCommitLessonIds
+          .map((lesson) =>
+            typeof lesson === 'string'
+              ? lesson
+              : lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || ''
+          )
+          .map((lessonId) => String(lessonId || '').trim())
+          .filter(Boolean)
+      ),
+    [fixedPrivateRenewalCommitLessonIds]
+  )
+  const createdRenewalLessonCount = createdRenewalLessonIds.size
   const fixedPrivateRenewalCommitSlotIds = Array.isArray(
     fixedPrivateRenewalCommitCreated.privateLessonSlots
   )
@@ -597,6 +613,21 @@ export default function PrivateLessonSlotsSection({
       setShowFixedPrivateRenewalConfirmModal(false)
     }
   }, [canOpenFixedPrivateRenewalConfirmModal])
+
+  function viewCreatedFixedPrivateRenewalLessons() {
+    setShowFixedPrivateRenewalConfirmModal(false)
+    const scrollToCreatedLessons = () => {
+      fixedPrivateLessonsSectionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(scrollToCreatedLessons)
+      return
+    }
+    setTimeout(scrollToCreatedLessons, 0)
+  }
 
   function openAvailabilityTemplateEdit(template) {
     setEditingAvailabilityTemplateId(String(template?.id || ''))
@@ -3671,6 +3702,7 @@ export default function PrivateLessonSlotsSection({
           </section>
 
           <section
+            ref={fixedPrivateLessonsSectionRef}
             data-testid="private-fixed-lessons-management-section"
             style={{
               display: 'grid',
@@ -3689,6 +3721,30 @@ export default function PrivateLessonSlotsSection({
                 시간에 학생 고정 배정에서 관리합니다.
               </p>
             </div>
+            {fixedPrivateRenewalCommitResult ? (
+              <div
+                data-testid="private-fixed-renewal-created-lessons-banner"
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  padding: '12px 14px',
+                  border: '1px solid #1f6f43',
+                  borderRadius: 8,
+                  background: '#0f2419',
+                  color: '#c7f9d4',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong data-testid="private-fixed-renewal-created-lessons-count">
+                  방금 생성된 연장 {createdRenewalLessonCount}건
+                </strong>
+                <span data-testid="private-fixed-renewal-created-lessons-note">
+                  기존 고정 1:1 수업 일정에서 생성된 수업을 확인하세요.
+                </span>
+                <span>생성된 행에는 “방금 생성됨” 표시가 붙습니다.</span>
+              </div>
+            ) : null}
             <div
               style={{
                 display: 'grid',
@@ -3747,6 +3803,9 @@ export default function PrivateLessonSlotsSection({
                 {visibleFixedPrivateLessons.map((lesson) => {
                   const statusLabel = fixedLessonStatusLabel(lesson)
                   const isCancelled = statusLabel !== '배정됨'
+                  const isCreatedRenewalLesson = createdRenewalLessonIds.has(
+                    String(lesson.id || lesson.lessonId || '').trim()
+                  )
                   const matchingReservation = privateLessonReservations.find(
                     (reservation) =>
                       String(reservation.status || '').trim() === 'active' &&
@@ -3759,7 +3818,16 @@ export default function PrivateLessonSlotsSection({
                       className="table-row"
                       data-testid="private-fixed-lesson-row"
                       data-lesson-id={lesson.id}
-                      style={{ gridTemplateColumns: '0.9fr 0.65fr 0.9fr 0.9fr 1fr 0.8fr minmax(160px, auto)' }}
+                      data-created-from-renewal={isCreatedRenewalLesson ? 'true' : undefined}
+                      data-created-row-testid={
+                        isCreatedRenewalLesson ? 'private-fixed-renewal-created-lesson-row' : ''
+                      }
+                      style={{
+                        gridTemplateColumns: '0.9fr 0.65fr 0.9fr 0.9fr 1fr 0.8fr minmax(160px, auto)',
+                        border: isCreatedRenewalLesson ? '1px solid #1f6f43' : undefined,
+                        background: isCreatedRenewalLesson ? '#10251a' : undefined,
+                        boxShadow: isCreatedRenewalLesson ? '0 0 0 1px rgba(34, 197, 94, 0.18)' : undefined,
+                      }}
                     >
                       <span>{lesson.date || '-'}</span>
                       <span>{lesson.time || '-'}</span>
@@ -3771,6 +3839,28 @@ export default function PrivateLessonSlotsSection({
                         {matchingReservation ? (
                           <span style={{ display: 'block', marginTop: 4, opacity: 0.72, fontSize: 12 }}>
                             예약: {matchingReservation.studentName || matchingReservation.studentId || '-'}
+                          </span>
+                        ) : null}
+                        {isCreatedRenewalLesson ? (
+                          <span
+                            data-testid="private-fixed-renewal-created-lesson-row"
+                            style={{ display: 'block', marginTop: 4 }}
+                          >
+                            <span
+                              data-testid="private-fixed-renewal-created-lesson-badge"
+                              style={{
+                                display: 'inline-block',
+                                padding: '2px 6px',
+                                borderRadius: 999,
+                                border: '1px solid #1f6f43',
+                                background: '#0f2419',
+                                color: '#c7f9d4',
+                                fontSize: 12,
+                                fontWeight: 700,
+                              }}
+                            >
+                              방금 생성됨
+                            </span>
                           </span>
                         ) : null}
                       </span>
@@ -4335,6 +4425,26 @@ export default function PrivateLessonSlotsSection({
                   <span>slots: {fixedPrivateRenewalCommitSlotIds.length}개</span>
                   <span>reservations: {fixedPrivateRenewalCommitReservationIds.length}개</span>
                 </div>
+                {createdRenewalLessonCount > 0 ? (
+                  <button
+                    type="button"
+                    data-testid="private-fixed-renewal-commit-view-created-lessons"
+                    onClick={viewCreatedFixedPrivateRenewalLessons}
+                    style={{
+                      justifySelf: 'start',
+                      marginTop: 4,
+                      padding: '7px 11px',
+                      borderRadius: 8,
+                      border: '1px solid #34d399',
+                      background: '#14532d',
+                      color: '#dcfce7',
+                      cursor: 'pointer',
+                      fontWeight: 700,
+                    }}
+                  >
+                    생성된 일정 보기
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
