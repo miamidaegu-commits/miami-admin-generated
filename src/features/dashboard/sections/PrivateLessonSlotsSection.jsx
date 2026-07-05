@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { PRIVATE_WEEKLY_SLOT_WEEKDAYS } from '../../booking/privateWeeklySlotBulk.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 
@@ -500,6 +500,71 @@ export default function PrivateLessonSlotsSection({
   const [showPastPrivateWeeklyTemplates, setShowPastPrivateWeeklyTemplates] = useState(false)
   const [showPastPrivateLessonSlots, setShowPastPrivateLessonSlots] = useState(false)
   const [showPastFixedPrivateLessons, setShowPastFixedPrivateLessons] = useState(false)
+  const [showFixedPrivateRenewalConfirmModal, setShowFixedPrivateRenewalConfirmModal] =
+    useState(false)
+  const fixedPrivateRenewalConfirmationPlan =
+    fixedPrivateRenewalServerPreview?.normalizedPlan || {}
+  const fixedPrivateRenewalConfirmationWouldCreate =
+    fixedPrivateRenewalServerPreview?.wouldCreate || null
+  const fixedPrivateRenewalConfirmationWarnings = Array.isArray(
+    fixedPrivateRenewalServerPreview?.warnings
+  )
+    ? fixedPrivateRenewalServerPreview.warnings
+    : []
+  const fixedPrivateRenewalConfirmationDates = Array.isArray(
+    fixedPrivateRenewalConfirmationPlan.assignableDates
+  )
+    ? fixedPrivateRenewalConfirmationPlan.assignableDates
+    : Array.isArray(fixedPrivateRenewalPlan?.assignableDates)
+      ? fixedPrivateRenewalPlan.assignableDates
+      : []
+  const fixedPrivateRenewalConfirmationTeacherTimeStatus = String(
+    fixedPrivateRenewalConfirmationPlan.teacherTimePreparation?.status ||
+      fixedPrivateRenewalPlan?.teacherTimePreparation?.status ||
+      ''
+  ).trim()
+  const canOpenFixedPrivateRenewalConfirmModal = Boolean(
+    fixedPrivateRenewalServerPreview &&
+      fixedPrivateRenewalServerPreview.ok === true &&
+      fixedPrivateRenewalServerPreview.dryRun === true &&
+      fixedPrivateRenewalServerPreview.previewOnly === true &&
+      fixedPrivateRenewalConfirmationWouldCreate &&
+      !fixedPrivateRenewalServerPreviewBusy &&
+      !fixedPrivateRenewalServerPreviewError &&
+      fixedPrivateRenewalConfirmationDates.length > 0 &&
+      !['conflict', 'missing_info'].includes(
+        fixedPrivateRenewalConfirmationTeacherTimeStatus
+      )
+  )
+  const fixedPrivateRenewalConfirmationSeedLesson = fixedPrivateRenewalPlan?.seedLesson || {}
+  const fixedPrivateRenewalConfirmationStudentLabel =
+    fixedPrivateRenewalDraftPackage?.studentName ||
+    fixedPrivateRenewalConfirmationSeedLesson.studentName ||
+    fixedPrivateRenewalConfirmationSeedLesson.student ||
+    fixedPrivateRenewalConfirmationPlan.studentId ||
+    '-'
+  const fixedPrivateRenewalConfirmationTeacherLabel =
+    fixedPrivateRenewalConfirmationPlan.teacherName ||
+    fixedPrivateRenewalPlan?.teacherTimePreparation?.teacherName ||
+    fixedPrivateRenewalConfirmationSeedLesson.teacherName ||
+    fixedPrivateRenewalConfirmationSeedLesson.teacher ||
+    fixedPrivateRenewalConfirmationPlan.teacherKey ||
+    '-'
+  const fixedPrivateRenewalConfirmationPackageMode = String(
+    fixedPrivateRenewalConfirmationPlan.packageMode || ''
+  ).trim()
+  const fixedPrivateRenewalConfirmationPackageModeLabel =
+    fixedPrivateRenewalConfirmationPackageMode === 'draft'
+      ? '새 수강권 초안'
+      : fixedPrivateRenewalConfirmationPackageMode === 'existing'
+        ? '기존 수강권'
+        : '-'
+
+  useEffect(() => {
+    if (!canOpenFixedPrivateRenewalConfirmModal) {
+      setShowFixedPrivateRenewalConfirmModal(false)
+    }
+  }, [canOpenFixedPrivateRenewalConfirmModal])
 
   function openAvailabilityTemplateEdit(template) {
     setEditingAvailabilityTemplateId(String(template?.id || ''))
@@ -3221,6 +3286,24 @@ export default function PrivateLessonSlotsSection({
                         nextStep: 실제 저장은 다음 단계에서 제공합니다.
                       </span>
                     ) : null}
+                    {canOpenFixedPrivateRenewalConfirmModal ? (
+                      <button
+                        type="button"
+                        data-testid="private-fixed-renewal-confirmation-open"
+                        onClick={() => setShowFixedPrivateRenewalConfirmModal(true)}
+                        style={{
+                          justifySelf: 'start',
+                          border: '1px solid #456034',
+                          borderRadius: 6,
+                          background: '#213b2b',
+                          color: '#d9f0df',
+                          padding: '8px 10px',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        생성 예정 항목 확인
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
@@ -3943,6 +4026,232 @@ export default function PrivateLessonSlotsSection({
 
         </>
       )}
+
+      {showFixedPrivateRenewalConfirmModal && canOpenFixedPrivateRenewalConfirmModal ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="private-fixed-renewal-confirmation-title"
+          data-testid="private-fixed-renewal-confirmation-modal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16,
+            background: 'rgba(0, 0, 0, 0.58)',
+          }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              setShowFixedPrivateRenewalConfirmModal(false)
+            }
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 720,
+              maxHeight: '86vh',
+              overflow: 'auto',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              background: '#151922',
+              color: 'white',
+              padding: 20,
+              boxSizing: 'border-box',
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="private-fixed-renewal-confirmation-title"
+              style={{ margin: '0 0 10px 0', fontSize: '1.1rem', fontWeight: 700 }}
+            >
+              최종 확인
+            </h2>
+            <div
+              data-testid="private-fixed-renewal-confirmation-no-write-note"
+              style={{
+                display: 'grid',
+                gap: 4,
+                marginBottom: 14,
+                padding: 12,
+                border: '1px solid #3b4252',
+                borderRadius: 8,
+                background: '#111722',
+                color: '#d7def0',
+                lineHeight: 1.6,
+              }}
+            >
+              <span>아직 저장하지 않습니다.</span>
+              <span>실제 저장은 다음 단계에서 제공합니다.</span>
+              <span>수강권 발행이나 수업 저장은 실행되지 않습니다.</span>
+              <span>서버 검증 결과를 다시 확인하는 단계입니다.</span>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gap: 12,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                fontSize: 13,
+                lineHeight: 1.65,
+              }}
+            >
+              <div style={{ display: 'grid', gap: 4 }}>
+                <strong>대상</strong>
+                <span>학생: {fixedPrivateRenewalConfirmationStudentLabel}</span>
+                <span>선생님: {fixedPrivateRenewalConfirmationTeacherLabel}</span>
+                <span>수강권 mode: {fixedPrivateRenewalConfirmationPackageModeLabel}</span>
+                <span>
+                  수강기간 {fixedPrivateRenewalConfirmationPlan.startDate || '-'} ~{' '}
+                  {fixedPrivateRenewalConfirmationPlan.endDate || '-'}
+                </span>
+                <span>
+                  총 회수 {Number(fixedPrivateRenewalConfirmationPlan.count || 0)}회
+                </span>
+              </div>
+
+              <div
+                data-testid="private-fixed-renewal-confirmation-would-create"
+                style={{ display: 'grid', gap: 4 }}
+              >
+                <strong>생성 예정 항목</strong>
+                <span>
+                  새 수강권 생성:{' '}
+                  {fixedPrivateRenewalConfirmationWouldCreate?.studentPackage ? '예' : '아니오'}
+                </span>
+                <span>
+                  기존 수강권 사용:{' '}
+                  {fixedPrivateRenewalConfirmationPackageMode === 'existing' ? '예' : '아니오'}
+                </span>
+                <span>
+                  선생님 시간 생성:{' '}
+                  {fixedPrivateRenewalConfirmationWouldCreate?.teacherTemplate ? '예' : '아니오'}
+                </span>
+                <span>
+                  선생님 시간 재활성화:{' '}
+                  {fixedPrivateRenewalConfirmationWouldCreate?.reactivateTeacherTemplate
+                    ? '예'
+                    : '아니오'}
+                </span>
+                <span>
+                  고정 수업 생성{' '}
+                  {Number(fixedPrivateRenewalConfirmationWouldCreate?.lessons || 0)}회
+                </span>
+                <span>
+                  날짜별 슬롯 생성{' '}
+                  {Number(fixedPrivateRenewalConfirmationWouldCreate?.privateLessonSlots || 0)}개
+                </span>
+                <span>
+                  예약 문서 생성{' '}
+                  {Number(
+                    fixedPrivateRenewalConfirmationWouldCreate?.privateLessonReservations || 0
+                  )}
+                  개
+                </span>
+              </div>
+            </div>
+
+            <div
+              data-testid="private-fixed-renewal-confirmation-dates"
+              style={{
+                display: 'grid',
+                gap: 6,
+                marginTop: 14,
+                padding: 12,
+                border: '1px solid #293246',
+                borderRadius: 8,
+                background: '#101521',
+                fontSize: 13,
+              }}
+            >
+              <strong>생성 예정 날짜</strong>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {fixedPrivateRenewalConfirmationDates.map((date) => (
+                  <span
+                    key={date}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 999,
+                      border: '1px solid #3b4252',
+                      background: '#151922',
+                    }}
+                  >
+                    {date}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gap: 6,
+                marginTop: 14,
+                fontSize: 12,
+                lineHeight: 1.6,
+                wordBreak: 'break-all',
+              }}
+            >
+              <span data-testid="private-fixed-renewal-confirmation-batch-id">
+                renewalBatchIdCandidate:{' '}
+                {fixedPrivateRenewalServerPreview.renewalBatchIdCandidate || '-'}
+              </span>
+              <span data-testid="private-fixed-renewal-confirmation-idempotency-key">
+                idempotencyKey: {fixedPrivateRenewalServerPreview.idempotencyKey || '-'}
+              </span>
+            </div>
+
+            <div
+              data-testid="private-fixed-renewal-confirmation-warnings"
+              style={{
+                display: 'grid',
+                gap: 4,
+                marginTop: 14,
+                color: fixedPrivateRenewalConfirmationWarnings.length > 0 ? '#f5c17a' : '#d7def0',
+                fontSize: 13,
+              }}
+            >
+              <strong>warnings</strong>
+              {fixedPrivateRenewalConfirmationWarnings.length > 0 ? (
+                fixedPrivateRenewalConfirmationWarnings.map((warning, index) => (
+                  <span key={`${warning.code || 'warning'}-${index}`}>
+                    {warning.message || warning.code || '확인 필요'}
+                  </span>
+                ))
+              ) : (
+                <span>서버 경고 없음</span>
+              )}
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                marginTop: 18,
+              }}
+            >
+              <button
+                type="button"
+                data-testid="private-fixed-renewal-confirmation-close"
+                onClick={() => setShowFixedPrivateRenewalConfirmModal(false)}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: 'pointer',
+                }}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {fixedPrivateLessonAction ? (
         <FixedPrivateLessonActionModal

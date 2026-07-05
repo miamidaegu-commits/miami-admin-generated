@@ -790,6 +790,28 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('서버 기준으로 생성 예정 항목을 확인합니다');
   expect(privateSlotsSectionSource).toContain('실제 저장은 다음 단계에서 제공합니다');
   expect(privateSlotsSectionSource).toContain('수강권 발행이나 수업 저장은 아직 실행되지 않습니다');
+  expect(privateSlotsSectionSource).toContain('생성 예정 항목 확인');
+  expect(privateSlotsSectionSource).toContain('최종 확인');
+  expect(privateSlotsSectionSource).toContain('아직 저장하지 않습니다');
+  expect(privateSlotsSectionSource).toContain('수강권 발행이나 수업 저장은 실행되지 않습니다');
+  expect(privateSlotsSectionSource).toContain('서버 검증 결과를 다시 확인하는 단계입니다');
+  expect(privateSlotsSectionSource).toContain('showFixedPrivateRenewalConfirmModal');
+  expect(privateSlotsSectionSource).toContain('canOpenFixedPrivateRenewalConfirmModal');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-open');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-modal');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-close');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-would-create');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-batch-id');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-idempotency-key');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-warnings');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-dates');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-no-write-note');
+  expect(privateSlotsSectionSource).toContain('fixedPrivateRenewalServerPreview.ok === true');
+  expect(privateSlotsSectionSource).toContain('fixedPrivateRenewalServerPreview.dryRun === true');
+  expect(privateSlotsSectionSource).toContain('fixedPrivateRenewalServerPreview.previewOnly === true');
+  expect(privateSlotsSectionSource).toContain('wouldCreate');
+  expect(privateSlotsSectionSource).toContain('renewalBatchIdCandidate');
+  expect(privateSlotsSectionSource).toContain('idempotencyKey');
   expect(privateSlotsSectionSource).toContain('연장 회수');
   expect(privateSlotsSectionSource).not.toContain('연장 수강권 또는 새 수강권 초안');
   expect(privateSlotsSectionSource).not.toContain('data-testid="private-fixed-renewal-submit-button"');
@@ -1056,12 +1078,28 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
   expect(privateSlotsSectionSource).toContain('선생님 시간 준비');
   expect(privateSlotsSectionSource).toContain('기존 남은 수강권으로 미리보기');
   expect(privateSlotsSectionSource).toContain('이번 단계에서는 저장하지 않고 미리보기만 제공합니다');
+  expect(privateSlotsSectionSource).toContain('생성 예정 항목 확인');
+  expect(privateSlotsSectionSource).toContain('아직 저장하지 않습니다');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-modal');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-open');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-close');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-would-create');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-batch-id');
+  expect(privateSlotsSectionSource).toContain(
+    'private-fixed-renewal-confirmation-idempotency-key'
+  );
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-no-write-note');
+  expect(privateSlotsSectionSource).toContain('서버 검증 결과를 다시 확인하는 단계입니다');
   expect(privateSlotsSectionSource).not.toContain('createFixedPrivateLessonRenewal');
   expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('commit: true');
   expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('dryRun: false');
   expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('previewOnly: false');
   expect(privateSlotsSectionSource).not.toContain('private-fixed-renewal-submit-button');
   expect(privateSlotsSectionSource).not.toContain('>연장 저장<');
+  expect(privateSlotsSectionSource).not.toContain('>연장 생성<');
+  expect(privateSlotsSectionSource).not.toContain('>수강권 발행<');
+  expect(privateSlotsSectionSource).not.toContain('>선생님 시간 생성<');
+  expect(privateSlotsSectionSource).not.toContain('>시간표 활성화<');
 });
 
 test('admin can assign fixed private lessons from a weekly template', async ({
