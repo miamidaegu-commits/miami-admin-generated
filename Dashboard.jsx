@@ -6915,10 +6915,12 @@ export default function Dashboard() {
     const packageId = String(fixedPrivateRenewalPackageId || '').trim()
     const startDate = String(fixedPrivateRenewalStartDate || '').trim()
     const endDate = String(fixedPrivateRenewalEndDate || '').trim()
-    const selectedPackage =
-      packageId === FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID
-        ? fixedPrivateRenewalDraftPackage
-        : studentPackages.find((pkg) => String(pkg.id || '').trim() === packageId) || null
+    const shouldUseDraftPackage =
+      packageId === FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID ||
+      (!packageId && fixedPrivateRenewalDraftPackage)
+    const selectedPackage = shouldUseDraftPackage
+      ? fixedPrivateRenewalDraftPackage
+      : studentPackages.find((pkg) => String(pkg.id || '').trim() === packageId) || null
     const basePlan = {
       previewOnly: true,
       seedLesson,
@@ -7160,6 +7162,11 @@ export default function Dashboard() {
     studentPackages,
   ])
 
+  const handleUseFixedPrivateRenewalDraftPackage = () => {
+    setFixedPrivateRenewalPackageId(FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID)
+    setShowExistingRenewalPackageChoice(false)
+  }
+
   const privateLessonTeacherSelectOptions = isAdmin
     ? teacherSelectOptions
     : teacherGroupClassKey
@@ -7211,6 +7218,7 @@ export default function Dashboard() {
     setFixedPrivateRenewalPackageId,
     showExistingRenewalPackageChoice,
     setShowExistingRenewalPackageChoice,
+    handleUseFixedPrivateRenewalDraftPackage,
     fixedPrivateRenewalStartDate,
     setFixedPrivateRenewalStartDate,
     fixedPrivateRenewalEndDate,
