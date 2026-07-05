@@ -521,6 +521,19 @@ async function createStudentFixture(db, auth, {
       studentId,
       teacherKeys: teacherAccess ? [teacherKey] : [],
       activePackageIds: createPackage ? [packageId] : [],
+      privatePackages: createPackage
+        ? [
+            {
+              id: packageId,
+              teacher: teacherKey,
+              teacherName: teacherKey,
+              totalCount: Math.max(Number(paidLessons || 0), 1),
+              usedCount: 0,
+              remainingCount: Math.max(Number(paidLessons || 0), 1),
+              status: 'active',
+            },
+          ]
+        : [],
       allowedSlotIds,
       allowedPrivateLessonSlotIds: allowedSlotIds,
       privateSlotBookingPilotEnabled,
@@ -1061,6 +1074,16 @@ async function getReservation(db, slotId, studentId) {
   return snap.exists ? snap.data() : null;
 }
 
+async function getPrivatePackageCounts(db, packageId) {
+  const snap = await db.collection('studentPackages').doc(packageId).get();
+  const data = snap.exists ? snap.data() || {} : {};
+  return {
+    totalCount: Number(data.totalCount || 0),
+    usedCount: Number(data.usedCount || 0),
+    remainingCount: Number(data.remainingCount || 0),
+  };
+}
+
 async function countGeneratedStudentRows(db, collectionName, fixture) {
   const snap = await db
     .collection(collectionName)
@@ -1138,6 +1161,10 @@ test('student booking page passes private slot e2e override to callable actions'
   expect(source).toMatch(
     /cancelPrivateLessonReservation[\s\S]*academyId: scopedAcademyId[\s\S]*slotId: reservation\.slotId[\s\S]*PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE/
   );
+  expect(source).toContain('student-private-package-summary-section');
+  expect(source).toContain('student-private-slot-package-summary');
+  expect(source).toContain('student-private-reservation-package-summary');
+  expect(source).toContain('getPrivateSlotPackageSummary');
 });
 
 test('student private all-view calendar keeps current week and next week visible', async () => {
@@ -2023,6 +2050,15 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
     contexts.push(eligibleContext);
     const eligiblePage = await eligibleContext.newPage();
     await loginAsStudentWithPrivateBooking(eligiblePage, fixture.eligibleStudent.email);
+    const packageSummarySection = eligiblePage.getByTestId(
+      'student-private-package-summary-section'
+    );
+    await expect(packageSummarySection).toContainText('개인 수강권');
+    const packageSummaryCard = packageSummarySection
+      .getByTestId('student-private-ticket-summary-row')
+      .filter({ hasText: fixture.teacherKey });
+    await expect(packageSummaryCard).toHaveCount(1, { timeout: 15000 });
+    await expect(packageSummaryCard.first()).toContainText('잔여 1회');
     const slotCards = await expectPrivateSlotCardCount(
       eligiblePage,
       fixture.date,
@@ -2041,6 +2077,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'eligible pilot-enabled student should have an enabled private slot reserve button'
     );
     await expect(eligibleReserveButton).toHaveText('1:1 수업 예약');
+    await expect(slotCard).toContainText('사용 가능 수강권: 잔여 1회');
     const eligibleAvailability = await listPrivateLessonSlotAvailabilityViaPage(eligiblePage, {
       academyId: DEFAULT_E2E_ACADEMY_ID,
     });
@@ -2247,9 +2284,24 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       bookablePrivateSlotCardForDateTime(eligiblePage, fixture.date, fixture.time),
       'reserved private slot should disappear from the bookable slot list'
     ).toHaveCount(0, { timeout: 15000 });
-    await expect(privateReservationCard(eligiblePage, fixture.date)).toBeVisible({
+    const activeReservationCard = privateReservationCard(eligiblePage, fixture.date);
+    await expect(activeReservationCard).toBeVisible({
       timeout: 15000,
     });
+    await expect(activeReservationCard).toContainText('수강권:');
+    await expect(activeReservationCard).toContainText(`${fixture.teacherKey} · 잔여 1회`);
+    const privateCancelButton = activeReservationCard.getByTestId(
+      'student-private-reservation-cancel-button'
+    );
+    await expect(privateCancelButton).toHaveText('예약 취소');
+    await expect(privateCancelButton).toHaveClass(/student-danger-button/);
+    await expect
+      .poll(
+        () => getPrivatePackageCounts(db, fixture.eligibleStudent.packageId),
+        { timeout: 15000 }
+      )
+      .toEqual({ totalCount: 1, usedCount: 0, remainingCount: 1 });
+    await expect(packageSummaryCard.first()).toContainText('잔여 1회 / 총 1회 · 사용 0회');
     const privateHistoryCard = eligiblePage
       .locator('[data-testid="student-lesson-history-card"]')
       .filter({ hasText: fixture.date })
@@ -2322,6 +2374,7 @@ test('intended flexible private slot reservation contract behind e2e flag', asyn
       'eligible student should see the reopened private slot after cancellation'
     );
     const reopenedSlotCard = reopenedSlotCards.first();
+    await expect(reopenedSlotCard).toContainText('사용 가능 수강권: 잔여 1회');
     await reopenedSlotCard.getByTestId('student-private-slot-reserve-button').click();
     await expectReservationStatus(
       db,

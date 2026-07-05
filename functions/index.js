@@ -1279,6 +1279,63 @@ function sortPrivatePackageCandidates(a, b) {
   return aCreated - bCreated;
 }
 
+function sanitizeComputedPrivatePackageSummary(summary) {
+  const data = (summary && summary.packageData) || {};
+  const totalCount = Number(
+      (summary && summary.totalCount) || data.totalCount || 0,
+  );
+  const remainingCount = Number(
+      summary && summary.makeupAvailableCount !== undefined ?
+        summary.makeupAvailableCount :
+        summary && summary.remainingCount !== undefined ?
+          summary.remainingCount :
+          data.remainingCount || 0,
+  );
+  const usedCount = Number(
+      summary && summary.usedDeductedCount !== undefined ?
+        summary.usedDeductedCount :
+        data.usedCount !== undefined && data.usedCount !== null ?
+          data.usedCount :
+          Math.max(
+              (Number.isFinite(totalCount) ? totalCount : 0) -
+                (Number.isFinite(remainingCount) ? remainingCount : 0),
+              0,
+          ),
+  );
+  return {
+    id: normalizeId(summary && summary.packageId),
+    teacher: normalizeId(summary && summary.teacherKey) ||
+      normalizeId(data.teacher),
+    teacherName: normalizeId(data.teacherName) ||
+      normalizeId(summary && summary.teacherKey) ||
+      normalizeId(data.teacher),
+    totalCount: Number.isFinite(totalCount) ? totalCount : 0,
+    usedCount: Number.isFinite(usedCount) ? usedCount : 0,
+    remainingCount: Number.isFinite(remainingCount) ? remainingCount : 0,
+    status: normalizeId(data.status || "active"),
+  };
+}
+
+function getComputedPrivatePackageSummaries(packageSummary) {
+  const byPackageId = new Map();
+  if (!packageSummary || !(packageSummary.byTeacherKey instanceof Map)) {
+    return [];
+  }
+  packageSummary.byTeacherKey.forEach((value) => {
+    const summaries = Array.isArray(value) ? value : value ? [value] : [];
+    summaries.forEach((summary) => {
+      const packageId = normalizeId(summary && summary.packageId);
+      if (!packageId || byPackageId.has(packageId)) return;
+      byPackageId.set(packageId, sanitizeComputedPrivatePackageSummary(summary));
+    });
+  });
+  return Array.from(byPackageId.values()).sort((a, b) => {
+    const aKey = `${a.teacher || a.teacherName || ""} ${a.id}`;
+    const bKey = `${b.teacher || b.teacherName || ""} ${b.id}`;
+    return aKey.localeCompare(bKey, "ko");
+  });
+}
+
 async function findActivePrivatePackageForTeacher({
   transaction,
   db,
@@ -5420,6 +5477,8 @@ exports.listPrivateLessonSlotAvailability = onCall(
           })),
           nowMillis,
         });
+        const privatePackageSummaries =
+          getComputedPrivatePackageSummaries(packageSummary);
         // Slot-date package matching keeps 수강권 기간 밖 dates unbookable
         // even when another private package has remainingCount.
         const packageTeacherKeys = Array.from(
@@ -5773,7 +5832,13 @@ exports.listPrivateLessonSlotAvailability = onCall(
             statsSnap.exists ? statsSnap.data() : {},
         );
 
-        return {ok: true, academyId, slots, cancelAllowance};
+        return {
+          ok: true,
+          academyId,
+          slots,
+          cancelAllowance,
+          privatePackages: privatePackageSummaries,
+        };
       } catch (error) {
         throw asHttpsError(error);
       }
