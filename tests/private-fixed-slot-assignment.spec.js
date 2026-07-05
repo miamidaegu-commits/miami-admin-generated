@@ -935,7 +935,7 @@ test('fixed private assignment source requires package and links generated docum
   expect(rulesSource).toContain('slot.packageId == request.resource.data.packageId');
 });
 
-test('fixed private renewal save callable skeleton is dry-run no-write only', () => {
+test('fixed private renewal save callable uses guarded transaction write mode', () => {
   const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
   const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
   const privateSlotsSectionSource = fs.readFileSync(
@@ -966,20 +966,51 @@ test('fixed private renewal save callable skeleton is dry-run no-write only', ()
     'requireAcademyAdmin',
     'previewOnly',
     'dryRun',
+    'commit',
+    'commitRequiredForWrite',
     'Actual fixed private renewal save is not enabled yet',
+    'Write mode requires commit: true, dryRun: false',
     'requestId',
+    'idempotencyKey',
     'renewalBatchIdCandidate',
+    'fixedPrivateRenewalBatches',
+    'payloadHash',
     'wouldCreate',
     'teacherTimePreparation',
     'packageMode',
     'assignableDates',
     'excludedDates',
+    'candidateDates',
     'conflict',
     'missing_info',
     'HttpsError',
+    'runFixedPrivateRenewalWriteTransaction',
+    'buildFixedPrivateRenewalDeterministicIds',
+    'buildFixedPrivateRenewalPayloadHash',
+    'assertFixedPrivateRenewalCheckpointMatches',
+    'studentPackages',
+    'creditTransactions',
+    'studentPrivateAccessSummary',
+    'privateLessonAvailabilityTemplates',
+    'lessons',
+    'privateLessonSlots',
+    'privateLessonReservations',
   ].forEach((token) => {
     expect(renewalSkeletonSource).toContain(token);
   });
+  expect(renewalSkeletonSource).toContain('db.runTransaction');
+  expect(renewalSkeletonSource).toContain('transaction.create');
+  expect(renewalSkeletonSource).toContain('transaction.set');
+  expect(renewalSkeletonSource).toContain('transaction.update');
+  expect(renewalSkeletonSource).toContain('commit: true');
+  expect(renewalSkeletonSource).toContain('dryRun: false');
+  expect(renewalSkeletonSource).toContain('previewOnly: false');
+  expect(renewalSkeletonSource).toContain('fixedPrivateRenewal_${academyId}_${requestId}');
+  expect(renewalSkeletonSource).toContain('__package');
+  expect(renewalSkeletonSource).toContain('__template');
+  expect(renewalSkeletonSource).toContain('__lesson__');
+  expect(renewalSkeletonSource).toContain('__slot__');
+  expect(renewalSkeletonSource).toContain('__package_created');
   expect(renewalSkeletonSource).toContain('studentPackage: packageMode === "draft"');
   expect(renewalSkeletonSource).toContain('teacherTemplate: teacherTimeStatus === "create"');
   expect(renewalSkeletonSource).toContain(
@@ -990,14 +1021,12 @@ test('fixed private renewal save callable skeleton is dry-run no-write only', ()
   expect(renewalSkeletonSource).toContain('privateLessonReservations: assignableDates.length');
   expect(renewalSkeletonSource).toContain('assignableDates.length > count');
   expect(renewalSkeletonSource).toContain('assignableDates.length === 0');
-  expect(renewalSkeletonSource).toContain('data.previewOnly !== true');
-  expect(renewalSkeletonSource).toContain('data.dryRun !== true');
+  expect(renewalSkeletonSource).toContain('data.dryRun !== false');
+  expect(renewalSkeletonSource).toContain('data.previewOnly !== false');
   expect(renewalSkeletonSource).toContain('excluded_dates_include_hard_block');
-  expect(renewalSkeletonSource).toContain('Actual write will be implemented in a later PR');
-
-  expect(renewalSkeletonSource).not.toMatch(
-    /writeBatch\(|runTransaction\(|\.set\(|\.add\(|\.update\(|\.delete\(/
-  );
+  expect(renewalSkeletonSource).toContain('hasTeacherScheduleConflict');
+  expect(renewalSkeletonSource).toContain('computePrivateTeacherPackageUsage');
+  expect(renewalSkeletonSource).toContain('privateReservationDocId');
 
   expect(dashboardSource).toContain('fixedPrivateRenewalPlan');
   expect(dashboardSource).toContain('새 수강권 초안');
