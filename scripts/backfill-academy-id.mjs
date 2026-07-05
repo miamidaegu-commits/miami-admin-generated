@@ -35,6 +35,8 @@ const PERMISSION_KEYS = [
   'canEditLesson',
   'canDeleteLesson',
   'canCreateLessonDirectly',
+  'canEditStudentPackageCounts',
+  'canManageOwnLessonDeductions',
   'requiresLessonApproval',
 ]
 
@@ -189,10 +191,14 @@ function getMembershipRole(uid, userData, ownerUid) {
   return 'staff'
 }
 
-function getMembershipPermissions(userData) {
+function getMembershipPermissions(userData, existingMembership = {}) {
+  const existingPermissions =
+    existingMembership?.permissions && typeof existingMembership.permissions === 'object'
+      ? existingMembership.permissions
+      : {}
   const permissions = {}
   for (const key of PERMISSION_KEYS) {
-    permissions[key] = userData[key] === true
+    permissions[key] = userData?.[key] === true || existingPermissions[key] === true
   }
   return permissions
 }
@@ -315,6 +321,7 @@ async function buildBackfillOperations({ db, academyId, academyName }) {
     const membershipId = `${academyId}_${uid}`
     const role = getMembershipRole(uid, userData, ownerUid)
     const membershipSnap = await db.collection('academyMemberships').doc(membershipId).get()
+    const existingMembership = membershipSnap.exists ? membershipSnap.data() || {} : {}
     operations.push(
       createOperation({
         db,
@@ -328,7 +335,7 @@ async function buildBackfillOperations({ db, academyId, academyName }) {
           role,
           teacherName: getMembershipTeacherName(uid, userData, role),
           status: userData.isActive === false ? 'disabled' : 'active',
-          permissions: getMembershipPermissions(userData),
+          permissions: getMembershipPermissions(userData, existingMembership),
           sourceUserDocId: uid,
           migrationSource: 'backfill-academy-id',
         },

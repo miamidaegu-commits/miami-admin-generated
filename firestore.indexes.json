@@ -137,6 +137,22 @@
       ]
     },
     {
+      "collectionGroup": "groupLessons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "teacher", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "groupLessons",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "academyId", "order": "ASCENDING" },
+        { "fieldPath": "teacherName", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "studentPackages",
       "queryScope": "COLLECTION",
       "fields": [

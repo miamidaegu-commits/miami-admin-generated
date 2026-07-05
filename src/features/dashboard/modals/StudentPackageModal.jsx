@@ -3,6 +3,7 @@ import {
   buildAutoPrivateStudentPackageTitle,
   computePrivateRegularTotalCount,
   formatGroupStudentStartDate,
+  formatTeacherDisplayName,
 } from '../dashboardViewUtils.js'
 import {
   DEFAULT_GROUP_COURSE_TYPE,
@@ -11,43 +12,41 @@ import {
   normalizeGroupCourseType,
 } from '../../group-booking/groupCourseTypes.js'
 
+function formatTeacherScopeLabel(row) {
+  return formatTeacherDisplayName(row)
+}
+
 export default function StudentPackageModal({
   studentPackageModalStudent,
   studentPackageForm,
   setStudentPackageForm,
   studentPackageFormErrors,
+  canViewPaymentFields = false,
   sortedGroupClasses,
+  teacherSelectOptions = [],
   nextGroupLessonDateByGroupId,
   studentPackageGroupAutoSummary,
   studentPackageModalActiveSameScopeDuplicates,
+  openExistingStudentPackageFromAddModal,
+  goToFixedPrivateAssignmentFromPackageModal,
   isStudentPackageModalSubmitting,
   closeStudentPackageModal,
   submitStudentPackageModal,
 }) {
-  const isGroupPackage =
-    studentPackageForm.packageType === 'group' || studentPackageForm.packageType === 'openGroup'
-  const isPrivatePackage = studentPackageForm.packageType === 'private'
+  const packageType = String(studentPackageForm.packageType || 'private')
+  const isPrivatePackage = packageType === 'private'
+  const isRegisteredGroupPackage = packageType === 'group'
+  const isOpenGroupPackage = packageType === 'openGroup'
   const isPrivateRegular =
     isPrivatePackage && studentPackageForm.privatePackageMode !== 'countBased'
+  const groupClasses = Array.isArray(sortedGroupClasses) ? sortedGroupClasses : []
   const selectedGroupClassName = (() => {
+    if (!isRegisteredGroupPackage) return ''
     const gid = String(studentPackageForm.groupClassId || '').trim()
     if (!gid) return ''
-    const g = sortedGroupClasses.find((x) => x.id === gid)
+    const g = groupClasses.find((x) => x.id === gid)
     return g?.name != null && String(g.name).trim() ? String(g.name).trim() : ''
   })()
-  const groupPackageTitlePlaceholder =
-    isGroupPackage &&
-    selectedGroupClassName &&
-    String(studentPackageForm.registrationStartDate || '').trim() &&
-    String(studentPackageForm.registrationWeeks || '').trim()
-      ? buildAutoGroupStudentPackageTitle({
-          groupClassName: selectedGroupClassName,
-          registrationStartDate: studentPackageForm.registrationStartDate,
-          registrationWeeks: studentPackageForm.registrationWeeks,
-        })
-      : isGroupPackage
-        ? '반·시작일·주수를 선택하면 제목이 자동 제안됩니다'
-        : ''
   const privateRegularComputed = isPrivateRegular
     ? computePrivateRegularTotalCount({
         registrationWeeks: studentPackageForm.registrationWeeks,
@@ -63,11 +62,201 @@ export default function StudentPackageModal({
           weeklyFrequency: studentPackageForm.weeklyFrequency,
         })
       : ''
-  const autoTotalCount = isGroupPackage
+  const groupPackageTitlePlaceholder =
+    isRegisteredGroupPackage &&
+    selectedGroupClassName &&
+    String(studentPackageForm.registrationStartDate || '').trim() &&
+    String(studentPackageForm.registrationWeeks || '').trim()
+      ? buildAutoGroupStudentPackageTitle({
+          groupClassName: selectedGroupClassName,
+          registrationStartDate: studentPackageForm.registrationStartDate,
+          registrationWeeks: studentPackageForm.registrationWeeks,
+        })
+      : isRegisteredGroupPackage
+        ? '반·시작일·주수를 선택하면 제목이 자동 제안됩니다'
+        : ''
+  const openGroupTitlePlaceholder = (() => {
+    if (!isOpenGroupPackage) return ''
+    const courseLabel = getGroupCourseTypeLabel(studentPackageForm.groupCourseType)
+    if (courseLabel) return `예: ${courseLabel} 자유예약권`
+    return '제목을 입력해 주세요'
+  })()
+  const packageTitlePlaceholder = isOpenGroupPackage
+    ? openGroupTitlePlaceholder
+    : isRegisteredGroupPackage
+      ? groupPackageTitlePlaceholder
+      : isPrivateRegular
+        ? privateRegularTitlePlaceholder
+        : ''
+  const registeredGroupTotalCount = isRegisteredGroupPackage
     ? String(studentPackageGroupAutoSummary?.computedTotalCount ?? 0)
+    : ''
+  const autoTotalCount = isRegisteredGroupPackage
+    ? registeredGroupTotalCount
     : isPrivateRegular
       ? String(privateRegularComputed || 0)
       : String(studentPackageForm.totalCount || '')
+  const showPrivateTotalCountField = isPrivatePackage
+  const selectedPrivateTeacherValue = String(studentPackageForm.privateTeacher || '').trim()
+  const selectedPrivateTeacherOption =
+    teacherSelectOptions.find((option) => {
+      const keys = [
+        option?.value,
+        option?.teacherKey,
+        option?.displayName,
+        option?.label,
+        option?.teacherUid,
+      ]
+        .map((value) => String(value || '').trim().toLowerCase())
+        .filter(Boolean)
+      return keys.includes(selectedPrivateTeacherValue.toLowerCase())
+    }) || null
+  const mergedPrivateTeacherOptions =
+    selectedPrivateTeacherValue && !selectedPrivateTeacherOption
+      ? [
+          {
+            value: selectedPrivateTeacherValue,
+            label: `기존 값: ${selectedPrivateTeacherValue}`,
+            teacherKey: selectedPrivateTeacherValue,
+          },
+          ...teacherSelectOptions,
+        ]
+      : teacherSelectOptions
+  const selectedPrivateTeacherScope = selectedPrivateTeacherOption
+    ? {
+        teacherName: selectedPrivateTeacherOption.displayName || selectedPrivateTeacherOption.label,
+        teacherKey: selectedPrivateTeacherOption.teacherKey || selectedPrivateTeacherOption.value,
+      }
+    : {
+        teacherName: selectedPrivateTeacherValue,
+        teacherKey: selectedPrivateTeacherValue,
+      }
+  const privateTeacherScopeLabel = formatTeacherScopeLabel(selectedPrivateTeacherScope)
+  const primaryDuplicatePackage = studentPackageModalActiveSameScopeDuplicates[0] || null
+  const hasPrivateDuplicatePackage = isPrivatePackage && !!primaryDuplicatePackage
+  const isPrivateTopUpFlow =
+    hasPrivateDuplicatePackage &&
+    String(studentPackageForm.privateDuplicateAction || 'topUp') !== 'new'
+  const primaryDuplicateBalance = primaryDuplicatePackage?.privateAssignmentBalance || null
+  const primaryDuplicateFixedScheduled = Math.max(
+    0,
+    Number(primaryDuplicateBalance?.futureFixedAllocatedCount) || 0
+  )
+  const primaryDuplicateActiveReservations = Math.max(
+    0,
+    Number(primaryDuplicateBalance?.activeFutureReservationCount) || 0
+  )
+  const primaryDuplicateAvailableForAssignment = Math.max(
+    0,
+    Number(primaryDuplicateBalance?.makeupAvailableCount) || 0
+  )
+  const topUpCountInput = String(studentPackageForm.totalCount || '').trim()
+  const topUpCountPreview = /^[1-9]\d*$/.test(topUpCountInput)
+    ? Number.parseInt(topUpCountInput, 10)
+    : 0
+  const topUpTotalCountPreview =
+    (Number(primaryDuplicatePackage?.totalCount ?? 0) || 0) + topUpCountPreview
+  const topUpAvailableForAssignmentPreview =
+    primaryDuplicateAvailableForAssignment + topUpCountPreview
+  const topUpRegistrationRound = Number(primaryDuplicatePackage?.nextRegistrationRound || 2)
+  const hasMultiplePrivateDuplicatePackages =
+    isPrivatePackage && studentPackageModalActiveSameScopeDuplicates.length > 1
+  const groupCancelLimitFields =
+    isRegisteredGroupPackage || isOpenGroupPackage ? (
+      <div
+        style={{
+          display: 'grid',
+          gap: 10,
+          padding: 12,
+          borderRadius: 10,
+          border: '1px solid #2e3a55',
+          background: '#182033',
+        }}
+      >
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+            fontSize: 13,
+            lineHeight: 1.45,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={studentPackageForm.groupCancelLimitEnabled === true}
+            onChange={(e) =>
+              setStudentPackageForm((prev) => ({
+                ...prev,
+                groupCancelLimitEnabled: e.target.checked,
+              }))
+            }
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            자유 예약 취소 가능 횟수 제한
+            <br />
+            <span style={{ opacity: 0.72 }}>
+              학생이 직접 취소하는 자유 예약에만 적용됩니다.
+            </span>
+          </span>
+        </label>
+
+        {studentPackageForm.groupCancelLimitEnabled === true ? (
+          <div style={{ display: 'grid', gap: 10, gridTemplateColumns: '1fr 1fr' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+              <span style={{ opacity: 0.85 }}>취소 가능 횟수</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                value={studentPackageForm.groupCancelLimitCount}
+                onChange={(e) =>
+                  setStudentPackageForm((prev) => ({
+                    ...prev,
+                    groupCancelLimitCount: e.target.value,
+                  }))
+                }
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #444',
+                  background: '#1f1f1f',
+                  color: 'white',
+                }}
+              />
+              {studentPackageFormErrors.groupCancelLimitCount ? (
+                <span style={{ color: '#f08080', fontSize: 12 }}>
+                  {studentPackageFormErrors.groupCancelLimitCount}
+                </span>
+              ) : null}
+            </label>
+
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+              <span style={{ opacity: 0.85 }}>제한 기간</span>
+              <select
+                value={studentPackageForm.groupCancelLimitPeriod}
+                onChange={(e) =>
+                  setStudentPackageForm((prev) => ({
+                    ...prev,
+                    groupCancelLimitPeriod: e.target.value,
+                  }))
+                }
+                style={{
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #444',
+                  background: '#1f1f1f',
+                  color: 'white',
+                }}
+              >
+                <option value="calendarMonth">월별</option>
+                <option value="packagePeriod">수강권 기간</option>
+              </select>
+            </label>
+          </div>
+        ) : null}
+      </div>
+    ) : null
 
   return (
         <div
@@ -113,9 +302,38 @@ export default function StudentPackageModal({
               {studentPackageModalStudent.name || '-'} · {studentPackageModalStudent.teacher || '-'}
               <br />
               <span style={{ fontSize: 12, opacity: 0.78 }}>
-                저장 후 첫 수업 예약 또는 반 등록을 이어서 할 수 있습니다.
+                수강권은 수업을 들을 수 있는 횟수만 등록합니다.
+                <br />
+                고정 수업 일정은 1:1 예약 시간 관리 &gt; 주간 시간에 학생 고정 배정에서
+                예약하세요.
               </span>
             </p>
+
+            {isPrivatePackage ? (
+              <div
+                data-testid="student-package-private-workflow-guide"
+                style={{
+                  margin: '0 0 16px 0',
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #2e3240',
+                  background: '#1a1d26',
+                  fontSize: 12,
+                  lineHeight: 1.55,
+                }}
+              >
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>운영 순서</div>
+                <div>1) 수강권 등록/추가 등록: 학생에게 수업 가능 횟수를 부여합니다.</div>
+                <div>
+                  2) 선생님 주간 1:1 시간표 등록: 고정 수업 배정용 또는 학생 직접 예약
+                  허용에 사용할 반복 요일/시간을 만듭니다.
+                </div>
+                <div>
+                  3) 주간 시간에 학생 고정 배정: 수강권 횟수를 사용해 선택한 주간 시간에
+                  학생을 고정 배정합니다.
+                </div>
+              </div>
+            ) : null}
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
@@ -128,18 +346,32 @@ export default function StudentPackageModal({
                       ...prev,
                       packageType,
                       groupClassId:
-                        packageType === 'private' ? '' : prev.groupClassId,
+                        packageType === 'private' || packageType === 'openGroup'
+                          ? ''
+                          : prev.groupClassId,
                       groupCourseType:
                         packageType === 'private'
                           ? ''
-                          : normalizeGroupCourseType(prev.groupCourseType) ||
-                            DEFAULT_GROUP_COURSE_TYPE,
+                          : packageType === 'openGroup'
+                            ? normalizeGroupCourseType(prev.groupCourseType) ||
+                              DEFAULT_GROUP_COURSE_TYPE
+                            : '',
+                      allowGroupFreeBooking:
+                        packageType === 'group' ? prev.allowGroupFreeBooking === true : false,
+                      groupCancelLimitEnabled:
+                        packageType === 'group' || packageType === 'openGroup'
+                          ? prev.groupCancelLimitEnabled === true
+                          : false,
                       registrationStartDate:
                         packageType === 'private'
                           ? ''
                           : prev.registrationStartDate,
                       registrationWeeks:
-                        packageType === 'private' ? '4' : prev.registrationWeeks,
+                        packageType === 'private'
+                          ? '4'
+                          : packageType === 'openGroup'
+                            ? ''
+                            : prev.registrationWeeks,
                       weeklyFrequency: packageType === 'private' ? '1' : prev.weeklyFrequency,
                       privatePackageMode:
                         packageType === 'private' ? 'regular' : prev.privatePackageMode,
@@ -155,12 +387,49 @@ export default function StudentPackageModal({
                   }}
                 >
                   <option value="private">개인 (private)</option>
-                  <option value="group">그룹 (group)</option>
-                  <option value="openGroup">오픈 그룹 (openGroup)</option>
+                  <option value="group">반 등록 단체반 (group)</option>
+                  <option value="openGroup">자유 예약 단체반 (openGroup)</option>
                 </select>
               </label>
 
               {isPrivatePackage ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>수강권 선생님</span>
+                  <select
+                    aria-label="수강권 선생님"
+                    data-testid="student-package-private-teacher-select"
+                    value={selectedPrivateTeacherValue}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({
+                        ...prev,
+                        privateTeacher: e.target.value,
+                        privateDuplicateAction: 'topUp',
+                      }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="">선택</option>
+                    {mergedPrivateTeacherOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {studentPackageFormErrors.privateTeacher ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageFormErrors.privateTeacher}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
+
+              {isPrivatePackage && !isPrivateTopUpFlow ? (
                 <div
                   style={{
                     padding: '10px 12px',
@@ -173,6 +442,13 @@ export default function StudentPackageModal({
                   }}
                 >
                   <span style={{ fontSize: 12, fontWeight: 600, opacity: 0.9 }}>수강권 모드</span>
+                  <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, opacity: 0.8 }}>
+                    개인 수강권 등록 후, 고정 수업은 기본 1:1 슬롯에 배정해 생성합니다.
+                    <br />
+                    개인 수강권은 선택한 선생님 수업에만 사용할 수 있습니다.
+                    <br />
+                    사용 가능 선생님: {privateTeacherScopeLabel}
+                  </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                     <button
                       type="button"
@@ -200,7 +476,7 @@ export default function StudentPackageModal({
                         fontSize: 13,
                       }}
                     >
-                      정기등록
+                      정기 수강권
                     </button>
                     <button
                       type="button"
@@ -227,8 +503,13 @@ export default function StudentPackageModal({
                         fontSize: 13,
                       }}
                     >
-                      횟수권
+                      횟수 수강권
                     </button>
+                  </div>
+                  <div style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.78 }}>
+                    {isPrivateRegular
+                      ? '주당 횟수와 기간으로 총 수업 횟수를 자동 계산합니다. 고정 1:1 운영에 적합합니다.'
+                      : '총 횟수를 직접 입력합니다. 자유 예약/보충/비정기 수업에 적합합니다.'}
                   </div>
 
                   {isPrivateRegular ? (
@@ -236,9 +517,11 @@ export default function StudentPackageModal({
                       <label
                         style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
                       >
-                        <span style={{ opacity: 0.85 }}>시작일</span>
+                        <span style={{ opacity: 0.85 }}>수강권 시작일</span>
                         <input
                           type="date"
+                          aria-label="수강권 시작일"
+                          data-testid="student-package-start-date-input"
                           value={studentPackageForm.registrationStartDate}
                           onChange={(e) =>
                             setStudentPackageForm((prev) => ({
@@ -263,7 +546,7 @@ export default function StudentPackageModal({
                       <label
                         style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
                       >
-                        <span style={{ opacity: 0.85 }}>주당 횟수</span>
+                        <span style={{ opacity: 0.85 }}>주당 수업 횟수</span>
                         <select
                           value={String(studentPackageForm.weeklyFrequency ?? '1')}
                           onChange={(e) =>
@@ -293,7 +576,7 @@ export default function StudentPackageModal({
                       <label
                         style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}
                       >
-                        <span style={{ opacity: 0.85 }}>등록 주수</span>
+                        <span style={{ opacity: 0.85 }}>수강 기간 (주)</span>
                         <input
                           type="text"
                           inputMode="numeric"
@@ -328,8 +611,8 @@ export default function StudentPackageModal({
                           opacity: 0.92,
                         }}
                       >
-                        주 {String(studentPackageForm.weeklyFrequency ?? '1')}회 ×{' '}
-                        {String(studentPackageForm.registrationWeeks || '').trim() || '—'}주 ={' '}
+                        주당 {String(studentPackageForm.weeklyFrequency ?? '1')}회 × 기간{' '}
+                        {String(studentPackageForm.registrationWeeks || '').trim() || '—'}주 = 총{' '}
                         {privateRegularComputed || 0}회
                       </div>
                     </>
@@ -337,6 +620,8 @@ export default function StudentPackageModal({
                 </div>
               ) : null}
 
+              {!isPrivateTopUpFlow ? (
+                <>
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>제목</span>
                 <input
@@ -345,13 +630,7 @@ export default function StudentPackageModal({
                   onChange={(e) =>
                     setStudentPackageForm((prev) => ({ ...prev, title: e.target.value }))
                   }
-                  placeholder={
-                    isGroupPackage
-                      ? groupPackageTitlePlaceholder
-                      : isPrivateRegular
-                        ? privateRegularTitlePlaceholder
-                        : ''
-                  }
+                  placeholder={packageTitlePlaceholder}
                   style={{
                     padding: '10px 12px',
                     borderRadius: 8,
@@ -367,26 +646,27 @@ export default function StudentPackageModal({
                 ) : null}
               </label>
 
+              {showPrivateTotalCountField ? (
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                 <span style={{ opacity: 0.85 }}>
-                  총 횟수 (totalCount)
+                  {isPrivateRegular ? '총 수업 횟수' : '총 횟수'}
                   {isPrivateRegular ? <span style={{ opacity: 0.65 }}> — 자동 계산</span> : null}
                 </span>
                 <input
                   type="text"
                   inputMode="numeric"
-                  value={isGroupPackage || isPrivateRegular ? autoTotalCount : studentPackageForm.totalCount}
+                  value={isPrivateRegular ? autoTotalCount : studentPackageForm.totalCount}
                   onChange={(e) =>
                     setStudentPackageForm((prev) => ({ ...prev, totalCount: e.target.value }))
                   }
-                  readOnly={isGroupPackage || isPrivateRegular}
+                  readOnly={isPrivateRegular}
                   style={{
                     padding: '10px 12px',
                     borderRadius: 8,
                     border: '1px solid #444',
-                    background: isGroupPackage || isPrivateRegular ? '#252525' : '#1f1f1f',
+                    background: isPrivateRegular ? '#252525' : '#1f1f1f',
                     color: 'white',
-                    cursor: isGroupPackage || isPrivateRegular ? 'default' : 'text',
+                    cursor: isPrivateRegular ? 'default' : 'text',
                   }}
                 />
                 {studentPackageFormErrors.totalCount ? (
@@ -395,25 +675,24 @@ export default function StudentPackageModal({
                   </span>
                 ) : null}
               </label>
+              ) : null}
 
-              {studentPackageForm.packageType === 'group' ||
-              studentPackageForm.packageType === 'openGroup' ? (
+              {isRegisteredGroupPackage ? (
                 <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                  <span style={{ opacity: 0.85 }}>그룹 수업</span>
+                  <span style={{ opacity: 0.85 }}>등록할 반 선택</span>
                   <select
+                    aria-label="등록할 반 선택"
                     value={studentPackageForm.groupClassId}
                     onChange={(e) => {
                       const nextGid = String(e.target.value || '').trim()
                       const nextStartDate =
                         nextGroupLessonDateByGroupId?.get(nextGid) || studentPackageForm.registrationStartDate
-                      const selectedGroup = sortedGroupClasses.find((g) => g.id === nextGid)
+                      const selectedGroup = groupClasses.find((g) => g.id === nextGid)
                       setStudentPackageForm((prev) => ({
                         ...prev,
                         groupClassId: nextGid,
                         groupCourseType:
-                          normalizeGroupCourseType(selectedGroup?.groupCourseType) ||
-                          normalizeGroupCourseType(prev.groupCourseType) ||
-                          DEFAULT_GROUP_COURSE_TYPE,
+                          normalizeGroupCourseType(selectedGroup?.groupCourseType) || '',
                         registrationStartDate: nextGid ? nextStartDate || '' : '',
                         registrationWeeks: prev.registrationWeeks || '4',
                       }))
@@ -426,10 +705,10 @@ export default function StudentPackageModal({
                       color: 'white',
                     }}
                   >
-                    <option value="">그룹을 선택하세요</option>
-                    {sortedGroupClasses.map((g) => (
+                    <option value="">반을 선택하세요</option>
+                    {groupClasses.map((g) => (
                       <option key={g.id} value={g.id}>
-                        {g.name || '-'} ({g.teacher || '-'})
+                        {g.name || '-'} ({formatTeacherDisplayName(g)})
                         {getGroupCourseTypeLabel(g.groupCourseType)
                           ? ` · ${getGroupCourseTypeLabel(g.groupCourseType)}`
                           : ''}
@@ -444,11 +723,19 @@ export default function StudentPackageModal({
                 </label>
               ) : null}
 
-              {isGroupPackage ? (
+              {isOpenGroupPackage ? (
+                <p style={{ margin: 0, fontSize: 12, opacity: 0.78, lineHeight: 1.5 }}>
+                  특정 반을 연결하지 않는 자유 예약 수강권입니다. 코스 유형 기준으로 남은 좌석에
+                  선착순 예약할 수 있습니다.
+                </p>
+              ) : null}
+
+              {isOpenGroupPackage ? (
                 <>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
                     <span style={{ opacity: 0.85 }}>코스 유형</span>
                     <select
+                      aria-label="코스 유형"
                       value={
                         normalizeGroupCourseType(studentPackageForm.groupCourseType) ||
                         DEFAULT_GROUP_COURSE_TYPE
@@ -481,9 +768,128 @@ export default function StudentPackageModal({
                   </label>
 
                   <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                    <span style={{ opacity: 0.85 }}>시작일</span>
+                    <span style={{ opacity: 0.85 }}>총 횟수</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={studentPackageForm.totalCount}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          totalCount: e.target.value,
+                        }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {studentPackageFormErrors.totalCount ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.totalCount}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>수강권 시작일 (선택)</span>
                     <input
                       type="date"
+                      aria-label="수강권 시작일"
+                      data-testid="student-package-start-date-input"
+                      value={studentPackageForm.registrationStartDate}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          registrationStartDate: e.target.value,
+                        }))
+                      }
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                    {studentPackageFormErrors.registrationStartDate ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.registrationStartDate}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  {groupCancelLimitFields}
+                </>
+              ) : null}
+
+              {isRegisteredGroupPackage ? (
+                <>
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>코스 유형</span>
+                    <div
+                      aria-label="코스 유형"
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#252525',
+                        color: 'rgba(255,255,255,0.92)',
+                        fontSize: 13,
+                      }}
+                    >
+                      {studentPackageForm.groupClassId
+                        ? getGroupCourseTypeLabel(studentPackageForm.groupCourseType) ||
+                          '반을 선택하면 코스 유형이 자동 설정됩니다.'
+                        : '등록할 반을 선택하면 코스 유형이 자동 설정됩니다.'}
+                    </div>
+                    {studentPackageFormErrors.groupCourseType ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.groupCourseType}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 8,
+                      fontSize: 13,
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={studentPackageForm.allowGroupFreeBooking === true}
+                      onChange={(e) =>
+                        setStudentPackageForm((prev) => ({
+                          ...prev,
+                          allowGroupFreeBooking: e.target.checked,
+                        }))
+                      }
+                      style={{ marginTop: 2 }}
+                    />
+                    <span>
+                      반 등록 수업 외 남은 횟수로 자유 예약 허용
+                      <br />
+                      <span style={{ opacity: 0.72 }}>
+                        켜면 반 등록 수업에 배정되지 않은 남은 횟수로 같은 코스 유형 수업을
+                        선착순 예약할 수 있습니다.
+                      </span>
+                    </span>
+                  </label>
+                  {groupCancelLimitFields}
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>수강권 시작일</span>
+                    <input
+                      type="date"
+                      aria-label="수강권 시작일"
+                      data-testid="student-package-start-date-input"
                       value={studentPackageForm.registrationStartDate}
                       onChange={(e) =>
                         setStudentPackageForm((prev) => ({
@@ -529,6 +935,32 @@ export default function StudentPackageModal({
                     {studentPackageFormErrors.registrationWeeks ? (
                       <span style={{ color: '#f08080', fontSize: 12 }}>
                         {studentPackageFormErrors.registrationWeeks}
+                      </span>
+                    ) : null}
+                  </label>
+
+                  <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                    <span style={{ opacity: 0.85 }}>
+                      총 횟수
+                      <span style={{ opacity: 0.65 }}> — 일정 기준 자동 계산</span>
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={registeredGroupTotalCount}
+                      readOnly
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#252525',
+                        color: 'white',
+                        cursor: 'default',
+                      }}
+                    />
+                    {studentPackageFormErrors.totalCount ? (
+                      <span style={{ color: '#f08080', fontSize: 12 }}>
+                        {studentPackageFormErrors.totalCount}
                       </span>
                     ) : null}
                   </label>
@@ -600,53 +1032,109 @@ export default function StudentPackageModal({
                 ) : null}
               </label>
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={studentPackageForm.amountPaid}
-                  onChange={(e) =>
-                    setStudentPackageForm((prev) => ({ ...prev, amountPaid: e.target.value }))
-                  }
-                  placeholder="0"
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                  }}
-                />
-                {studentPackageFormErrors.amountPaid ? (
-                  <span style={{ color: '#f08080', fontSize: 12 }}>
-                    {studentPackageFormErrors.amountPaid}
+              {canViewPaymentFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>결제일 (선택)</span>
+                  <input
+                    type="date"
+                    aria-label="결제일 (선택)"
+                    data-testid="student-package-payment-date-input"
+                    value={studentPackageForm.paymentDate}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({ ...prev, paymentDate: e.target.value }))
+                    }
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                    결제일은 실제 결제한 날짜입니다. 수강권 시작일과 다를 수 있습니다.
                   </span>
-                ) : null}
-              </label>
+                  {studentPackageFormErrors.paymentDate ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageFormErrors.paymentDate}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
 
-              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>메모 (선택)</span>
-                <textarea
-                  value={studentPackageForm.memo}
-                  onChange={(e) =>
-                    setStudentPackageForm((prev) => ({ ...prev, memo: e.target.value }))
-                  }
-                  rows={3}
-                  style={{
-                    padding: '10px 12px',
-                    borderRadius: 8,
-                    border: '1px solid #444',
-                    background: '#1f1f1f',
-                    color: 'white',
-                    resize: 'vertical',
-                  }}
-                />
-              </label>
+              {canViewPaymentFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={studentPackageForm.amountPaid}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({ ...prev, amountPaid: e.target.value }))
+                    }
+                    placeholder="0"
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                  {studentPackageFormErrors.amountPaid ? (
+                    <span style={{ color: '#f08080', fontSize: 12 }}>
+                      {studentPackageFormErrors.amountPaid}
+                    </span>
+                  ) : null}
+                </label>
+              ) : null}
+
+              {canViewPaymentFields ? (
+                <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                  <span style={{ opacity: 0.85 }}>메모 (선택)</span>
+                  <textarea
+                    value={studentPackageForm.memo}
+                    onChange={(e) =>
+                      setStudentPackageForm((prev) => ({ ...prev, memo: e.target.value }))
+                    }
+                    rows={3}
+                    style={{
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                      resize: 'vertical',
+                    }}
+                  />
+                </label>
+              ) : null}
+                </>
+              ) : null}
             </div>
+
+            {studentPackageFormErrors.submit ? (
+              <div
+                role="alert"
+                data-testid="student-package-submit-error"
+                style={{
+                  marginTop: 16,
+                  padding: '10px 12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(240, 128, 128, 0.55)',
+                  background: 'rgba(120, 30, 30, 0.25)',
+                  color: '#f4a7a7',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                {studentPackageFormErrors.submit}
+              </div>
+            ) : null}
 
             {studentPackageModalActiveSameScopeDuplicates.length > 0 ? (
               <div
+                data-testid="student-package-duplicate-guidance"
                 style={{
                   marginTop: 16,
                   padding: '10px 12px',
@@ -658,23 +1146,409 @@ export default function StudentPackageModal({
                 }}
               >
                 <div style={{ fontWeight: 600, marginBottom: 8, opacity: 0.95 }}>
-                  같은 범위의 사용 중 수강권이 이미 있습니다.
+                  {isPrivatePackage
+                    ? '이미 사용 중인 개인 수강권이 있습니다.'
+                    : '같은 범위의 사용 중 수강권이 이미 있습니다.'}
                 </div>
+                {isPrivatePackage ? (
+                  <p style={{ margin: '0 0 10px 0', opacity: 0.9 }}>
+                    기존 수강권에 추가 등록할 수 있습니다.
+                  </p>
+                ) : null}
+                {hasMultiplePrivateDuplicatePackages ? (
+                  <div
+                    data-testid="student-package-multiple-duplicates-warning"
+                    style={{
+                      margin: '0 0 10px 0',
+                      color: '#f2c27a',
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    같은 선생님 수강권이 여러 개 있습니다. 일반적으로 하나의 수강권에 추가
+                    등록하는 것을 권장합니다.
+                  </div>
+                ) : null}
+                {isPrivateTopUpFlow && primaryDuplicatePackage ? (
+                  <div
+                    data-testid="student-package-top-up-section"
+                    style={{
+                      marginBottom: 12,
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid rgba(90, 125, 255, 0.45)',
+                      background: 'rgba(35, 52, 105, 0.28)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600 }}>기존 수강권에 추가 등록</div>
+                    <div style={{ opacity: 0.84 }}>
+                      같은 선생님 수강권에 횟수와 결제 이력을 더합니다.
+                    </div>
+                    <div style={{ opacity: 0.92 }}>
+                      현재 수강권:{' '}
+                      <strong>{String(primaryDuplicatePackage.title || '').trim() || '-'}</strong>
+                    </div>
+                    <div>
+                      총 {Number(primaryDuplicatePackage.totalCount ?? 0) || 0}회 · 사용{' '}
+                      {Number(primaryDuplicatePackage.usedCount ?? 0) || 0}회 · 남은{' '}
+                      {Number(primaryDuplicatePackage.remainingCount ?? 0) || 0}회
+                    </div>
+                    <div>
+                      고정 예정 {primaryDuplicateFixedScheduled}회 · 예약{' '}
+                      {primaryDuplicateActiveReservations}회 · 새 배정 가능{' '}
+                      {primaryDuplicateAvailableForAssignment}회
+                    </div>
+                    <div>사용 가능 선생님: {formatTeacherScopeLabel(primaryDuplicatePackage)}</div>
+                    <div style={{ opacity: 0.78 }}>
+                      등록 회차: {Number.isFinite(topUpRegistrationRound) && topUpRegistrationRound > 0
+                        ? `${topUpRegistrationRound}회차 등록`
+                        : '추가 등록'}
+                    </div>
+                    <div
+                      data-testid="private-package-situation-guidance"
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        background: 'rgba(0, 0, 0, 0.16)',
+                        fontSize: 12,
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>상황별 선택</div>
+                      <div>2회차/3회차 결제 등록 → 기존 수강권에 추가 등록</div>
+                      <div>결제일/금액/횟수 오입력 수정 → 기존 수강권 수정</div>
+                      <div>별도 계약으로 분리 → 새 수강권으로 발급</div>
+                      <div>주간 시간 고정 배정 → 주간 시간에 학생 고정 배정으로 이동</div>
+                    </div>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ opacity: 0.85 }}>등록명 (선택)</span>
+                      <input
+                        type="text"
+                        data-testid="private-package-top-up-registration-label-input"
+                        value={studentPackageForm.registrationLabel}
+                        onChange={(e) =>
+                          setStudentPackageForm((prev) => ({
+                            ...prev,
+                            registrationLabel: e.target.value,
+                          }))
+                        }
+                        placeholder={
+                          Number.isFinite(topUpRegistrationRound) && topUpRegistrationRound > 0
+                            ? `${topUpRegistrationRound}회차 등록`
+                            : '추가 등록'
+                        }
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          border: '1px solid #444',
+                          background: '#1f1f1f',
+                          color: 'white',
+                        }}
+                      />
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        예: 3회차 등록, 1~5회차 패키지, 5개월 할인 등록
+                      </span>
+                    </label>
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ opacity: 0.85 }}>이번에 추가할 수업 횟수</span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        data-testid="private-package-top-up-count-input"
+                        value={studentPackageForm.totalCount}
+                        onChange={(e) =>
+                          setStudentPackageForm((prev) => ({ ...prev, totalCount: e.target.value }))
+                        }
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 8,
+                          border: '1px solid #444',
+                          background: '#1f1f1f',
+                          color: 'white',
+                        }}
+                      />
+                      {studentPackageFormErrors.totalCount ? (
+                        <span style={{ color: '#f08080', fontSize: 12 }}>
+                          {studentPackageFormErrors.totalCount}
+                        </span>
+                      ) : null}
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        4주 등록이면 4를 입력하세요. 예: 주1회 4주 등록 = 추가 횟수 4회.
+                      </span>
+                    </label>
+                    <div
+                      data-testid="private-package-top-up-preview"
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #2e3240',
+                        background: 'rgba(0, 0, 0, 0.18)',
+                        fontSize: 12,
+                        lineHeight: 1.55,
+                      }}
+                    >
+                      <div>이번 추가: +{topUpCountPreview}회</div>
+                      <div>저장 후 총 횟수: {topUpTotalCountPreview}회</div>
+                      <div>저장 후 새 배정 가능: {topUpAvailableForAssignmentPreview}회</div>
+                    </div>
+                    {canViewPaymentFields ? (
+                      <>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span style={{ opacity: 0.85 }}>결제일 (선택)</span>
+                          <input
+                            type="date"
+                            aria-label="결제일 (선택)"
+                            data-testid="student-package-payment-date-input"
+                            value={studentPackageForm.paymentDate}
+                            onChange={(e) =>
+                              setStudentPackageForm((prev) => ({
+                                ...prev,
+                                paymentDate: e.target.value,
+                              }))
+                            }
+                            style={{
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              border: '1px solid #444',
+                              background: '#1f1f1f',
+                              color: 'white',
+                            }}
+                          />
+                          {studentPackageFormErrors.paymentDate ? (
+                            <span style={{ color: '#f08080', fontSize: 12 }}>
+                              {studentPackageFormErrors.paymentDate}
+                            </span>
+                          ) : null}
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span style={{ opacity: 0.85 }}>결제 금액 (선택)</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            data-testid="private-package-top-up-amount-input"
+                            value={studentPackageForm.amountPaid}
+                            onChange={(e) =>
+                              setStudentPackageForm((prev) => ({
+                                ...prev,
+                                amountPaid: e.target.value,
+                              }))
+                            }
+                            placeholder="0"
+                            style={{
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              border: '1px solid #444',
+                              background: '#1f1f1f',
+                              color: 'white',
+                            }}
+                          />
+                          {studentPackageFormErrors.amountPaid ? (
+                            <span style={{ color: '#f08080', fontSize: 12 }}>
+                              {studentPackageFormErrors.amountPaid}
+                            </span>
+                          ) : null}
+                        </label>
+                        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <span style={{ opacity: 0.85 }}>메모 (선택)</span>
+                          <textarea
+                            data-testid="private-package-top-up-memo-input"
+                            value={studentPackageForm.memo}
+                            onChange={(e) =>
+                              setStudentPackageForm((prev) => ({ ...prev, memo: e.target.value }))
+                            }
+                            rows={3}
+                            style={{
+                              padding: '10px 12px',
+                              borderRadius: 8,
+                              border: '1px solid #444',
+                              background: '#1f1f1f',
+                              color: 'white',
+                              resize: 'vertical',
+                            }}
+                          />
+                        </label>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
                 <ul style={{ margin: 0, paddingLeft: 18, opacity: 0.9 }}>
-                  {studentPackageModalActiveSameScopeDuplicates.map((p) => (
-                    <li key={p.id} style={{ marginBottom: 6 }}>
-                      <span style={{ opacity: 0.85 }}>제목</span> {String(p.title || '').trim() || '-'}
-                      {' · '}
-                      <span style={{ opacity: 0.85 }}>남은</span>{' '}
-                      {p.remainingCount != null && p.remainingCount !== ''
-                        ? String(p.remainingCount)
-                        : '-'}
-                      {' · '}
-                      <span style={{ opacity: 0.85 }}>만료</span>{' '}
-                      {formatGroupStudentStartDate(p.expiresAt)}
-                    </li>
-                  ))}
+                  {studentPackageModalActiveSameScopeDuplicates.map((p) => {
+                    const balance = isPrivatePackage ? p.privateAssignmentBalance || null : null
+                    const fixedScheduled = Math.max(
+                      0,
+                      Number(balance?.futureFixedAllocatedCount) || 0
+                    )
+                    const activeReservations = Math.max(
+                      0,
+                      Number(balance?.activeFutureReservationCount) || 0
+                    )
+                    const availableForAssignment = Math.max(
+                      0,
+                      Number(balance?.makeupAvailableCount) || 0
+                    )
+                    const startDate = formatGroupStudentStartDate(p.registrationStartDate)
+                    const weeklyFrequency = Number(p.weeklyFrequency || 0)
+                    const registrationWeeks = Number(p.registrationWeeks || 0)
+                    const scheduleParts = []
+                    if (startDate !== '-') scheduleParts.push(`${startDate} 시작`)
+                    if (weeklyFrequency > 0) scheduleParts.push(`주${weeklyFrequency}회`)
+                    if (registrationWeeks > 0) scheduleParts.push(`${registrationWeeks}주`)
+                    return (
+                      <li key={p.id} style={{ marginBottom: 8 }}>
+                        <div>
+                          <span style={{ opacity: 0.85 }}>현재 수강권:</span>{' '}
+                          {String(p.title || '').trim() || '-'}
+                          {scheduleParts.length > 0 ? ` · ${scheduleParts.join(' · ')}` : ''}
+                        </div>
+                        {isPrivatePackage ? (
+                          <div>
+                            총 {Number(p.totalCount ?? 0) || 0}회 · 사용{' '}
+                            {Number(p.usedCount ?? 0) || 0}회 · 잔여{' '}
+                            {Number(p.remainingCount ?? 0) || 0}회 · 고정 예정 {fixedScheduled}회 ·
+                            예약 {activeReservations}회 · 새 배정 가능 {availableForAssignment}회
+                          </div>
+                        ) : (
+                          <div>
+                            총 {Number(p.totalCount ?? 0) || 0}회 · 사용{' '}
+                            {Number(p.usedCount ?? 0) || 0}회 · 잔여{' '}
+                            {Number(p.remainingCount ?? 0) || 0}회
+                          </div>
+                        )}
+                        {p.expiresAt ? (
+                          <div style={{ opacity: 0.82 }}>
+                            만료 {formatGroupStudentStartDate(p.expiresAt)}
+                          </div>
+                        ) : null}
+                      </li>
+                    )
+                  })}
                 </ul>
+                {hasPrivateDuplicatePackage ? (
+                  <div
+                    data-testid="private-package-other-options"
+                    style={{
+                      marginTop: 12,
+                      paddingTop: 10,
+                      borderTop: '1px solid rgba(255, 255, 255, 0.12)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, opacity: 0.86 }}>기타 옵션</div>
+                    <div style={{ fontSize: 12, opacity: 0.78 }}>
+                      일반적인 2회차/3회차 등록은 기존 수강권에 추가 등록을 사용하세요.
+                    </div>
+                    {isPrivateTopUpFlow ? (
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setStudentPackageForm((prev) => ({
+                              ...prev,
+                              privateDuplicateAction: 'new',
+                            }))
+                          }
+                          data-testid="private-package-force-new-button"
+                          style={{
+                            justifySelf: 'flex-start',
+                            padding: '7px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #665533',
+                            background: '#2b281b',
+                            color: '#ffe8b8',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          새 수강권으로 발급
+                        </button>
+                        <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                          별도 수강권을 새로 만듭니다. 일반적인 추가 등록에는 사용하지
+                          마세요.
+                        </span>
+                      </div>
+                    ) : (
+                      <div style={{ display: 'grid', gap: 4 }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setStudentPackageForm((prev) => ({
+                              ...prev,
+                              privateDuplicateAction: 'topUp',
+                            }))
+                          }
+                          data-testid="private-package-use-top-up-button"
+                          style={{
+                            justifySelf: 'flex-start',
+                            padding: '7px 10px',
+                            borderRadius: 8,
+                            border: '1px solid #4a6fff55',
+                            background: '#1f2a44',
+                            color: 'white',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          기존 수강권에 추가 등록
+                        </button>
+                        <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                          같은 선생님 수강권에 횟수와 결제 이력을 더합니다.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                  {primaryDuplicatePackage && openExistingStudentPackageFromAddModal ? (
+                    <div style={{ display: 'grid', gap: 4, maxWidth: 220 }}>
+                      <button
+                        type="button"
+                        onClick={() => openExistingStudentPackageFromAddModal(primaryDuplicatePackage)}
+                        data-testid="student-package-edit-existing-button"
+                        style={{
+                          justifySelf: 'flex-start',
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #665533',
+                          background: '#2b281b',
+                          color: '#ffe8b8',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        기존 수강권 수정
+                      </button>
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        잘못 입력한 정보를 고칠 때 사용합니다.
+                      </span>
+                    </div>
+                  ) : null}
+                  {isPrivatePackage && goToFixedPrivateAssignmentFromPackageModal ? (
+                    <div style={{ display: 'grid', gap: 4, maxWidth: 260 }}>
+                      <button
+                        type="button"
+                        onClick={goToFixedPrivateAssignmentFromPackageModal}
+                        data-testid="student-package-go-fixed-assignment-button"
+                        style={{
+                          justifySelf: 'flex-start',
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #4a6fff55',
+                          background: '#1f2a44',
+                          color: 'white',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        주간 시간에 학생 고정 배정으로 이동
+                      </button>
+                      <span style={{ fontSize: 12, lineHeight: 1.45, opacity: 0.72 }}>
+                        수강권 횟수를 선택한 주간 시간에 고정 배정합니다.
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             ) : null}
 
@@ -715,7 +1589,14 @@ export default function StudentPackageModal({
                   cursor: isStudentPackageModalSubmitting ? 'not-allowed' : 'pointer',
                 }}
               >
-                {isStudentPackageModalSubmitting ? '저장 중...' : '저장'}
+                {isStudentPackageModalSubmitting
+                  ? '저장 중...'
+                  : isPrivateTopUpFlow
+                    ? '기존 수강권에 추가 등록'
+                    : hasPrivateDuplicatePackage &&
+                        String(studentPackageForm.privateDuplicateAction || 'topUp') === 'new'
+                      ? '새 수강권으로 발급'
+                      : '저장'}
               </button>
             </div>
           </div>

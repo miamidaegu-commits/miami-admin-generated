@@ -68,14 +68,17 @@ node_modules/
 .env
 .env.e2e
 .env.local
+.env.production
 .env.*.local
 
 # dataconnect generated files
 .dataconnect
 
 # Playwright
+/dist/
 /test-results/
 /playwright-report/
+/.playwright-browsers/
 /blob-report/
 /playwright/.cache/
 /playwright/.auth/

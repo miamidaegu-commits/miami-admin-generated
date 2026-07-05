@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
   clickGroupRow,
-  getGroupRow,
   getRegisteredStudentsHeading,
   loginAsAdmin,
   openDashboardSection,
@@ -9,9 +8,15 @@ import {
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
-  TEST_GROUP_NAME,
-  TEST_STUDENT_NAME,
 } from './fixtures/test-data.js';
+import {
+  cleanupAdminSeededTempCalendarGroupLessonSetup,
+  cleanupAdminSeededTempGroupAttendanceSetup,
+  createAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededPrivateStudent,
+  createAdminSeededTempGroupAttendanceSetup,
+  getAdminGroupStudentById,
+} from './e2e-admin-helpers.js';
 
 function formatYmd(date) {
   const year = date.getFullYear();
@@ -29,61 +34,131 @@ function addDays(baseDate, days) {
 test('관리자가 그룹 학생 관리 모달에서 제외 날짜를 저장하고 다시 원복할 수 있다', async ({
   page,
   browserName,
-}) => {
+}, testInfo) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.setTimeout(90000);
 
   const excludedDate = formatYmd(addDays(new Date(), 920));
+  const unique = `${Date.now()}-${testInfo.workerIndex}`;
+  const groupName = `E2E 학생관리반 ${unique}`;
+  const studentName = `E2E 학생관리 ${unique}`;
+  const groupClassId = `e2e-group-student-manage-class-${unique}`;
+  const groupLessonId = `e2e-group-student-manage-lesson-${unique}`;
+  const studentId = `e2e-group-student-manage-student-${unique}`;
+  const packageId = `e2e-group-student-manage-package-${unique}`;
+  const groupStudentId = `e2e-group-student-manage-row-${unique}`;
+  let groupSetup = null;
+  let groupStudentSetup = null;
 
-  await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
-  await openDashboardSection(page, '단체반 관리');
+  try {
+    await createAdminSeededPrivateStudent({
+      studentId,
+      studentName,
+      name: studentName,
+      note: 'E2E temporary student for group student manage test',
+    });
+    groupSetup = await createAdminSeededCalendarGroupLessonSetup({
+      groupClassId,
+      groupLessonId,
+      groupName,
+      teacherName: 'teacher',
+      lessonDate: formatYmd(addDays(new Date(), 14)),
+      lessonTime: '20:20',
+      lessonSubject: `E2E 학생관리 수업 ${unique}`,
+    });
+    groupStudentSetup = await createAdminSeededTempGroupAttendanceSetup({
+      groupClassId,
+      groupName,
+      studentId,
+      studentName,
+      lessonDate: formatYmd(addDays(new Date(), 14)),
+      tempPackageTitle: `E2E 학생관리 수강권 ${unique}`,
+      packageId,
+      groupStudentId,
+      totalCount: 8,
+    });
 
-  const groupRow = await clickGroupRow(page, TEST_GROUP_NAME);
+    await expect
+      .poll(async () => {
+        const groupStudent = await getAdminGroupStudentById({ groupStudentId });
+        return {
+          exists: Boolean(groupStudent),
+          studentId: groupStudent?.studentId || '',
+          groupClassId: groupStudent?.groupClassId || '',
+        };
+      }, { timeout: 20000 })
+      .toEqual({
+        exists: true,
+        studentId,
+        groupClassId,
+      });
 
-  await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '단체반 관리');
 
-  const groupStudentsSection = page.getByTestId('group-students-section');
-  await expect(groupStudentsSection).toBeVisible();
+    await clickGroupRow(page, groupName);
 
-  const studentRow = groupStudentsSection.locator(
-    `[data-testid="group-student-row"][data-student-name="${TEST_STUDENT_NAME}"]`
-  ).first();
-  await expect(studentRow).toBeVisible();
+    await expect(getRegisteredStudentsHeading(page, groupName)).toBeVisible();
 
-  const manageButton = studentRow.getByRole('button', { name: '관리', exact: true });
-  await expect(manageButton).toBeVisible();
+    const groupStudentsSection = page.getByTestId('group-students-section');
+    await expect(groupStudentsSection).toBeVisible();
 
-  async function openManageDialog() {
-    await manageButton.click();
-    const dialog = page.getByRole('dialog', { name: '그룹 학생 관리' });
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText(TEST_STUDENT_NAME);
-    return dialog;
-  }
+    const studentRow = groupStudentsSection.locator(
+      `[data-testid="group-student-row"][data-student-name="${studentName}"]`
+    ).first();
+    await expect(studentRow).toBeVisible({ timeout: 15000 });
 
-  async function saveManageDialog(dialog) {
+    const manageButton = studentRow.getByRole('button', { name: '관리', exact: true });
+    await expect(manageButton).toBeVisible();
+
+    async function openManageDialog() {
+      await expect(manageButton).toBeEnabled({ timeout: 15000 });
+      await manageButton.dispatchEvent('click');
+      const dialog = page.getByRole('dialog', { name: '그룹 학생 관리' });
+      await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(studentName);
+      return dialog;
+    }
+
+    async function saveManageDialog(dialog, expectedExcludedDates) {
     const saveButton = dialog.getByRole('button', { name: '저장', exact: true });
     await expect(saveButton).toBeEnabled();
     await saveButton.click();
-    await expect(dialog).toBeHidden();
-  }
+      await expect
+        .poll(async () => {
+          const groupStudent = await getAdminGroupStudentById({ groupStudentId });
+          return Array.isArray(groupStudent?.excludedDates) ? groupStudent.excludedDates : [];
+        }, { timeout: 15000 })
+        .toEqual(expectedExcludedDates);
+      await expect(dialog).toBeHidden({ timeout: 15000 });
+    }
 
-  async function ensureDateRemovedIfPresent() {
+    async function closeDialogBestEffort(dialog) {
+      if (!(await dialog.isVisible().catch(() => false))) return;
+      const cancelButton = dialog.getByRole('button', { name: '취소', exact: true });
+      if (await cancelButton.isEnabled({ timeout: 1000 }).catch(() => false)) {
+        await cancelButton.click({ timeout: 5000 }).catch(() => {});
+      } else {
+        await page.keyboard.press('Escape').catch(() => {});
+      }
+      await expect(dialog).toBeHidden({ timeout: 5000 }).catch(() => {});
+    }
+
+    async function ensureDateRemovedIfPresent() {
     const dialog = await openManageDialog();
     const dateItem = dialog.locator(
       `[data-testid="group-student-excluded-date-item"][data-date="${excludedDate}"]`
     ).first();
     if ((await dateItem.count()) > 0) {
       await dateItem.getByRole('button', { name: '삭제', exact: true }).click();
-      await saveManageDialog(dialog);
+        await saveManageDialog(dialog, []);
       return;
     }
-    await dialog.getByRole('button', { name: '취소', exact: true }).click();
-    await expect(dialog).toBeHidden();
-  }
+      await closeDialogBestEffort(dialog);
+    }
 
-  let dateAdded = false;
+    let dateAdded = false;
 
-  try {
     await ensureDateRemovedIfPresent();
 
     const addDialog = await openManageDialog();
@@ -96,7 +171,7 @@ test('관리자가 그룹 학생 관리 모달에서 제외 날짜를 저장하�
         `[data-testid="group-student-excluded-date-item"][data-date="${excludedDate}"]`
       ).first()
     ).toBeVisible();
-    await saveManageDialog(addDialog);
+    await saveManageDialog(addDialog, [excludedDate]);
 
     dateAdded = true;
 
@@ -114,7 +189,7 @@ test('관리자가 그룹 학생 관리 모달에서 제외 날짜를 저장하�
       .first()
       .getByRole('button', { name: '삭제', exact: true })
       .click();
-    await saveManageDialog(verifyAddedDialog);
+    await saveManageDialog(verifyAddedDialog, []);
 
     dateAdded = false;
 
@@ -127,20 +202,22 @@ test('관리자가 그룹 학생 관리 모달에서 제외 날짜를 저장하�
     await expect(
       verifyRemovedDialog.getByText('등록된 제외일이 없습니다.', { exact: true })
     ).toBeVisible();
-    await verifyRemovedDialog.getByRole('button', { name: '취소', exact: true }).click();
-    await expect(verifyRemovedDialog).toBeHidden();
+    await closeDialogBestEffort(verifyRemovedDialog);
+
+    if (dateAdded) {
+      await ensureDateRemovedIfPresent();
+    }
   } finally {
-    if (!dateAdded) return;
+    await cleanupAdminSeededTempGroupAttendanceSetup({
+      ...(groupStudentSetup || {}),
+      groupClassId,
+      groupLessonId,
+      strictLessonIdsOnly: true,
+    }).catch(() => {});
 
-    await ensureDateRemovedIfPresent();
-
-    const verifyCleanupDialog = await openManageDialog();
-    await expect(
-      verifyCleanupDialog.locator(
-        `[data-testid="group-student-excluded-date-item"][data-date="${excludedDate}"]`
-      ).first()
-    ).toHaveCount(0);
-    await verifyCleanupDialog.getByRole('button', { name: '취소', exact: true }).click();
-    await expect(verifyCleanupDialog).toBeHidden();
+    await cleanupAdminSeededTempCalendarGroupLessonSetup({
+      ...(groupSetup || {}),
+      strictLessonIdsOnly: true,
+    }).catch(() => {});
   }
 });

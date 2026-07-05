@@ -3,16 +3,271 @@ import {
   getGroupLessonGroupId,
   getLessonDate,
   getLessonStorageDateString,
+  getTodayStorageDateString,
   formatLessonSessionNumber,
   getStudentName,
   getTeacherName,
+  isActiveGroupClassRow,
+  isClassClosureCancelledGroupLesson,
+  isNoDeductionCancelledGroupLesson,
   normalizeText,
 } from '../dashboardViewUtils.js'
+import {
+  getTeacherScopeFromRecord,
+  rowMatchesTeacherScope,
+} from '../teacherLessonRosterHelpers.js'
+import { isCountablePrivateReservationStatus } from '../lessonOccurrenceStats.js'
 
 /**
  * 캘린더 탭 전용: 개인/그룹 수업 통합·필터·일자별 집계 등 읽기 전용 파생 상태.
  * Firestore 쓰기·모달·핸들러는 Dashboard에 둔다.
  */
+function groupLessonHasAutoDeduction(groupLesson) {
+  const autoDeductedIds = Array.isArray(groupLesson?.autoDeductedStudentIDs)
+    ? groupLesson.autoDeductedStudentIDs
+    : []
+  if (autoDeductedIds.length > 0) return true
+  if (String(groupLesson?.deductionSource || '').trim() === 'auto') return true
+  const deductionSources =
+    groupLesson?.deductionSources && typeof groupLesson.deductionSources === 'object'
+      ? groupLesson.deductionSources
+      : {}
+  return Object.values(deductionSources).some(
+    (source) => String(source || '').trim() === 'auto'
+  )
+}
+
+function findGroupClassForLesson(groupLesson, groupClasses) {
+  const groupId = getGroupLessonGroupId(groupLesson)
+  if (groupId) {
+    const byId = groupClasses.find((groupClass) => String(groupClass.id || '').trim() === groupId)
+    if (byId) return byId
+  }
+
+  const lessonName = normalizeText(
+    groupLesson?.groupClassName || groupLesson?.name || groupLesson?.title || ''
+  )
+  if (!lessonName) return null
+  return (
+    groupClasses.find((groupClass) => {
+      const groupClassName = normalizeText(groupClass?.name || groupClass?.title || '')
+      return groupClassName && groupClassName === lessonName
+    }) || null
+  )
+}
+
+function buildCalendarGroupLessonRows(groupLessons, groupClasses, todayYmd) {
+  return groupLessons.map((gl) => {
+    const gc = findGroupClassForLesson(gl, groupClasses)
+    const name =
+      gc?.name != null && String(gc.name).trim() ? String(gc.name).trim() : '-'
+    const lessonDate = getLessonStorageDateString(gl)
+    const countedIds = Array.isArray(gl.countedStudentIDs) ? gl.countedStudentIDs : []
+    let calendarStatusLabel = '예정'
+    if (isNoDeductionCancelledGroupLesson(gl)) {
+      calendarStatusLabel = '휴강 · 차감 없음'
+    } else if (groupLessonHasAutoDeduction(gl)) {
+      calendarStatusLabel = '자동 차감 완료'
+    } else if (countedIds.length > 0) {
+      calendarStatusLabel = '정상 차감'
+    } else if (lessonDate && lessonDate < todayYmd) {
+      calendarStatusLabel = '미처리 · 자동 차감 예정'
+    }
+    return {
+      ...gl,
+      _calendarRowKind: 'group',
+      groupClassDisplayName: name,
+      teacher: String(gl.teacher || gc?.teacher || '').trim() || '-',
+      teacherKey: String(gl.teacherKey || gc?.teacherKey || '').trim(),
+      teacherUid: String(gl.teacherUid || gc?.teacherUid || '').trim(),
+      teacherId: String(gl.teacherId || gc?.teacherId || '').trim(),
+      teacherName: String(gl.teacherName || gc?.teacherName || '').trim(),
+      teacherDisplayName: String(gl.teacherDisplayName || gc?.teacherDisplayName || '').trim(),
+      displayName: String(gl.displayName || gc?.displayName || '').trim(),
+      groupClassTeacher: String(gc?.teacher || '').trim(),
+      groupClassTeacherKey: String(gc?.teacherKey || '').trim(),
+      groupClassTeacherUid: String(gc?.teacherUid || '').trim(),
+      groupClassTeacherId: String(gc?.teacherId || '').trim(),
+      groupClassTeacherName: String(gc?.teacherName || '').trim(),
+      groupClassTeacherDisplayName: String(gc?.teacherDisplayName || '').trim(),
+      groupClassDisplayNameForTeacher: String(gc?.displayName || '').trim(),
+      calendarStatusLabel,
+    }
+  })
+}
+
+function sortCalendarRows(rows) {
+  const all = [...rows]
+  all.sort((a, b) => {
+    const aDate = getLessonDate(a)
+    const bDate = getLessonDate(b)
+    if (!aDate && !bDate) return 0
+    if (!aDate) return 1
+    if (!bDate) return -1
+    return aDate.getTime() - bDate.getTime()
+  })
+  return all
+}
+
+function isStudentFixedPrivateSeatReleasedCancellation(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const cancelledByRole = String(
+    lesson?.cancelledByRole || lesson?.canceledByRole || ''
+  )
+    .trim()
+    .toLowerCase()
+  const cancellationReason = String(
+    lesson?.cancellationReason || lesson?.cancelledReason || ''
+  )
+    .trim()
+    .toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    cancellationType === 'seat_released' &&
+    (cancelledByRole === 'student' || cancellationReason.includes('student_cancelled'))
+  )
+}
+
+function addPrivateLessonReservationLinkKeys(keys, lesson) {
+  if (!keys || !lesson) return
+  const lessonIds = [lesson.id, lesson.lessonId, lesson.fixedLessonId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  lessonIds.forEach((lessonId) => {
+    keys.add(`lessonId:${lessonId}`)
+    keys.add(`fixedLessonId:${lessonId}`)
+  })
+
+  const reservationId = String(lesson.reservationId || '').trim()
+  if (reservationId) keys.add(`reservationId:${reservationId}`)
+
+  const slotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+  if (slotId) keys.add(`slotId:${slotId}`)
+
+  const date = String(getLessonStorageDateString(lesson) || lesson.date || '').trim()
+  const time = String(lesson.time || '').trim()
+  const studentKey = normalizeText(
+    lesson.studentId || lesson.studentID || getStudentName(lesson)
+  )
+  const teacherKey = normalizeText(
+    lesson.teacherName || lesson.teacher || lesson.teacherKey || lesson.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.add(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+}
+
+function getPrivateReservationLinkKeys(reservation) {
+  const keys = []
+  const reservationIds = [reservation?.id, reservation?.reservationId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  reservationIds.forEach((reservationId) => keys.push(`reservationId:${reservationId}`))
+
+  const slotId = String(reservation?.slotId || '').trim()
+  if (slotId) keys.push(`slotId:${slotId}`)
+
+  ;[reservation?.lessonId, reservation?.fixedLessonId].forEach((lessonIdValue) => {
+    const lessonId = String(lessonIdValue || '').trim()
+    if (!lessonId) return
+    keys.push(`lessonId:${lessonId}`)
+    keys.push(`fixedLessonId:${lessonId}`)
+  })
+
+  const date = String(reservation?.date || '').trim()
+  const time = String(reservation?.time || '').trim()
+  const studentKey = normalizeText(
+    reservation?.studentId || reservation?.studentName || reservation?.student
+  )
+  const teacherKey = normalizeText(
+    reservation?.teacherName ||
+      reservation?.teacher ||
+      reservation?.teacherKey ||
+      reservation?.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.push(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+
+  return keys
+}
+
+function buildCalendarPrivateReservationRows({
+  privateLessonReservations,
+  privateSlotById,
+  approvedPrivateLessonKeys,
+  cancelledFixedPrivateLessonKeys,
+  selectedCalendarTeacherScope = null,
+}) {
+  const rows = Array.isArray(privateLessonReservations) ? privateLessonReservations : []
+  return rows
+    .filter((reservation) => isCountablePrivateReservationStatus(reservation.status))
+    .filter((reservation) => {
+      if (!selectedCalendarTeacherScope) return true
+      const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+      return (
+        rowMatchesTeacherScope(reservation, selectedCalendarTeacherScope) ||
+        rowMatchesTeacherScope(slot, selectedCalendarTeacherScope)
+      )
+    })
+    .map((reservation) => {
+      const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+      const date = String(reservation.date || slot?.date || '').trim()
+      const time = String(reservation.time || slot?.time || '').trim()
+      const teacherLabel =
+        String(reservation.teacherName || '').trim() ||
+        String(reservation.teacher || '').trim() ||
+        String(slot?.teacherName || '').trim() ||
+        String(slot?.teacher || '').trim()
+      const studentLabel =
+        String(reservation.studentName || '').trim() ||
+        String(reservation.student || '').trim() ||
+        String(reservation.studentId || '').trim()
+      const subject =
+        String(reservation.subject || '').trim() ||
+        String(slot?.subject || '').trim() ||
+        '1:1 수업'
+      return {
+        ...reservation,
+        _calendarRowKind: 'privateReservation',
+        date,
+        time,
+        studentName: studentLabel || '-',
+        teacherName: teacherLabel || '-',
+        teacher: teacherLabel || '-',
+        subject,
+        startAt: reservation.startAt || slot?.startAt || null,
+        durationMinutes: reservation.durationMinutes || slot?.durationMinutes || 50,
+        slotStatus: slot?.status || '',
+        slotType: slot?.slotType || '',
+        releaseReason: reservation.releaseReason || slot?.releaseReason || '',
+        blockReason: reservation.blockReason || slot?.blockReason || '',
+        unavailableReason: reservation.unavailableReason || slot?.unavailableReason || '',
+      }
+    })
+    .filter((reservation) => {
+      if (!reservation.date) return false
+      const linkedToCancelledFixedLesson = getPrivateReservationLinkKeys(reservation).some((key) =>
+        cancelledFixedPrivateLessonKeys.has(key)
+      )
+      if (linkedToCancelledFixedLesson) return false
+      const reservationId = String(reservation.id || reservation.reservationId || '').trim()
+      const slotId = String(reservation.slotId || '').trim()
+      if (reservationId && approvedPrivateLessonKeys.has(`reservationId:${reservationId}`)) {
+        return false
+      }
+      if (slotId && approvedPrivateLessonKeys.has(`slotId:${slotId}`)) return false
+      const fallbackKey = [
+        String(reservation.date || '').trim(),
+        String(reservation.time || '').trim(),
+        normalizeText(reservation.studentId || reservation.studentName || reservation.student),
+        normalizeText(reservation.teacherName || reservation.teacher),
+      ].join('__')
+      return !approvedPrivateLessonKeys.has(fallbackKey)
+    })
+}
+
 export default function useCalendarSectionViewModel({
   lessons,
   privateLessonReservations,
@@ -22,7 +277,22 @@ export default function useCalendarSectionViewModel({
   selectedDateString,
   showOnlySelectedDate,
   userProfile,
+  selectedCalendarTeacher = null,
 }) {
+  const todayYmd = getTodayStorageDateString()
+  const selectedCalendarTeacherScope = useMemo(() => {
+    if (userProfile?.role !== 'admin' || !selectedCalendarTeacher) return null
+    return getTeacherScopeFromRecord(selectedCalendarTeacher)
+  }, [selectedCalendarTeacher, userProfile?.role])
+
+  const activeGroupClassById = useMemo(() => {
+    return new Map(
+      groupClasses
+        .filter(isActiveGroupClassRow)
+        .map((groupClass) => [String(groupClass.id || ''), groupClass])
+    )
+  }, [groupClasses])
+
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aDate = getLessonDate(a)
@@ -44,38 +314,62 @@ export default function useCalendarSectionViewModel({
       )
     }
 
-    return sortedLessons
-  }, [sortedLessons, userProfile])
+    if (selectedCalendarTeacherScope) {
+      return sortedLessons.filter((lesson) =>
+        rowMatchesTeacherScope(lesson, selectedCalendarTeacherScope)
+      )
+    }
 
-  const visibleGroupLessons = useMemo(() => {
+    return sortedLessons
+  }, [selectedCalendarTeacherScope, sortedLessons, userProfile])
+
+  const activeGroupLessons = useMemo(() => {
     const rows = Array.isArray(studentSummaryGroupLessons)
       ? studentSummaryGroupLessons
       : []
+    return rows.filter((gl) => {
+      if (isClassClosureCancelledGroupLesson(gl)) return false
+      const gcid = getGroupLessonGroupId(gl)
+      if (gcid && activeGroupClassById.has(String(gcid))) return true
+      return Boolean(findGroupClassForLesson(gl, groupClasses))
+    })
+  }, [activeGroupClassById, groupClasses, studentSummaryGroupLessons])
+
+  const visibleGroupLessons = useMemo(() => {
     if (userProfile?.role === 'teacher' && userProfile?.teacherName) {
       const myTeacherName = normalizeText(userProfile.teacherName)
-      return rows.filter((gl) => {
+      return activeGroupLessons.filter((gl) => {
         const gcid = getGroupLessonGroupId(gl)
-        const gc = groupClasses.find((g) => String(g.id) === String(gcid))
+        const gc = activeGroupClassById.get(String(gcid)) || findGroupClassForLesson(gl, groupClasses)
         return gc && normalizeText(gc.teacher || '') === myTeacherName
       })
     }
-    return rows
-  }, [studentSummaryGroupLessons, groupClasses, userProfile])
+    if (selectedCalendarTeacherScope) {
+      return activeGroupLessons.filter((gl) => {
+        const gcid = getGroupLessonGroupId(gl)
+        const gc = activeGroupClassById.get(String(gcid)) || findGroupClassForLesson(gl, groupClasses)
+        return (
+          rowMatchesTeacherScope(gl, selectedCalendarTeacherScope) ||
+          rowMatchesTeacherScope(gc, selectedCalendarTeacherScope)
+        )
+      })
+    }
+    return activeGroupLessons
+  }, [
+    activeGroupClassById,
+    activeGroupLessons,
+    groupClasses,
+    selectedCalendarTeacherScope,
+    userProfile,
+  ])
 
   const calendarGroupLessonRows = useMemo(() => {
-    return visibleGroupLessons.map((gl) => {
-      const gcid = getGroupLessonGroupId(gl)
-      const gc = groupClasses.find((g) => String(g.id) === String(gcid))
-      const name =
-        gc?.name != null && String(gc.name).trim() ? String(gc.name).trim() : '-'
-      return {
-        ...gl,
-        _calendarRowKind: 'group',
-        groupClassDisplayName: name,
-        teacher: String(gl.teacher || gc?.teacher || '').trim() || '-',
-      }
-    })
-  }, [visibleGroupLessons, groupClasses])
+    return buildCalendarGroupLessonRows(visibleGroupLessons, groupClasses, todayYmd)
+  }, [visibleGroupLessons, groupClasses, todayYmd])
+
+  const allCalendarGroupLessonRows = useMemo(() => {
+    return buildCalendarGroupLessonRows(activeGroupLessons, groupClasses, todayYmd)
+  }, [activeGroupLessons, groupClasses, todayYmd])
 
   const privateSlotById = useMemo(() => {
     return new Map(
@@ -89,6 +383,14 @@ export default function useCalendarSectionViewModel({
   const approvedPrivateLessonKeys = useMemo(() => {
     const byKey = new Set()
     visibleLessons.forEach((lesson) => {
+      const status = String(lesson?.status || '').trim().toLowerCase()
+      const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+      const isReleasedOrCancelled =
+        status === 'cancelled' ||
+        status === 'canceled' ||
+        cancellationType === 'seat_released' ||
+        lesson?.isSeatReleased === true
+      if (isReleasedOrCancelled) return
       const directReservationId = String(lesson.reservationId || '').trim()
       const directSlotId = String(lesson.slotId || '').trim()
       if (directReservationId) byKey.add(`reservationId:${directReservationId}`)
@@ -109,73 +411,99 @@ export default function useCalendarSectionViewModel({
     return byKey
   }, [visibleLessons])
 
+  const allApprovedPrivateLessonKeys = useMemo(() => {
+    const byKey = new Set()
+    sortedLessons.forEach((lesson) => {
+      const status = String(lesson?.status || '').trim().toLowerCase()
+      const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+      const isReleasedOrCancelled =
+        status === 'cancelled' ||
+        status === 'canceled' ||
+        cancellationType === 'seat_released' ||
+        lesson?.isSeatReleased === true
+      if (isReleasedOrCancelled) return
+      const directReservationId = String(lesson.reservationId || '').trim()
+      const directSlotId = String(lesson.slotId || '').trim()
+      if (directReservationId) byKey.add(`reservationId:${directReservationId}`)
+      if (directSlotId) byKey.add(`slotId:${directSlotId}`)
+      const base = [
+        String(getLessonStorageDateString(lesson) || '').trim(),
+        String(lesson.time || '').trim(),
+        normalizeText(getTeacherName(lesson)),
+      ]
+      const studentKeys = [
+        normalizeText(lesson.studentId || lesson.studentID || ''),
+        normalizeText(getStudentName(lesson)),
+      ].filter(Boolean)
+      studentKeys.forEach((studentKey) => {
+        byKey.add([base[0], base[1], studentKey, base[2]].join('__'))
+      })
+    })
+    return byKey
+  }, [sortedLessons])
+
+  const cancelledFixedPrivateLessonKeys = useMemo(() => {
+    const byKey = new Set()
+    visibleLessons.forEach((lesson) => {
+      if (!isStudentFixedPrivateSeatReleasedCancellation(lesson)) return
+      addPrivateLessonReservationLinkKeys(byKey, lesson)
+    })
+    return byKey
+  }, [visibleLessons])
+
+  const allCancelledFixedPrivateLessonKeys = useMemo(() => {
+    const byKey = new Set()
+    sortedLessons.forEach((lesson) => {
+      if (!isStudentFixedPrivateSeatReleasedCancellation(lesson)) return
+      addPrivateLessonReservationLinkKeys(byKey, lesson)
+    })
+    return byKey
+  }, [sortedLessons])
+
   const calendarPrivateReservationRows = useMemo(() => {
-    const rows = Array.isArray(privateLessonReservations) ? privateLessonReservations : []
-    return rows
-      .filter((reservation) =>
-        ['active', 'completed', 'no_show'].includes(String(reservation.status || '').trim())
-      )
-      .map((reservation) => {
-        const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
-        const date = String(reservation.date || slot?.date || '').trim()
-        const time = String(reservation.time || slot?.time || '').trim()
-        const teacherLabel =
-          String(reservation.teacherName || '').trim() ||
-          String(reservation.teacher || '').trim() ||
-          String(slot?.teacherName || '').trim() ||
-          String(slot?.teacher || '').trim()
-        const studentLabel =
-          String(reservation.studentName || '').trim() ||
-          String(reservation.student || '').trim() ||
-          String(reservation.studentId || '').trim()
-        const subject =
-          String(reservation.subject || '').trim() ||
-          String(slot?.subject || '').trim() ||
-          '1:1 수업'
-        return {
-          ...reservation,
-          _calendarRowKind: 'privateReservation',
-          date,
-          time,
-          studentName: studentLabel || '-',
-          teacherName: teacherLabel || '-',
-          teacher: teacherLabel || '-',
-          subject,
-          startAt: reservation.startAt || slot?.startAt || null,
-          durationMinutes: reservation.durationMinutes || slot?.durationMinutes || 50,
-        }
-      })
-      .filter((reservation) => {
-        if (!reservation.date) return false
-        const reservationId = String(reservation.id || reservation.reservationId || '').trim()
-        const slotId = String(reservation.slotId || '').trim()
-        if (reservationId && approvedPrivateLessonKeys.has(`reservationId:${reservationId}`)) {
-          return false
-        }
-        if (slotId && approvedPrivateLessonKeys.has(`slotId:${slotId}`)) return false
-        const fallbackKey = [
-          String(reservation.date || '').trim(),
-          String(reservation.time || '').trim(),
-          normalizeText(reservation.studentId || reservation.studentName || reservation.student),
-          normalizeText(reservation.teacherName || reservation.teacher),
-        ].join('__')
-        return !approvedPrivateLessonKeys.has(fallbackKey)
-      })
-  }, [approvedPrivateLessonKeys, privateLessonReservations, privateSlotById])
+    return buildCalendarPrivateReservationRows({
+      privateLessonReservations,
+      privateSlotById,
+      approvedPrivateLessonKeys,
+      cancelledFixedPrivateLessonKeys,
+      selectedCalendarTeacherScope,
+    })
+  }, [
+    approvedPrivateLessonKeys,
+    cancelledFixedPrivateLessonKeys,
+    privateLessonReservations,
+    privateSlotById,
+    selectedCalendarTeacherScope,
+  ])
+
+  const allCalendarPrivateReservationRows = useMemo(() => {
+    return buildCalendarPrivateReservationRows({
+      privateLessonReservations,
+      privateSlotById,
+      approvedPrivateLessonKeys: allApprovedPrivateLessonKeys,
+      cancelledFixedPrivateLessonKeys: allCancelledFixedPrivateLessonKeys,
+      selectedCalendarTeacherScope: null,
+    })
+  }, [
+    allApprovedPrivateLessonKeys,
+    allCancelledFixedPrivateLessonKeys,
+    privateLessonReservations,
+    privateSlotById,
+  ])
 
   const calendarCombinedLessons = useMemo(() => {
     const priv = visibleLessons.map((l) => ({ ...l, _calendarRowKind: 'private' }))
-    const all = [...priv, ...calendarGroupLessonRows, ...calendarPrivateReservationRows]
-    all.sort((a, b) => {
-      const aDate = getLessonDate(a)
-      const bDate = getLessonDate(b)
-      if (!aDate && !bDate) return 0
-      if (!aDate) return 1
-      if (!bDate) return -1
-      return aDate.getTime() - bDate.getTime()
-    })
-    return all
+    return sortCalendarRows([...priv, ...calendarGroupLessonRows, ...calendarPrivateReservationRows])
   }, [visibleLessons, calendarGroupLessonRows, calendarPrivateReservationRows])
+
+  const allCalendarCombinedLessons = useMemo(() => {
+    const priv = sortedLessons.map((l) => ({ ...l, _calendarRowKind: 'private' }))
+    return sortCalendarRows([
+      ...priv,
+      ...allCalendarGroupLessonRows,
+      ...allCalendarPrivateReservationRows,
+    ])
+  }, [sortedLessons, allCalendarGroupLessonRows, allCalendarPrivateReservationRows])
 
   const displayedLessons = useMemo(() => {
     if (showOnlySelectedDate) {
@@ -208,19 +536,30 @@ export default function useCalendarSectionViewModel({
       const current = map.get(dateKey) || []
       const isGroupRow = lesson._calendarRowKind === 'group'
       const isPrivateReservationRow = lesson._calendarRowKind === 'privateReservation'
+      const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+      const isReleasedFixedPrivateRow =
+        !isGroupRow &&
+        !isPrivateReservationRow &&
+        (cancellationType === 'seat_released' || lesson?.isSeatReleased === true)
+      const studentName = getStudentName(lesson)
       current.push({
         id: lesson.id,
         kind: lesson._calendarRowKind || 'private',
+        teacherName: getTeacherName(lesson),
         time: lesson.time || '',
         label: [
           isGroupRow
             ? lesson.groupClassDisplayName || '단체수업'
             : isPrivateReservationRow
-              ? '1:1 예약'
-              : getStudentName(lesson),
-          isPrivateReservationRow ? getStudentName(lesson) : '',
+              ? '학생예약'
+              : isReleasedFixedPrivateRow
+                ? '자리공개'
+                : studentName,
+          isPrivateReservationRow || isReleasedFixedPrivateRow ? studentName : '',
           lesson.time || '',
-          formatLessonSessionNumber(lesson),
+          isPrivateReservationRow || isReleasedFixedPrivateRow
+            ? ''
+            : formatLessonSessionNumber(lesson),
         ]
           .filter(Boolean)
           .join(' · '),
@@ -246,6 +585,7 @@ export default function useCalendarSectionViewModel({
     calendarGroupLessonRows,
     calendarPrivateReservationRows,
     calendarCombinedLessons,
+    allCalendarCombinedLessons,
     displayedLessons,
     lessonsCountByDate,
     lessonsPreviewByDate,

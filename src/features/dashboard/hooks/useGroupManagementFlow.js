@@ -1,35 +1,38 @@
 import { useEffect, useState } from 'react'
-import { addDoc, collection, doc, serverTimestamp, updateDoc } from 'firebase/firestore'
+import {
+  addDoc,
+  collection,
+  doc,
+  getDocs,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+  writeBatch,
+} from 'firebase/firestore'
 import { db } from '../../../../firebase'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   addCalendarDaysToYmd,
   formatLocalDateToYmd,
+  getGroupLessonGroupId,
   getTodayStorageDateString,
   GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS,
+  isNoDeductionCancelledGroupLesson,
   normalizeGroupWeekdaysFromDoc,
   normalizeText,
-  parseRequiredMinOneIntField,
   parseYmdToLocalDate,
+  resolveTeacherFormValue,
+  resolveTeacherIdentityFields,
 } from '../dashboardViewUtils.js'
+import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
 import {
-  DEFAULT_GROUP_COURSE_TYPE,
-  normalizeGroupCourseType,
-} from '../../group-booking/groupCourseTypes.js'
-
-const DEFAULT_GROUP_FORM = {
-  name: '',
-  teacher: '',
-  maxStudents: '1',
-  startDate: '',
-  time: '',
-  subject: '',
-  groupCourseType: DEFAULT_GROUP_COURSE_TYPE,
-  weekdays: [],
-  recurrenceMode: 'fixedWeekdays',
-  rebuildFutureLessons: false,
-  rebuildFromDate: '',
-}
+  countActiveGroupFixedMembers,
+  createDefaultGroupForm,
+  groupMaxStudentsToFormString,
+  resolveGroupLessonSubject,
+  validateGroupFormFields,
+} from '../groupClassRoomUtils.js'
 
 function resolveStateUpdater(updater, prev) {
   return typeof updater === 'function' ? updater(prev) : updater
@@ -45,107 +48,35 @@ function areNormalizedGroupWeekdaysEqual(rawA, rawB) {
 function isGroupEditScheduleAffected(group, validated) {
   const currentGroup = group || {}
   if (String(currentGroup.time || '').trim() !== validated.time) return true
-  if (String(currentGroup.subject || '').trim() !== validated.subject) return true
+  if (
+    resolveGroupLessonSubject({
+      subject: currentGroup.subject,
+      groupClassName: currentGroup.name,
+      groupCourseType: currentGroup.groupCourseType,
+    }) !== validated.subject
+  ) {
+    return true
+  }
   if (normalizeGroupCourseType(currentGroup.groupCourseType) !== validated.groupCourseType) return true
   if (!areNormalizedGroupWeekdaysEqual(currentGroup.weekdays, validated.weekdays)) return true
   return false
 }
 
-function groupMaxStudentsToFormString(value) {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return '1'
-  const i = Math.trunc(n)
-  return String(Math.max(1, i))
-}
-
-function createDefaultGroupForm(overrides = {}) {
-  return {
-    ...DEFAULT_GROUP_FORM,
-    ...overrides,
-  }
-}
-
-function validateGroupFormFields(form, options = {}) {
-  const { forNewClass, forEdit } = options
-  const errors = {}
-  const name = String(form?.name || '').trim()
-  const teacher = String(form?.teacher || '').trim()
-  if (!name) errors.name = '이름을 입력해주세요.'
-  if (!teacher) errors.teacher = '선생님 이름을 입력해주세요.'
-
-  const maxStudents = parseRequiredMinOneIntField(form?.maxStudents)
-  if (!maxStudents.ok) errors.maxStudents = '1 이상의 정수를 입력해주세요.'
-
-  let startDate = ''
-  if (forNewClass) {
-    startDate = String(form?.startDate || '').trim()
-    if (!startDate) {
-      errors.startDate = '시작일을 선택해주세요.'
-    } else if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
-      errors.startDate = '시작일 형식이 올바르지 않습니다.'
-    } else if (!parseYmdToLocalDate(startDate)) {
-      errors.startDate = '유효한 시작일을 선택해주세요.'
-    }
-  }
-
-  const time = String(form?.time || '').trim()
-  if (!time) {
-    errors.time = '시간을 입력해주세요.'
-  } else if (!/^\d{2}:\d{2}$/.test(time)) {
-    errors.time = 'HH:mm 형식으로 입력해주세요.'
-  } else {
-    const [h, m] = time.split(':').map(Number)
-    if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
-      errors.time = '유효한 시간을 입력해주세요.'
-    }
-  }
-
-  const subject = String(form?.subject || '').trim()
-  if (!subject) errors.subject = '과목을 입력해주세요.'
-  const normalizedGroupCourseType = normalizeGroupCourseType(form?.groupCourseType)
-  const groupCourseType = normalizedGroupCourseType || (forNewClass ? DEFAULT_GROUP_COURSE_TYPE : '')
-
-  const weekdays = normalizeGroupWeekdaysFromDoc(
-    Array.isArray(form?.weekdays) ? form.weekdays : []
+export async function countActiveGroupFixedMembersFromDb({ academyId, groupClassId }) {
+  const scopedAcademyId = requireCurrentAcademyId(academyId)
+  const gid = String(groupClassId || '').trim()
+  if (!gid) return 0
+  const snap = await getDocs(
+    query(
+      collection(db, 'groupStudents'),
+      where('academyId', '==', scopedAcademyId),
+      where('groupClassId', '==', gid)
+    )
   )
-  if (weekdays.length === 0) {
-    errors.weekdays = '요일을 1개 이상 선택해주세요.'
-  }
-
-  const recurrenceMode =
-    form?.recurrenceMode === 'fixedWeekdays' ? 'fixedWeekdays' : 'fixedWeekdays'
-
-  let rebuildFutureLessons = false
-  let rebuildFromDate = ''
-  if (forEdit) {
-    rebuildFutureLessons = Boolean(form?.rebuildFutureLessons)
-    if (rebuildFutureLessons) {
-      rebuildFromDate = String(form?.rebuildFromDate || '').trim()
-      if (!rebuildFromDate) {
-        errors.rebuildFromDate = '변경 적용 시작일을 선택해주세요.'
-      } else if (!/^\d{4}-\d{2}-\d{2}$/.test(rebuildFromDate)) {
-        errors.rebuildFromDate = '날짜 형식이 올바르지 않습니다.'
-      } else if (!parseYmdToLocalDate(rebuildFromDate)) {
-        errors.rebuildFromDate = '유효한 날짜를 선택해주세요.'
-      }
-    }
-  }
-
-  return {
-    valid: Object.keys(errors).length === 0,
-    errors,
-    name,
-    teacher,
-    maxStudents: maxStudents.ok ? maxStudents.value : 1,
-    startDate: forNewClass ? startDate : '',
-    time,
-    subject,
-    groupCourseType,
-    weekdays,
-    recurrenceMode,
-    rebuildFutureLessons,
-    rebuildFromDate,
-  }
+  return countActiveGroupFixedMembers(
+    snap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })),
+    gid
+  )
 }
 
 function isAdminProfile(profile) {
@@ -170,6 +101,38 @@ function groupBelongsToTeacher(group, teacherKey) {
   )
 }
 
+function resolveGroupTeacherFormValue(group, teacherSelectOptions = []) {
+  return resolveTeacherFormValue(group, teacherSelectOptions)
+}
+
+function teacherIdentityChanged(group, teacherIdentity) {
+  return [
+    ['teacher', teacherIdentity.teacher],
+    ['teacherKey', teacherIdentity.teacherKey],
+    ['teacherUid', teacherIdentity.teacherUid],
+    ['teacherId', teacherIdentity.teacherId],
+    ['teacherName', teacherIdentity.teacherName],
+    ['teacherDisplayName', teacherIdentity.teacherDisplayName],
+    ['displayName', teacherIdentity.displayName],
+  ].some(([key, value]) => String(group?.[key] || '').trim() !== String(value || '').trim())
+}
+
+function isFutureTeacherSyncTargetGroupLesson(lesson, groupClassId, todayYmd) {
+  if (getGroupLessonGroupId(lesson) !== String(groupClassId || '').trim()) return false
+  if (isNoDeductionCancelledGroupLesson(lesson)) return false
+  if (lesson?.completed === true) return false
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  if (['cancelled', 'canceled', 'deleted', 'closed'].includes(status)) return false
+  const date = String(lesson?.date || '').trim()
+  return !/^\d{4}-\d{2}-\d{2}$/.test(date) || date >= todayYmd
+}
+
+function chunkArray(items, size) {
+  const chunks = []
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size))
+  return chunks
+}
+
 export default function useGroupManagementFlow({
   activeSection,
   userProfile,
@@ -180,6 +143,11 @@ export default function useGroupManagementFlow({
   groupLessons,
   createGroupLessonsInDateRange,
   openPostGroupScheduleRebuildModal,
+  groupStudents = [],
+  teacherSelectOptions = [],
+  setGroupClasses,
+  setSelectedGroupClass,
+  setGroupLessons,
 }) {
   const [groupModal, setGroupModal] = useState(null)
   const [groupForm, setGroupFormState] = useState(createDefaultGroupForm())
@@ -232,6 +200,7 @@ export default function useGroupManagementFlow({
       createDefaultGroupForm({
         startDate: formatLocalDateToYmd(new Date()),
         teacher: teacherKey || '',
+        status: 'active',
       })
     )
     setGroupFormErrors({})
@@ -258,8 +227,9 @@ export default function useGroupManagementFlow({
     setGroupFormState(
       createDefaultGroupForm({
         name: group.name || '',
-        teacher: teacherKey || group.teacher || group.teacherName || '',
+        teacher: teacherKey || resolveGroupTeacherFormValue(group, teacherSelectOptions),
         maxStudents: groupMaxStudentsToFormString(group.maxStudents),
+        status: String(group.status || 'active').trim() === 'inactive' ? 'inactive' : 'active',
         time: String(group.time || '').trim(),
         subject: String(group.subject || '').trim(),
         groupCourseType: normalizeGroupCourseType(group.groupCourseType),
@@ -277,12 +247,20 @@ export default function useGroupManagementFlow({
     const result = validateGroupFormFields(groupForm, {
       forNewClass: groupModal.type === 'add',
       forEdit: groupModal.type === 'edit',
+      activeFixedMemberCount:
+        groupModal.type === 'edit'
+          ? countActiveGroupFixedMembers(groupStudents, groupModal.group?.id)
+          : 0,
     })
     setGroupFormErrors(result.errors)
     if (!result.valid) return
 
     const teacherOwnKey = getTeacherOwnGroupKey(userProfile)
     const teacherKey = teacherOwnKey || normalizeText(result.teacher)
+    const teacherIdentity = resolveTeacherIdentityFields(
+      teacherKey || result.teacher,
+      teacherSelectOptions
+    )
     const canAutoCreateLessons =
       (isAdminProfile(userProfile) || userProfile?.canCreateLessonDirectly === true) &&
       userProfile?.requiresLessonApproval !== true
@@ -298,9 +276,15 @@ export default function useGroupManagementFlow({
         const docRef = await addDoc(collection(db, 'groupClasses'), {
           academyId: scopedAcademyId,
           name: result.name,
-          teacher: teacherKey,
-          teacherName: teacherKey,
+          teacher: teacherIdentity.teacher,
+          teacherKey: teacherIdentity.teacherKey,
+          teacherUid: teacherIdentity.teacherUid,
+          teacherId: teacherIdentity.teacherId,
+          teacherName: teacherIdentity.teacherName,
+          teacherDisplayName: teacherIdentity.teacherDisplayName,
+          displayName: teacherIdentity.displayName,
           maxStudents: result.maxStudents,
+          status: result.status,
           time: result.time,
           subject: result.subject,
           groupCourseType: result.groupCourseType,
@@ -325,7 +309,8 @@ export default function useGroupManagementFlow({
               academyId: scopedAcademyId,
               groupClassId: newId,
               groupClassName: result.name,
-              teacher: teacherKey,
+              teacher: teacherIdentity.teacher,
+              teacherName: teacherIdentity.teacherName,
               time: result.time,
               subject: result.subject,
               groupCourseType: result.groupCourseType,
@@ -359,23 +344,132 @@ export default function useGroupManagementFlow({
       return
     }
     const scheduleAffected = isGroupEditScheduleAffected(group, result)
+    const teacherChanged = teacherIdentityChanged(group, teacherIdentity)
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(group, scopedAcademyId, '그룹')
       setBusyGroupId(group.id)
-      await updateDoc(doc(db, 'groupClasses', group.id), {
+      const activeFixedMemberCount = await countActiveGroupFixedMembersFromDb({
+        academyId: scopedAcademyId,
+        groupClassId: group.id,
+      })
+      if (activeFixedMemberCount > result.maxStudents) {
+        setGroupFormErrors((prev) => ({
+          ...prev,
+          maxStudents: `현재 반 등록 학생 ${activeFixedMemberCount}명보다 정원을 작게 설정할 수 없습니다.`,
+        }))
+        setBusyGroupId(null)
+        return
+      }
+      const groupClassUpdate = {
         name: result.name,
-        teacher: teacherKey,
-        teacherName: teacherKey,
+        teacher: teacherIdentity.teacher,
+        teacherKey: teacherIdentity.teacherKey,
+        teacherUid: teacherIdentity.teacherUid,
+        teacherId: teacherIdentity.teacherId,
+        teacherName: teacherIdentity.teacherName,
+        teacherDisplayName: teacherIdentity.teacherDisplayName,
+        displayName: teacherIdentity.displayName,
         maxStudents: result.maxStudents,
+        status: result.status,
         time: result.time,
         subject: result.subject,
         groupCourseType: result.groupCourseType,
         weekdays: result.weekdays,
         recurrenceMode: result.recurrenceMode,
         updatedAt: serverTimestamp(),
-      })
+      }
+      await updateDoc(doc(db, 'groupClasses', group.id), groupClassUpdate)
+
+      const savedGroup = {
+        ...group,
+        name: result.name,
+        teacher: teacherIdentity.teacher,
+        teacherKey: teacherIdentity.teacherKey,
+        teacherUid: teacherIdentity.teacherUid,
+        teacherId: teacherIdentity.teacherId,
+        teacherName: teacherIdentity.teacherName,
+        teacherDisplayName: teacherIdentity.teacherDisplayName,
+        displayName: teacherIdentity.displayName,
+        maxStudents: result.maxStudents,
+        status: result.status,
+        time: result.time,
+        subject: result.subject,
+        groupCourseType: result.groupCourseType,
+        weekdays: result.weekdays,
+        recurrenceMode: result.recurrenceMode,
+      }
+
+      setGroupClasses?.((prev) =>
+        (Array.isArray(prev) ? prev : []).map((row) =>
+          row?.id === savedGroup.id ? { ...row, ...savedGroup } : row
+        )
+      )
+      setSelectedGroupClass?.((prev) =>
+        prev?.id === savedGroup.id ? { ...prev, ...savedGroup } : prev
+      )
+
+      if (teacherChanged) {
+        const todayYmd = getTodayStorageDateString()
+        const futureGroupLessonsTeacherUpdate = {
+          teacher: teacherIdentity.teacher,
+          teacherKey: teacherIdentity.teacherKey,
+          teacherUid: teacherIdentity.teacherUid,
+          teacherId: teacherIdentity.teacherId,
+          teacherName: teacherIdentity.teacherName,
+          teacherDisplayName: teacherIdentity.teacherDisplayName,
+          displayName: teacherIdentity.displayName,
+          updatedAt: serverTimestamp(),
+        }
+        const snapshots = await Promise.all([
+          getDocs(
+            query(
+              collection(db, 'groupLessons'),
+              where('academyId', '==', scopedAcademyId),
+              where('groupClassId', '==', group.id)
+            )
+          ),
+          getDocs(
+            query(
+              collection(db, 'groupLessons'),
+              where('academyId', '==', scopedAcademyId),
+              where('groupClassID', '==', group.id)
+            )
+          ),
+        ])
+        const futureGroupLessons = new Map()
+        snapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((docItem) => {
+            const lesson = { id: docItem.id, ...docItem.data() }
+            if (isFutureTeacherSyncTargetGroupLesson(lesson, group.id, todayYmd)) {
+              futureGroupLessons.set(docItem.id, docItem.ref)
+            }
+          })
+        })
+        for (const refs of chunkArray([...futureGroupLessons.values()], 450)) {
+          const batch = writeBatch(db)
+          refs.forEach((lessonRef) => batch.update(lessonRef, futureGroupLessonsTeacherUpdate))
+          await batch.commit()
+        }
+        setGroupLessons?.((prev) =>
+          (Array.isArray(prev) ? prev : []).map((lesson) =>
+            isFutureTeacherSyncTargetGroupLesson(lesson, group.id, todayYmd)
+              ? {
+                  ...lesson,
+                  teacher: teacherIdentity.teacher,
+                  teacherKey: teacherIdentity.teacherKey,
+                  teacherUid: teacherIdentity.teacherUid,
+                  teacherId: teacherIdentity.teacherId,
+                  teacherName: teacherIdentity.teacherName,
+                  teacherDisplayName: teacherIdentity.teacherDisplayName,
+                  displayName: teacherIdentity.displayName,
+                }
+              : lesson
+          )
+        )
+      }
+
       closeGroupModal()
       if (
         scheduleAffected &&
@@ -395,7 +489,8 @@ export default function useGroupManagementFlow({
             newGroupCourseType: result.groupCourseType,
             newWeekdays: result.weekdays,
             maxStudents: result.maxStudents,
-            teacher: teacherKey,
+            teacher: teacherIdentity.teacher,
+            teacherName: teacherIdentity.teacherName,
             requestedFromDate: fromYmd,
           },
           fromYmd

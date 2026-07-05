@@ -17,10 +17,19 @@ export function requireCurrentAcademyId(academyId) {
   return id
 }
 
+function hasKoreanFinalConsonant(value) {
+  const text = String(value || '').trim()
+  if (!text) return false
+  const code = text.charCodeAt(text.length - 1)
+  if (code < 0xac00 || code > 0xd7a3) return false
+  return (code - 0xac00) % 28 !== 0
+}
+
 export function assertSameAcademy(row, academyId, label = '문서') {
   const currentAcademyId = requireCurrentAcademyId(academyId)
   if (normalizeAcademyId(row?.academyId) !== currentAcademyId) {
-    throw new Error(`${label}가 현재 학원에 속하지 않습니다.`)
+    const subjectParticle = hasKoreanFinalConsonant(label) ? '이' : '가'
+    throw new Error(`${label}${subjectParticle} 현재 학원에 속하지 않습니다.`)
   }
   return currentAcademyId
 }

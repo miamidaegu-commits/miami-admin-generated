@@ -5,7 +5,12 @@ import { createRequire } from 'node:module';
 import { promisify } from 'node:util';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
-import { loginAsAdmin, loginAsStudent, openDashboardSection } from './e2e-helpers.js';
+import {
+  loginAsAdmin,
+  loginAsStudent,
+  openDashboardSection,
+  selectTeacherOption,
+} from './e2e-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -115,6 +120,31 @@ function addDaysToYmd(date, days) {
   return formatYmd(next);
 }
 
+function formatSeoulYmd(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`;
+}
+
+function ensureMondaySaturdayYmd(date) {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  while (parsed.getUTCDay() === 0) {
+    parsed.setUTCDate(parsed.getUTCDate() + 1);
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function upcomingMondaySaturdayYmd(daysFromNow) {
+  return ensureMondaySaturdayYmd(
+    formatSeoulYmd(new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000))
+  );
+}
+
 function futureTuesdayYmd(unique) {
   const offsetWeeks = (Number.parseInt(String(unique).split('-')[0], 10) || Date.now()) % 400;
   const date = new Date('2098-01-01T00:00:00');
@@ -125,6 +155,13 @@ function futureTuesdayYmd(unique) {
 
 function privateSlotCard(page, text) {
   return page.locator('[data-testid="student-private-slot-card"]').filter({ hasText: text }).first();
+}
+
+function privateBusySlotCard(page, text) {
+  return page
+    .locator('[data-testid="student-private-busy-slot-card"]')
+    .filter({ hasText: text })
+    .first();
 }
 
 function privateReservationCard(page, text) {
@@ -183,6 +220,26 @@ async function expectSlotStatus(db, slotId, expected) {
     .toBe(expected);
 }
 
+async function expectSlotStatusWithDiagnostics(db, page, slotId, expected, diagnostics = {}) {
+  try {
+    await expectSlotStatus(db, slotId, expected);
+  } catch (error) {
+    const [slotSnap, rows] = await Promise.all([
+      db.collection('privateLessonSlots').doc(slotId).get(),
+      getVisiblePrivateSlotRows(page).catch(() => []),
+    ]);
+    throw new Error(
+      [
+        `Expected private slot ${slotId} status to be ${expected}.`,
+        `Slot data: ${JSON.stringify(slotSnap.exists ? slotSnap.data() : null, null, 2)}`,
+        `Visible private slot rows: ${JSON.stringify(rows, null, 2)}`,
+        `Diagnostics: ${JSON.stringify(diagnostics, null, 2)}`,
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+}
+
 async function expectReservationStatus(db, slotId, studentId, expected) {
   await expect
     .poll(async () => {
@@ -237,14 +294,12 @@ async function createFixture(unique) {
   const firstStudentName = `개인예약학생 A ${unique}`;
   const secondStudentName = `개인예약학생 B ${unique}`;
   const numericUnique = Number.parseInt(String(unique).split('-')[0], 10) || Date.now();
-  const createdDateBase = new Date('2099-04-01T00:00:00');
-  createdDateBase.setDate(createdDateBase.getDate() + (numericUnique % 5000));
-  const createdDate = formatYmd(createdDateBase);
+  const createdDate = upcomingMondaySaturdayYmd(3);
   const workerSuffix = Number.parseInt(String(unique).split('-').at(-1), 10) || 0;
   const createdHour = 8 + ((Math.floor(numericUnique / 60000) + workerSuffix) % 10);
   const createdTime = `${String(createdHour).padStart(2, '0')}:${String(numericUnique % 60).padStart(2, '0')}`;
-  const hiddenDate = addDaysToYmd(createdDate, 31);
-  const otherAcademyDate = addDaysToYmd(createdDate, 62);
+  const hiddenDate = addDaysToYmd(createdDate, 1);
+  const otherAcademyDate = addDaysToYmd(createdDate, 2);
   const approvedLessonDate = addDaysToYmd(createdDate, 93);
   const hiddenApprovedLessonDate = addDaysToYmd(createdDate, 124);
   const pastApprovedLessonDate = '2020-01-04';
@@ -430,11 +485,39 @@ async function createFixture(unique) {
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
+    db.collection('studentPackages').doc(`pkg-private-a-${unique}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: firstStudentId,
+      title: `E2E Private Slot Package A ${unique}`,
+      packageType: 'private',
+      teacher: TEACHER_NAME,
+      teacherName: TEACHER_NAME,
+      status: 'active',
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId: secondStudentId })).set({
       academyId: DEFAULT_E2E_ACADEMY_ID,
       studentId: secondStudentId,
       teacherKeys: [TEACHER_NAME],
       activePackageIds: [`pkg-private-b-${unique}`],
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPackages').doc(`pkg-private-b-${unique}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId: secondStudentId,
+      title: `E2E Private Slot Package B ${unique}`,
+      packageType: 'private',
+      teacher: TEACHER_NAME,
+      teacherName: TEACHER_NAME,
+      status: 'active',
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
@@ -533,6 +616,7 @@ async function createFixture(unique) {
   });
 
   return {
+    unique,
     firstEmail,
     firstUid: firstStudentUser.uid,
     firstAuthCreated: firstStudentAuthCreated,
@@ -568,6 +652,8 @@ async function cleanupFixture(fixture) {
     db.collection('privateStudents').doc(fixture.secondStudentId),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId: fixture.firstStudentId })),
     db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId: fixture.secondStudentId })),
+    db.collection('studentPackages').doc(`pkg-private-a-${fixture.unique}`),
+    db.collection('studentPackages').doc(`pkg-private-b-${fixture.unique}`),
     db.collection('privateLessonSlots').doc(fixture.hiddenSlotId),
     db.collection('privateLessonSlots').doc(fixture.otherAcademySlotId),
     db.collection('lessons').doc(fixture.approvedLessonId),
@@ -597,6 +683,227 @@ async function cleanupFixture(fixture) {
   ]);
 }
 
+async function createRevokedPrivatePackageStudentFixture(unique) {
+  const db = admin.firestore();
+  const nowTs = admin.firestore.Timestamp.now();
+  const studentId = `e2e-revoked-private-student-${unique}`;
+  const studentName = `E2E 회수학생 ${unique}`;
+  const email = `e2e-revoked-private-${unique}@example.com`;
+  const displayName = `Revoked Private Student ${unique}`;
+  const teacherKey = `miketest-revoked-${unique}`;
+  const packageId = `e2e-revoked-private-package-${unique}`;
+  const slotId = `e2e-revoked-private-slot-${unique}`;
+  const slotDate = upcomingMondaySaturdayYmd(35);
+  const { user, created } = await createOrGetStudentAuthUser({ email, displayName });
+
+  await Promise.all([
+    db.collection('users').doc(user.uid).set({
+      uid: user.uid,
+      email,
+      displayName,
+      role: 'student',
+      isActive: true,
+      lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
+      updatedAt: nowTs,
+    }),
+    db.collection('privateStudents').doc(studentId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      name: studentName,
+      studentName,
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${user.uid}`).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      uid: user.uid,
+      email,
+      displayName,
+      role: 'student',
+      studentId,
+      teacherName: '',
+      status: 'active',
+      permissions: {
+        canManageAttendance: false,
+        canAddStudent: false,
+        canEditStudent: false,
+        canDeleteStudent: false,
+        canEditLesson: false,
+        canDeleteLesson: false,
+        canCreateLessonDirectly: false,
+        requiresLessonApproval: false,
+      },
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPackages').doc(packageId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId,
+      studentName,
+      title: `E2E 회수 개인 수강권 ${unique}`,
+      packageType: 'private',
+      teacher: teacherKey,
+      teacherKey,
+      teacherName: teacherKey,
+      status: 'revoked',
+      totalCount: 4,
+      usedCount: 0,
+      remainingCount: 4,
+      revokedAt: nowTs,
+      revokedBy: 'E2E Admin',
+      revokedByUid: 'e2e-admin',
+      revokeReason: 'E2E 회수 학생 화면',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('studentPrivateAccessSummary').doc(privateSummaryId({ studentId })).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      studentId,
+      teacherKeys: [],
+      activePackageIds: [],
+      privateSlotBookingPilotEnabled: true,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }),
+    db.collection('privateLessonSlots').doc(slotId).set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: teacherKey,
+      teacherName: teacherKey,
+      teacherKey,
+      date: slotDate,
+      time: '15:30',
+      startAt: admin.firestore.Timestamp.fromDate(new Date(`${slotDate}T15:30:00`)),
+      durationMinutes: 50,
+      status: 'open',
+      reservedStudentId: '',
+      reservationId: '',
+      createdAt: nowTs,
+      updatedAt: nowTs,
+      reservedAt: null,
+      cancelledAt: null,
+    }),
+  ]);
+
+  await linkStudentAccountWithScript({ studentId, email, displayName });
+  return { studentId, email, uid: user.uid, authCreated: created, packageId, slotId };
+}
+
+async function cleanupRevokedPrivatePackageStudentFixture(fixture) {
+  if (!fixture) return;
+  const db = admin.firestore();
+  await Promise.all([
+    db.collection('privateStudents').doc(fixture.studentId).delete().catch(() => {}),
+    db.collection('studentPackages').doc(fixture.packageId).delete().catch(() => {}),
+    db.collection('studentPrivateAccessSummary')
+      .doc(privateSummaryId({ studentId: fixture.studentId }))
+      .delete()
+      .catch(() => {}),
+    db.collection('privateLessonSlots').doc(fixture.slotId).delete().catch(() => {}),
+    db.collection('users').doc(fixture.uid).delete().catch(() => {}),
+    db.collection('academyMemberships')
+      .doc(`${DEFAULT_E2E_ACADEMY_ID}_${fixture.uid}`)
+      .delete()
+      .catch(() => {}),
+  ]);
+  if (fixture.authCreated) {
+    await admin.auth().deleteUser(fixture.uid).catch(() => {});
+  }
+}
+
+async function getVisiblePrivateSlotRows(page) {
+  return page.locator('[data-testid="private-slot-row"]').evaluateAll((rows) =>
+    rows.map((row) => ({
+      slotId: row.getAttribute('data-slot-id') || '',
+      academyId: row.getAttribute('data-academy-id') || '',
+      text: row.textContent || '',
+    }))
+  );
+}
+
+async function expectPrivateSlotRowHidden(page, slotId, message) {
+  const row = page.locator(`[data-testid="private-slot-row"][data-slot-id="${slotId}"]`);
+  try {
+    await expect(row, message).toHaveCount(0);
+  } catch (error) {
+    const [rows, url, authState] = await Promise.all([
+      getVisiblePrivateSlotRows(page).catch(() => []),
+      Promise.resolve(page.url()),
+      page
+        .evaluate(() => {
+          const keys = Object.keys(window.localStorage || {}).filter((key) =>
+            key.includes('firebase')
+          );
+          return { firebaseLocalStorageKeys: keys };
+        })
+        .catch(() => null),
+    ]);
+    throw new Error(
+      [
+        message || `Private slot row should be hidden: ${slotId}`,
+        `Current URL: ${url}`,
+        `Auth storage: ${JSON.stringify(authState)}`,
+        `Visible private slot rows: ${JSON.stringify(rows, null, 2)}`,
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+}
+
+async function expectPrivateSlotRowVisible(page, slotId, message) {
+  const row = page.locator(`[data-testid="private-slot-row"][data-slot-id="${slotId}"]`);
+  try {
+    await expect(row, message).toBeVisible({ timeout: 30000 });
+  } catch (error) {
+    const [rows, bodyText] = await Promise.all([
+      getVisiblePrivateSlotRows(page).catch(() => []),
+      page.locator('body').innerText().catch(() => ''),
+    ]);
+    throw new Error(
+      [
+        message || `Private slot row should be visible: ${slotId}`,
+        `Current URL: ${page.url()}`,
+        `Visible private slot rows: ${JSON.stringify(rows, null, 2)}`,
+        'Body:',
+        bodyText.slice(0, 1500),
+        `Original error: ${error.message}`,
+      ].join('\n')
+    );
+  }
+  return row;
+}
+
+test('student booking page does not show revoked private package as reservable', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 private slot setup을 실행합니다.');
+  test.setTimeout(90000);
+
+  initializeAdmin();
+  let fixture = null;
+
+  try {
+    fixture = await createRevokedPrivatePackageStudentFixture(`${Date.now()}-${testInfo.workerIndex}`);
+    await loginAsStudent(page, fixture.email, TEST_STUDENT_PASSWORD);
+
+    await expect(page.getByTestId('student-ticket-summary-section')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText('불러오는 중...', { exact: true })).toHaveCount(0, { timeout: 30000 });
+    await expect(page.getByTestId('student-private-ticket-summary-empty')).toContainText(
+      '사용 가능한 개인 수강권이 없습니다.'
+    );
+    await expect(page.getByTestId('student-private-ticket-summary-row')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('예약 가능 4회');
+    await expect(page.locator('body')).not.toContainText('소진');
+    await expect(page.locator('[data-testid="student-private-slot-card"]')).toHaveCount(0);
+    await expect(
+      page.getByText('지금 예약 가능한 1:1 수업 시간이 없습니다. 학원 안내 후 다시 확인해 주세요.')
+    ).toBeVisible({ timeout: 30000 });
+  } finally {
+    await cleanupRevokedPrivatePackageStudentFixture(fixture).catch(() => {});
+  }
+});
+
 test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and tenant scope', async ({
   browser,
   page,
@@ -619,8 +926,16 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '1:1 예약 시간 관리');
     await expect(page.getByRole('heading', { name: '1:1 예약 시간 관리', level: 1 })).toBeVisible();
-    await expect(page.getByText(fixture.hiddenDate).first()).toBeVisible({ timeout: 15000 });
-    await expect(page.getByText(fixture.otherAcademyDate)).toHaveCount(0);
+    await expectPrivateSlotRowVisible(
+      page,
+      fixture.hiddenSlotId,
+      'current academy private slot row should be visible to current academy admin'
+    );
+    await expectPrivateSlotRowHidden(
+      page,
+      fixture.otherAcademySlotId,
+      'other academy private slot row should not be visible to current academy admin'
+    );
 
     const existingMatchingSlots = await queryMatchingSlots(db, {
       date: fixture.createdDate,
@@ -628,7 +943,7 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     });
     const existingMatchingSlotIds = new Set(existingMatchingSlots.map((slot) => slot.id));
 
-    await page.getByLabel('1:1 수업 선생님').selectOption(TEACHER_NAME);
+    await selectTeacherOption(page.getByLabel('1:1 수업 선생님'), TEACHER_NAME);
     await page.getByLabel('1:1 수업 날짜').fill(fixture.createdDate);
     await page.getByLabel('1:1 수업 시작 시간').fill(fixture.createdTime);
     await page.getByLabel('1:1 수업 진행 시간').fill('50');
@@ -686,14 +1001,36 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
     await expect(pastApprovedLessonCard).toContainText('1:1 수업');
     await expect(pastApprovedLessonCard).toContainText(fixture.pastApprovedLessonDate);
     await expect(pastApprovedLessonCard).toContainText('지난 수업');
-    await expect(privateSlotCard(studentPage, fixture.createdDate)).toBeVisible({ timeout: 15000 });
-    await expect(studentPage.getByText(fixture.hiddenDate)).toHaveCount(0);
     await expect(
-      privateSlotCard(studentPage, fixture.createdDate).getByTestId('student-private-slot-reserve-button')
+      studentPage.locator('[data-testid="student-private-slot-card"]').filter({
+        hasText: fixture.createdDate,
+      })
+    ).toHaveCount(0);
+    await expect(
+      studentPage.locator('[data-testid="student-private-busy-slot-card"]').filter({
+        hasText: fixture.createdDate,
+      })
+    ).toHaveCount(0);
+    await expect(
+      studentPage.locator(`[data-testid="student-private-slot-card"][data-slot-id="${fixture.hiddenSlotId}"]`)
+    ).toHaveCount(0);
+    await expect(
+      studentPage.locator(`[data-testid="student-private-busy-slot-card"][data-slot-id="${fixture.hiddenSlotId}"]`)
+    ).toHaveCount(0);
+    await expect(studentPage.locator('body')).not.toContainText(fixture.secondStudentName);
+
+    const secondStudentContext = await browser.newContext();
+    contexts.push(secondStudentContext);
+    const secondStudentPage = await secondStudentContext.newPage();
+    await loginAsStudent(secondStudentPage, fixture.secondEmail, TEST_STUDENT_PASSWORD);
+    const secondStudentSlotCard = privateSlotCard(secondStudentPage, fixture.createdDate);
+    await expect(secondStudentSlotCard).toBeVisible({ timeout: 15000 });
+    await expect(secondStudentSlotCard).toContainText(fixture.createdTime);
+    await expect(secondStudentSlotCard).toContainText('Teacher E2E');
+    await expect(privateBusySlotCard(secondStudentPage, fixture.createdDate)).toHaveCount(0);
+    await expect(
+      secondStudentSlotCard.getByTestId('student-private-slot-reserve-button')
     ).toBeDisabled();
-    await expect(
-      privateSlotCard(studentPage, fixture.createdDate).getByTestId('student-private-slot-reserve-button')
-    ).toHaveText('예약 중지');
     await expectSlotStatus(db, fixture.createdSlotId, 'open');
 
     await openDashboardSection(page, '1:1 예약 시간 관리');
@@ -701,11 +1038,20 @@ test('private 1:1 lesson slot booking MVP enforces eligibility, pairing, and ten
       .locator(`[data-testid="private-slot-row"][data-slot-id="${fixture.createdSlotId}"]`);
     await expect(dashboardSlotRow).toBeVisible({ timeout: 15000 });
     await expect(dashboardSlotRow).toContainText(fixture.secondStudentName);
-    await Promise.all([
-      page.waitForEvent('dialog').then((dialog) => dialog.accept()),
-      dashboardSlotRow.getByTestId('private-slot-cancel-button').click(),
-    ]);
-    await expectSlotStatus(db, fixture.createdSlotId, 'cancelled');
+    const cancelDialogs = [];
+    const acceptCancelDialog = async (dialog) => {
+      cancelDialogs.push(dialog.message());
+      await dialog.accept();
+    };
+    page.on('dialog', acceptCancelDialog);
+    try {
+      await dashboardSlotRow.getByTestId('private-slot-cancel-button').click();
+      await expectSlotStatusWithDiagnostics(db, page, fixture.createdSlotId, 'cancelled', {
+        cancelDialogs,
+      });
+    } finally {
+      page.off('dialog', acceptCancelDialog);
+    }
   } finally {
     await Promise.all(contexts.map((context) => context.close().catch(() => {})));
     if (fixture) {
@@ -757,7 +1103,7 @@ test('admin can create repeated weekly private slots and skips duplicate Tuesday
 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '1:1 예약 시간 관리');
-    await page.getByLabel('1:1 수업 선생님').selectOption(TEACHER_NAME);
+    await selectTeacherOption(page.getByLabel('1:1 수업 선생님'), TEACHER_NAME);
     await page.getByLabel('1:1 수업 날짜').fill(startDate);
     await page.getByLabel('1:1 수업 시작 시간').fill(time);
     await page.getByLabel('1:1 수업 진행 시간').fill('50');

@@ -1,10 +1,67 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { expect } from '@playwright/test';
 import admin from 'firebase-admin';
 
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
 const EXPECTED_PROJECT_ID = 'miami-e2e';
 const DEFAULT_E2E_ACADEMY_ID = 'academy_e2e_default';
+const DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES = [
+  'E2E 개인학생',
+  'E2E 개인 수강권',
+  'E2E 즉시수강권',
+  'E2E 즉시 개인 수강권',
+  'E2E 수강권설명',
+  'E2E 수강권중복',
+  'E2E 다선생수강권',
+  'E2E don1 기존 수강권',
+  'E2E miketest 수강권',
+  'E2E 사용이력회수',
+  'E2E 사용 이력 회수',
+  'E2E 수강권회수',
+  'E2E 추가등록',
+  'E2E 새발급',
+  'E2E 기존 새발급',
+  'E2E 강제 새 수강권',
+  'E2E 다른선생님',
+  'E2E 다른 선생님 기존',
+  'E2E 현재 선생님 신규',
+  'E2E top-up',
+  'E2E 개인진행',
+  'E2E 개인수정',
+  'E2E 수업학생',
+  'E2E 예약학생',
+  'E2E 요청학생',
+  'top-up-',
+  'miketest-',
+  'miketest ',
+  'e2e-',
+  'e2e-top-up-',
+  'e2e-package-',
+  'e2e-private-',
+  'e2e-slot-',
+  'e2e-immediate-',
+  'e2e-immediate-package-student-',
+  'e2e-used-history-revoke-student-',
+  'e2e-revoke-student-',
+  'e2e_lesson_student_',
+  'e2e_reservation_student_',
+  'e2e_request_student_',
+  'e2e-teacher-',
+  'private-slot',
+];
+
+export const PRIVATE_PACKAGE_E2E_SUITE_PREFIXES = DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES;
+
+export function hasE2EAdminServiceAccount() {
+  if (!fs.existsSync(SERVICE_ACCOUNT_PATH)) return false;
+  try {
+    const serviceAccount = JSON.parse(fs.readFileSync(SERVICE_ACCOUNT_PATH, 'utf8'));
+    return serviceAccount.project_id === EXPECTED_PROJECT_ID;
+  } catch {
+    return false;
+  }
+}
 
 function getAdminApp() {
   const existing = admin.apps.find((app) => app?.name === 'e2e-admin-helper');
@@ -62,6 +119,228 @@ async function deleteKnownAcademyDoc(db, collectionName, docId, academyId) {
   await docRef.delete();
 }
 
+function formatCleanupError(error) {
+  return error?.message || String(error);
+}
+
+function logAdminCleanupWarnings(label, results) {
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      console.warn(`${label}[${index}] cleanup warning: ${formatCleanupError(result.reason)}`);
+    }
+  });
+}
+
+function normalizePrefixList(prefixes = DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES) {
+  return Array.from(
+    new Set(
+      (Array.isArray(prefixes) ? prefixes : [prefixes])
+        .map((prefix) => String(prefix || '').trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+function startsWithAnyPrefix(value, prefixes) {
+  const text = String(value || '').trim();
+  return text && prefixes.some((prefix) => text.startsWith(prefix));
+}
+
+function rowMatchesAnyPrefix(row, docId, fields, prefixes) {
+  if (startsWithAnyPrefix(docId, prefixes)) return true;
+  return fields.some((field) => startsWithAnyPrefix(row?.[field], prefixes));
+}
+
+function isE2EFixtureIdentity(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  return (
+    text.startsWith('e2e-') ||
+    text.startsWith('E2E') ||
+    lower.includes('e2e') ||
+    text.startsWith('top-up-') ||
+    text.startsWith('miketest-') ||
+    text.startsWith('miketest ') ||
+    text.startsWith('private-slot')
+  );
+}
+
+function rowMatchesE2EFixture(row, docId, fields, prefixes) {
+  if (rowMatchesAnyPrefix(row, docId, fields, prefixes)) return true;
+  if (isE2EFixtureIdentity(docId)) return true;
+  if (isE2EFixtureIdentity(row?.studentId)) return true;
+  if (isE2EFixtureIdentity(row?.packageId)) return true;
+  if (isE2EFixtureIdentity(row?.teacherKey)) return true;
+  return fields.some((field) => isE2EFixtureIdentity(row?.[field]));
+}
+
+async function getAcademyScopedDocs(db, collectionName, academyId) {
+  const snap = await db
+    .collection(collectionName)
+    .where('academyId', '==', String(academyId || '').trim())
+    .get();
+  return snap.docs;
+}
+
+function addIfPresent(set, value) {
+  const text = String(value || '').trim();
+  if (text) set.add(text);
+}
+
+function addPrefixedIdentity(set, values, prefixes) {
+  values.forEach((value) => {
+    if (startsWithAnyPrefix(value, prefixes)) addIfPresent(set, value);
+  });
+}
+
+function chunk(items, size = 100) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
+}
+
+async function cleanupKnownAcademyDocs(label, db, collectionName, docIds, academyId) {
+  const ids = Array.from(
+    new Set(
+      (Array.isArray(docIds) ? docIds : [docIds])
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const results = await Promise.allSettled(
+    ids.map((id) => deleteKnownAcademyDoc(db, collectionName, id, academyId))
+  );
+  logAdminCleanupWarnings(label, results);
+  return results;
+}
+
+export async function cleanupAdminPrivatePackageE2ESuiteFixtures({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  prefixes = PRIVATE_PACKAGE_E2E_SUITE_PREFIXES,
+} = {}) {
+  return cleanupAdminPrivatePackageE2EFixtures({ academyId, prefixes });
+}
+
+export async function cleanupAdminPrivatePackageE2EFixtures({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  prefixes = DEFAULT_PRIVATE_PACKAGE_E2E_PREFIXES,
+} = {}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const scopedPrefixes = normalizePrefixList(prefixes);
+  const collectionFieldMap = {
+    privateStudents: ['name', 'studentName', 'note', 'learningPurpose'],
+    studentPackages: [
+      'title',
+      'packageTitle',
+      'studentName',
+      'teacher',
+      'teacherKey',
+      'teacherName',
+      'memo',
+      'registrationLabel',
+      'registrationMemo',
+    ],
+    lessons: ['studentName', 'teacher', 'teacherKey', 'teacherName', 'packageTitle', 'title', 'className'],
+    privateLessonReservations: [
+      'studentName',
+      'teacher',
+      'teacherKey',
+      'teacherName',
+      'packageTitle',
+      'slotTitle',
+    ],
+    privateLessonSlots: ['studentName', 'teacher', 'teacherKey', 'teacherName', 'packageTitle', 'title'],
+    privateLessonAvailabilityTemplates: ['teacher', 'teacherKey', 'teacherName', 'teacherEmail'],
+    creditTransactions: [
+      'studentName',
+      'teacher',
+      'teacherKey',
+      'teacherName',
+      'packageTitle',
+      'memo',
+      'registrationLabel',
+      'registrationMemo',
+    ],
+    teachers: ['name', 'teacherName', 'teacherKey', 'teacherEmail'],
+    studentPrivateAccessSummary: ['studentId'],
+  };
+  const collectionDocs = {};
+  const studentIds = new Set();
+  const packageIds = new Set();
+  const teacherKeys = new Set();
+  const refsByPath = new Map();
+
+  await Promise.all(
+    Object.keys(collectionFieldMap).map(async (collectionName) => {
+      collectionDocs[collectionName] = await getAcademyScopedDocs(
+        db,
+        collectionName,
+        scopedAcademyId
+      ).catch(() => []);
+    })
+  );
+
+  function mark(docSnap) {
+    refsByPath.set(docSnap.ref.path, docSnap.ref);
+  }
+
+  for (const [collectionName, fields] of Object.entries(collectionFieldMap)) {
+    for (const docSnap of collectionDocs[collectionName] || []) {
+      const row = docSnap.data() || {};
+      if (!rowMatchesE2EFixture(row, docSnap.id, fields, scopedPrefixes)) continue;
+      mark(docSnap);
+      addIfPresent(studentIds, row.studentId);
+      addIfPresent(packageIds, row.packageId);
+      if (collectionName === 'studentPackages') addIfPresent(packageIds, docSnap.id);
+      if (collectionName === 'privateStudents') addIfPresent(studentIds, docSnap.id);
+      if (collectionName === 'teachers') {
+        addPrefixedIdentity(teacherKeys, [docSnap.id, row.teacherKey, row.teacherName, row.name], scopedPrefixes);
+      } else {
+        addPrefixedIdentity(teacherKeys, [row.teacher, row.teacherKey, row.teacherName], scopedPrefixes);
+      }
+    }
+  }
+
+  for (const [collectionName, docs] of Object.entries(collectionDocs)) {
+    for (const docSnap of docs || []) {
+      const row = docSnap.data() || {};
+      const relatedToStudent = studentIds.has(String(row.studentId || '').trim());
+      const relatedToPackage =
+        packageIds.has(String(row.packageId || '').trim()) ||
+        (collectionName === 'studentPackages' && packageIds.has(docSnap.id));
+      const relatedToTeacher =
+        teacherKeys.has(String(row.teacher || '').trim()) ||
+        teacherKeys.has(String(row.teacherKey || '').trim()) ||
+        teacherKeys.has(String(row.teacherName || '').trim());
+      const relatedSummary =
+        collectionName === 'studentPrivateAccessSummary' &&
+        (studentIds.has(String(row.studentId || '').trim()) ||
+          Array.from(studentIds).some((studentId) => docSnap.id.endsWith(`__${studentId}`)));
+
+      if (relatedToStudent || relatedToPackage || relatedToTeacher || relatedSummary) {
+        mark(docSnap);
+      }
+    }
+  }
+
+  const refs = Array.from(refsByPath.values());
+  for (const refsChunk of chunk(refs)) {
+    const results = await Promise.allSettled(refsChunk.map((ref) => ref.delete()));
+    logAdminCleanupWarnings('cleanupAdminPrivatePackageE2EFixtures', results);
+  }
+
+  return {
+    deletedCount: refs.length,
+    studentIds: Array.from(studentIds),
+    packageIds: Array.from(packageIds),
+    teacherKeys: Array.from(teacherKeys),
+  };
+}
+
 export async function createAdminSeededPrivateStudent(params = {}) {
   const db = getDb();
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
@@ -71,14 +350,22 @@ export async function createAdminSeededPrivateStudent(params = {}) {
   const now = timestampNow();
   const name = String(params.name || `E2E 개인진행 학생 ${Date.now()}`).trim();
   const teacher = String(params.teacher || 'teacher').trim();
+  const teacherKey = String(params.teacherKey || teacher).trim();
+  const teacherName = String(params.teacherName || teacher).trim();
+  const studentIdValue = studentRef.id;
 
   await studentRef.set({
     academyId,
+    id: studentIdValue,
+    studentId: studentIdValue,
     name,
     studentName: String(params.studentName || name).trim(),
     teacher,
-    teacherName: String(params.teacherName || teacher).trim(),
+    teacherKey,
+    teacherName,
     status: String(params.status || 'active').trim(),
+    isActive: params.isActive !== false,
+    deleted: params.deleted === true,
     phone: String(params.phone || '010-9999-0000').trim(),
     carNumber: String(params.carNumber || '').trim(),
     learningPurpose: String(params.learningPurpose || 'E2E private progress').trim(),
@@ -97,10 +384,252 @@ export async function createAdminSeededPrivateStudent(params = {}) {
   });
 
   return {
-    studentId: studentRef.id,
+    studentId: studentIdValue,
     studentName: name,
     teacher,
+    teacherKey,
+    teacherName,
   };
+}
+
+function buildPrivateStudentReadiness(student, { academyId, name, teacher, teacherKey } = {}) {
+  if (!student) return { ready: false, reason: 'missing-doc' };
+  if (String(student.academyId || '').trim() !== String(academyId || DEFAULT_E2E_ACADEMY_ID).trim()) {
+    return { ready: false, reason: 'academyId-mismatch' };
+  }
+  if (String(student.id || '').trim() !== String(student.studentId || '').trim()) {
+    return { ready: false, reason: 'studentId-field-mismatch' };
+  }
+  if (name && String(student.name || '').trim() !== String(name).trim()) {
+    return { ready: false, reason: 'name-mismatch', actualName: String(student.name || '') };
+  }
+  if (teacher && String(student.teacher || '').trim() !== String(teacher).trim()) {
+    return { ready: false, reason: 'teacher-mismatch', actualTeacher: String(student.teacher || '') };
+  }
+  if (teacherKey && String(student.teacherKey || student.teacher || '').trim() !== String(teacherKey).trim()) {
+    return {
+      ready: false,
+      reason: 'teacherKey-mismatch',
+      actualTeacherKey: String(student.teacherKey || student.teacher || ''),
+    };
+  }
+  if (String(student.status || '').trim() !== 'active') {
+    return { ready: false, reason: 'status-not-active', actualStatus: String(student.status || '') };
+  }
+  if (student.isActive === false) return { ready: false, reason: 'isActive-false' };
+  if (student.deleted === true) return { ready: false, reason: 'deleted-true' };
+  return { ready: true };
+}
+
+export async function waitForAdminSeededPrivateStudentReady({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  name = '',
+  teacher = '',
+  teacherKey = '',
+  timeout = 30000,
+} = {}) {
+  const id = String(studentId || '').trim();
+  if (!id) {
+    throw new Error('waitForAdminSeededPrivateStudentReady requires studentId.');
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const student = await getAdminSeededPrivateStudent({ academyId, studentId: id });
+        return buildPrivateStudentReadiness(student, { academyId, name, teacher, teacherKey });
+      },
+      { timeout }
+    )
+    .toMatchObject({ ready: true });
+}
+
+export async function waitForAdminSeededStudentPackageReady({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+  studentId = '',
+  teacher = '',
+  teacherKey = '',
+  status = 'active',
+  totalCount,
+  remainingCount,
+  timeout = 30000,
+} = {}) {
+  const id = String(packageId || '').trim();
+  if (!id) {
+    throw new Error('waitForAdminSeededStudentPackageReady requires packageId.');
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const pkg = await getAdminSeededStudentPackage({ academyId, packageId: id });
+        if (!pkg) {
+          return { exists: false };
+        }
+        const actualTeacher = String(pkg.teacherKey || pkg.teacher || '').trim();
+        return {
+          exists: true,
+          studentIdMatches:
+            !studentId || String(pkg.studentId || '').trim() === String(studentId).trim(),
+          teacherMatches: !teacher || actualTeacher === String(teacher).trim(),
+          teacherKeyMatches: !teacherKey || actualTeacher === String(teacherKey).trim(),
+          statusMatches: String(pkg.status || 'active').trim() === String(status).trim(),
+          totalCountMatches:
+            totalCount == null || Number(pkg.totalCount || 0) === Number(totalCount),
+          remainingCountMatches:
+            remainingCount == null || Number(pkg.remainingCount || 0) === Number(remainingCount),
+        };
+      },
+      { timeout }
+    )
+    .toEqual(
+      expect.objectContaining({
+        exists: true,
+        studentIdMatches: true,
+        teacherMatches: true,
+        teacherKeyMatches: true,
+        statusMatches: true,
+        totalCountMatches: true,
+        remainingCountMatches: true,
+      })
+    );
+}
+
+export async function waitForAdminSeededPrivateAccessSummaryReady({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  teacherKeys = [],
+  activePackageIds = [],
+  timeout = 30000,
+} = {}) {
+  const id = String(studentId || '').trim();
+  if (!id) {
+    throw new Error('waitForAdminSeededPrivateAccessSummaryReady requires studentId.');
+  }
+
+  await expect
+    .poll(
+      async () => {
+        const summary = await getAdminSeededStudentPrivateAccessSummary({ academyId, studentId: id });
+        if (!summary) return { exists: false };
+        const summaryTeacherKeys = summary?.teacherKeys || [];
+        const summaryPackageIds = summary?.activePackageIds || [];
+        return {
+          exists: true,
+          teacherKeysReady: teacherKeys.every((teacherKey) => summaryTeacherKeys.includes(teacherKey)),
+          packageIdsReady: activePackageIds.every((packageId) => summaryPackageIds.includes(packageId)),
+        };
+      },
+      { timeout }
+    )
+    .toEqual({
+      exists: true,
+      teacherKeysReady: true,
+      packageIdsReady: true,
+    });
+}
+
+export async function getAdminSeededPrivateStudent({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const db = getDb();
+  const id = String(studentId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('privateStudents').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
+export async function getAdminPrivateStudentByName({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentName,
+}) {
+  const db = getDb();
+  const name = String(studentName || '').trim();
+  if (!name) return null;
+
+  const snap = await db
+    .collection('privateStudents')
+    .where('academyId', '==', String(academyId || '').trim())
+    .where('name', '==', name)
+    .limit(1)
+    .get();
+  const docSnap = snap.docs[0];
+  return docSnap ? { id: docSnap.id, ...docSnap.data() } : null;
+}
+
+export async function createAdminSeededStudentUser(params = {}) {
+  const auth = admin.auth(getAdminApp());
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const email = String(params.email || `e2e-student-${Date.now()}@example.com`).trim();
+  const password = String(params.password || '123456').trim();
+  const studentId = String(params.studentId || '').trim();
+  const displayName = String(params.displayName || params.studentName || studentId || email).trim();
+  const now = timestampNow();
+  const user = await auth.createUser({
+    email,
+    password,
+    displayName,
+  });
+  await auth.setCustomUserClaims(user.uid, {
+    role: 'student',
+    academyId,
+    studentId,
+  });
+  await Promise.all([
+    db.collection('users').doc(user.uid).set({
+      uid: user.uid,
+      email,
+      displayName,
+      role: 'student',
+      isActive: true,
+      lastSelectedAcademyId: academyId,
+      updatedAt: now,
+      createdAt: now,
+    }),
+    db.collection('academyMemberships').doc(`${academyId}_${user.uid}`).set({
+      academyId,
+      uid: user.uid,
+      email,
+      displayName,
+      role: 'student',
+      studentId,
+      teacherName: '',
+      status: 'active',
+      joinedAt: now,
+      updatedAt: now,
+    }),
+  ]);
+  return {
+    uid: user.uid,
+    email,
+    studentId,
+  };
+}
+
+export async function cleanupAdminSeededStudentUser({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  uid,
+}) {
+  const userId = String(uid || '').trim();
+  if (!userId) return;
+  const auth = admin.auth(getAdminApp());
+  const db = getDb();
+  await Promise.all([
+    auth.deleteUser(userId).catch(() => {}),
+    db.collection('users').doc(userId).delete().catch(() => {}),
+    db.collection('academyMemberships').doc(`${String(academyId || '').trim()}_${userId}`).delete().catch(() => {}),
+  ]);
 }
 
 export async function createAdminSeededStudentPackage(params = {}) {
@@ -112,6 +641,7 @@ export async function createAdminSeededStudentPackage(params = {}) {
   const now = timestampNow();
   const packageType = String(params.packageType || 'private').trim();
   const teacher = String(params.teacher || params.teacherName || 'teacher').trim();
+  const teacherKey = String(params.teacherKey || teacher).trim();
   const totalCount =
     Number.isInteger(Number(params.totalCount)) && Number(params.totalCount) >= 0
       ? Number(params.totalCount)
@@ -133,12 +663,35 @@ export async function createAdminSeededStudentPackage(params = {}) {
     packageType,
     teacher,
     teacherName: String(params.teacherName || teacher).trim(),
+    ...(packageType === 'private'
+      ? {
+          teacherKey,
+          teacherDisplayName: String(params.teacherDisplayName || params.teacherName || teacher).trim(),
+          teacherUid: String(params.teacherUid || '').trim(),
+          teacherEmail: String(params.teacherEmail || '').trim(),
+        }
+      : {}),
     totalCount,
     usedCount,
     remainingCount,
     status: String(params.status || 'active').trim(),
     startDate: String(params.startDate || '').trim(),
+    ...(params.registrationStartDate !== undefined
+      ? { registrationStartDate: String(params.registrationStartDate || '').trim() }
+      : {}),
+    ...(params.registrationWeeks !== undefined
+      ? { registrationWeeks: Number(params.registrationWeeks) || null }
+      : {}),
+    ...(params.weeklyFrequency !== undefined
+      ? { weeklyFrequency: Number(params.weeklyFrequency) || null }
+      : {}),
+    ...(params.privatePackageMode !== undefined
+      ? { privatePackageMode: String(params.privatePackageMode || '').trim() }
+      : {}),
     expiresAt: String(params.expiresAt || '2099-01-01').trim(),
+    ...(params.paymentDate !== undefined
+      ? { paymentDate: String(params.paymentDate || '').trim() }
+      : {}),
     createdAt: now,
     updatedAt: now,
   });
@@ -148,6 +701,800 @@ export async function createAdminSeededStudentPackage(params = {}) {
     studentId: String(params.studentId || '').trim(),
     teacher,
   };
+}
+
+export async function createAdminSeededCreditTransaction(params = {}) {
+  const db = getDb();
+  const txRef = params.transactionId
+    ? db.collection('creditTransactions').doc(String(params.transactionId))
+    : db.collection('creditTransactions').doc();
+  await txRef.set({
+    academyId: String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim(),
+    studentId: String(params.studentId || '').trim(),
+    studentName: String(params.studentName || '').trim(),
+    teacher: String(params.teacher || '').trim(),
+    packageId: String(params.packageId || '').trim(),
+    packageType: String(params.packageType || 'private').trim(),
+    packageTitle: String(params.packageTitle || '').trim(),
+    groupClassName: String(params.groupClassName || '').trim(),
+    sourceType: String(params.sourceType || 'studentPackage').trim(),
+    sourceId: String(params.sourceId || params.packageId || '').trim(),
+    actionType: String(params.actionType || 'package_created').trim(),
+    deltaCount: Number(params.deltaCount || 0),
+    memo: String(params.memo || '').trim(),
+    actorUid: String(params.actorUid || 'e2e-admin').trim(),
+    actorRole: String(params.actorRole || 'admin').trim(),
+    ...(params.registrationRound !== undefined
+      ? { registrationRound: Number(params.registrationRound) || null }
+      : {}),
+    ...(params.roundNumber !== undefined
+      ? { roundNumber: Number(params.roundNumber) || null }
+      : {}),
+    ...(params.registrationLabel !== undefined
+      ? { registrationLabel: String(params.registrationLabel || '').trim() }
+      : {}),
+    ...(params.paymentDate !== undefined
+      ? { paymentDate: String(params.paymentDate || '').trim() }
+      : {}),
+    ...(params.amountPaid !== undefined ? { amountPaid: Number(params.amountPaid || 0) } : {}),
+    ...(params.registrationMemo !== undefined
+      ? { registrationMemo: String(params.registrationMemo || '').trim() }
+      : {}),
+    createdAt: timestampNow(),
+  });
+  return { transactionId: txRef.id };
+}
+
+export async function createAdminSeededPrivateAvailabilityTemplate(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const templateRef = params.templateId
+    ? db.collection('privateLessonAvailabilityTemplates').doc(String(params.templateId))
+    : db.collection('privateLessonAvailabilityTemplates').doc();
+  const now = timestampNow();
+  const teacherKey = String(params.teacherKey || params.teacher || 'teacher').trim();
+  await templateRef.set({
+    academyId,
+    teacher: teacherKey,
+    teacherName: String(params.teacherName || teacherKey).trim(),
+    teacherKey,
+    weekday: Number(params.weekday || 1),
+    time: String(params.time || '13:00').trim(),
+    durationMinutes: Number(params.durationMinutes || 60),
+    status: String(params.status || 'active').trim(),
+    useForFixedAssignment: params.useForFixedAssignment === true,
+    openForStudentBooking: params.openForStudentBooking !== false,
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { templateId: templateRef.id };
+}
+
+export async function cleanupAdminSeededPrivateAvailabilityTemplate({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  templateId,
+}) {
+  await deleteKnownAcademyDoc(
+    getDb(),
+    'privateLessonAvailabilityTemplates',
+    String(templateId || '').trim(),
+    String(academyId || '').trim()
+  );
+}
+
+export async function getAdminSeededPrivatePackagesForStudent({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const db = getDb();
+  const snap = await db
+    .collection('studentPackages')
+    .where('academyId', '==', String(academyId || '').trim())
+    .where('studentId', '==', String(studentId || '').trim())
+    .where('packageType', '==', 'private')
+    .get();
+  return snap.docs.map((docSnap) => ({
+    id: docSnap.id,
+    ...docSnap.data(),
+  }));
+}
+
+export async function getAdminSeededStudentPackage({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+}) {
+  const db = getDb();
+  const id = String(packageId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('studentPackages').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
+export async function getAdminSeededLesson({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  lessonId,
+}) {
+  const db = getDb();
+  const id = String(lessonId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('lessons').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
+export async function getAdminGroupStudentById({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  groupStudentId,
+}) {
+  const db = getDb();
+  const id = String(groupStudentId || '').trim();
+  if (!id) return null;
+
+  const snap = await db.collection('groupStudents').doc(id).get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  if (String(data.academyId || '').trim() !== String(academyId || '').trim()) return null;
+  return {
+    id: snap.id,
+    ...data,
+  };
+}
+
+export async function getAdminSeededStudentPrivateAccessSummary({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const db = getDb();
+  const id = `${String(academyId || '').trim()}__${String(studentId || '').trim()}`;
+  const snap = await db.collection('studentPrivateAccessSummary').doc(id).get();
+  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+}
+
+export async function setAdminSeededPrivatePackageRevokedState({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+  studentId,
+  teacherKey,
+  totalCount,
+  usedCount,
+  remainingCount,
+  revokeReason = 'E2E 수강권 회수',
+  revokedByUid = 'e2e-admin-helper',
+}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const scopedPackageId = String(packageId || '').trim();
+  if (!scopedPackageId) throw new Error('packageId is required');
+
+  const packageRef = db.collection('studentPackages').doc(scopedPackageId);
+  const packageSnap = await packageRef.get();
+  if (!packageSnap.exists) throw new Error(`studentPackages/${scopedPackageId} not found`);
+  const packageData = packageSnap.data() || {};
+  if (String(packageData.academyId || '').trim() !== scopedAcademyId) {
+    throw new Error(`studentPackages/${scopedPackageId} academy mismatch`);
+  }
+  if (String(packageData.packageType || '').trim() !== 'private') {
+    throw new Error(`studentPackages/${scopedPackageId} is not a private package`);
+  }
+
+  const scopedStudentId = String(studentId || packageData.studentId || '').trim();
+  const scopedTeacherKey = String(
+    teacherKey || packageData.teacherKey || packageData.teacher || packageData.teacherName || ''
+  ).trim();
+  const now = timestampNow();
+
+  const activeSameTeacherSnap = scopedStudentId && scopedTeacherKey
+    ? await db
+      .collection('studentPackages')
+      .where('academyId', '==', scopedAcademyId)
+      .where('studentId', '==', scopedStudentId)
+      .where('packageType', '==', 'private')
+      .where('status', '==', 'active')
+      .get()
+    : null;
+  const hasOtherActiveSameTeacher = activeSameTeacherSnap
+    ? activeSameTeacherSnap.docs.some((docSnap) => {
+      if (docSnap.id === scopedPackageId) return false;
+      const row = docSnap.data() || {};
+      const rowTeacherKey = String(row.teacherKey || row.teacher || row.teacherName || '').trim();
+      return rowTeacherKey === scopedTeacherKey;
+    })
+    : false;
+
+  const batch = db.batch();
+  batch.set(
+    packageRef,
+    {
+      status: 'revoked',
+      totalCount: Number(totalCount),
+      usedCount: Number(usedCount),
+      remainingCount: Number(remainingCount),
+      revokedAt: packageData.revokedAt || now,
+      revokedBy: packageData.revokedBy || 'E2E Admin Helper',
+      revokedByUid: String(packageData.revokedByUid || revokedByUid || 'e2e-admin-helper').trim(),
+      revokeReason: String(revokeReason || packageData.revokeReason || '').trim(),
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+
+  if (scopedStudentId) {
+    const summaryRef = db
+      .collection('studentPrivateAccessSummary')
+      .doc(`${scopedAcademyId}__${scopedStudentId}`);
+    batch.set(
+      summaryRef,
+      {
+        academyId: scopedAcademyId,
+        studentId: scopedStudentId,
+        activePackageIds: admin.firestore.FieldValue.arrayRemove(scopedPackageId),
+        ...(scopedTeacherKey && !hasOtherActiveSameTeacher
+          ? { teacherKeys: admin.firestore.FieldValue.arrayRemove(scopedTeacherKey) }
+          : {}),
+        updatedAt: now,
+      },
+      { merge: true }
+    );
+  }
+
+  await batch.commit();
+}
+
+export async function setAdminSeededStudentPrivateAccessSummary({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  teacherKeys = [],
+  activePackageIds = [],
+  privateSlotBookingPilotEnabled,
+}) {
+  const db = getDb();
+  const id = `${String(academyId || '').trim()}__${String(studentId || '').trim()}`;
+  const now = timestampNow();
+  const payload = {
+    academyId: String(academyId || '').trim(),
+    studentId: String(studentId || '').trim(),
+    teacherKeys,
+    activePackageIds,
+    createdAt: now,
+    updatedAt: now,
+  };
+  if (privateSlotBookingPilotEnabled !== undefined) {
+    payload.privateSlotBookingPilotEnabled = privateSlotBookingPilotEnabled === true;
+  }
+  await db.collection('studentPrivateAccessSummary').doc(id).set(
+    payload,
+    { merge: true }
+  );
+  return { summaryId: id };
+}
+
+export async function createAdminSeededTeacher({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  teacherId,
+  teacherKey,
+  teacherName,
+  teacherUid = '',
+  teacherEmail = '',
+}) {
+  const db = getDb();
+  const now = timestampNow();
+  const key = String(teacherKey || '').trim();
+  const id = String(teacherId || `e2e-teacher-${key}`).trim();
+  await db.collection('teachers').doc(id).set({
+    academyId: String(academyId || '').trim(),
+    name: String(teacherName || key).trim(),
+    teacherName: key,
+    teacherKey: key,
+    teacherUid: String(teacherUid || '').trim(),
+    teacherEmail: String(teacherEmail || '').trim(),
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { teacherId: id, teacherKey: key, teacherName: String(teacherName || key).trim() };
+}
+
+export async function cleanupAdminSeededTeacher({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  teacherId,
+}) {
+  await deleteKnownAcademyDoc(
+    getDb(),
+    'teachers',
+    String(teacherId || '').trim(),
+    String(academyId || '').trim()
+  );
+}
+
+export async function cleanupAdminSeededStudentPrivateAccessSummary({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const id = `${String(academyId || '').trim()}__${String(studentId || '').trim()}`;
+  await deleteKnownAcademyDoc(
+    getDb(),
+    'studentPrivateAccessSummary',
+    id,
+    String(academyId || '').trim()
+  );
+}
+
+export async function cleanupAdminSeededCreditTransactionsForStudent({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+}) {
+  const db = getDb();
+  const snap = await db
+    .collection('creditTransactions')
+    .where('academyId', '==', String(academyId || '').trim())
+    .where('studentId', '==', String(studentId || '').trim())
+    .get();
+  await Promise.all(snap.docs.map((docSnap) => docSnap.ref.delete().catch(() => {})));
+}
+
+export async function cleanupAdminTempStudentData({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  studentId,
+  studentName,
+  packageId,
+  packageIds = [],
+  createdPackageIds = [],
+  groupStudentId,
+  groupStudentIds = [],
+  allowStudentNameLookup = false,
+  cleanupPackagesByStudent = false,
+  cleanupGroupStudentsByStudent = false,
+} = {}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const studentIds = new Set(
+    [studentId]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+
+  if (allowStudentNameLookup === true && studentName) {
+    const snap = await db
+      .collection('privateStudents')
+      .where('academyId', '==', scopedAcademyId)
+      .where('name', '==', String(studentName || '').trim())
+      .get();
+    snap.docs.forEach((docSnap) => studentIds.add(docSnap.id));
+  }
+
+  const exactPackageIds = new Set(
+    [packageId, ...(Array.isArray(packageIds) ? packageIds : []), ...(Array.isArray(createdPackageIds) ? createdPackageIds : [])]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+  const exactGroupStudentIds = new Set(
+    [groupStudentId, ...(Array.isArray(groupStudentIds) ? groupStudentIds : [])]
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+
+  if (cleanupPackagesByStudent === true) {
+    for (const currentStudentId of studentIds) {
+      const snap = await db
+        .collection('studentPackages')
+        .where('academyId', '==', scopedAcademyId)
+        .where('studentId', '==', currentStudentId)
+        .get();
+      snap.docs.forEach((docSnap) => exactPackageIds.add(docSnap.id));
+    }
+  }
+
+  if (cleanupGroupStudentsByStudent === true) {
+    for (const currentStudentId of studentIds) {
+      const snap = await db
+        .collection('groupStudents')
+        .where('academyId', '==', scopedAcademyId)
+        .where('studentId', '==', currentStudentId)
+        .get();
+      snap.docs.forEach((docSnap) => exactGroupStudentIds.add(docSnap.id));
+    }
+  }
+
+  const summaryIds = Array.from(studentIds).flatMap((currentStudentId) => [
+    currentStudentId,
+    `${scopedAcademyId}__${currentStudentId}`,
+  ]);
+
+  const results = await Promise.allSettled([
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.privateStudents',
+      db,
+      'privateStudents',
+      Array.from(studentIds),
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.studentPackages',
+      db,
+      'studentPackages',
+      Array.from(exactPackageIds),
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.groupStudents',
+      db,
+      'groupStudents',
+      Array.from(exactGroupStudentIds),
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.studentGroupAccessSummary',
+      db,
+      'studentGroupAccessSummary',
+      summaryIds,
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempStudentData.studentPrivateAccessSummary',
+      db,
+      'studentPrivateAccessSummary',
+      summaryIds,
+      scopedAcademyId
+    ),
+  ]);
+  logAdminCleanupWarnings('cleanupTempStudentData', results);
+}
+
+export async function cleanupAdminSeededTempGroupAttendanceSetup({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+  groupStudentId,
+  studentId,
+  creditTransactionId,
+  creditTransactionIds = [],
+  cleanupCreditTransactionsByPackage = false,
+  skipCreditTransactionCleanup = false,
+  groupLessonId = '',
+}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const exactCreditTransactionIds = [
+    creditTransactionId,
+    ...(Array.isArray(creditTransactionIds) ? creditTransactionIds : []),
+  ]
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+
+  await Promise.allSettled([
+    cleanupKnownAcademyDocs(
+      'cleanupTempGroupAttendanceSetup.groupStudents',
+      db,
+      'groupStudents',
+      groupStudentId,
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempGroupAttendanceSetup.studentPackages',
+      db,
+      'studentPackages',
+      packageId,
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempGroupAttendanceSetup.privateStudents',
+      db,
+      'privateStudents',
+      studentId,
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempGroupAttendanceSetup.creditTransactions',
+      db,
+      'creditTransactions',
+      exactCreditTransactionIds,
+      scopedAcademyId
+    ),
+  ]);
+
+  if (
+    packageId &&
+    skipCreditTransactionCleanup !== true &&
+    cleanupCreditTransactionsByPackage === true &&
+    exactCreditTransactionIds.length === 0
+  ) {
+    const snap = await db
+      .collection('creditTransactions')
+      .where('academyId', '==', scopedAcademyId)
+      .where('packageId', '==', String(packageId || '').trim())
+      .get();
+    const filteredIds = snap.docs
+      .filter((docSnap) => {
+        const data = docSnap.data() || {};
+        if (groupLessonId && String(data.sourceId || '') !== String(groupLessonId)) return false;
+        if (studentId && String(data.studentId || '') !== String(studentId)) return false;
+        return true;
+      })
+      .map((docSnap) => docSnap.id);
+    await cleanupKnownAcademyDocs(
+      'cleanupTempGroupAttendanceSetup.creditTransactionsByPackage',
+      db,
+      'creditTransactions',
+      filteredIds,
+      scopedAcademyId
+    );
+  }
+}
+
+export async function createAdminSeededTempGroupAttendanceSetup(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const studentId = String(params.studentId || '').trim();
+  const packageId = String(params.packageId || '').trim();
+  const groupStudentId = String(params.groupStudentId || '').trim();
+  const lessonDate = String(params.lessonDate || '').trim();
+  const packageTitle = String(params.tempPackageTitle || params.packageTitle || '').trim();
+  const totalCount =
+    Number.isInteger(Number(params.totalCount)) && Number(params.totalCount) >= 0
+      ? Number(params.totalCount)
+      : 4;
+
+  if (!groupClassId) throw new Error('groupClassId is required for group attendance setup.');
+  if (!studentId) throw new Error('studentId is required for group attendance setup.');
+  if (!packageId) throw new Error('packageId is required for group attendance setup.');
+  if (!groupStudentId) throw new Error('groupStudentId is required for group attendance setup.');
+  if (!lessonDate) throw new Error('lessonDate is required for group attendance setup.');
+
+  const [groupClassSnap, studentSnap] = await Promise.all([
+    db.collection('groupClasses').doc(groupClassId).get(),
+    db.collection('privateStudents').doc(studentId).get(),
+  ]);
+
+  if (!groupClassSnap.exists) throw new Error(`Group class not found by id: ${groupClassId}`);
+  if (!studentSnap.exists) throw new Error(`Student not found by id: ${studentId}`);
+
+  const groupClass = groupClassSnap.data() || {};
+  const student = studentSnap.data() || {};
+  if (String(groupClass.academyId || '').trim() !== academyId) {
+    throw new Error(`Group class academyId does not match ${academyId}: ${groupClassId}`);
+  }
+  if (String(student.academyId || '').trim() !== academyId) {
+    throw new Error(`Student academyId does not match ${academyId}: ${studentId}`);
+  }
+
+  const now = timestampNow();
+  const startDate = admin.firestore.Timestamp.fromDate(new Date(`${lessonDate}T00:00:00`));
+  const teacher = String(groupClass.teacher || groupClass.teacherName || 'teacher').trim().toLowerCase();
+  const studentName = String(student.name || student.studentName || params.studentName || '').trim();
+  const groupName = String(groupClass.name || params.groupName || '').trim();
+
+  await Promise.all([
+    db.collection('studentPackages').doc(packageId).set({
+      academyId,
+      studentId,
+      studentName,
+      teacher,
+      packageType: 'group',
+      groupClassId,
+      groupClassName: groupName,
+      title: packageTitle,
+      totalCount,
+      usedCount: 0,
+      remainingCount: totalCount,
+      status: 'active',
+      registrationStartDate: lessonDate,
+      registrationWeeks: 1,
+      coverageEndDate: '',
+      expiresAt: '',
+      amountPaid: 0,
+      memo: 'E2E temporary package for group attendance test',
+      createdAt: now,
+      updatedAt: now,
+    }),
+    db.collection('groupStudents').doc(groupStudentId).set({
+      academyId,
+      groupClassId,
+      classID: groupClassId,
+      studentId,
+      studentName,
+      name: studentName,
+      teacher,
+      packageId,
+      packageType: 'group',
+      paidLessons: totalCount,
+      attendanceCount: 0,
+      startDate,
+      status: 'active',
+      studentStatus: 'active',
+      excludedDates: [],
+      breakStartDate: '',
+      breakEndDate: '',
+      createdAt: now,
+      updatedAt: now,
+    }),
+  ]);
+
+  return {
+    packageId,
+    groupStudentId,
+    studentId,
+    studentName,
+  };
+}
+
+export async function setAdminSeededTempGroupAttendanceState({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  groupLessonId,
+  studentId,
+  packageId,
+  groupStudentId,
+  deducted,
+  syncGuardStudentId = '',
+  totalCount = 4,
+}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const lessonId = String(groupLessonId || '').trim();
+  const scopedStudentId = String(studentId || '').trim();
+  const scopedPackageId = String(packageId || '').trim();
+  const scopedGroupStudentId = String(groupStudentId || '').trim();
+  const normalizedTotalCount = Number(totalCount);
+
+  if (!lessonId) throw new Error('groupLessonId is required for attendance state setup.');
+  if (!scopedStudentId) throw new Error('studentId is required for attendance state setup.');
+  if (!scopedPackageId) throw new Error('packageId is required for attendance state setup.');
+  if (!scopedGroupStudentId) throw new Error('groupStudentId is required for attendance state setup.');
+
+  const isDeducted = deducted === true;
+  const countedStudentIDs = [
+    String(syncGuardStudentId || '').trim(),
+    isDeducted ? scopedStudentId : '',
+  ].filter(Boolean);
+  const now = timestampNow();
+  const batch = db.batch();
+
+  batch.set(
+    db.collection('groupLessons').doc(lessonId),
+    {
+      academyId: scopedAcademyId,
+      countedStudentIDs,
+      attendanceAppliedAt: now,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+  batch.set(
+    db.collection('studentPackages').doc(scopedPackageId),
+    {
+      academyId: scopedAcademyId,
+      usedCount: isDeducted ? 1 : 0,
+      remainingCount: isDeducted ? Math.max(0, normalizedTotalCount - 1) : normalizedTotalCount,
+      status: 'active',
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+  batch.set(
+    db.collection('groupStudents').doc(scopedGroupStudentId),
+    {
+      academyId: scopedAcademyId,
+      attendanceCount: isDeducted ? 1 : 0,
+      updatedAt: now,
+    },
+    { merge: true }
+  );
+
+  await batch.commit();
+}
+
+export async function cleanupAdminSeededTempCalendarGroupLessonSetup({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  groupClassId,
+  groupLessonId,
+  groupLessonIds = [],
+}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+  const lessonIds = [
+    groupLessonId,
+    ...(Array.isArray(groupLessonIds) ? groupLessonIds : []),
+  ]
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+
+  await Promise.allSettled([
+    cleanupKnownAcademyDocs(
+      'cleanupTempCalendarGroupLessonSetup.groupLessons',
+      db,
+      'groupLessons',
+      lessonIds,
+      scopedAcademyId
+    ),
+    cleanupKnownAcademyDocs(
+      'cleanupTempCalendarGroupLessonSetup.groupClasses',
+      db,
+      'groupClasses',
+      groupClassId,
+      scopedAcademyId
+    ),
+  ]);
+}
+
+export async function getAdminSeededGroupAttendanceState({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  groupClassId,
+  groupLessonId,
+  groupStudentId,
+  packageId,
+  studentId,
+}) {
+  const db = getDb();
+  const scopedAcademyId = String(academyId || '').trim();
+
+  async function readDoc(collectionName, docId) {
+    const normalizedDocId = String(docId || '').trim();
+    if (!normalizedDocId) {
+      return { exists: false };
+    }
+
+    const snap = await db.collection(collectionName).doc(normalizedDocId).get();
+    const data = snap.exists ? snap.data() || {} : {};
+    return {
+      exists: snap.exists,
+      academyId: data.academyId || '',
+      studentId: data.studentId || '',
+      packageId: data.packageId || '',
+      groupClassId: data.groupClassId || data.groupClassID || data.classID || '',
+      countedStudentIDs: Array.isArray(data.countedStudentIDs) ? data.countedStudentIDs : [],
+      usedCount: data.usedCount ?? null,
+      remainingCount: data.remainingCount ?? null,
+      attendanceCount: data.attendanceCount ?? null,
+      status: data.status || '',
+      studentStatus: data.studentStatus || '',
+      updatedAtType: data.updatedAt?.toDate ? 'timestamp' : typeof data.updatedAt,
+    };
+  }
+
+  const [groupClass, groupLesson, studentPackage, groupStudent, privateStudent] = await Promise.all([
+    readDoc('groupClasses', groupClassId),
+    readDoc('groupLessons', groupLessonId),
+    readDoc('studentPackages', packageId),
+    readDoc('groupStudents', groupStudentId),
+    readDoc('privateStudents', studentId),
+  ]);
+
+  return {
+    academyId: scopedAcademyId,
+    groupClass,
+    groupLesson,
+    studentPackage,
+    groupStudent,
+    privateStudent,
+  };
+}
+
+export async function getAdminSeededCreditTransactionsForPackage({
+  academyId = DEFAULT_E2E_ACADEMY_ID,
+  packageId,
+}) {
+  const db = getDb();
+  const snap = await db
+    .collection('creditTransactions')
+    .where('academyId', '==', String(academyId || '').trim())
+    .where('packageId', '==', String(packageId || '').trim())
+    .get();
+  return snap.docs.map((docSnap) => ({
+    id: docSnap.id,
+    ...docSnap.data(),
+  }));
 }
 
 export async function createAdminSeededLessonRequest(params = {}) {
@@ -302,6 +1649,68 @@ export async function createAdminSeededPrivateLesson(params = {}) {
   };
 }
 
+export async function createAdminSeededPrivateReservation(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const reservationRef = params.reservationId
+    ? db.collection('privateLessonReservations').doc(String(params.reservationId))
+    : db.collection('privateLessonReservations').doc();
+  const now = timestampNow();
+  const studentId = String(params.studentId || `e2e_reservation_student_${Date.now()}`).trim();
+  const studentName = String(params.studentName || `E2E 예약학생 ${Date.now()}`).trim();
+  const teacher = String(params.teacher || 'teacher').trim();
+  const date = String(params.date || '').trim();
+  const time = String(params.time || '10:00').trim();
+  const startDate = parseLegacyLessonDateTime(date, time);
+
+  await reservationRef.set({
+    academyId,
+    slotId: String(params.slotId || '').trim(),
+    studentId,
+    studentName,
+    teacher,
+    teacherName: String(params.teacherName || teacher).trim(),
+    packageId: String(params.packageId || '').trim(),
+    deductionPackageId: String(params.deductionPackageId || params.packageId || '').trim(),
+    date,
+    time,
+    status: String(params.status || 'active').trim(),
+    ...(startDate ? { startAt: admin.firestore.Timestamp.fromDate(startDate) } : {}),
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  return {
+    reservationId: reservationRef.id,
+    studentId,
+    studentName,
+    teacher,
+    packageId: String(params.packageId || '').trim(),
+  };
+}
+
+export async function cleanupAdminSeededPrivatePackageWorkflowCopyFixture(fixture = {}) {
+  const academyId = String(fixture.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  await Promise.all(
+    (Array.isArray(fixture.packageIds) ? fixture.packageIds : []).map((id) =>
+      deleteKnownAcademyDoc(getDb(), 'studentPackages', id, academyId)
+    )
+  );
+  await Promise.all(
+    (Array.isArray(fixture.lessonIds) ? fixture.lessonIds : []).map((id) =>
+      deleteKnownAcademyDoc(getDb(), 'lessons', id, academyId)
+    )
+  );
+  await Promise.all(
+    (Array.isArray(fixture.reservationIds) ? fixture.reservationIds : []).map((id) =>
+      deleteKnownAcademyDoc(getDb(), 'privateLessonReservations', id, academyId)
+    )
+  );
+  if (fixture.studentId) {
+    await deleteKnownAcademyDoc(getDb(), 'privateStudents', fixture.studentId, academyId);
+  }
+}
+
 export async function createAdminSeededPrivateLessonEditFixture(params = {}) {
   const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
   const unique = String(params.unique || Date.now()).trim();
@@ -402,6 +1811,7 @@ export async function createAdminSeededCalendarGroupLessonSetup(params = {}) {
   const lessonDate = String(params.lessonDate || '').trim();
   const lessonTime = String(params.lessonTime || '09:00').trim();
   const lessonSubject = String(params.lessonSubject || `E2E 그룹 과목 ${Date.now()}`).trim();
+  const skipPastAttendanceSync = params.skipPastAttendanceSync === true;
   const maxStudents =
     Number.isInteger(Number(params.maxStudents)) && Number(params.maxStudents) > 0
       ? Number(params.maxStudents)
@@ -417,6 +1827,7 @@ export async function createAdminSeededCalendarGroupLessonSetup(params = {}) {
     name: groupName,
     teacher,
     teacherName: teacher,
+    status: String(params.status || 'active').trim(),
     maxStudents,
     time: lessonTime,
     subject: lessonSubject,
@@ -439,8 +1850,8 @@ export async function createAdminSeededCalendarGroupLessonSetup(params = {}) {
     subject: lessonSubject,
     groupCourseType: String(params.groupCourseType || 'general_conversation').trim(),
     completed: false,
-    countedStudentIDs: [],
-    attendanceAppliedAt: null,
+    countedStudentIDs: skipPastAttendanceSync ? [`__e2e_sync_guard_${groupLessonRef.id}`] : [],
+    attendanceAppliedAt: skipPastAttendanceSync ? now : null,
     bookingMode: 'fixed',
     capacity: maxStudents,
     bookedCount: 0,
@@ -541,6 +1952,128 @@ export async function cleanupAdminGroupClassByName(params = {}) {
 
   await Promise.all(Array.from(lessonRefs.values()).map((ref) => ref.delete()));
   await Promise.all(groupSnap.docs.map((docSnap) => docSnap.ref.delete()));
+}
+
+export async function getAdminGroupClassByName(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupName = String(params.groupName || '').trim();
+  if (!groupName) return null;
+
+  const snap = await db
+    .collection('groupClasses')
+    .where('academyId', '==', academyId)
+    .where('name', '==', groupName)
+    .limit(1)
+    .get();
+  const docSnap = snap.docs[0];
+  if (!docSnap) return null;
+  return {
+    id: docSnap.id,
+    ...(docSnap.data() || {}),
+  };
+}
+
+export async function getAdminGroupLessonByFields(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const date = String(params.date || '').trim();
+  const time = String(params.time || '').trim();
+  const subject = String(params.subject || '').trim();
+  if (!groupClassId || !date || !time || !subject) return null;
+
+  const snap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', academyId)
+    .where('groupClassId', '==', groupClassId)
+    .where('date', '==', date)
+    .where('time', '==', time)
+    .where('subject', '==', subject)
+    .limit(1)
+    .get();
+  const docSnap = snap.docs[0];
+  if (!docSnap) return null;
+  return {
+    id: docSnap.id,
+    ...(docSnap.data() || {}),
+  };
+}
+
+export async function getAdminGroupPackageStartDate(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const groupName = String(params.groupName || '').trim();
+  let scopedGroupClassId = groupClassId;
+
+  if (!scopedGroupClassId && groupName) {
+    const groupSnap = await db
+      .collection('groupClasses')
+      .where('academyId', '==', academyId)
+      .where('name', '==', groupName)
+      .limit(1)
+      .get();
+    scopedGroupClassId = groupSnap.docs[0]?.id || '';
+  }
+
+  if (!scopedGroupClassId) {
+    throw new Error(`Group class not found for package start date: ${groupName || '(missing)'}`);
+  }
+
+  const todayYmd = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  const lessonSnap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', academyId)
+    .where('groupClassId', '==', scopedGroupClassId)
+    .get();
+
+  const startDate = lessonSnap.docs
+    .map((docSnap) => String((docSnap.data() || {}).date || '').trim())
+    .filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= todayYmd)
+    .sort()[0];
+
+  if (!startDate) {
+    throw new Error(`No future lessons found for group class: ${scopedGroupClassId}`);
+  }
+  return startDate;
+}
+
+export async function getAdminGroupLessonIdsInRange(params = {}) {
+  const db = getDb();
+  const academyId = String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim();
+  const groupClassId = String(params.groupClassId || '').trim();
+  const startDate = String(params.startDate || '').trim();
+  const endDate = String(params.endDate || '').trim();
+  if (!groupClassId || !startDate || !endDate) return [];
+
+  const snap = await db
+    .collection('groupLessons')
+    .where('academyId', '==', academyId)
+    .where('groupClassId', '==', groupClassId)
+    .get();
+
+  return snap.docs
+    .filter((docSnap) => {
+      const date = String((docSnap.data() || {}).date || '').trim();
+      return date >= startDate && date <= endDate;
+    })
+    .map((docSnap) => docSnap.id)
+    .sort();
+}
+
+export async function cleanupAdminGroupLessonById(params = {}) {
+  await deleteKnownAcademyDoc(
+    getDb(),
+    'groupLessons',
+    String(params.lessonId || '').trim(),
+    String(params.academyId || DEFAULT_E2E_ACADEMY_ID).trim()
+  );
 }
 
 export async function getAdminSeededCalendarGroupLessonState(fixture = {}) {
@@ -658,6 +2191,7 @@ export async function getAdminLessonsForStudentTeacher(params = {}) {
       studentID: String(lesson.studentID || ''),
       studentName: String(lesson.studentName || ''),
       teacher: String(lesson.teacher || ''),
+      packageId: String(lesson.packageId || ''),
       sessionNumber: lesson.sessionNumber || null,
       isDeductCancelled: lesson.isDeductCancelled === true,
     }));

@@ -1,14 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   onSnapshot,
   query,
-  runTransaction,
-  serverTimestamp,
   where,
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
@@ -25,7 +24,7 @@ import {
 } from './src/features/dashboard/academyScope.js'
 import {
   formatLessonSessionNumber,
-  getGroupLessonGroupId,
+  formatTeacherDisplayName,
   getLessonStorageDateString,
   getTodayStorageDateString,
 } from './src/features/dashboard/dashboardViewUtils.js'
@@ -39,11 +38,42 @@ import {
   normalizePrivateTeacherKey,
 } from './src/features/private-booking/privateBookingModel.js'
 import {
+  addKstDays,
+  buildMondaySaturdayWeekDays,
+  formatKstDotDateTime,
+  getBookingWindowForPrivateLesson,
+  getMondayForKstDate,
+  getPrivateBookingStatusLabel,
+  getPrivateBookingStatus,
+  getRelativeOpenLabel,
+} from './src/features/booking/privateBookingWindow.js'
+import {
   getGroupCourseTypeLabel,
   normalizeGroupCourseType,
 } from './src/features/group-booking/groupCourseTypes.js'
+import {
+  buildStudentPrivateTicketSummariesFromCallablePackages,
+  buildStudentTicketSummaryViewModel,
+  formatStudentBookingIdentityLine,
+  resolveLinkedStudentDisplayName,
+} from './src/features/booking/studentTicketSummary.js'
+import {
+  buildPrivateSlotReserveConfirmMessage,
+  buildPrivateReservationCancelConfirmMessage,
+  computePrivatePackageCancelAllowance,
+  formatStudentPrivateCancelPolicyGuide,
+} from './src/features/booking/studentPrivateCancelAllowance.js'
 
 const GROUP_CLASS_QUERY_CHUNK_SIZE = 10
+const PRIVATE_CANCEL_CUTOFF_MS = 10 * 60 * 60 * 1000
+const PRIVATE_CANCEL_BLOCKED_PACKAGE_STATUSES = new Set([
+  'inactive',
+  'expired',
+  'ended',
+  'revoked',
+  'cancelled',
+  'canceled',
+])
 function isEnabledFlag(value) {
   return ['1', 'true', 'yes', 'on', 'enabled'].includes(
     String(value || '').trim().toLowerCase()
@@ -63,11 +93,120 @@ const PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE = PRIVATE_SLOT_BOOKING_OVERRIDE_ENA
   ? { privateSlotBooking: 'enabled' }
   : {}
 
-const PRIVATE_SLOT_RESERVE_CONFIRM_MESSAGE =
-  '1:1 수업을 예약하시겠습니까?\n\n취소는 수업 시작 6시간 전까지만 가능하며, 학생 직접 취소는 최대 2회까지 가능합니다.'
+const STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY = 'studentBookingPreferredViewMode'
+const STUDENT_BOOKING_MOBILE_MEDIA_QUERY = '(max-width: 720px)'
+const STUDENT_BOOKING_VIEW_MODE_OPTIONS = new Set(['auto', 'desktop', 'mobile'])
+const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP =
+  'calc(18px + env(safe-area-inset-top, 0px))'
+const STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM =
+  'calc(140px + env(safe-area-inset-bottom, 0px))'
+const STUDENT_BOOKING_MOBILE_CARD_LIST_BOTTOM_SPACER_HEIGHT =
+  'calc(96px + env(safe-area-inset-bottom, 0px))'
+const STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+}
+const STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+}
+const STUDENT_BOOKING_MOBILE_TEXT_WRAP_STYLE = {
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+}
+const STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+}
+const STUDENT_BOOKING_MOBILE_STACKED_ACTION_STYLE = {
+  display: 'grid',
+  gridTemplateColumns: '1fr',
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+}
+const STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE = {
+  width: '100%',
+  maxWidth: '100%',
+  minWidth: 0,
+  boxSizing: 'border-box',
+}
 
-const PRIVATE_RESERVATION_CANCEL_CONFIRM_MESSAGE =
-  '예약을 취소하시겠습니까?\n\n학생 직접 취소는 최대 2회까지 가능하며, 이 취소도 횟수에 포함됩니다.'
+function getStoredStudentBookingViewMode() {
+  if (typeof window === 'undefined') return 'auto'
+  try {
+    const value = window.localStorage.getItem(STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY)
+    return STUDENT_BOOKING_VIEW_MODE_OPTIONS.has(value) ? value : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
+
+function persistStudentBookingViewMode(value) {
+  if (typeof window === 'undefined') return
+  try {
+    if (value === 'auto') {
+      window.localStorage.removeItem(STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY, value)
+  } catch {
+    // Ignore storage errors so booking remains usable in private browsing modes.
+  }
+}
+
+function getStudentBookingAutoMobileMatch() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
+  return window.matchMedia(STUDENT_BOOKING_MOBILE_MEDIA_QUERY).matches
+}
+
+function setHorizontalScrollLeftToZero() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return
+  const currentTop = Number.isFinite(window.scrollY) ? window.scrollY : window.pageYOffset || 0
+  try {
+    window.scrollTo({ left: 0, top: currentTop, behavior: 'auto' })
+  } catch {
+    window.scrollTo(0, currentTop)
+  }
+  const scrollContainers = [
+    document.documentElement,
+    document.body,
+    document.scrollingElement,
+    document.getElementById('root'),
+    document.querySelector('.student-booking-mobile-overflow-root'),
+  ].filter(Boolean)
+  scrollContainers.forEach((element) => {
+    element.scrollLeft = 0
+  })
+}
+
+function resetHorizontalScroll() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return undefined
+  setHorizontalScrollLeftToZero()
+  const frameId =
+    typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame(setHorizontalScrollLeftToZero)
+      : null
+  const timeoutId = window.setTimeout(setHorizontalScrollLeftToZero, 80)
+  return () => {
+    if (frameId !== null && typeof window.cancelAnimationFrame === 'function') {
+      window.cancelAnimationFrame(frameId)
+    }
+    window.clearTimeout(timeoutId)
+  }
+}
 
 function chunkValues(values, size) {
   const out = []
@@ -77,9 +216,17 @@ function chunkValues(values, size) {
   return out
 }
 
+function getFixedMemberLessonStatusLabel(lesson) {
+  if (lesson?.memberStatusLabel) return lesson.memberStatusLabel
+  const today = getTodayStorageDateString()
+  const lessonDate = String(lesson?.date || '').trim()
+  return lessonDate && lessonDate >= today ? '반 등록 예정' : '반 등록됨'
+}
+
 function validateLessonBookingState(lesson, mode) {
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
+  const remainingSeats = Number(lesson?.remainingSeats ?? lesson?.seatAvailability?.remainingSeats)
 
   if (!Number.isFinite(capacity) || capacity <= 0) {
     throw new Error('예약 불가 수업입니다.')
@@ -92,6 +239,7 @@ function validateLessonBookingState(lesson, mode) {
   }
   if (mode === 'reserve') {
     if (lesson?.isBookable !== true) throw new Error('예약 불가 수업입니다.')
+    if (Number.isFinite(remainingSeats) && remainingSeats <= 0) throw new Error('정원 마감')
     if (bookedCount >= capacity) throw new Error('정원 마감')
     return
   }
@@ -102,14 +250,139 @@ function validateLessonBookingState(lesson, mode) {
 
 function getLessonCapacityLabel(lesson) {
   const capacity = Number(lesson?.capacity ?? 0)
-  const bookedCount = Number(lesson?.bookedCount ?? 0)
   const safeCapacity = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
+  const remainingSeats = Number(lesson?.remainingSeats ?? lesson?.seatAvailability?.remainingSeats)
+  if (Number.isFinite(remainingSeats)) {
+    return `남은 자리 ${Math.max(0, remainingSeats)}명`
+  }
+  const bookedCount = Number(lesson?.bookedCount ?? 0)
   const safeBooked = Number.isFinite(bookedCount) && bookedCount >= 0 ? bookedCount : 0
-  return `${safeBooked} / ${safeCapacity}`
+  return `남은 자리 ${Math.max(0, safeCapacity - safeBooked)}명`
+}
+
+const PRIVATE_RESERVATION_ACTIVE_STATUSES = new Set(['active', 'reserved', 'confirmed', 'booked'])
+const PRIVATE_RESERVATION_CANCELLED_STATUSES = new Set([
+  'cancelled',
+  'canceled',
+  'teacher_cancelled',
+  'teacher_unavailable',
+  'admin_cancelled',
+  'student_cancelled',
+])
+const PRIVATE_RESERVATION_COMPLETED_STATUSES = new Set([
+  'completed',
+  'complete',
+  'done',
+  'deducted',
+  'auto_deducted',
+  'pending_deduction',
+])
+const PRIVATE_RESERVATION_NO_SHOW_STATUSES = new Set(['no_show', 'noshow', 'no-show'])
+const GROUP_RESERVATION_ACTIVE_STATUSES = new Set(['active', 'reserved', 'confirmed', 'booked'])
+const GROUP_RESERVATION_CANCELLED_STATUSES = new Set(['cancelled', 'canceled'])
+
+function normalizeStudentBookingToken(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+}
+
+function getPrivateReservationOutcomeToken(reservation) {
+  return normalizeStudentBookingToken(
+    reservation?.outcome ||
+      reservation?.reservationOutcome ||
+      reservation?.lessonOutcome ||
+      reservation?.attendanceStatus ||
+      ''
+  )
+}
+
+function getPrivateReservationStatusToken(reservation) {
+  return normalizeStudentBookingToken(reservation?.status)
+}
+
+function getGroupReservationStatusToken(reservation) {
+  return normalizeStudentBookingToken(reservation?.status)
+}
+
+function isPrivateReservationCancelled(reservation) {
+  const cancellationType = normalizeStudentBookingToken(reservation?.cancellationType)
+  const cancelledByRole = normalizeStudentBookingToken(
+    reservation?.cancelledByRole || reservation?.canceledByRole
+  )
+  const cancelledBy = normalizeStudentBookingToken(
+    reservation?.cancelledBy || reservation?.canceledBy
+  )
+  return (
+    PRIVATE_RESERVATION_CANCELLED_STATUSES.has(getPrivateReservationStatusToken(reservation)) ||
+    Boolean(
+      reservation?.cancelledAt ||
+        reservation?.canceledAt ||
+        reservation?.teacherCancelledAt ||
+        reservation?.adminCancelledAt ||
+        reservation?.studentCancelledAt ||
+        cancelledByRole ||
+        cancelledBy
+    ) ||
+    cancellationType.includes('cancel') ||
+    cancellationType.includes('unavailable') ||
+    cancellationType === 'seat_released'
+  )
+}
+
+function isPrivateReservationCompleted(reservation) {
+  const status = getPrivateReservationStatusToken(reservation)
+  const outcome = getPrivateReservationOutcomeToken(reservation)
+  return (
+    PRIVATE_RESERVATION_COMPLETED_STATUSES.has(status) ||
+    PRIVATE_RESERVATION_COMPLETED_STATUSES.has(outcome) ||
+    reservation?.deductionApplied === true ||
+    reservation?.autoDeducted === true ||
+    reservation?.deducted === true ||
+    reservation?.completed === true
+  )
+}
+
+function isPrivateReservationNoShow(reservation) {
+  const status = getPrivateReservationStatusToken(reservation)
+  const outcome = getPrivateReservationOutcomeToken(reservation)
+  return (
+    PRIVATE_RESERVATION_NO_SHOW_STATUSES.has(status) ||
+    PRIVATE_RESERVATION_NO_SHOW_STATUSES.has(outcome) ||
+    reservation?.noShow === true ||
+    reservation?.isNoShow === true
+  )
+}
+
+function isPrivateReservationOutcomeFinal(reservation) {
+  return isPrivateReservationCompleted(reservation) || isPrivateReservationNoShow(reservation)
+}
+
+function isActivePrivateReservationStatus(reservation) {
+  return PRIVATE_RESERVATION_ACTIVE_STATUSES.has(getPrivateReservationStatusToken(reservation))
+}
+
+function isUpcomingPrivateReservationStatus(reservation) {
+  const status = getPrivateReservationStatusToken(reservation)
+  return (
+    PRIVATE_RESERVATION_ACTIVE_STATUSES.has(status) ||
+    status === 'scheduled' ||
+    status === 'schedule_confirmed'
+  )
 }
 
 function getReservationStatusLabel(reservation) {
-  return reservation?.status === 'active' ? '예약 완료' : '예약 취소'
+  if (isPrivateReservationNoShow(reservation)) return '노쇼'
+  if (isPrivateReservationCompleted(reservation)) return '완료'
+  if (isPrivateReservationCancelled(reservation)) {
+    const actorLabel = getLessonHistoryCancelActorLabel(reservation)
+    return actorLabel || '예약 취소'
+  }
+  if (reservation?.noDeduction === true) {
+    return '휴강 · 차감 없음'
+  }
+  return isActivePrivateReservationStatus(reservation) ? '예약 완료' : '예약 취소'
 }
 
 function getLessonDisplayTime(lesson) {
@@ -117,11 +390,612 @@ function getLessonDisplayTime(lesson) {
 }
 
 function getLessonTeacherLabel(lesson) {
-  return String(lesson?.teacherName || lesson?.teacher || '').trim() || '-'
+  return formatTeacherDisplayName(lesson)
+}
+
+function getGroupLessonDisplaySubject(lesson) {
+  return (
+    String(lesson?.subject || '').trim() ||
+    String(lesson?.groupClassName || lesson?.groupClassDisplayName || '').trim() ||
+    getGroupCourseTypeLabel(lesson?.groupCourseType) ||
+    '단체반 수업'
+  )
 }
 
 function getLessonSubjectLabel(lesson) {
   return String(lesson?.subject || '').trim() || '1:1 수업'
+}
+
+function getStudentBookingYmdFromDateValue(value) {
+  if (!value) return ''
+  let date = null
+  if (typeof value.toDate === 'function') date = value.toDate()
+  else if (value instanceof Date) date = value
+  else if (typeof value === 'number' && Number.isFinite(value)) date = new Date(value)
+  else {
+    const raw = String(value || '').trim()
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
+    const parsed = Date.parse(raw)
+    if (Number.isFinite(parsed)) date = new Date(parsed)
+  }
+  if (!date) return ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function getStudentBookingYearMonth(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value)
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}`
+}
+
+function getGroupCancelLimitInfo(pkg, reservations, studentId) {
+  const packageType = String(pkg?.packageType || '').trim()
+  const freeBookingAllowed =
+    packageType === 'openGroup' ||
+    (packageType === 'group' &&
+      (pkg?.allowGroupFreeBooking === true || pkg?.allowStudentGroupBooking === true))
+  const limitCountRaw = Number(pkg?.groupCancelLimitCount)
+  const limitCount = Number.isFinite(limitCountRaw) && limitCountRaw > 0
+    ? Math.floor(limitCountRaw)
+    : 0
+  const enabled = Boolean(pkg?.groupCancelLimitEnabled === true && freeBookingAllowed && limitCount > 0)
+  if (!enabled) return { enabled: false, usedCount: 0, limitCount: 0, remainingCount: null, label: '' }
+
+  const packageId = String(pkg?.id || '').trim()
+  const period = pkg?.groupCancelLimitPeriod === 'packagePeriod' ? 'packagePeriod' : 'calendarMonth'
+  const startYmd = getStudentBookingYmdFromDateValue(
+    pkg?.registrationStartDate || pkg?.startDate
+  )
+  const endYmd = getStudentBookingYmdFromDateValue(pkg?.coverageEndDate || pkg?.endDate || pkg?.expiresAt)
+  const currentYearMonth = getStudentBookingYearMonth()
+  const usedCount = (Array.isArray(reservations) ? reservations : []).filter((row) => {
+    if (String(row?.packageId || '').trim() !== packageId) return false
+    if (String(row?.studentId || '').trim() !== String(studentId || '').trim()) return false
+    const status = String(row?.status || '').trim().toLowerCase()
+    if (status !== 'cancelled' && status !== 'canceled') return false
+    if (String(row?.cancelledByRole || '').trim().toLowerCase() === 'admin') return false
+    const cancelledYmd = getStudentBookingYmdFromDateValue(row?.cancelledAt)
+    if (!cancelledYmd) return false
+    if (period === 'calendarMonth') {
+      return cancelledYmd.slice(0, 7) === currentYearMonth
+    }
+    if (startYmd && cancelledYmd < startYmd) return false
+    if (endYmd && cancelledYmd > endYmd) return false
+    return true
+  }).length
+  const remainingCount = Math.max(0, limitCount - usedCount)
+  const periodLabel = period === 'packagePeriod' ? '수강권 기간' : '이번 달'
+  return {
+    enabled,
+    usedCount,
+    limitCount,
+    remainingCount,
+    label: `${periodLabel} 취소 ${usedCount}/${limitCount}회`,
+  }
+}
+
+function getPrivateDurationLabel(...sources) {
+  for (const source of sources) {
+    const duration = Number(
+      source?.durationMinutes ||
+        source?.duration ||
+        source?.lessonDurationMinutes ||
+        source?.classDurationMinutes
+    )
+    if (Number.isFinite(duration) && duration > 0) return `${Math.floor(duration)}분`
+  }
+  return ''
+}
+
+function isFixedPrivateLesson(lesson) {
+  const sourceType = normalizeStudentBookingToken(lesson?.sourceType || lesson?.source || '')
+  const reservationType = normalizeStudentBookingToken(lesson?.reservationType || lesson?.type || '')
+  const packageType = String(lesson?.packageType || '').trim()
+  return (
+    (
+      packageType === 'private' ||
+      hasPrivateRecordIndicators(lesson) ||
+      reservationType === 'fixed_private'
+    ) &&
+    (
+      sourceType === 'fixed_private_slot_assignment' ||
+      sourceType === 'weekly_slot_fixed_assignment' ||
+      sourceType === 'fixed_admin' ||
+      reservationType === 'fixed' ||
+      reservationType === 'fixed_private' ||
+      lesson?.isFixedPrivateLesson === true
+    )
+  )
+}
+
+function isFixedPrivateReservation(reservation) {
+  const sourceType = normalizeStudentBookingToken(reservation?.sourceType || reservation?.source || '')
+  const reservationType = normalizeStudentBookingToken(
+    reservation?.reservationType || reservation?.type || ''
+  )
+  return (
+    sourceType === 'fixed_private_slot_assignment' ||
+    sourceType === 'weekly_slot_fixed_assignment' ||
+    sourceType === 'fixed_admin' ||
+    reservationType === 'fixed' ||
+    reservationType === 'fixed_private'
+  )
+}
+
+function isStudentDirectPrivateReservation(reservation) {
+  if (isFixedPrivateReservation(reservation)) return false
+  const source = normalizeStudentBookingToken(
+    reservation?.source ||
+      reservation?.sourceType ||
+      reservation?.reservationSource ||
+      reservation?.createdByRole ||
+      reservation?.createdBy ||
+      ''
+  )
+  const reservationType = normalizeStudentBookingToken(
+    reservation?.reservationType || reservation?.type || ''
+  )
+  if (!source && !reservationType) return true
+  return (
+    source.includes('student') ||
+    source.includes('direct') ||
+    reservationType.includes('student') ||
+    reservationType.includes('direct') ||
+    reservationType === 'flexible' ||
+    reservationType === 'regular'
+  )
+}
+
+function getPrivatePackageLinkId(...sources) {
+  for (const source of sources) {
+    const packageId = String(
+      source?.packageId ||
+        source?.deductionPackageId ||
+        source?.linkedPackageId ||
+        source?.fixedPrivatePackageId ||
+        source?.packageSummary?.packageId ||
+        source?.package?.id ||
+        ''
+    ).trim()
+    if (packageId) return packageId
+  }
+  return ''
+}
+
+function getFixedPrivatePackageLinkId({
+  item = null,
+  reservation = null,
+  slot = null,
+  lesson = null,
+  fixedCancelLesson = null,
+} = {}) {
+  return String(
+    item?.packageId ||
+      item?.deductionPackageId ||
+      item?.linkedPackageId ||
+      item?.fixedPrivatePackageId ||
+      reservation?.packageId ||
+      reservation?.deductionPackageId ||
+      reservation?.linkedPackageId ||
+      reservation?.fixedPrivatePackageId ||
+      slot?.packageId ||
+      slot?.deductionPackageId ||
+      slot?.linkedPackageId ||
+      slot?.fixedPrivatePackageId ||
+      lesson?.packageId ||
+      lesson?.deductionPackageId ||
+      lesson?.linkedPackageId ||
+      lesson?.fixedPrivatePackageId ||
+      fixedCancelLesson?.packageId ||
+      fixedCancelLesson?.deductionPackageId ||
+      fixedCancelLesson?.linkedPackageId ||
+      fixedCancelLesson?.fixedPrivatePackageId ||
+      ''
+  ).trim()
+}
+
+function getFixedPrivateLessonLinkId({
+  item = null,
+  reservation = null,
+  slot = null,
+  lesson = null,
+  fixedCancelLesson = null,
+} = {}) {
+  const lessonBackedItemId =
+    item?.source === 'lesson'
+      ? String(item?.sourceId || item?.id || '').trim()
+      : ''
+  return String(
+    item?.lessonId ||
+      item?.fixedLessonId ||
+      reservation?.lessonId ||
+      reservation?.fixedLessonId ||
+      slot?.lessonId ||
+      slot?.fixedLessonId ||
+      lesson?.lessonId ||
+      lesson?.fixedLessonId ||
+      lesson?.id ||
+      fixedCancelLesson?.lessonId ||
+      fixedCancelLesson?.fixedLessonId ||
+      fixedCancelLesson?.id ||
+      lessonBackedItemId ||
+      ''
+  ).trim()
+}
+
+function getFixedPrivateCancellableLessonId(lesson) {
+  return String(lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || '').trim()
+}
+
+function getFixedPrivateFallbackLessonId(lessonId, ...sources) {
+  const fixedLessonId = String(
+    sources.find((source) => String(source?.fixedLessonId || '').trim())?.fixedLessonId || ''
+  ).trim()
+  return fixedLessonId || lessonId
+}
+
+function buildFixedPrivateCancelLessonFromReservation(
+  reservation,
+  linkedLesson = null,
+  linkedSlot = null
+) {
+  if (!isFixedPrivateReservation(reservation)) return linkedLesson
+  const lessonId = getFixedPrivateLessonLinkId({
+    reservation,
+    slot: linkedSlot,
+    lesson: linkedLesson,
+  })
+  const fixedLessonId = getFixedPrivateFallbackLessonId(
+    lessonId,
+    reservation,
+    linkedSlot,
+    linkedLesson
+  )
+  return {
+    ...reservation,
+    ...(linkedSlot || {}),
+    ...(linkedLesson || {}),
+    id: lessonId,
+    lessonId,
+    fixedLessonId,
+    missingFixedLessonId: !lessonId,
+    date: getLessonStorageDateString(linkedLesson) || String(reservation?.date || '').trim(),
+    time: getLessonDisplayTime(linkedLesson) || String(reservation?.time || '').trim(),
+    teacherName:
+      linkedLesson?.teacherName ||
+      linkedLesson?.teacher ||
+      reservation?.teacherName ||
+      reservation?.teacher ||
+      '',
+    subject: linkedLesson?.subject || reservation?.subject || '1:1 수업',
+    packageId: getFixedPrivatePackageLinkId({
+      reservation,
+      slot: linkedSlot,
+      lesson: linkedLesson,
+    }),
+    packageType: linkedLesson?.packageType || reservation?.packageType || 'private',
+    sourceType:
+      linkedLesson?.sourceType ||
+      reservation?.sourceType ||
+      'fixed-private-slot-assignment',
+    reservationType:
+      linkedLesson?.reservationType ||
+      reservation?.reservationType ||
+      reservation?.type ||
+      'fixed_private',
+  }
+}
+
+function isFixedPrivateScheduleDisplayLabel(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim() === '고정 예약 1:1'
+}
+
+function getUpcomingFixedPrivateCancelLesson(item) {
+  const fixedCancelLesson = item?.fixedCancelLesson || null
+  const linkedLesson = item?.lesson || null
+  const reservation = item?.reservation || null
+  const linkedSlot = item?.slot || null
+
+  if (isFixedPrivateReservation(reservation)) {
+    return buildFixedPrivateCancelLessonFromReservation(reservation, linkedLesson, linkedSlot)
+  }
+  if (
+    !isFixedPrivateScheduleDisplayLabel(item?.typeLabel) &&
+    !isFixedPrivateLesson(fixedCancelLesson) &&
+    !isFixedPrivateLesson(linkedLesson)
+  ) {
+    return null
+  }
+
+  const lessonId = getFixedPrivateLessonLinkId({
+    item,
+    reservation,
+    slot: linkedSlot,
+    lesson: linkedLesson,
+    fixedCancelLesson,
+  })
+  const fixedLessonId = getFixedPrivateFallbackLessonId(
+    lessonId,
+    item,
+    reservation,
+    linkedSlot,
+    linkedLesson,
+    fixedCancelLesson
+  )
+  const packageId = getFixedPrivatePackageLinkId({
+    item,
+    reservation,
+    slot: linkedSlot,
+    lesson: linkedLesson,
+    fixedCancelLesson,
+  })
+
+  return {
+    ...(item || {}),
+    ...(reservation || {}),
+    ...(linkedSlot || {}),
+    ...(linkedLesson || {}),
+    ...(fixedCancelLesson || {}),
+    id: lessonId,
+    lessonId,
+    fixedLessonId,
+    missingFixedLessonId: !lessonId,
+    date:
+      getLessonStorageDateString(fixedCancelLesson) ||
+      getLessonStorageDateString(linkedLesson) ||
+      String(item?.date || reservation?.date || '').trim(),
+    time:
+      getLessonDisplayTime(fixedCancelLesson) ||
+      getLessonDisplayTime(linkedLesson) ||
+      String(item?.time || reservation?.time || '').trim(),
+    teacherName:
+      fixedCancelLesson?.teacherName ||
+      fixedCancelLesson?.teacher ||
+      linkedLesson?.teacherName ||
+      linkedLesson?.teacher ||
+      reservation?.teacherName ||
+      reservation?.teacher ||
+      item?.teacherLabel ||
+      '',
+    subject:
+      fixedCancelLesson?.subject ||
+      linkedLesson?.subject ||
+      reservation?.subject ||
+      item?.title ||
+      '1:1 수업',
+    packageId,
+    packageType:
+      fixedCancelLesson?.packageType ||
+      linkedLesson?.packageType ||
+      reservation?.packageType ||
+      'private',
+    sourceType:
+      fixedCancelLesson?.sourceType ||
+      linkedLesson?.sourceType ||
+      reservation?.sourceType ||
+      'fixed-private-slot-assignment',
+    reservationType:
+      fixedCancelLesson?.reservationType ||
+      linkedLesson?.reservationType ||
+      reservation?.reservationType ||
+      reservation?.type ||
+      'fixed_private',
+    isFixedPrivateLesson: true,
+  }
+}
+
+function hasPrivateRecordIndicators(...sources) {
+  return sources.some((source) => {
+    if (!source) return false
+    if (
+      source?.slotId ||
+      source?.privateLessonSlotId ||
+      source?.privateReservationId ||
+      source?.availabilityTemplateId
+    ) {
+      return true
+    }
+    const text = [
+      source.source,
+      source.sourceType,
+      source.reservationSource,
+      source.reservationType,
+      source.type,
+      source.packageType,
+      source.lessonType,
+      source.lessonCategory,
+      source.courseType,
+      source.classType,
+      source.kind,
+    ]
+      .map(normalizeStudentBookingToken)
+      .filter(Boolean)
+      .join(' ')
+    return (
+      text.includes('private') ||
+      text.includes('1_1') ||
+      text.includes('one_to_one') ||
+      text.includes('one_on_one')
+    )
+  })
+}
+
+function isGroupReservationRecord(reservation, lesson = null) {
+  return Boolean(reservation?.lessonId) && !hasPrivateRecordIndicators(reservation, lesson)
+}
+
+function isCancelledLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  return status === 'cancelled' || status === 'canceled'
+}
+
+function isStudentFixedPrivateSeatReleasedCancellation(lesson) {
+  const cancellationType = normalizeStudentBookingToken(lesson?.cancellationType)
+  const cancelledByRole = normalizeStudentBookingToken(
+    lesson?.cancelledByRole || lesson?.canceledByRole
+  )
+  const cancellationReason = normalizeStudentBookingToken(
+    lesson?.cancellationReason || lesson?.cancelledReason
+  )
+  return (
+    isCancelledLesson(lesson) &&
+    cancellationType === 'seat_released' &&
+    (cancelledByRole === 'student' || cancellationReason.includes('student_cancelled'))
+  )
+}
+
+function mergeFixedPrivateReservationCancellationFromLesson(reservation, linkedLesson) {
+  if (!isStudentFixedPrivateSeatReleasedCancellation(linkedLesson)) return reservation
+  return {
+    ...(reservation || {}),
+    status: 'cancelled',
+    cancellationType: linkedLesson.cancellationType || 'seat_released',
+    cancellationReason:
+      linkedLesson.cancellationReason ||
+      linkedLesson.cancelledReason ||
+      reservation?.cancellationReason ||
+      '',
+    cancelledReason:
+      linkedLesson.cancelledReason ||
+      linkedLesson.cancellationReason ||
+      reservation?.cancelledReason ||
+      '',
+    cancelledAt: linkedLesson.cancelledAt || linkedLesson.canceledAt || reservation?.cancelledAt,
+    canceledAt: linkedLesson.canceledAt || linkedLesson.cancelledAt || reservation?.canceledAt,
+    cancelledByRole:
+      linkedLesson.cancelledByRole || linkedLesson.canceledByRole || reservation?.cancelledByRole,
+    canceledByRole:
+      linkedLesson.canceledByRole || linkedLesson.cancelledByRole || reservation?.canceledByRole,
+    cancelledBy: linkedLesson.cancelledBy || linkedLesson.canceledBy || reservation?.cancelledBy,
+    canceledBy: linkedLesson.canceledBy || linkedLesson.cancelledBy || reservation?.canceledBy,
+    releasedAt: linkedLesson.releasedAt || reservation?.releasedAt,
+    releasedForPrivateBooking: true,
+    isSeatReleased: true,
+    noDeduction: true,
+  }
+}
+
+function addStudentCancelledFixedPrivateLessonLinkKeys(keys, lesson) {
+  if (!keys || !lesson) return
+  const lessonIds = [lesson.id, lesson.lessonId, lesson.fixedLessonId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  lessonIds.forEach((lessonId) => {
+    keys.add(`lessonId:${lessonId}`)
+    keys.add(`fixedLessonId:${lessonId}`)
+  })
+
+  const reservationId = String(lesson.reservationId || '').trim()
+  if (reservationId) keys.add(`reservationId:${reservationId}`)
+
+  const slotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+  if (slotId) keys.add(`slotId:${slotId}`)
+
+  const date = String(getLessonStorageDateString(lesson) || lesson.date || '').trim()
+  const time = String(getLessonDisplayTime(lesson) || lesson.time || '').trim()
+  const studentKey = normalizeStudentBookingToken(
+    lesson.studentId || lesson.studentID || lesson.studentName || lesson.student
+  )
+  const teacherKey = normalizeStudentBookingToken(
+    lesson.teacherName || lesson.teacher || lesson.teacherKey || lesson.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.add(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+  if (date && time && teacherKey) {
+    keys.add(`schedule:${date}|${time}|${teacherKey}`)
+  }
+}
+
+function getPrivateReservationFixedLessonLinkKeys(reservation, slot = null) {
+  const keys = []
+  const reservationIds = [reservation?.id, reservation?.reservationId]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+  reservationIds.forEach((reservationId) => keys.push(`reservationId:${reservationId}`))
+
+  const slotId = String(reservation?.slotId || slot?.id || '').trim()
+  if (slotId) keys.push(`slotId:${slotId}`)
+
+  ;[reservation?.lessonId, reservation?.fixedLessonId].forEach((lessonIdValue) => {
+    const lessonId = String(lessonIdValue || '').trim()
+    if (!lessonId) return
+    keys.push(`lessonId:${lessonId}`)
+    keys.push(`fixedLessonId:${lessonId}`)
+  })
+
+  const date = String(reservation?.date || slot?.date || '').trim()
+  const time = String(reservation?.time || slot?.time || '').trim()
+  const studentKey = normalizeStudentBookingToken(
+    reservation?.studentId || reservation?.studentID || reservation?.studentName || reservation?.student
+  )
+  const teacherKey = normalizeStudentBookingToken(
+    reservation?.teacherName ||
+      reservation?.teacher ||
+      reservation?.teacherKey ||
+      reservation?.teacherUid ||
+      slot?.teacherName ||
+      slot?.teacher ||
+      slot?.teacherKey ||
+      slot?.teacherUid
+  )
+  if (date && time && studentKey && teacherKey) {
+    keys.push(`datetime:${date}|${time}|${studentKey}|${teacherKey}`)
+  }
+  if (date && time && teacherKey) {
+    keys.push(`schedule:${date}|${time}|${teacherKey}`)
+  }
+
+  return keys
+}
+
+function isPrivateSlotOwnReservationStatus(status) {
+  return status === 'my_reservation' || status === 'reserved_by_me'
+}
+
+function isStudentCancelledFixedPrivateGridSlot({
+  slot,
+  reservation = null,
+  canUsePrivateBooking,
+  cancelledFixedLessonKeys,
+}) {
+  if (!slot || !cancelledFixedLessonKeys) return false
+  const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
+  const hasOwnReservationState =
+    isPrivateSlotOwnReservationStatus(bookingStatus) ||
+    isActivePrivateReservationStatus(reservation)
+  if (!hasOwnReservationState) return false
+  return getPrivateReservationFixedLessonLinkKeys(reservation || {}, slot).some((key) =>
+    cancelledFixedLessonKeys.has(key)
+  )
+}
+
+function getPrivateSlotPublicDedupeKey(slot) {
+  const date = String(slot?.date || '').trim()
+  const time = String(slot?.time || '').trim()
+  const duration = String(Number(slot?.durationMinutes || 0) || 60)
+  const teacherKey = normalizeStudentBookingToken(
+    slot?.teacherUid ||
+      slot?.teacherUID ||
+      slot?.teacherId ||
+      slot?.teacherKey ||
+      slot?.teacherName ||
+      slot?.teacher
+  )
+  if (!date || !time || !teacherKey) return ''
+  return `${date}|${time}|${duration}|${teacherKey}`
 }
 
 function getDateTimeMs(dateValue, timeValue) {
@@ -132,6 +1006,146 @@ function getDateTimeMs(dateValue, timeValue) {
   const parsed = new Date(`${date}T${safeTime}:00`)
   const value = parsed.getTime()
   return Number.isFinite(value) ? value : null
+}
+
+function getTimestampLikeMs(value) {
+  if (!value) return null
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value.toMillis === 'function') {
+    const millis = value.toMillis()
+    return Number.isFinite(millis) ? millis : null
+  }
+  if (typeof value === 'object' && value.seconds !== undefined) {
+    const seconds = Number(value.seconds)
+    if (Number.isFinite(seconds)) return seconds * 1000
+  }
+  const parsed = Date.parse(String(value))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function getPrivateReservationStartMillis(reservation) {
+  return (
+    getTimestampLikeMs(reservation?.startAt) ??
+    getTimestampLikeMs(reservation?.startsAt) ??
+    getTimestampLikeMs(reservation?.startAtMillis) ??
+    getDateTimeMs(reservation?.date, reservation?.time)
+  )
+}
+
+function getGroupReservationStartMillis(reservation, lesson = null) {
+  return (
+    getTimestampLikeMs(reservation?.startAt) ??
+    getTimestampLikeMs(reservation?.startsAt) ??
+    getTimestampLikeMs(reservation?.startAtMillis) ??
+    getTimestampLikeMs(lesson?.startAt) ??
+    getTimestampLikeMs(lesson?.startsAt) ??
+    getTimestampLikeMs(lesson?.startAtMillis) ??
+    getDateTimeMs(reservation?.date || lesson?.date, reservation?.time || lesson?.time)
+  )
+}
+
+function isPrivateReservationInFuture(reservation) {
+  const startMillis = getPrivateReservationStartMillis(reservation)
+  return startMillis !== null && Date.now() < startMillis
+}
+
+function getFixedPrivateLessonStartMillis(lesson) {
+  return getDateTimeMs(getLessonStorageDateString(lesson), getLessonDisplayTime(lesson))
+}
+
+function isFixedPrivateLessonInFuture(lesson, nowMillis = Date.now()) {
+  const startMillis = getFixedPrivateLessonStartMillis(lesson)
+  return startMillis !== null && nowMillis < startMillis
+}
+
+function isCancelablePrivatePackage(pkg) {
+  if (!pkg) return false
+  const packageType = String(pkg.packageType || 'private').trim()
+  if (packageType && packageType !== 'private') return false
+  const status = String(pkg.status || 'active').trim().toLowerCase()
+  return !PRIVATE_CANCEL_BLOCKED_PACKAGE_STATUSES.has(status)
+}
+
+function isPrivateReservationPast(reservation, nowMillis = Date.now()) {
+  const startMillis = getPrivateReservationStartMillis(reservation)
+  return startMillis !== null && nowMillis >= startMillis
+}
+
+function canShowPrivateReservationCancelAction(reservation) {
+  return (
+    Boolean(reservation?.slotId) &&
+    isStudentDirectPrivateReservation(reservation) &&
+    isActivePrivateReservationStatus(reservation) &&
+    !isPrivateReservationCancelled(reservation) &&
+    !isPrivateReservationOutcomeFinal(reservation) &&
+    !isPrivateReservationPast(reservation) &&
+    isPrivateReservationInFuture(reservation)
+  )
+}
+
+function canShowFixedPrivateLessonCancelAction(
+  lesson,
+  nowMillis = Date.now(),
+  cancelAllowance = null
+) {
+  const startMillis = getFixedPrivateLessonStartMillis(lesson)
+  return (
+    isFixedPrivateLesson(lesson) &&
+    Boolean(String(lesson?.id || '').trim()) &&
+    lesson?.missingFixedLessonId !== true &&
+    !isCancelledLesson(lesson) &&
+    !isPrivateReservationCancelled(lesson) &&
+    !isPrivateReservationOutcomeFinal(lesson) &&
+    startMillis !== null &&
+    nowMillis < startMillis &&
+    startMillis - nowMillis >= PRIVATE_CANCEL_CUTOFF_MS &&
+    Boolean(getPrivatePackageLinkId(lesson)) &&
+    Number(cancelAllowance?.remaining ?? 0) > 0
+  )
+}
+
+function canRenderFixedPrivateLessonCancelAction(lesson, nowMillis = Date.now()) {
+  return (
+    isFixedPrivateLesson(lesson) &&
+    !isCancelledLesson(lesson) &&
+    !isPrivateReservationCancelled(lesson) &&
+    !isPrivateReservationOutcomeFinal(lesson) &&
+    isFixedPrivateLessonInFuture(lesson, nowMillis)
+  )
+}
+
+function canShowUpcomingPrivateReservation(reservation) {
+  return (
+    Boolean(reservation?.slotId) &&
+    isUpcomingPrivateReservationStatus(reservation) &&
+    !isPrivateReservationCancelled(reservation) &&
+    !isPrivateReservationOutcomeFinal(reservation) &&
+    !isPrivateReservationPast(reservation) &&
+    isPrivateReservationInFuture(reservation)
+  )
+}
+
+function canShowGroupReservationCancelAction(reservation, lesson = null, nowMillis = Date.now()) {
+  if (!isGroupReservationRecord(reservation, lesson)) return false
+  if (!GROUP_RESERVATION_ACTIVE_STATUSES.has(getGroupReservationStatusToken(reservation))) return false
+  if (
+    GROUP_RESERVATION_CANCELLED_STATUSES.has(getGroupReservationStatusToken(reservation)) ||
+    reservation?.cancelledAt ||
+    reservation?.canceledAt
+  ) {
+    return false
+  }
+  const startsAtMs = getGroupReservationStartMillis(reservation, lesson)
+  return startsAtMs !== null && nowMillis < startsAtMs
+}
+
+function getPrivateReservationStudentStatusLabel(reservation) {
+  if (isPrivateReservationCancelled(reservation)) return getReservationStatusLabel(reservation)
+  if (isPrivateReservationNoShow(reservation)) return '노쇼'
+  if (isPrivateReservationCompleted(reservation)) return '완료'
+  if (!isActivePrivateReservationStatus(reservation)) return getReservationStatusLabel(reservation)
+  if (!isPrivateReservationInFuture(reservation)) return '지난 수업'
+  return isFixedPrivateReservation(reservation) ? '고정 예약' : '내 예약'
 }
 
 function normalizePrivateAccessKey(value) {
@@ -146,24 +1160,37 @@ function privateTeacherValuesMatch(values, teacherValue) {
 
 function slotMatchesPrivateTeacherAccess(slot, teacherKeys) {
   return (
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherUid) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherUID) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherId) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherKey) ||
     privateTeacherValuesMatch(teacherKeys, slot?.teacher) ||
-    privateTeacherValuesMatch(teacherKeys, slot?.teacherName)
+    privateTeacherValuesMatch(teacherKeys, slot?.teacherName) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.displayName) ||
+    privateTeacherValuesMatch(teacherKeys, slot?.name)
   )
 }
 
 function getPrivatePackageTeacherKey(pkg) {
-  return String(pkg?.teacher || pkg?.teacherName || pkg?.teacherKey || '').trim()
+  return String(
+    pkg?.teacherUid ||
+      pkg?.teacherUID ||
+      pkg?.teacherId ||
+      pkg?.teacherKey ||
+      pkg?.teacher ||
+      pkg?.teacherName ||
+      pkg?.displayName ||
+      pkg?.name ||
+      ''
+  ).trim()
 }
 
 function isActivePrivatePackage(pkg) {
   const packageType = String(pkg?.packageType || 'private').trim()
   const status = String(pkg?.status || 'active').trim().toLowerCase()
-  const remainingCount = Number(pkg?.remainingCount || 0)
   return (
     (!packageType || packageType === 'private') &&
-    !['inactive', 'expired', 'ended', 'cancelled', 'canceled'].includes(status) &&
-    Number.isFinite(remainingCount) &&
-    remainingCount > 0 &&
+    !['inactive', 'expired', 'ended', 'revoked', 'cancelled', 'canceled'].includes(status) &&
     Boolean(getPrivatePackageTeacherKey(pkg))
   )
 }
@@ -216,10 +1243,249 @@ function findPrivatePackageSummaryForTeacher(packages, teacherValue) {
   })[0]
 }
 
+function getPrivateSlotPackageSummary(slot) {
+  const summary = slot?.packageSummary
+  if (!summary) return null
+  const remainingCount =
+    summary.makeupAvailableCount !== undefined
+      ? summary.makeupAvailableCount
+      : summary.remainingCount !== undefined
+        ? summary.remainingCount
+        : slot?.makeupAvailableCount !== undefined
+          ? slot.makeupAvailableCount
+          : slot?.packageRemainingCount
+  return {
+    id: summary.packageId || slot?.packageId || '',
+    teacher: summary.teacherKey || slot?.teacherKey || slot?.teacher || '',
+    teacherName: slot?.teacherName || summary.teacherKey || slot?.teacher || '',
+    totalCount: summary.totalCount,
+    usedCount: summary.usedDeductedCount,
+    remainingCount,
+    status: 'active',
+  }
+}
+
+function formatPrivateSlotOpenDisplay(slot) {
+  const millis = Number(slot?.bookingOpensAtMillis)
+  if (Number.isFinite(millis) && millis > 0) return formatKstDotDateTime(millis)
+  const window = getBookingWindowForPrivateLesson(slot?.date, slot?.time)
+  return window ? formatKstDotDateTime(window.bookingOpensAt) : ''
+}
+
+function getPrivateSlotOpenRelativeDisplay(slot) {
+  if (slot?.bookingOpenRelativeLabel) return slot.bookingOpenRelativeLabel
+  const millis = Number(slot?.bookingOpensAtMillis)
+  if (Number.isFinite(millis) && millis > 0) return getRelativeOpenLabel(millis)
+  const window = getBookingWindowForPrivateLesson(slot?.date, slot?.time)
+  return window ? getRelativeOpenLabel(window.bookingOpensAt) : ''
+}
+
+function getStudentPrivateSlotStatus(slot, canUsePrivateBooking) {
+  if (slot?.bookingStatus) {
+    return slot.bookingStatus === 'available' && !canUsePrivateBooking
+      ? 'blocked'
+      : slot.bookingStatus
+  }
+  const status = getPrivateBookingStatus({
+    slot,
+    hasPackage: Number(slot?.packageRemainingCount ?? 1) > 0,
+    isReservedByMe: false,
+  })
+  return status === 'available' && !canUsePrivateBooking ? 'blocked' : status
+}
+
+function getPrivateSlotAvailableCount(slot) {
+  const count = Number(slot?.makeupAvailableCount ?? slot?.packageRemainingCount ?? 0)
+  return Number.isFinite(count) ? Math.max(0, count) : 0
+}
+
+function getPrivateSlotDisplayLabel(status, fallbackLabel = '') {
+  if (
+    [
+      'available',
+      'busy',
+      'reserved',
+      'blocked',
+      'not_open',
+      'closed',
+      'my_reservation',
+      'reserved_by_me',
+      'no_ticket',
+      'no_makeup',
+    ].includes(status)
+  ) {
+    return getPrivateBookingStatusLabel(status)
+  }
+  return String(fallbackLabel || '').trim() || getPrivateBookingStatusLabel(status)
+}
+
+function getPrivateSlotStatusTone(status) {
+  if (status === 'available') {
+    return {
+      border: '#427a4e',
+      background: '#193323',
+      badgeBorder: '#5ba765',
+      badgeBackground: '#22462d',
+      badgeColor: '#d9ffe0',
+    }
+  }
+  if (status === 'not_open') {
+    return {
+      border: '#6f5a2e',
+      background: '#282315',
+      badgeBorder: '#9c7a33',
+      badgeBackground: '#3a2f18',
+      badgeColor: '#ffe5a8',
+    }
+  }
+  if (status === 'closed') {
+    return {
+      border: '#6a3f4b',
+      background: '#281d25',
+      badgeBorder: '#9a5865',
+      badgeBackground: '#3a242b',
+      badgeColor: '#ffd6de',
+    }
+  }
+  if (status === 'my_reservation' || status === 'reserved_by_me') {
+    return {
+      border: '#356b85',
+      background: '#182a36',
+      badgeBorder: '#4f9cbc',
+      badgeBackground: '#203c4d',
+      badgeColor: '#d8f5ff',
+    }
+  }
+  if (status === 'busy' || status === 'reserved' || status === 'blocked') {
+    return {
+      border: '#4e4261',
+      background: '#211c2b',
+      badgeBorder: '#78639b',
+      badgeBackground: '#30283e',
+      badgeColor: '#eadfff',
+    }
+  }
+  return {
+    border: '#30384b',
+    background: '#1a1f2b',
+    badgeBorder: '#4a5570',
+    badgeBackground: '#252d3d',
+    badgeColor: '#eef3ff',
+  }
+}
+
+function getPrivateSlotCardStyle(status, isMobile = false) {
+  const tone = getPrivateSlotStatusTone(status)
+  return {
+    border: `1px solid ${tone.border}`,
+    borderRadius: isMobile ? 14 : 8,
+    padding: isMobile ? 14 : 12,
+    background: tone.background,
+    ...(isMobile ? STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE : {}),
+  }
+}
+
+function getPrivateSlotBadgeStyle(status) {
+  const tone = getPrivateSlotStatusTone(status)
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    border: `1px solid ${tone.badgeBorder}`,
+    borderRadius: 999,
+    background: tone.badgeBackground,
+    color: tone.badgeColor,
+    padding: '4px 8px',
+    fontSize: 12,
+    fontWeight: 800,
+    lineHeight: 1.2,
+    whiteSpace: 'nowrap',
+  }
+}
+
+function getPrivateSlotViewModeButtonStyle(isSelected, isMobile = false) {
+  return {
+    flex: isMobile ? 1 : undefined,
+    justifyContent: 'center',
+    padding: isMobile ? '9px 8px' : '8px 12px',
+    minHeight: isMobile ? 38 : undefined,
+    borderRadius: isMobile ? 12 : 7,
+    border: `1px solid ${isSelected ? '#6ea8ff' : 'transparent'}`,
+    background: isSelected ? '#263f67' : 'transparent',
+    color: isSelected ? 'white' : '#b6c0d0',
+    cursor: 'pointer',
+    fontSize: isMobile ? 12 : 13,
+    fontWeight: isSelected ? 800 : 600,
+    boxShadow: isSelected ? '0 0 0 1px rgba(110, 168, 255, 0.18) inset' : 'none',
+    minWidth: 0,
+    width: isMobile ? '100%' : undefined,
+    maxWidth: isMobile ? '100%' : undefined,
+    boxSizing: 'border-box',
+    whiteSpace: 'normal',
+    lineHeight: 1.2,
+  }
+}
+
 function getLessonHistoryStatusLabel(item) {
-  if (item.status !== 'active') return '예약 취소'
+  if (item?.source === 'privateReservation') {
+    if (isPrivateReservationCancelled(item)) return getReservationStatusLabel(item)
+    if (isPrivateReservationNoShow(item)) return '노쇼'
+    if (isPrivateReservationCompleted(item)) return '완료'
+  }
+  if (isStudentFixedPrivateSeatReleasedCancellation(item)) return '학생 취소'
+  const cancellationType = String(item?.cancellationType || '').trim()
+  if (cancellationType === 'seat_released') return '고정수업 자리 공개됨'
+  if (cancellationType === 'lesson_cancelled') return '수업 취소'
+  if (item.noDeduction === true) {
+    return '휴강 · 차감 없음'
+  }
+  const status = String(item.status || '').trim().toLowerCase()
+  const activeStatuses = new Set(['active', 'reserved', 'confirmed', 'booked'])
+  if (!activeStatuses.has(status)) return '예약 취소'
   if (item.startsAtMs !== null && item.startsAtMs < Date.now()) return '지난 수업'
   return '예약 완료'
+}
+
+function getLessonHistoryCancelActorLabel(item) {
+  const status = getPrivateReservationStatusToken(item)
+  if (status.includes('teacher')) return '선생님 취소'
+  if (status.includes('admin') || status.includes('owner')) return '관리자 취소'
+  if (status.includes('student')) return '학생 취소'
+  if (!PRIVATE_RESERVATION_CANCELLED_STATUSES.has(status)) return ''
+  const actor = String(
+    item?.cancelledByRole ||
+      item?.canceledByRole ||
+      item?.cancelledBy ||
+      item?.canceledBy ||
+      ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '')
+  const reason = String(item?.cancellationReason || item?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  if (actor.includes('student') || reason.includes('student')) return '학생 취소'
+  if (actor.includes('teacher') || reason.includes('teacher')) return '선생님 취소'
+  if (actor.includes('admin') || actor.includes('owner') || reason.includes('admin')) {
+    return '관리자 취소'
+  }
+  return ''
+}
+
+function formatLessonHistoryCancelledAt(item) {
+  const millis = getTimestampLikeMs(item?.cancelledAt || item?.canceledAt)
+  if (millis == null) return ''
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(millis))
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
 }
 
 function validatePrivateSlotBookingState(slot, mode) {
@@ -227,6 +1493,9 @@ function validatePrivateSlotBookingState(slot, mode) {
   if (slot.status === 'cancelled') throw new Error('취소된 시간입니다.')
   if (mode === 'reserve') {
     if (slot.status !== 'open') throw new Error('이미 예약된 시간입니다.')
+    if (getPrivateSlotAvailableCount(slot) <= 0) {
+      throw new Error('예약 가능한 횟수가 없습니다.')
+    }
     return
   }
   if (slot.status !== 'reserved') throw new Error('활성 예약 시간을 찾을 수 없습니다.')
@@ -257,6 +1526,7 @@ export default function StudentBookingPage() {
   const [accessResolved, setAccessResolved] = useState(false)
   const [accessError, setAccessError] = useState('')
   const [lessons, setLessons] = useState([])
+  const [fixedMemberLessons, setFixedMemberLessons] = useState([])
   const [lessonsLoading, setLessonsLoading] = useState(false)
   const [lessonsError, setLessonsError] = useState('')
   const [reservations, setReservations] = useState([])
@@ -264,6 +1534,8 @@ export default function StudentBookingPage() {
   const [reservationsResolved, setReservationsResolved] = useState(false)
   const [reservationsError, setReservationsError] = useState('')
   const [busyReservationId, setBusyReservationId] = useState('')
+  const [groupLessonsRefreshKey, setGroupLessonsRefreshKey] = useState(0)
+  const [locallyReservedGroupLessonIds, setLocallyReservedGroupLessonIds] = useState([])
   const [allowedPrivateTeacherKeys, setAllowedPrivateTeacherKeys] = useState([])
   const [allowedPrivateSlotIds, setAllowedPrivateSlotIds] = useState([])
   const [privateSlotBookingPilotEnabled, setPrivateSlotBookingPilotEnabled] = useState(false)
@@ -275,24 +1547,136 @@ export default function StudentBookingPage() {
   const [privateSlotsError, setPrivateSlotsError] = useState('')
   const [privateSlotsRefreshKey, setPrivateSlotsRefreshKey] = useState(0)
   const [privatePackageSummaries, setPrivatePackageSummaries] = useState([])
+  const [privateSlotViewMode, setPrivateSlotViewMode] = useState('all')
   const [privateReservations, setPrivateReservations] = useState([])
   const [privateReservationsLoading, setPrivateReservationsLoading] = useState(false)
   const [privateReservationsResolved, setPrivateReservationsResolved] = useState(false)
   const [privateReservationsError, setPrivateReservationsError] = useState('')
+  const hasGroupLessonRowsRef = useRef(false)
   const [studentPrivateLessons, setStudentPrivateLessons] = useState([])
   const [studentPrivateLessonsLoading, setStudentPrivateLessonsLoading] = useState(false)
   const [studentPrivateLessonsResolved, setStudentPrivateLessonsResolved] = useState(false)
   const [studentPrivateLessonsError, setStudentPrivateLessonsError] = useState('')
   const [busyPrivateReservationId, setBusyPrivateReservationId] = useState('')
+  const [busyFixedPrivateLessonId, setBusyFixedPrivateLessonId] = useState('')
   const [dailyMaterials, setDailyMaterials] = useState([])
   const [dailyMaterialsLoading, setDailyMaterialsLoading] = useState(false)
   const [dailyMaterialsError, setDailyMaterialsError] = useState('')
+  const [studentPackages, setStudentPackages] = useState([])
+  const [studentPackagesLoading, setStudentPackagesLoading] = useState(false)
+  const [studentPackagesResolved, setStudentPackagesResolved] = useState(false)
+  const [studentPackagesError, setStudentPackagesError] = useState('')
+  const [linkedPrivateStudent, setLinkedPrivateStudent] = useState(null)
+  const [privateSlotReserveConfirm, setPrivateSlotReserveConfirm] = useState(null)
+  const [privateSlotCancelConfirm, setPrivateSlotCancelConfirm] = useState(null)
+  const [linkedPrivateStudentLoading, setLinkedPrivateStudentLoading] = useState(false)
+  const groupAccessRefreshTimerRef = useRef(null)
+  const groupLessonFetchRequestRef = useRef(0)
+  const reservationsRef = useRef([])
+  const locallyReservedGroupLessonIdsRef = useRef([])
+  const [studentBookingViewModePreference, setStudentBookingViewModePreference] = useState(
+    getStoredStudentBookingViewMode
+  )
+  const [studentBookingAutoIsMobile, setStudentBookingAutoIsMobile] = useState(
+    getStudentBookingAutoMobileMatch
+  )
 
   const scopedStudentId = String(studentId || currentMembership?.studentId || '').trim()
   const hasOperationalAcademy = isValidOperationalAcademyId(currentAcademyId)
   const todayDailyMaterialId = hasOperationalAcademy
     ? `${currentAcademyId}__${getTodayStorageDateString()}`
     : ''
+  const canUsePrivateBooking = PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled
+  const privateCancelPolicyLines = useMemo(() => formatStudentPrivateCancelPolicyGuide(), [])
+
+  useEffect(() => {
+    reservationsRef.current = reservations
+  }, [reservations])
+
+  useEffect(() => {
+    locallyReservedGroupLessonIdsRef.current = locallyReservedGroupLessonIds
+  }, [locallyReservedGroupLessonIds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined
+    const mediaQuery = window.matchMedia(STUDENT_BOOKING_MOBILE_MEDIA_QUERY)
+    const updateAutoMode = () => setStudentBookingAutoIsMobile(mediaQuery.matches)
+    updateAutoMode()
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', updateAutoMode)
+      return () => mediaQuery.removeEventListener('change', updateAutoMode)
+    }
+    mediaQuery.addListener(updateAutoMode)
+    return () => mediaQuery.removeListener(updateAutoMode)
+  }, [])
+
+  const studentBookingViewMode =
+    studentBookingViewModePreference === 'mobile' ||
+    (studentBookingViewModePreference === 'auto' && studentBookingAutoIsMobile)
+      ? 'mobile'
+      : 'desktop'
+  const isMobileStudentBooking = studentBookingViewMode === 'mobile'
+
+  useLayoutEffect(() => {
+    if (!isMobileStudentBooking) return undefined
+    return resetHorizontalScroll()
+  }, [isMobileStudentBooking, studentBookingViewModePreference])
+
+  useEffect(() => {
+    if (!isMobileStudentBooking || typeof window === 'undefined' || typeof document === 'undefined') {
+      return undefined
+    }
+    const cleanupCallbacks = [resetHorizontalScroll()].filter(Boolean)
+    const runReset = () => {
+      const cleanup = resetHorizontalScroll()
+      if (cleanup) cleanupCallbacks.push(cleanup)
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') runReset()
+    }
+
+    window.addEventListener('pageshow', runReset)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => {
+      window.removeEventListener('pageshow', runReset)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      cleanupCallbacks.splice(0).forEach((cleanup) => cleanup())
+    }
+  }, [isMobileStudentBooking])
+
+  function handleStudentBookingViewModeChange(value) {
+    const nextValue = STUDENT_BOOKING_VIEW_MODE_OPTIONS.has(value) ? value : 'auto'
+    setStudentBookingViewModePreference(nextValue)
+    persistStudentBookingViewMode(nextValue)
+  }
+
+  function scrollToStudentBookingSection(sectionId) {
+    if (typeof document === 'undefined') return
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  function mergeGroupLessonRows(rows, previousLessons = []) {
+    const byId = new Map(
+      rows.map((lesson) => [String(lesson.id || '').trim(), lesson])
+    )
+    const activeReservationLessonIds = new Set(
+      reservationsRef.current
+        .filter((reservation) => reservation.status === 'active')
+        .map((reservation) => String(reservation.lessonId || '').trim())
+        .filter(Boolean)
+    )
+    locallyReservedGroupLessonIdsRef.current.forEach((lessonId) => {
+      if (lessonId) activeReservationLessonIds.add(String(lessonId))
+    })
+    previousLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (!lessonId || byId.has(lessonId)) return
+      if (activeReservationLessonIds.has(lessonId)) {
+        byId.set(lessonId, lesson)
+      }
+    })
+    return Array.from(byId.values())
+  }
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
@@ -317,30 +1701,103 @@ export default function StudentBookingPage() {
       })
     )
 
+    async function readGroupAccessFromSummary(summaryData) {
+      const nextIds = new Set()
+      const rawIds = Array.isArray(summaryData?.groupClassIds)
+        ? summaryData.groupClassIds
+        : []
+      rawIds.forEach((value) => {
+        const groupClassId = String(value || '').trim()
+        if (!groupClassId) return
+        nextIds.add(groupClassId)
+      })
+      const nextCourseTypes = new Set()
+      const rawCourseTypes = Array.isArray(summaryData?.groupCourseTypes)
+        ? summaryData.groupCourseTypes
+        : []
+      rawCourseTypes.forEach((value) => {
+        const groupCourseType = normalizeGroupCourseType(value)
+        if (!groupCourseType) return
+        nextCourseTypes.add(groupCourseType)
+      })
+      return {
+        classIds: Array.from(nextIds.values()),
+        courseTypes: Array.from(nextCourseTypes.values()),
+      }
+    }
+
+    async function fetchGroupLessonsForAccess() {
+      let classIds = []
+      let courseTypes = []
+      try {
+        const summarySnap = await getDocFromServer(summaryRef)
+        const access = await readGroupAccessFromSummary(
+          summarySnap.exists() ? summarySnap.data() : null
+        )
+        classIds = access.classIds
+        courseTypes = access.courseTypes
+        setAllowedGroupClassIds(classIds)
+        setAllowedGroupCourseTypes(courseTypes)
+      } catch (error) {
+        console.error('studentGroupAccessSummary server read 실패:', error)
+      }
+
+      const requestId = groupLessonFetchRequestRef.current + 1
+      groupLessonFetchRequestRef.current = requestId
+      setLessonsLoading(!hasGroupLessonRowsRef.current)
+      setLessonsError('')
+
+      try {
+        const listGroupLessonAvailability = httpsCallable(
+          firebaseFunctions,
+          'listGroupLessonAvailability'
+        )
+        const result = await listGroupLessonAvailability({
+          academyId: currentAcademyId,
+        })
+        if (requestId !== groupLessonFetchRequestRef.current) return
+        const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        const fixedRows = Array.isArray(result.data?.fixedMemberLessons)
+          ? result.data.fixedMemberLessons
+          : []
+        setLessons((previous) => mergeGroupLessonRows(rows, previous))
+        setFixedMemberLessons(fixedRows)
+        hasGroupLessonRowsRef.current = rows.length > 0 || fixedRows.length > 0
+      } catch (error) {
+        if (requestId !== groupLessonFetchRequestRef.current) return
+        console.error('student groupLessons 불러오기 실패:', error)
+        setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
+        setLessons([])
+        setFixedMemberLessons([])
+        hasGroupLessonRowsRef.current = false
+      } finally {
+        if (requestId === groupLessonFetchRequestRef.current) {
+          setLessonsLoading(false)
+        }
+      }
+    }
+
+    void fetchGroupLessonsForAccess()
+
     const unsubscribe = onSnapshot(
       summaryRef,
       (snapshot) => {
-        const summaryData = snapshot.exists() ? snapshot.data() : null
-        const nextIds = new Set()
-        const rawIds = Array.isArray(summaryData?.groupClassIds)
-          ? summaryData.groupClassIds
-          : []
-        rawIds.forEach((value) => {
-          const groupClassId = String(value || '').trim()
-          if (!groupClassId) return
-          nextIds.add(groupClassId)
-        })
-        const nextCourseTypes = new Set()
-        const rawCourseTypes = Array.isArray(summaryData?.groupCourseTypes)
-          ? summaryData.groupCourseTypes
-          : []
-        rawCourseTypes.forEach((value) => {
-          const groupCourseType = normalizeGroupCourseType(value)
-          if (!groupCourseType) return
-          nextCourseTypes.add(groupCourseType)
-        })
-        setAllowedGroupClassIds(Array.from(nextIds.values()))
-        setAllowedGroupCourseTypes(Array.from(nextCourseTypes.values()))
+        void (async () => {
+          const access = await readGroupAccessFromSummary(
+            snapshot.exists() ? snapshot.data() : null
+          )
+          setAllowedGroupClassIds(access.classIds)
+          setAllowedGroupCourseTypes(access.courseTypes)
+          setGroupLessonsRefreshKey((previous) => previous + 1)
+          await fetchGroupLessonsForAccess()
+        })()
+        if (groupAccessRefreshTimerRef.current) {
+          clearTimeout(groupAccessRefreshTimerRef.current)
+        }
+        groupAccessRefreshTimerRef.current = window.setTimeout(() => {
+          void fetchGroupLessonsForAccess()
+          groupAccessRefreshTimerRef.current = null
+        }, 750)
         setAccessLoading(false)
         setAccessResolved(true)
       },
@@ -354,7 +1811,14 @@ export default function StudentBookingPage() {
       }
     )
 
-    return () => unsubscribe()
+    return () => {
+      groupLessonFetchRequestRef.current += 1
+      if (groupAccessRefreshTimerRef.current) {
+        clearTimeout(groupAccessRefreshTimerRef.current)
+        groupAccessRefreshTimerRef.current = null
+      }
+      unsubscribe()
+    }
   }, [currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
 
   useEffect(() => {
@@ -508,93 +1972,148 @@ export default function StudentBookingPage() {
 
   useEffect(() => {
     if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
-      setLessons([])
-      setLessonsLoading(false)
-      setLessonsError('')
+      setStudentPackages([])
+      setStudentPackagesLoading(false)
+      setStudentPackagesResolved(false)
+      setStudentPackagesError('')
+      return
+    }
+
+    setStudentPackagesLoading(true)
+    setStudentPackagesResolved(false)
+    setStudentPackagesError('')
+
+    const packagesQuery = query(
+      collection(db, 'studentPackages'),
+      where('academyId', '==', currentAcademyId),
+      where('studentId', '==', scopedStudentId)
+    )
+
+    const unsubscribe = onSnapshot(
+      packagesQuery,
+      (snapshot) => {
+        const rows = snapshot.docs.map((docItem) => ({
+          id: docItem.id,
+          ...docItem.data(),
+        }))
+        setStudentPackages(rows)
+        setStudentPackagesLoading(false)
+        setStudentPackagesResolved(true)
+      },
+      (error) => {
+        console.error('studentPackages 불러오기 실패:', error)
+        setStudentPackages([])
+        setStudentPackagesLoading(false)
+        setStudentPackagesResolved(true)
+        setStudentPackagesError('내 수강권 정보를 불러오지 못했습니다.')
+      }
+    )
+
+    return () => unsubscribe()
+  }, [currentAcademyId, hasOperationalAcademy, role, scopedStudentId])
+
+  useEffect(() => {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
+      setLinkedPrivateStudent(null)
+      setLinkedPrivateStudentLoading(false)
+      return
+    }
+
+    let cancelled = false
+    setLinkedPrivateStudentLoading(true)
+
+    getDoc(doc(db, 'privateStudents', scopedStudentId))
+      .then((snapshot) => {
+        if (cancelled) return
+        setLinkedPrivateStudent(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null)
+        setLinkedPrivateStudentLoading(false)
+      })
+      .catch((error) => {
+        if (cancelled) return
+        console.error('privateStudents 불러오기 실패:', error)
+        setLinkedPrivateStudent(null)
+        setLinkedPrivateStudentLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [hasOperationalAcademy, role, scopedStudentId])
+
+  useEffect(() => {
+    if (!hasOperationalAcademy || role !== 'student' || !scopedStudentId) {
       return
     }
     if (allowedGroupClassIds.length === 0 && allowedGroupCourseTypes.length === 0) {
-      setLessons([])
-      setLessonsLoading(false)
-      setLessonsError('')
       return
     }
 
-    setLessonsLoading(true)
-    setLessonsError('')
+    let cancelled = false
 
-    const querySpecs = [
-      ...chunkValues(allowedGroupClassIds, GROUP_CLASS_QUERY_CHUNK_SIZE).map((values) => ({
-        type: 'groupClassId',
-        values,
-      })),
-      ...chunkValues(allowedGroupCourseTypes, GROUP_CLASS_QUERY_CHUNK_SIZE).map((values) => ({
-        type: 'groupCourseType',
-        values,
-      })),
-    ]
-    const chunkMaps = new Map()
-    const unsubs = []
-
-    const mergeRows = () => {
-      const byId = new Map()
-      for (let i = 0; i < querySpecs.length; i += 1) {
-        const chunkMap = chunkMaps.get(i)
-        if (!chunkMap) continue
-        for (const row of chunkMap.values()) {
-          byId.set(row.id, row)
-        }
+    async function refreshGroupLessonsAfterReservationChange() {
+      const listGroupLessonAvailability = httpsCallable(
+        firebaseFunctions,
+        'listGroupLessonAvailability'
+      )
+      try {
+        const result = await listGroupLessonAvailability({
+          academyId: currentAcademyId,
+        })
+        if (cancelled) return
+        const rows = Array.isArray(result.data?.lessons) ? result.data.lessons : []
+        const fixedRows = Array.isArray(result.data?.fixedMemberLessons)
+          ? result.data.fixedMemberLessons
+          : []
+        setLessons((previous) => mergeGroupLessonRows(rows, previous))
+        setFixedMemberLessons(fixedRows)
+        hasGroupLessonRowsRef.current = rows.length > 0 || fixedRows.length > 0
+      } catch (error) {
+        if (cancelled) return
+        console.error('student groupLessons reservation refresh 실패:', error)
       }
-      setLessons(Array.from(byId.values()))
-      setLessonsLoading(false)
     }
 
-    querySpecs.forEach((spec, chunkIndex) => {
-      const unsubscribe = onSnapshot(
-        query(
-          collection(db, 'groupLessons'),
-          where('academyId', '==', currentAcademyId),
-          where('isBookable', '==', true),
-          where(spec.type, 'in', spec.values)
-        ),
-        (snapshot) => {
-          const rows = new Map()
-          snapshot.docs.forEach((docItem) => {
-            rows.set(docItem.id, {
-              id: docItem.id,
-              ...docItem.data(),
-            })
-          })
-          chunkMaps.set(chunkIndex, rows)
-          mergeRows()
-        },
-        (error) => {
-          console.error('student groupLessons 불러오기 실패:', error)
-          chunkMaps.set(chunkIndex, new Map())
-          setLessonsError('예약 가능한 수업을 불러오지 못했습니다.')
-          mergeRows()
-        }
-      )
-
-      unsubs.push(unsubscribe)
-    })
+    refreshGroupLessonsAfterReservationChange()
 
     return () => {
-      unsubs.forEach((unsubscribe) => unsubscribe())
+      cancelled = true
     }
   }, [
-    allowedGroupClassIds,
-    allowedGroupCourseTypes,
     currentAcademyId,
     hasOperationalAcademy,
+    locallyReservedGroupLessonIds,
+    reservations,
     role,
     scopedStudentId,
   ])
+
+  function updateGroupLessonBookedCount(lessonId, delta) {
+    const scopedLessonId = String(lessonId || '').trim()
+    if (!scopedLessonId) return
+    setLessons((previous) =>
+      previous.map((lesson) => {
+        if (String(lesson.id || '').trim() !== scopedLessonId) return lesson
+        const rawBookedCount = Number(lesson.bookedCount ?? 0)
+        const bookedCount = Number.isFinite(rawBookedCount) ? rawBookedCount : 0
+        return {
+          ...lesson,
+          bookedCount: Math.max(0, bookedCount + delta),
+          remainingSeats: Number.isFinite(Number(lesson.remainingSeats))
+            ? Math.max(0, Number(lesson.remainingSeats) - delta)
+            : lesson.remainingSeats,
+        }
+      })
+    )
+  }
 
   async function loadDirectOpenPrivateSlotsFallback() {
     const byId = new Map()
     const teacherChunks = chunkValues(allowedPrivateTeacherKeys, GROUP_CLASS_QUERY_CHUNK_SIZE)
     const querySpecs = [
+      ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherUID', values })),
+      ...teacherChunks.map((values) => ({ type: 'teacherId', values })),
       ...teacherChunks.map((values) => ({ type: 'teacher', values })),
       ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
     ]
@@ -606,7 +2125,16 @@ export default function StudentBookingPage() {
         releasedByStudentId: _releasedByStudentId,
         ...safeData
       } = data || {}
-      const row = { id, ...safeData, isReserved: false, isBookable: true }
+      const row = {
+        id,
+        ...safeData,
+        isReserved: false,
+        isBookable: false,
+        bookingStatus: 'blocked',
+        bookingStatusLabel: '수업 있음',
+        packageRemainingCount: 0,
+        makeupAvailableCount: 0,
+      }
       if (
         String(row.academyId || '').trim() !== currentAcademyId ||
         String(row.status || '').trim() !== 'open'
@@ -677,9 +2205,12 @@ export default function StudentBookingPage() {
         academyId: currentAcademyId,
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
-      const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
       const packageRows = getPrivatePackageSummariesFromValue(response?.data)
       if (Array.isArray(packageRows)) setPrivatePackageSummaries(packageRows)
+      const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+      const rows = canUsePrivateBooking
+        ? serverRows
+        : serverRows.filter((row) => row?.isBusy !== true && row?.bookingStatus !== 'busy')
       if (rows.length === 0) {
         const fallbackRows = await loadDirectOpenPrivateSlotsFallback()
         if (fallbackRows.length > 0) {
@@ -755,7 +2286,16 @@ export default function StudentBookingPage() {
         releasedByStudentId: _releasedByStudentId,
         ...safeData
       } = snapshot.data() || {}
-      const row = { id: snapshot.id, ...safeData, isReserved: false, isBookable: true }
+      const row = {
+        id: snapshot.id,
+        ...safeData,
+        isReserved: false,
+        isBookable: false,
+        bookingStatus: 'blocked',
+        bookingStatusLabel: '수업 있음',
+        packageRemainingCount: 0,
+        makeupAvailableCount: 0,
+      }
       if (
         String(row.academyId || '').trim() !== currentAcademyId ||
         String(row.status || '').trim() !== 'open'
@@ -805,6 +2345,10 @@ export default function StudentBookingPage() {
       const byId = new Map()
       const teacherChunks = chunkValues(allowedPrivateTeacherKeys, GROUP_CLASS_QUERY_CHUNK_SIZE)
       const querySpecs = [
+        ...teacherChunks.map((values) => ({ type: 'teacherKey', values })),
+        ...teacherChunks.map((values) => ({ type: 'teacherUid', values })),
+        ...teacherChunks.map((values) => ({ type: 'teacherUID', values })),
+        ...teacherChunks.map((values) => ({ type: 'teacherId', values })),
         ...teacherChunks.map((values) => ({ type: 'teacher', values })),
         ...teacherChunks.map((values) => ({ type: 'teacherName', values })),
       ]
@@ -816,7 +2360,16 @@ export default function StudentBookingPage() {
           releasedByStudentId: _releasedByStudentId,
           ...safeData
         } = data || {}
-        const row = { id, ...safeData, isReserved: false, isBookable: true }
+        const row = {
+          id,
+          ...safeData,
+          isReserved: false,
+          isBookable: false,
+          bookingStatus: 'blocked',
+          bookingStatusLabel: '수업 있음',
+          packageRemainingCount: 0,
+          makeupAvailableCount: 0,
+        }
         if (
           String(row.academyId || '').trim() !== currentAcademyId ||
           String(row.status || '').trim() !== 'open'
@@ -869,9 +2422,6 @@ export default function StudentBookingPage() {
         .then((fallbackRows) => {
           fallbackResolved = true
           latestFallbackRows = fallbackRows
-          if (cancelled) return fallbackRows
-          setPrivateSlots(fallbackRows)
-          setPrivateSlotsLoading(false)
           return fallbackRows
         })
         .catch((fallbackError) => {
@@ -891,9 +2441,12 @@ export default function StudentBookingPage() {
           ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
         })
         if (cancelled) return
-        const rows = Array.isArray(response?.data?.slots) ? response.data.slots : []
         const packageRows = getPrivatePackageSummariesFromValue(response?.data)
         if (Array.isArray(packageRows)) setPrivatePackageSummaries(packageRows)
+        const serverRows = Array.isArray(response?.data?.slots) ? response.data.slots : []
+        const rows = canUsePrivateBooking
+          ? serverRows
+          : serverRows.filter((row) => row?.isBusy !== true && row?.bookingStatus !== 'busy')
         if (rows.length === 0 && Array.isArray(latestFallbackRows) && latestFallbackRows.length > 0) {
           setPrivateSlots(latestFallbackRows)
         } else {
@@ -924,6 +2477,7 @@ export default function StudentBookingPage() {
     allowedPrivateSlotIds,
     allowedPrivateTeacherKeys,
     currentAcademyId,
+    canUsePrivateBooking,
     hasOperationalAcademy,
     privateAccessLoading,
     privateAccessResolved,
@@ -994,7 +2548,23 @@ export default function StudentBookingPage() {
       collection(db, 'privateLessonReservations'),
       where('academyId', '==', currentAcademyId),
       where('studentId', '==', scopedStudentId),
-      where('status', 'in', ['active', 'cancelled'])
+      where('status', 'in', [
+        'active',
+        'reserved',
+        'confirmed',
+        'booked',
+        'scheduled',
+        'cancelled',
+        'canceled',
+        'teacher_cancelled',
+        'teacher_unavailable',
+        'admin_cancelled',
+        'student_cancelled',
+        'completed',
+        'no_show',
+        'pending_deduction',
+        'auto_deducted',
+      ])
     )
 
     const unsubscribe = onSnapshot(
@@ -1087,7 +2657,7 @@ export default function StudentBookingPage() {
           console.error(`student lessons ${spec.label} 불러오기 실패:`, error)
           sourceMaps.set(index, new Map())
           resolvedSources.add(index)
-          setStudentPrivateLessonsError('내 예정 수업을 불러오지 못했습니다.')
+          setStudentPrivateLessonsError('예정된 1:1 수업을 불러오지 못했습니다.')
           mergeRows()
         }
       )
@@ -1118,6 +2688,123 @@ export default function StudentBookingPage() {
     return byLessonId
   }, [reservations])
 
+  const studentPrivateLessonById = useMemo(() => {
+    const byId = new Map()
+    studentPrivateLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (lessonId) byId.set(lessonId, lesson)
+    })
+    return byId
+  }, [studentPrivateLessons])
+
+  const privateReservationByLessonId = useMemo(() => {
+    const byLessonId = new Map()
+    privateReservations.forEach((reservation) => {
+      ;[reservation.lessonId, reservation.fixedLessonId].forEach((lessonIdValue) => {
+        const lessonId = String(lessonIdValue || '').trim()
+        if (lessonId) byLessonId.set(lessonId, reservation)
+      })
+    })
+    return byLessonId
+  }, [privateReservations])
+
+  const studentPackageById = useMemo(() => {
+    const byId = new Map()
+    studentPackages.forEach((pkg) => {
+      getStudentPackageLookupIds(pkg).forEach((packageId) => {
+        byId.set(packageId, pkg)
+      })
+    })
+    return byId
+  }, [studentPackages])
+
+  function getStudentPackageLookupIds(pkg) {
+    return Array.from(
+      new Set(
+        [pkg?.id, pkg?.packageId, pkg?.docId, pkg?.originalId]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+    )
+  }
+
+  function getPrivateCancelTeacherScopeIds(...sources) {
+    return Array.from(
+      new Set(
+        sources
+          .flatMap((source) => [
+            source?.teacher,
+            source?.teacherName,
+            source?.teacherKey,
+            source?.packageTeacherKey,
+            source?.teacherUid,
+            source?.teacherUID,
+            source?.teacherId,
+          ])
+          .map(normalizeStudentBookingToken)
+          .filter(Boolean)
+      )
+    )
+  }
+
+  function studentPackageMatchesPrivateCancelScope(pkg, ...sources) {
+    if (!isCancelablePrivatePackage(pkg)) return false
+    const packageAcademyId = String(pkg?.academyId || '').trim()
+    if (currentAcademyId && packageAcademyId && packageAcademyId !== currentAcademyId) {
+      return false
+    }
+    const packageStudentId = String(pkg?.studentId || pkg?.studentID || '').trim()
+    if (scopedStudentId && packageStudentId && packageStudentId !== scopedStudentId) {
+      return false
+    }
+    const packageTeacherIds = getPrivateCancelTeacherScopeIds(pkg)
+    const sourceTeacherIds = getPrivateCancelTeacherScopeIds(...sources)
+    if (
+      packageTeacherIds.length > 0 &&
+      sourceTeacherIds.length > 0 &&
+      !packageTeacherIds.some((teacherId) => sourceTeacherIds.includes(teacherId))
+    ) {
+      return false
+    }
+    return true
+  }
+
+  function getPrivatePackageCancelAllowanceById(packageId, ...sources) {
+    const scopedPackageId = String(packageId || '').trim()
+    if (!scopedPackageId) return null
+    const pkg =
+      studentPackageById.get(scopedPackageId) ||
+      studentPackages.find((candidate) =>
+        getStudentPackageLookupIds(candidate).includes(scopedPackageId)
+      ) ||
+      null
+    if (!studentPackageMatchesPrivateCancelScope(pkg, ...sources)) return null
+    return computePrivatePackageCancelAllowance(pkg)
+  }
+
+  function getPrivateReservationCancelAllowance(reservation) {
+    return getPrivatePackageCancelAllowanceById(getPrivatePackageLinkId(reservation), reservation)
+  }
+
+  function getFixedPrivateLessonCancelAllowance(lesson) {
+    const lessonId = String(lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || '').trim()
+    const linkedReservation = lessonId ? privateReservationByLessonId.get(lessonId) : null
+    const slotId = String(
+      lesson?.slotId || lesson?.privateLessonSlotId || linkedReservation?.slotId || ''
+    ).trim()
+    const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null
+    return getPrivatePackageCancelAllowanceById(
+      getFixedPrivatePackageLinkId({
+        lesson,
+        reservation: linkedReservation,
+        slot: linkedSlot,
+      }),
+      lesson,
+      linkedReservation,
+      linkedSlot
+    )
+  }
+
   const privateSlotsById = useMemo(() => {
     const byId = new Map()
     privateSlots.forEach((slot) => {
@@ -1125,6 +2812,15 @@ export default function StudentBookingPage() {
     })
     return byId
   }, [privateSlots])
+
+  const studentCancelledFixedPrivateLessonLinkKeys = useMemo(() => {
+    const keys = new Set()
+    studentPrivateLessons.forEach((lesson) => {
+      if (!isStudentFixedPrivateSeatReleasedCancellation(lesson)) return
+      addStudentCancelledFixedPrivateLessonLinkKeys(keys, lesson)
+    })
+    return keys
+  }, [studentPrivateLessons])
 
   const privateReservationBySlotId = useMemo(() => {
     const bySlotId = new Map()
@@ -1136,16 +2832,6 @@ export default function StudentBookingPage() {
     return bySlotId
   }, [privateReservations])
 
-  const activePrivateReservationSlotIds = useMemo(() => {
-    const slotIds = new Set()
-    privateReservations.forEach((reservation) => {
-      if (reservation.status !== 'active') return
-      const slotId = String(reservation.slotId || '').trim()
-      if (slotId) slotIds.add(slotId)
-    })
-    return slotIds
-  }, [privateReservations])
-
   const sortedLessons = useMemo(() => {
     return [...lessons].sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
@@ -1153,6 +2839,39 @@ export default function StudentBookingPage() {
       return aKey.localeCompare(bKey, 'ko')
     })
   }, [lessons])
+
+  const sortedFixedMemberLessons = useMemo(() => {
+    return fixedMemberLessons
+      .filter((lesson) => String(lesson.id || '').trim())
+      .map((lesson) => ({
+        ...lesson,
+        enrollmentType: 'fixed',
+        isFixedMemberLesson: true,
+      }))
+      .sort((a, b) => {
+        const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
+        const bKey = `${b.date || ''} ${b.time || ''} ${b.subject || ''}`
+        return aKey.localeCompare(bKey, 'ko')
+      })
+  }, [fixedMemberLessons])
+
+  const sortedGroupFreeBookingLessons = useMemo(() => {
+    const byId = new Map()
+    sortedLessons.forEach((lesson) => {
+      const lessonId = String(lesson.id || '').trim()
+      if (!lessonId) return
+      byId.set(lessonId, {
+        ...lesson,
+        enrollmentType: lesson.enrollmentType || 'guest',
+        isFixedMemberLesson: false,
+      })
+    })
+    return Array.from(byId.values()).sort((a, b) => {
+      const aKey = `${a.date || ''} ${a.time || ''} ${a.subject || ''}`
+      const bKey = `${b.date || ''} ${b.time || ''} ${b.subject || ''}`
+      return aKey.localeCompare(bKey, 'ko')
+    })
+  }, [sortedLessons])
 
   const sortedReservations = useMemo(() => {
     return [...reservations].sort((a, b) => {
@@ -1165,24 +2884,104 @@ export default function StudentBookingPage() {
   }, [lessonsById, reservations])
 
   const sortedPrivateSlots = useMemo(() => {
+    const publicSlotKeys = new Set()
     return privateSlots
-      .filter((slot) => !activePrivateReservationSlotIds.has(String(slot.id || '').trim()))
+      .filter((slot) => {
+        const reservation = privateReservationBySlotId.get(String(slot.id || '').trim()) || null
+        // Remove seat_released fixed lesson matches by lessonId/fixedLessonId/reservationId/slotId
+        // before my_reservation/reserved_by_me slots become blue "내 예약" grid cards.
+        if (
+          isStudentCancelledFixedPrivateGridSlot({
+            slot,
+            reservation,
+            canUsePrivateBooking,
+            cancelledFixedLessonKeys: studentCancelledFixedPrivateLessonLinkKeys,
+          })
+        ) {
+          return false
+        }
+        if (privateSlotViewMode !== 'available') return true
+        const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
+        return (
+          bookingStatus === 'available' &&
+          slot.isBookable === true &&
+          slot.isBusy !== true &&
+          String(slot.status || '').trim() === 'open'
+        )
+      })
       .sort((a, b) => {
         const aKey = `${a.date || ''} ${a.time || ''} ${a.teacher || ''}`
         const bKey = `${b.date || ''} ${b.time || ''} ${b.teacher || ''}`
         return aKey.localeCompare(bKey, 'ko')
       })
-  }, [activePrivateReservationSlotIds, privateSlots])
+      .filter((slot) => {
+        const bookingStatus = getStudentPrivateSlotStatus(slot, canUsePrivateBooking)
+        if (isPrivateSlotOwnReservationStatus(bookingStatus)) return true
+        const key = getPrivateSlotPublicDedupeKey(slot)
+        if (!key) return true
+        if (publicSlotKeys.has(key)) return false
+        publicSlotKeys.add(key)
+        return true
+      })
+  }, [
+    canUsePrivateBooking,
+    privateReservationBySlotId,
+    privateSlotViewMode,
+    privateSlots,
+    studentCancelledFixedPrivateLessonLinkKeys,
+  ])
+
+  const privateCalendarWeeks = useMemo(() => {
+    const weekStarts = new Set()
+    const addWeekStart = (value) => {
+      const weekStart = getMondayForKstDate(value)
+      if (weekStart) weekStarts.add(weekStart)
+    }
+
+    // 전체 시간 보기 keeps empty weeks visible; 예약 가능한 시간만 remains slot-driven.
+    // Next-week cards such as 예약 오픈 대기 still render from sortedPrivateSlots.
+    if (privateSlotViewMode === 'all') {
+      const currentWeekStart = getMondayForKstDate(getTodayStorageDateString())
+      addWeekStart(currentWeekStart)
+      addWeekStart(addKstDays(currentWeekStart, 7))
+    }
+
+    sortedPrivateSlots.forEach((slot) => {
+      addWeekStart(slot.date)
+    })
+
+    return Array.from(weekStarts)
+      .sort((a, b) => a.localeCompare(b))
+      .map((weekStart) => {
+        const days = buildMondaySaturdayWeekDays(weekStart).map((date) => ({
+          date,
+          slots: sortedPrivateSlots.filter((slot) => String(slot.date || '').trim() === date),
+        }))
+        return {
+          weekStart,
+          weekEnd: days[days.length - 1]?.date || weekStart,
+          days,
+        }
+      })
+  }, [privateSlotViewMode, sortedPrivateSlots])
 
   const sortedPrivateReservations = useMemo(() => {
     return privateReservations
-      .filter((reservation) => reservation.status === 'active')
+      .filter((reservation) => {
+        if (!isStudentDirectPrivateReservation(reservation)) return false
+        const slot = privateSlotsById.get(String(reservation.slotId || '').trim()) || null
+        const hasCancelledFixedLessonLink = getPrivateReservationFixedLessonLinkKeys(
+          reservation,
+          slot
+        ).some((key) => studentCancelledFixedPrivateLessonLinkKeys.has(key))
+        return !hasCancelledFixedLessonLink
+      })
       .sort((a, b) => {
         const aKey = `${a.date || ''} ${a.time || ''} ${a.slotId || ''}`
         const bKey = `${b.date || ''} ${b.time || ''} ${b.slotId || ''}`
         return aKey.localeCompare(bKey, 'ko')
       })
-  }, [privateReservations])
+  }, [privateReservations, privateSlotsById, studentCancelledFixedPrivateLessonLinkKeys])
 
   const todayYmd = getTodayStorageDateString()
 
@@ -1196,7 +2995,8 @@ export default function StudentBookingPage() {
       .filter((lesson) => {
         return (
           /^\d{4}-\d{2}-\d{2}$/.test(lesson.scheduleDate) &&
-          lesson.scheduleDate >= todayYmd
+          lesson.scheduleDate >= todayYmd &&
+          !isCancelledLesson(lesson)
         )
       })
       .sort((a, b) => {
@@ -1207,73 +3007,209 @@ export default function StudentBookingPage() {
   }, [studentPrivateLessons, todayYmd])
 
   const upcomingPrivateScheduleItems = useMemo(() => {
-    const lessonItems = sortedUpcomingPrivateLessons.map((lesson) => ({
-      id: `lesson-${lesson.id}`,
-      source: 'lesson',
-      sourceId: lesson.id,
-      date: lesson.scheduleDate,
-      time: lesson.scheduleTime,
-      teacherLabel: getLessonTeacherLabel(lesson),
-      title: getLessonSubjectLabel(lesson),
-      sessionLabel: formatLessonSessionNumber(lesson),
-      statusLabel: '수업 예정',
-    }))
+    const seenKeys = new Set()
+    const addSeenKey = (key) => {
+      if (!key) return false
+      if (seenKeys.has(key)) return true
+      seenKeys.add(key)
+      return false
+    }
 
     const reservationItems = privateReservations
       .filter((reservation) => {
-        if (reservation.status !== 'active') return false
+        if (!canShowUpcomingPrivateReservation(reservation)) return false
+        const slot = privateSlotsById.get(String(reservation.slotId || '').trim()) || null
+        const hasCancelledFixedLessonLink = getPrivateReservationFixedLessonLinkKeys(
+          reservation,
+          slot
+        ).some((key) => studentCancelledFixedPrivateLessonLinkKeys.has(key))
+        if (hasCancelledFixedLessonLink) return false
+        const linkedLessonId = String(reservation.lessonId || reservation.fixedLessonId || '').trim()
+        const linkedLesson = linkedLessonId
+          ? studentPrivateLessonById.get(linkedLessonId) || null
+          : null
+        if (isStudentFixedPrivateSeatReleasedCancellation(linkedLesson)) return false
         const date = String(reservation.date || '').trim()
         return /^\d{4}-\d{2}-\d{2}$/.test(date) && date >= todayYmd
       })
-      .map((reservation) => ({
-        id: `private-reservation-${reservation.id}`,
-        source: 'privateReservation',
-        sourceId: reservation.id,
-        date: String(reservation.date || '').trim(),
-        time: String(reservation.time || '').trim(),
-        teacherLabel: String(reservation.teacher || '').trim() || '-',
-        title: String(reservation.subject || '').trim() || '1:1 수업',
-        sessionLabel: '',
-        statusLabel: '예약 완료',
-      }))
+      .map((reservation) => {
+        const date = String(reservation.date || '').trim()
+        const time = String(reservation.time || '').trim()
+        const slotId = String(reservation.slotId || '').trim()
+        const lessonId = String(reservation.lessonId || '').trim()
+        const linkedLesson = lessonId ? studentPrivateLessonById.get(lessonId) || null : null
+        const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null
+        const fixedCancelLesson = buildFixedPrivateCancelLessonFromReservation(
+          reservation,
+          linkedLesson,
+          linkedSlot
+        )
+        const typeLabel = isFixedPrivateReservation(reservation)
+          ? '고정 예약 1:1'
+          : '학생 직접예약 1:1'
+        if (slotId) addSeenKey(`${date}|${time}|${slotId}`)
+        return {
+          id: `private-reservation-${reservation.id}`,
+          source: 'privateReservation',
+          sourceId: reservation.id,
+          date,
+          time,
+          typeLabel,
+          teacherLabel:
+            String(reservation.teacherName || reservation.teacher || '').trim() || '-',
+          studentName:
+            String(reservation.studentName || reservation.student || '').trim() || '',
+          title: String(reservation.subject || '').trim() || '1:1 수업',
+          sessionLabel: '',
+          durationLabel: getPrivateDurationLabel(reservation),
+          statusLabel: '예약 완료',
+          reservation,
+          slot: linkedSlot,
+          lesson: linkedLesson,
+          fixedCancelLesson,
+        }
+      })
+
+    const lessonItems = sortedUpcomingPrivateLessons
+      .filter((lesson) => {
+        const lessonSlotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+        const duplicateKey = lessonSlotId
+          ? `${lesson.scheduleDate}|${lesson.scheduleTime}|${lessonSlotId}`
+          : ''
+        return !addSeenKey(duplicateKey)
+      })
+      .map((lesson) => {
+        const slotId = String(lesson.slotId || lesson.privateLessonSlotId || '').trim()
+        const linkedSlot = slotId ? privateSlotsById.get(slotId) || null : null
+        return {
+          id: `lesson-${lesson.id}`,
+          source: 'lesson',
+          sourceId: lesson.id,
+          date: lesson.scheduleDate,
+          time: lesson.scheduleTime,
+          typeLabel: isFixedPrivateLesson(lesson) ? '고정 예약 1:1' : '1:1 수업',
+          teacherLabel: getLessonTeacherLabel(lesson),
+          studentName: String(lesson.studentName || lesson.student || '').trim() || '',
+          title: getLessonSubjectLabel(lesson),
+          sessionLabel: formatLessonSessionNumber(lesson),
+          durationLabel: getPrivateDurationLabel(lesson),
+          statusLabel: '수업 예정',
+          slot: linkedSlot,
+          lesson,
+          fixedCancelLesson: isFixedPrivateLesson(lesson) ? lesson : null,
+        }
+      })
 
     return [...lessonItems, ...reservationItems].sort((a, b) => {
       const aKey = `${a.date || ''} ${a.time || '00:00'} ${a.title || ''} ${a.sourceId || ''}`
       const bKey = `${b.date || ''} ${b.time || '00:00'} ${b.title || ''} ${b.sourceId || ''}`
       return aKey.localeCompare(bKey, 'ko')
     })
-  }, [privateReservations, sortedUpcomingPrivateLessons, todayYmd])
+  }, [
+    privateReservations,
+    privateSlotsById,
+    sortedUpcomingPrivateLessons,
+    studentCancelledFixedPrivateLessonLinkKeys,
+    studentPrivateLessonById,
+    todayYmd,
+  ])
 
   const lessonHistoryItems = useMemo(() => {
-    const privateLessonItems = studentPrivateLessons.map((lesson) => {
-      const date = getLessonStorageDateString(lesson)
-      const time = getLessonDisplayTime(lesson)
-      const startsAtMs = getDateTimeMs(date, time)
-      return {
-        id: `private-lesson-${lesson.id}`,
-        typeLabel: '1:1 수업',
-        title: getLessonSubjectLabel(lesson),
-        date,
-        time,
-        status: 'active',
-        startsAtMs,
-        fallbackId: lesson.id,
+    const cancelledFixedLessonIdsWithReservation = new Set()
+    privateReservations.forEach((reservation) => {
+      const linkedLessonId = String(reservation.lessonId || reservation.fixedLessonId || '').trim()
+      const linkedLesson = linkedLessonId
+        ? studentPrivateLessonById.get(linkedLessonId) || null
+        : null
+      if (isStudentFixedPrivateSeatReleasedCancellation(linkedLesson)) {
+        cancelledFixedLessonIdsWithReservation.add(linkedLessonId)
       }
     })
 
+    const privateLessonItems = studentPrivateLessons
+      .filter((lesson) => {
+        const lessonId = String(lesson.id || '').trim()
+        return !lessonId || !cancelledFixedLessonIdsWithReservation.has(lessonId)
+      })
+      .map((lesson) => {
+        const date = getLessonStorageDateString(lesson)
+        const time = getLessonDisplayTime(lesson)
+        const startsAtMs = getDateTimeMs(date, time)
+        const cancellationType = String(lesson.cancellationType || '').trim()
+        const status = isCancelledLesson(lesson) ? 'cancelled' : 'active'
+        const isReleasedFixedSeat =
+          cancellationType === 'seat_released' || lesson?.isSeatReleased === true
+        return {
+          id: `private-lesson-${lesson.id}`,
+          source: 'privateLesson',
+          typeLabel: isReleasedFixedSeat ? '내 고정수업' : '1:1 수업',
+          title: getLessonSubjectLabel(lesson),
+          date,
+          time,
+          status,
+          cancellationType,
+          cancelledByRole: lesson.cancelledByRole || lesson.canceledByRole || '',
+          cancelledBy: lesson.cancelledBy || lesson.canceledBy || '',
+          cancellationReason: lesson.cancellationReason || lesson.cancelledReason || '',
+          cancelledAt: lesson.cancelledAt || lesson.canceledAt || null,
+          noDeduction: lesson.noDeduction === true || isCancelledLesson(lesson),
+          startsAtMs,
+          fallbackId: lesson.id,
+        }
+      })
+
     const privateItems = privateReservations.map((reservation) => {
-      const date = String(reservation.date || '').trim()
-      const time = String(reservation.time || '').trim()
+      const linkedLessonId = String(reservation.lessonId || reservation.fixedLessonId || '').trim()
+      const linkedLesson = linkedLessonId
+        ? studentPrivateLessonById.get(linkedLessonId) || null
+        : null
+      const effectiveReservation = mergeFixedPrivateReservationCancellationFromLesson(
+        reservation,
+        linkedLesson
+      )
+      const date = String(effectiveReservation.date || linkedLesson?.date || '').trim()
+      const time = String(effectiveReservation.time || getLessonDisplayTime(linkedLesson) || '').trim()
       const startsAtMs = getDateTimeMs(date, time)
+      const duration = Number(effectiveReservation.durationMinutes || linkedLesson?.durationMinutes || 0)
       return {
-        id: `private-${reservation.id}`,
-        typeLabel: '1:1 수업',
-        title: String(reservation.teacher || '').trim() || '1:1 수업',
+        id: `private-${effectiveReservation.id}`,
+        source: 'privateReservation',
+        typeLabel: isFixedPrivateReservation(effectiveReservation)
+          ? '고정 예약 1:1'
+          : '학생 직접예약 1:1',
+        title: String(effectiveReservation.subject || linkedLesson?.subject || '').trim() || '1:1 수업',
         date,
         time,
-        status: reservation.status,
+        status: effectiveReservation.status,
+        teacherLabel:
+          String(
+            effectiveReservation.teacherName || effectiveReservation.teacher || linkedLesson?.teacherName
+          ).trim() || '-',
+        studentName:
+          String(effectiveReservation.studentName || effectiveReservation.student || '').trim() || '-',
+        durationLabel: Number.isFinite(duration) && duration > 0 ? `${duration}분` : '',
+        cancellationType: String(effectiveReservation.cancellationType || '').trim(),
+        cancelledByRole:
+          effectiveReservation.cancelledByRole || effectiveReservation.canceledByRole || '',
+        cancelledBy: effectiveReservation.cancelledBy || effectiveReservation.canceledBy || '',
+        cancellationReason:
+          effectiveReservation.cancellationReason || effectiveReservation.cancelledReason || '',
+        cancelledAt: effectiveReservation.cancelledAt || effectiveReservation.canceledAt || null,
+        outcome:
+          effectiveReservation.outcome ||
+          effectiveReservation.reservationOutcome ||
+          effectiveReservation.lessonOutcome ||
+          '',
+        attendanceStatus: effectiveReservation.attendanceStatus || '',
+        deductionApplied: effectiveReservation.deductionApplied === true,
+        autoDeducted: effectiveReservation.autoDeducted === true,
+        deducted: effectiveReservation.deducted === true,
+        completed: effectiveReservation.completed === true,
+        noShow: effectiveReservation.noShow === true,
+        isNoShow: effectiveReservation.isNoShow === true,
+        noDeduction: effectiveReservation.noDeduction === true,
         startsAtMs,
-        fallbackId: reservation.slotId,
+        fallbackId: effectiveReservation.slotId,
       }
     })
 
@@ -1289,6 +3225,8 @@ export default function StudentBookingPage() {
         date,
         time,
         status: reservation.status,
+        cancellationType: reservation.cancellationType || lesson?.cancellationType || '',
+        noDeduction: reservation.noDeduction === true || lesson?.noDeduction === true,
         startsAtMs,
         fallbackId: reservation.lessonId,
       }
@@ -1303,7 +3241,7 @@ export default function StudentBookingPage() {
         'ko'
       )
     })
-  }, [lessonsById, privateReservations, reservations, studentPrivateLessons])
+  }, [lessonsById, privateReservations, reservations, studentPrivateLessonById, studentPrivateLessons])
 
   const lessonHistoryLoading =
     !reservationsResolved ||
@@ -1337,7 +3275,7 @@ export default function StudentBookingPage() {
         return {
           id: `private-reservation-${reservation.id}`,
           time: String(reservation.time || slot?.time || '').trim() || '-',
-          typeLabel: '1:1 예약',
+          typeLabel: '학생 직접예약 1:1',
           teacherLabel: String(reservation.teacher || slot?.teacher || '').trim() || '-',
           title:
             String(reservation.subject || '').trim() ||
@@ -1416,7 +3354,11 @@ export default function StudentBookingPage() {
       alert('학생 계정 연결 정보가 없어 예약할 수 없습니다.')
       return
     }
-    if (!allowedGroupClassIds.includes(groupClassId)) {
+    const groupCourseType = normalizeGroupCourseType(lesson.groupCourseType)
+    const hasGroupAccess =
+      allowedGroupClassIds.includes(groupClassId) ||
+      (groupCourseType && allowedGroupCourseTypes.includes(groupCourseType))
+    if (!hasGroupAccess) {
       alert('예약 가능한 반 권한이 없습니다.')
       return
     }
@@ -1435,88 +3377,20 @@ export default function StudentBookingPage() {
 
     try {
       setBusyReservationId(reservationId)
-      if (existingReservation?.status === 'cancelled') {
-        await runTransaction(db, async (transaction) => {
-          const lessonRef = doc(db, 'groupLessons', lesson.id)
-          const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-
-          const [lessonSnap, reservationSnap] = await Promise.all([
-            transaction.get(lessonRef),
-            transaction.get(reservationRef),
-          ])
-
-          if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-          if (!reservationSnap.exists()) throw new Error('취소된 예약을 찾을 수 없습니다.')
-
-          const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-          const reservationData = reservationSnap.data()
-
-          assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-          validateLessonBookingState(lessonData, 'reserve')
-
-          if (getGroupLessonGroupId(lessonData) !== groupClassId) {
-            throw new Error('수업의 그룹 정보가 올바르지 않습니다.')
-          }
-          if (String(reservationData.studentId || '').trim() !== scopedStudentId) {
-            throw new Error('다른 학생의 예약은 수정할 수 없습니다.')
-          }
-          if (reservationData.status !== 'cancelled') {
-            throw new Error('이미 예약됨')
-          }
-
-          const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-          transaction.update(reservationRef, {
-            status: 'active',
-            cancelledAt: null,
-            updatedAt: serverTimestamp(),
-          })
-          transaction.update(lessonRef, {
-            bookedCount: bookedCount + 1,
-            updatedAt: serverTimestamp(),
-          })
-        })
-      } else {
-        await runTransaction(db, async (transaction) => {
-          const lessonRef = doc(db, 'groupLessons', lesson.id)
-          const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-          const lessonSnap = await transaction.get(lessonRef)
-
-          if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-
-          const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-
-          assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-          validateLessonBookingState(lessonData, 'reserve')
-
-          if (getGroupLessonGroupId(lessonData) !== groupClassId) {
-            throw new Error('수업의 그룹 정보가 올바르지 않습니다.')
-          }
-
-          const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-          transaction.set(reservationRef, {
-            academyId: scopedAcademyId,
-            lessonId: lesson.id,
-            groupClassId,
-            studentId: scopedStudentId,
-            status: 'active',
-            source: 'student',
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            cancelledAt: null,
-          })
-          transaction.update(lessonRef, {
-            bookedCount: bookedCount + 1,
-            updatedAt: serverTimestamp(),
-          })
-        })
-      }
+      const reserveGroupLessonSeat = httpsCallable(firebaseFunctions, 'reserveGroupLessonSeat')
+      await reserveGroupLessonSeat({
+        academyId: scopedAcademyId,
+        lessonId: lesson.id,
+      })
       logStudentBookingEvent('reserve_success', {
         academyId: scopedAcademyId,
         lessonId: lesson.id,
         studentId: scopedStudentId,
       })
+      setLocallyReservedGroupLessonIds((previous) =>
+        previous.includes(lesson.id) ? previous : [...previous, lesson.id]
+      )
+      updateGroupLessonBookedCount(lesson.id, 1)
     } catch (error) {
       console.error('학생 그룹 수업 예약 실패:', error)
       logStudentBookingEvent('reserve_failure', {
@@ -1531,7 +3405,7 @@ export default function StudentBookingPage() {
     }
   }
 
-  async function reservePrivateSlot(slot) {
+  async function reservePrivateSlot(slot, options = {}) {
     if (!PRIVATE_SLOT_BOOKING_ENABLED) {
       alert('1:1 예약 시간은 현재 관리자만 변경할 수 있습니다.')
       return
@@ -1576,7 +3450,12 @@ export default function StudentBookingPage() {
       alert('이미 예약됨')
       return
     }
-    if (!window.confirm(PRIVATE_SLOT_RESERVE_CONFIRM_MESSAGE)) {
+    if (!options.confirmed) {
+      setPrivateSlotReserveConfirm({
+        slot,
+        reservationId,
+        message: buildPrivateSlotReserveConfirmMessage(),
+      })
       return
     }
 
@@ -1589,6 +3468,9 @@ export default function StudentBookingPage() {
       await reservePrivateLessonSlot({
         academyId: scopedAcademyId,
         slotId: slot.id,
+        availabilityTemplateId: slot.availabilityTemplateId || '',
+        date: slot.date || '',
+        time: slot.time || '',
         ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
       })
       logStudentPrivateBookingEvent('reserve_success', {
@@ -1611,6 +3493,34 @@ export default function StudentBookingPage() {
     }
   }
 
+  function closePrivateSlotReserveConfirm() {
+    if (busyPrivateReservationId) return
+    setPrivateSlotReserveConfirm(null)
+  }
+
+  async function confirmPrivateSlotReserve() {
+    const slot = privateSlotReserveConfirm?.slot
+    if (!slot) return
+    setPrivateSlotReserveConfirm(null)
+    await reservePrivateSlot(slot, { confirmed: true })
+  }
+
+  function closePrivateSlotCancelConfirm() {
+    if (busyPrivateReservationId || busyFixedPrivateLessonId) return
+    setPrivateSlotCancelConfirm(null)
+  }
+
+  async function confirmPrivateSlotCancel() {
+    const pending = privateSlotCancelConfirm
+    if (!pending) return
+    setPrivateSlotCancelConfirm(null)
+    if (pending.kind === 'fixedLesson') {
+      await cancelFixedPrivateLesson(pending.lesson, { confirmed: true })
+      return
+    }
+    await cancelPrivateReservation(pending.reservation, { confirmed: true })
+  }
+
   async function cancelReservation(reservation) {
     if (role !== 'student') {
       alert('학생 계정만 예약을 취소할 수 있습니다.')
@@ -1619,6 +3529,11 @@ export default function StudentBookingPage() {
     if (!reservation?.lessonId) return
 
     const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    const lesson = lessonsById.get(String(reservation.lessonId || '').trim()) || null
+    if (!canShowGroupReservationCancelAction(reservation, lesson)) {
+      alert('취소할 수 있는 단체반 예약이 아닙니다.')
+      return
+    }
     const reservationId = buildGroupLessonReservationId({
       academyId: scopedAcademyId,
       lessonId: reservation.lessonId,
@@ -1627,47 +3542,21 @@ export default function StudentBookingPage() {
 
     try {
       setBusyReservationId(reservationId)
-      await runTransaction(db, async (transaction) => {
-        const lessonRef = doc(db, 'groupLessons', reservation.lessonId)
-        const reservationRef = doc(db, 'groupLessonReservations', reservationId)
-        const [lessonSnap, reservationSnap] = await Promise.all([
-          transaction.get(lessonRef),
-          transaction.get(reservationRef),
-        ])
-
-        if (!lessonSnap.exists()) throw new Error('수업 일정을 찾을 수 없습니다.')
-        if (!reservationSnap.exists()) throw new Error('활성 예약을 찾을 수 없습니다.')
-
-        const lessonData = { id: lessonSnap.id, ...lessonSnap.data() }
-        const reservationData = reservationSnap.data()
-
-        assertSameAcademy(lessonData, scopedAcademyId, '그룹 수업')
-        validateLessonBookingState(lessonData, 'cancel')
-
-        if (String(reservationData.studentId || '').trim() !== scopedStudentId) {
-          throw new Error('다른 학생의 예약은 취소할 수 없습니다.')
-        }
-        if (reservationData.status !== 'active') {
-          throw new Error('활성 예약을 찾을 수 없습니다.')
-        }
-
-        const bookedCount = Number(lessonData.bookedCount ?? 0)
-
-        transaction.update(reservationRef, {
-          status: 'cancelled',
-          cancelledAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
-        transaction.update(lessonRef, {
-          bookedCount: bookedCount - 1,
-          updatedAt: serverTimestamp(),
-        })
+      const cancelGroupLessonSeat = httpsCallable(firebaseFunctions, 'cancelGroupLessonSeat')
+      await cancelGroupLessonSeat({
+        academyId: scopedAcademyId,
+        lessonId: reservation.lessonId,
       })
       logStudentBookingEvent('cancel_success', {
         academyId: scopedAcademyId,
         lessonId: reservation.lessonId,
         studentId: scopedStudentId,
       })
+      setLocallyReservedGroupLessonIds((previous) =>
+        previous.filter((lessonId) => lessonId !== reservation.lessonId)
+      )
+      updateGroupLessonBookedCount(reservation.lessonId, -1)
+      setGroupLessonsRefreshKey((value) => value + 1)
     } catch (error) {
       console.error('학생 그룹 수업 예약 취소 실패:', error)
       logStudentBookingEvent('cancel_failure', {
@@ -1682,7 +3571,7 @@ export default function StudentBookingPage() {
     }
   }
 
-  async function cancelPrivateReservation(reservation) {
+  async function cancelPrivateReservation(reservation, options = {}) {
     if (!PRIVATE_SLOT_BOOKING_ENABLED) {
       alert('1:1 예약 시간은 현재 관리자만 변경할 수 있습니다.')
       return
@@ -1698,12 +3587,35 @@ export default function StudentBookingPage() {
     if (!reservation?.slotId) return
 
     const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    if (!canShowPrivateReservationCancelAction(reservation)) {
+      alert('취소할 수 있는 1:1 예약이 아닙니다.')
+      return
+    }
+    const unavailableReason = getPrivateReservationCancelUnavailableReason(reservation)
+    if (unavailableReason) {
+      alert(unavailableReason)
+      return
+    }
     const reservationId = buildPrivateLessonReservationId({
       academyId: scopedAcademyId,
       slotId: reservation.slotId,
       studentId: scopedStudentId,
     })
-    if (!window.confirm(PRIVATE_RESERVATION_CANCEL_CONFIRM_MESSAGE)) {
+    const cancelAllowance = getPrivateReservationCancelAllowance(reservation)
+    const cancelConfirmMessage = buildPrivateReservationCancelConfirmMessage(cancelAllowance, {
+      loaded: Boolean(cancelAllowance),
+    })
+    if (cancelAllowance && cancelAllowance.remaining <= 0) {
+      alert(cancelConfirmMessage)
+      return
+    }
+    if (!options.confirmed) {
+      setPrivateSlotCancelConfirm({
+        kind: 'reservation',
+        reservation,
+        reservationId,
+        message: cancelConfirmMessage,
+      })
       return
     }
 
@@ -1744,6 +3656,259 @@ export default function StudentBookingPage() {
     }
   }
 
+  async function cancelFixedPrivateLesson(lesson, options = {}) {
+    const lessonId = getFixedPrivateCancellableLessonId(lesson)
+    if (!lessonId || lesson?.missingFixedLessonId === true) {
+      alert('수강권 연결 정보가 없어 학원에 문의해 주세요.')
+      return
+    }
+    const date = getLessonStorageDateString(lesson)
+    const time = getLessonDisplayTime(lesson)
+    const startMillis = getDateTimeMs(date, time)
+    if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
+      alert('수업 시작 10시간 전까지만 취소할 수 있습니다.')
+      return
+    }
+    const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
+    if (!cancelAllowance) {
+      alert('수강권 연결 정보가 없어 학원에 문의해 주세요.')
+      return
+    }
+    if (cancelAllowance.remaining <= 0) {
+      alert('이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.')
+      return
+    }
+    if (!options.confirmed) {
+      setPrivateSlotCancelConfirm({
+        kind: 'fixedLesson',
+        lesson,
+        lessonId,
+        message:
+          `이번 고정 1:1 수업을 취소할까요?\n\n` +
+          `취소 사용 ${cancelAllowance.used}/${cancelAllowance.limit}회\n` +
+          `남은 취소 가능 ${cancelAllowance.remaining}회\n` +
+          `취소 가능 횟수 1회가 사용되며, 수강권은 차감되지 않습니다.\n` +
+          `취소 후 같은 시간은 다시 예약 가능한 시간으로 열립니다.`,
+      })
+      return
+    }
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      setBusyFixedPrivateLessonId(lessonId)
+      const cancelFixedPrivateLessonOccurrence = httpsCallable(
+        firebaseFunctions,
+        'cancelFixedPrivateLessonOccurrence'
+      )
+      await cancelFixedPrivateLessonOccurrence({
+        academyId: scopedAcademyId,
+        lessonId,
+        cancellationType: 'seat_released',
+        reason: 'student_cancelled_fixed_private_lesson',
+        ...PRIVATE_SLOT_BOOKING_CALLABLE_OVERRIDE,
+      })
+      await Promise.all([loadPrivateReservations(), loadPrivateSlotAvailability()])
+    } catch (error) {
+      console.error('고정 1:1 수업 취소 실패:', error)
+      alert(`고정 1:1 수업 취소 실패: ${error.message}`)
+    } finally {
+      setBusyFixedPrivateLessonId('')
+    }
+  }
+
+  function getPrivateReservationCancelUnavailableReason(reservation) {
+    if (!canShowPrivateReservationCancelAction(reservation)) {
+      return '취소할 수 있는 1:1 예약이 아닙니다.'
+    }
+    const startMillis = getPrivateReservationStartMillis(reservation)
+    if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
+      return '수업 시작 10시간 전까지만 취소할 수 있습니다.'
+    }
+    const cancelAllowance = getPrivateReservationCancelAllowance(reservation)
+    if (!cancelAllowance) {
+      return '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+    }
+    if (cancelAllowance.remaining <= 0) {
+      return '이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+    }
+    return ''
+  }
+
+  function getFixedPrivateLessonCancelUnavailableReason(lesson) {
+    if (!canRenderFixedPrivateLessonCancelAction(lesson)) {
+      return ''
+    }
+    const startMillis = getFixedPrivateLessonStartMillis(lesson)
+    if (startMillis !== null && Date.now() > startMillis - PRIVATE_CANCEL_CUTOFF_MS) {
+      return '수업 시작 10시간 전까지만 취소할 수 있습니다.'
+    }
+    if (!String(lesson?.id || '').trim() || lesson?.missingFixedLessonId === true) {
+      return '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+    }
+    const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
+    if (canShowFixedPrivateLessonCancelAction(lesson, Date.now(), cancelAllowance)) {
+      return ''
+    }
+    if (!cancelAllowance) {
+      return '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+    }
+    if (cancelAllowance.remaining <= 0) {
+      return '이 수강권의 취소 가능 횟수를 모두 사용했습니다. 학원에 문의해 주세요.'
+    }
+    return ''
+  }
+
+  function renderFixedPrivateLessonCancelAction(lesson, {
+    testId = 'student-fixed-private-lesson-cancel-button',
+    forceRender = false,
+  } = {}) {
+    const canRender = forceRender
+      ? Boolean(lesson) &&
+        !isCancelledLesson(lesson) &&
+        !isPrivateReservationCancelled(lesson) &&
+        !isPrivateReservationOutcomeFinal(lesson) &&
+        isFixedPrivateLessonInFuture(lesson)
+      : canRenderFixedPrivateLessonCancelAction(lesson)
+    if (!canRender) {
+      return null
+    }
+    const cancelAllowance = getFixedPrivateLessonCancelAllowance(lesson)
+    const unavailableReason = getFixedPrivateLessonCancelUnavailableReason(lesson)
+    const canCancel = canShowFixedPrivateLessonCancelAction(lesson, Date.now(), cancelAllowance)
+    const fixedCancelLessonId = getFixedPrivateCancellableLessonId(lesson)
+    const isBusy =
+      Boolean(fixedCancelLessonId) && busyFixedPrivateLessonId === fixedCancelLessonId
+    const disabled = Boolean(isBusy || !canCancel || !fixedCancelLessonId)
+
+    return (
+      <div
+        data-private-cancel-used-field="privateCancelUsedCount"
+        data-private-cancel-used-count={cancelAllowance?.used ?? 0}
+        style={{
+          display: isMobileStudentBooking ? 'grid' : 'flex',
+          gridTemplateColumns: isMobileStudentBooking
+            ? 'repeat(2, minmax(0, 1fr))'
+            : undefined,
+          justifyContent: isMobileStudentBooking ? undefined : 'space-between',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: isMobileStudentBooking ? undefined : 'wrap',
+          marginTop: 12,
+          width: isMobileStudentBooking ? '100%' : undefined,
+          maxWidth: isMobileStudentBooking ? '100%' : undefined,
+          minWidth: 0,
+          boxSizing: 'border-box',
+        }}
+      >
+        {unavailableReason ? (
+          <span style={{ opacity: 0.72, fontSize: 13, ...studentBookingMobileTextGuardStyle }}>
+            {unavailableReason}
+          </span>
+        ) : (
+          <span style={{ opacity: 0.72, fontSize: 13, ...studentBookingMobileTextGuardStyle }}>
+            취소 가능 {cancelAllowance?.remaining ?? 0}회
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            if (!fixedCancelLessonId || !canCancel) return
+            cancelFixedPrivateLesson(lesson)
+          }}
+          disabled={disabled}
+          data-testid={testId}
+          style={{
+            padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
+            minHeight: isMobileStudentBooking ? 44 : undefined,
+            borderRadius: 999,
+            border: '1px solid #9a3f48',
+            background: '#3a1f24',
+            color: '#ffd8dc',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            fontSize: isMobileStudentBooking ? 14 : 12,
+            fontWeight: 800,
+            flex: isMobileStudentBooking ? undefined : '0 0 auto',
+            ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
+          }}
+        >
+          {isBusy ? '취소 중...' : canCancel ? '수업 취소' : '수업 취소 불가'}
+        </button>
+      </div>
+    )
+  }
+
+  function renderPrivateReservationCancelAction(reservation, {
+    testId = 'student-private-reservation-cancel-button',
+  } = {}) {
+    if (!reservation || !PRIVATE_SLOT_BOOKING_ENABLED || !privateSlotBookingPilotEnabled) {
+      return null
+    }
+    if (!canShowPrivateReservationCancelAction(reservation)) {
+      return null
+    }
+    const reservationId = buildPrivateLessonReservationId({
+      academyId: currentAcademyId,
+      slotId: reservation.slotId,
+      studentId: scopedStudentId,
+    })
+    const isBusy = busyPrivateReservationId === reservationId
+    const unavailableReason = getPrivateReservationCancelUnavailableReason(reservation)
+    const disabled = Boolean(isBusy || unavailableReason)
+    const cancelAllowance = getPrivateReservationCancelAllowance(reservation)
+
+    return (
+      <div
+        style={{
+          display: isMobileStudentBooking ? 'grid' : 'flex',
+          gridTemplateColumns: isMobileStudentBooking
+            ? 'repeat(2, minmax(0, 1fr))'
+            : undefined,
+          justifyContent: isMobileStudentBooking ? undefined : 'space-between',
+          gap: 10,
+          alignItems: 'center',
+          flexWrap: isMobileStudentBooking ? undefined : 'wrap',
+          marginTop: 12,
+          width: isMobileStudentBooking ? '100%' : undefined,
+          maxWidth: isMobileStudentBooking ? '100%' : undefined,
+          minWidth: 0,
+          boxSizing: 'border-box',
+        }}
+      >
+        {unavailableReason ? (
+          <span style={{ opacity: 0.72, fontSize: 13, ...studentBookingMobileTextGuardStyle }}>
+            {unavailableReason}
+          </span>
+        ) : (
+          <span style={{ opacity: 0.72, fontSize: 13, ...studentBookingMobileTextGuardStyle }}>
+            취소 가능 {cancelAllowance?.remaining ?? 0}회
+          </span>
+        )}
+        <button
+          type="button"
+          className="student-danger-button"
+          onClick={() => cancelPrivateReservation(reservation)}
+          disabled={disabled}
+          data-testid={testId}
+          style={{
+            padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
+            minHeight: isMobileStudentBooking ? 44 : undefined,
+            borderRadius: 999,
+            border: '1px solid #9a3f48',
+            background: '#3a1f24',
+            color: '#ffd8dc',
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            fontSize: isMobileStudentBooking ? 14 : 12,
+            fontWeight: 800,
+            flex: isMobileStudentBooking ? undefined : '0 0 auto',
+            ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
+          }}
+        >
+          {isBusy ? '취소 중...' : '예약 취소'}
+        </button>
+      </div>
+    )
+  }
+
   const pageBlockedReason = useMemo(() => {
     if (authLoading) return ''
     if (!user) return '로그인이 필요합니다.'
@@ -1753,18 +3918,126 @@ export default function StudentBookingPage() {
     return ''
   }, [authLoading, hasOperationalAcademy, role, scopedStudentId, user])
 
+  const linkedStudentName = useMemo(() => {
+    const packageStudentName =
+      studentPackages
+        .map((pkg) => String(pkg?.studentName || '').trim())
+        .find(Boolean) || ''
+    return resolveLinkedStudentDisplayName({
+      membershipDisplayName: currentMembership?.displayName,
+      privateStudentRecord: linkedPrivateStudent,
+      packageStudentName,
+    })
+  }, [currentMembership?.displayName, linkedPrivateStudent, studentPackages])
+
+  const studentIdentityLine = useMemo(
+    () =>
+      formatStudentBookingIdentityLine({
+        academyName: currentAcademy?.name || currentAcademyId || '-',
+        studentName: linkedStudentName,
+        email: user?.email || '',
+      }),
+    [currentAcademy?.name, currentAcademyId, linkedStudentName, user?.email]
+  )
+
+  const studentTicketSummary = useMemo(() => {
+    if (!hasOperationalAcademy || !scopedStudentId) {
+      return {
+        privateSummaries: [],
+        groupSummaries: [],
+        hasPrivateTicket: false,
+        hasGroupTicket: false,
+      }
+    }
+    const fromPackages = buildStudentTicketSummaryViewModel({
+      packages: studentPackages,
+      privateLessons: studentPrivateLessons,
+      privateReservations,
+      groupReservations: reservations,
+      academyId: currentAcademyId,
+      studentId: scopedStudentId,
+    })
+    if (fromPackages.privateSummaries.length > 0 || fromPackages.groupSummaries.length > 0) {
+      return fromPackages
+    }
+    const privateSummaries = buildStudentPrivateTicketSummariesFromCallablePackages(privateSlots)
+    return {
+      privateSummaries,
+      groupSummaries: fromPackages.groupSummaries,
+      hasPrivateTicket: privateSummaries.length > 0,
+      hasGroupTicket: fromPackages.groupSummaries.length > 0,
+    }
+  }, [
+    currentAcademyId,
+    hasOperationalAcademy,
+    privateReservations,
+    privateSlots,
+    reservations,
+    scopedStudentId,
+    studentPackages,
+    studentPrivateLessons,
+  ])
+
+  const studentTicketSummaryLoading =
+    !studentPackagesResolved ||
+    studentPackagesLoading ||
+    !privateReservationsResolved ||
+    privateReservationsLoading ||
+    !studentPrivateLessonsResolved ||
+    studentPrivateLessonsLoading ||
+    linkedPrivateStudentLoading
+  const studentBookingQuickNavItems = [
+    { id: 'student-ticket-summary-section', label: '내 수강권' },
+    { id: 'student-upcoming-private-lessons-section', label: '예정 수업' },
+    { id: 'student-private-booking-section', label: '1:1 예약' },
+    { id: 'student-lesson-history-section', label: '수업 내역' },
+  ]
+  const studentBookingViewModeButtons = [
+    { value: 'auto', label: '자동', mobileLabel: '자동' },
+    { value: 'desktop', label: 'PC 화면으로 보기', mobileLabel: 'PC' },
+    { value: 'mobile', label: '모바일 화면으로 보기', mobileLabel: '모바일' },
+  ]
+  const studentBookingMobileOverflowGuardStyle = isMobileStudentBooking
+    ? STUDENT_BOOKING_MOBILE_OVERFLOW_GUARD_STYLE
+    : {}
+  const studentBookingMobileContentGuardStyle = isMobileStudentBooking
+    ? STUDENT_BOOKING_MOBILE_CONTENT_GUARD_STYLE
+    : {}
+  const studentBookingMobileTextGuardStyle = isMobileStudentBooking
+    ? STUDENT_BOOKING_MOBILE_TEXT_WRAP_STYLE
+    : {}
+  const privateSlotReserveConfirmMessageLines = String(
+    privateSlotReserveConfirm?.message || ''
+  ).split('\n')
+  const privateSlotCancelConfirmMessageLines = String(
+    privateSlotCancelConfirm?.message || ''
+  ).split('\n')
+
   return (
     <div
+      className={isMobileStudentBooking ? 'student-booking-mobile-overflow-root' : undefined}
       style={{
         minHeight: '100vh',
         background:
           'linear-gradient(180deg, rgba(8,18,33,1) 0%, rgba(16,28,45,1) 45%, rgba(22,27,37,1) 100%)',
         color: 'white',
-        padding: '32px 20px 60px',
+        padding: isMobileStudentBooking
+          ? `${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP} 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
+          : '32px 20px 60px',
         boxSizing: 'border-box',
+        width: isMobileStudentBooking ? '100%' : undefined,
+        maxWidth: isMobileStudentBooking ? '100%' : undefined,
+        ...studentBookingMobileOverflowGuardStyle,
       }}
     >
-      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+      <div
+        style={{
+          ...studentBookingMobileOverflowGuardStyle,
+          width: '100%',
+          maxWidth: isMobileStudentBooking ? '100%' : 960,
+          margin: '0 auto',
+        }}
+      >
         <header
           style={{
             display: 'flex',
@@ -1772,24 +4045,168 @@ export default function StudentBookingPage() {
             alignItems: 'flex-start',
             gap: 16,
             flexWrap: 'wrap',
-            marginBottom: 24,
+            marginBottom: isMobileStudentBooking ? 16 : 24,
+            ...studentBookingMobileOverflowGuardStyle,
           }}
         >
-          <div>
-            <h1 style={{ margin: 0, fontSize: '2rem' }}>수업 예약</h1>
-            <p style={{ margin: '8px 0 0 0', opacity: 0.78 }}>
-              {currentAcademy?.name || currentAcademyId || '-'} · {user?.email || '-'}
+          <div style={studentBookingMobileContentGuardStyle}>
+            <h1
+              style={{
+                margin: 0,
+                fontSize: isMobileStudentBooking ? '1.65rem' : '2rem',
+                ...studentBookingMobileTextGuardStyle,
+              }}
+            >
+              수업 예약
+            </h1>
+            <p
+              data-testid="student-booking-identity-line"
+              style={{
+                margin: '8px 0 0 0',
+                opacity: 0.78,
+                ...studentBookingMobileTextGuardStyle,
+              }}
+            >
+              {studentIdentityLine}
             </p>
+            {scopedStudentId ? (
+              <p
+                data-testid="student-booking-linked-student-id"
+                style={{
+                  margin: '4px 0 0 0',
+                  opacity: 0.55,
+                  fontSize: 12,
+                  ...studentBookingMobileTextGuardStyle,
+                }}
+              >
+                학생 ID: {scopedStudentId}
+              </p>
+            ) : null}
           </div>
-          <button
-            type="button"
-            className="btn-primary"
-            onClick={handleSignOut}
-            style={{ minWidth: 120 }}
+          <div
+            style={{
+              display: 'grid',
+              gap: 10,
+              justifyItems: isMobileStudentBooking ? 'stretch' : 'end',
+              width: isMobileStudentBooking ? '100%' : 'auto',
+              ...studentBookingMobileOverflowGuardStyle,
+            }}
           >
-            로그아웃
-          </button>
+            <div
+              data-testid="student-booking-view-mode-toggle"
+              style={{
+                display: isMobileStudentBooking ? 'grid' : 'flex',
+                gridTemplateColumns: isMobileStudentBooking
+                  ? 'repeat(3, minmax(0, 1fr))'
+                  : undefined,
+                gap: 4,
+                padding: 4,
+                border: '1px solid #30384b',
+                borderRadius: isMobileStudentBooking ? 18 : 999,
+                background: '#101827',
+                flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
+                width: isMobileStudentBooking ? '100%' : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
+              }}
+            >
+              {studentBookingViewModeButtons.map((option) => {
+                const selected = studentBookingViewModePreference === option.value
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    data-testid={`student-booking-view-mode-${option.value}`}
+                    onClick={() => handleStudentBookingViewModeChange(option.value)}
+                    aria-pressed={selected}
+                    aria-label={option.label}
+                    title={option.label}
+                    style={{
+                      border: `1px solid ${selected ? '#6ea8ff' : 'transparent'}`,
+                      borderRadius: 999,
+                      background: selected ? '#244166' : 'transparent',
+                      color: selected ? 'white' : '#b6c0d0',
+                      padding: isMobileStudentBooking ? '7px 8px' : '7px 10px',
+                      minHeight: isMobileStudentBooking ? 34 : undefined,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      fontWeight: selected ? 800 : 700,
+                      flex: isMobileStudentBooking ? undefined : '0 0 auto',
+                      minWidth: 0,
+                      width: isMobileStudentBooking ? '100%' : undefined,
+                      maxWidth: isMobileStudentBooking ? '100%' : undefined,
+                      boxSizing: 'border-box',
+                      whiteSpace: 'normal',
+                      lineHeight: 1.2,
+                      ...studentBookingMobileTextGuardStyle,
+                    }}
+                  >
+                    {isMobileStudentBooking ? option.mobileLabel : option.label}
+                  </button>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSignOut}
+              style={{
+                minWidth: isMobileStudentBooking ? 0 : 120,
+                minHeight: isMobileStudentBooking ? 44 : undefined,
+                width: isMobileStudentBooking ? '100%' : undefined,
+                maxWidth: isMobileStudentBooking ? '100%' : undefined,
+                boxSizing: 'border-box',
+              }}
+            >
+              로그아웃
+            </button>
+          </div>
         </header>
+
+        {isMobileStudentBooking && !pageBlockedReason ? (
+          <nav
+            aria-label="학생 예약 빠른 이동"
+            data-testid="student-booking-mobile-tabs"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: 6,
+              marginBottom: 16,
+              position: 'sticky',
+              top: isMobileStudentBooking ? 'env(safe-area-inset-top, 0px)' : 0,
+              zIndex: 3,
+              padding: '8px 0',
+              background: 'rgba(8,18,33,0.92)',
+              backdropFilter: 'blur(10px)',
+              ...studentBookingMobileOverflowGuardStyle,
+            }}
+          >
+            {studentBookingQuickNavItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => scrollToStudentBookingSection(item.id)}
+                style={{
+                  minHeight: 44,
+                  border: '1px solid #33445f',
+                  borderRadius: 12,
+                  background: '#172235',
+                  color: 'white',
+                  fontSize: 12,
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  minWidth: 0,
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  whiteSpace: 'normal',
+                  lineHeight: 1.2,
+                  ...studentBookingMobileTextGuardStyle,
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
+        ) : null}
 
         {pageBlockedReason ? (
           <div
@@ -1798,36 +4215,189 @@ export default function StudentBookingPage() {
               borderRadius: 16,
               padding: 24,
               background: 'rgba(17, 24, 39, 0.78)',
+              ...studentBookingMobileOverflowGuardStyle,
             }}
           >
             <h2 style={{ marginTop: 0 }}>예약 페이지를 열 수 없습니다.</h2>
             <p style={{ marginBottom: 0, opacity: 0.78 }}>{pageBlockedReason}</p>
           </div>
 	        ) : (
-	          <div style={{ display: 'grid', gap: 20 }}>
-	            <TodaySchedulePanel
-	              items={todayScheduleItems}
-	              loading={todayScheduleLoading}
-	              showStudent={false}
-	            />
-            <DailyMaterialStudentPanel
-              material={
-                dailyMaterials.find((material) => material.id === todayDailyMaterialId) ||
-                dailyMaterials[0] ||
-                null
-              }
-              loading={dailyMaterialsLoading}
-            />
-            {dailyMaterialsError ? (
-              <p style={{ color: '#f4a7a7', margin: 0 }}>{dailyMaterialsError}</p>
-            ) : null}
+	          <div
+              style={{
+                display: 'grid',
+                gap: isMobileStudentBooking ? 16 : 20,
+                ...studentBookingMobileOverflowGuardStyle,
+              }}
+            >
+	            <section
+                  id="student-ticket-summary-section"
+	              data-testid="student-ticket-summary-section"
+	              style={{
+	                border: '1px solid #3b4a66',
+	                borderRadius: isMobileStudentBooking ? 20 : 16,
+	                background: '#182235',
+	                padding: isMobileStudentBooking ? 16 : 18,
+                    order: isMobileStudentBooking ? 1 : undefined,
+                    ...studentBookingMobileOverflowGuardStyle,
+	              }}
+	            >
+	              <h2 style={{ margin: '0 0 8px 0', fontSize: '1.1rem' }}>내 수강권</h2>
+	              <p style={{ margin: '0 0 12px 0', opacity: 0.72, fontSize: 14 }}>
+                수강권별 남은 횟수와 예약 가능 횟수를 확인할 수 있습니다.
+              </p>
+	              {studentPackagesError ? (
+	                <p style={{ color: '#f4a7a7', margin: 0 }}>{studentPackagesError}</p>
+	              ) : null}
+	              {studentTicketSummaryLoading ? (
+	                <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
+	              ) : (
+	                <div style={{ display: 'grid', gap: 12 }}>
+                    <div data-testid="student-private-ticket-summary-block">
+                      <div data-testid="student-private-package-summary-section">
+                        <p style={{ margin: '0 0 8px 0', fontSize: 13, opacity: 0.72 }}>개인 수강권</p>
+                        {studentTicketSummary.privateSummaries.length > 0 ? (
+                          studentTicketSummary.privateSummaries.map((summary) => (
+                            <div
+                              key={summary.id}
+                              data-testid="student-private-ticket-summary-row"
+                              style={{
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 4,
+                                opacity: summary.muted ? 0.62 : 1,
+                              }}
+                            >
+                              <span data-testid="student-private-ticket-summary-usage">
+                                {summary.teacherLabel} · {summary.usageText}
+                              </span>
+                              {summary.coverageText ? (
+                                <span
+                                  data-testid="student-private-ticket-summary-coverage"
+                                  style={{ opacity: 0.86, fontSize: 14 }}
+                                >
+                                  {summary.coverageText}
+                                </span>
+                              ) : null}
+                              {summary.scheduleText ? (
+                                <span
+                                  data-testid="student-private-ticket-summary-schedule"
+                                  style={{ opacity: 0.86, fontSize: 14 }}
+                                >
+                                  {summary.scheduleText}
+                                </span>
+                              ) : null}
+                              {summary.cancelUsageText ? (
+                                <span
+                                  data-testid="student-private-ticket-summary-cancel-usage"
+                                  style={{ opacity: 0.86, fontSize: 14 }}
+                                >
+                                  {summary.cancelUsageText}
+                                </span>
+                              ) : null}
+                              {summary.registrationSummaryText ? (
+                                <span
+                                  data-testid="student-private-ticket-summary-registration"
+                                  style={{ opacity: 0.86, fontSize: 13 }}
+                                >
+                                  {summary.registrationSummaryText}
+                                </span>
+                              ) : null}
+                              {summary.statusText ? (
+                                <span style={{ opacity: 0.72, fontSize: 13 }}>{summary.statusText}</span>
+                              ) : null}
+                            </div>
+                          ))
+                        ) : (
+                          <p
+                            data-testid="student-private-ticket-summary-empty"
+                            style={{ margin: 0, opacity: 0.78 }}
+                          >
+                            사용 가능한 개인 수강권이 없습니다.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+	                  <div data-testid="student-group-ticket-summary-block">
+	                    <p style={{ margin: '0 0 8px 0', fontSize: 13, opacity: 0.72 }}>단체 수강권</p>
+	                    {studentTicketSummary.groupSummaries.length > 0 ? (
+	                      studentTicketSummary.groupSummaries.map((summary) => (
+	                        <div
+	                          key={summary.id}
+	                          data-testid="student-group-ticket-summary-row"
+	                          style={{
+	                            display: 'flex',
+	                            flexDirection: 'column',
+	                            gap: 4,
+	                            opacity: summary.muted ? 0.62 : 1,
+	                          }}
+	                        >
+	                          <span data-testid="student-group-ticket-summary-usage">
+	                            {summary.classLabel} · {summary.usageText}
+	                          </span>
+	                          {summary.scheduleText ? (
+	                            <span
+	                              data-testid="student-group-ticket-summary-schedule"
+	                              style={{ opacity: 0.86, fontSize: 14 }}
+	                            >
+	                              {summary.scheduleText}
+	                            </span>
+	                          ) : null}
+	                          {summary.statusText ? (
+	                            <span style={{ opacity: 0.72, fontSize: 13 }}>{summary.statusText}</span>
+	                          ) : null}
+	                        </div>
+	                      ))
+	                    ) : (
+	                      <p
+	                        data-testid="student-group-ticket-summary-empty"
+	                        style={{ margin: 0, opacity: 0.78 }}
+	                      >
+	                        단체 수강권 등록 필요
+	                      </p>
+	                    )}
+	                  </div>
+	                </div>
+	              )}
+	            </section>
+	            <div
+                style={{
+                  order: isMobileStudentBooking ? 8 : undefined,
+                  ...studentBookingMobileOverflowGuardStyle,
+                }}
+              >
+	              <TodaySchedulePanel
+	                items={todayScheduleItems}
+	                loading={todayScheduleLoading}
+	                showStudent={false}
+	              />
+	            </div>
+            <div
+              style={{
+                order: isMobileStudentBooking ? 9 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
+              }}
+            >
+              <DailyMaterialStudentPanel
+                material={
+                  dailyMaterials.find((material) => material.id === todayDailyMaterialId) ||
+                  dailyMaterials[0] ||
+                  null
+                }
+                loading={dailyMaterialsLoading}
+              />
+              {dailyMaterialsError ? (
+                <p style={{ color: '#f4a7a7', margin: '8px 0 0 0' }}>{dailyMaterialsError}</p>
+              ) : null}
+            </div>
 
 	            <section
 	              style={{
                 border: '1px solid #3b4a66',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 18 : 16,
                 background: '#182235',
                 padding: 18,
+                order: isMobileStudentBooking ? 10 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <p style={{ margin: 0, fontSize: 14, opacity: 0.9 }}>
@@ -1836,11 +4406,14 @@ export default function StudentBookingPage() {
             </section>
 
             <section
+              id="student-upcoming-private-lessons-section"
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 2 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 예정 수업</h2>
@@ -1858,81 +4431,198 @@ export default function StudentBookingPage() {
                 </p>
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-                  {upcomingPrivateScheduleItems.map((item) => (
-                    <article
-                      key={item.id}
-                      data-testid="student-upcoming-private-lesson-card"
-                      data-source={item.source}
-                      data-source-id={item.sourceId}
-                      style={{
-                        border: '1px solid #283042',
-                        borderRadius: 14,
-                        padding: 16,
-                        background: '#1a1f2b',
-                      }}
-                    >
-                      <div
+                  {upcomingPrivateScheduleItems.map((item) => {
+                    const fixedLessonForCancel = getUpcomingFixedPrivateCancelLesson(item)
+                    const fixedCancelUnavailableReason = fixedLessonForCancel
+                      ? getFixedPrivateLessonCancelUnavailableReason(fixedLessonForCancel) ||
+                        '수강권 연결 정보가 없어 학원에 문의해 주세요.'
+                      : ''
+                    const fixedCancelNode = fixedLessonForCancel
+                      ? renderFixedPrivateLessonCancelAction(fixedLessonForCancel, {
+                          forceRender: true,
+                        })
+                      : null
+
+                    return (
+                      <article
+                        key={item.id}
+                        data-testid="student-upcoming-private-lesson-card"
+                        data-source={item.source}
+                        data-source-id={item.sourceId}
                         style={{
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))',
-                          gap: 12,
-                          alignItems: 'center',
+                          border: '1px solid #283042',
+                          borderRadius: 14,
+                          padding: 16,
+                          background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            날짜
-                          </span>
-                          {item.date || '-'}
-                        </span>
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            시간
-                          </span>
-                          {item.time || '-'}
-                        </span>
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            선생님
-                          </span>
-                          {item.teacherLabel || '-'}
-                        </span>
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            수업명
-                          </span>
-                          {item.title || '-'}
-                        </span>
-                        {item.sessionLabel ? (
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateColumns: isMobileStudentBooking
+                              ? 'repeat(2, minmax(0, 1fr))'
+                              : 'repeat(auto-fit, minmax(112px, 1fr))',
+                            gap: 12,
+                            alignItems: 'center',
+                            ...studentBookingMobileContentGuardStyle,
+                          }}
+                        >
+                          {item.typeLabel ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                구분
+                              </span>
+                              {item.typeLabel}
+                            </span>
+                          ) : null}
                           <span>
                             <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                              회차
+                              날짜
                             </span>
-                            <span
-                              data-testid="student-upcoming-session-badge"
-                              style={{
-                                display: 'inline-block',
-                                border: '1px solid rgba(120, 140, 200, 0.45)',
-                                borderRadius: 4,
-                                padding: '2px 6px',
-                                background: 'rgba(60, 120, 90, 0.35)',
-                                fontWeight: 700,
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {item.sessionLabel}
-                            </span>
+                            {item.date || '-'}
                           </span>
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              시간
+                            </span>
+                            {item.time || '-'}
+                          </span>
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              선생님
+                            </span>
+                            {item.teacherLabel || '-'}
+                          </span>
+                          {item.studentName ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                학생
+                              </span>
+                              {item.studentName}
+                            </span>
+                          ) : null}
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              수업명
+                            </span>
+                            {item.title || '-'}
+                          </span>
+                          {item.sessionLabel ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                회차
+                              </span>
+                              <span
+                                data-testid="student-upcoming-session-badge"
+                                style={{
+                                  display: 'inline-block',
+                                  border: '1px solid rgba(120, 140, 200, 0.45)',
+                                  borderRadius: 4,
+                                  padding: '2px 6px',
+                                  background: 'rgba(60, 120, 90, 0.35)',
+                                  fontWeight: 700,
+                                  whiteSpace: 'nowrap',
+                                }}
+                              >
+                                {item.sessionLabel}
+                              </span>
+                            </span>
+                          ) : null}
+                          {item.durationLabel ? (
+                            <span>
+                              <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                                길이
+                              </span>
+                              {item.durationLabel}
+                            </span>
+                          ) : null}
+                          <span>
+                            <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
+                              상태
+                            </span>
+                            {item.statusLabel || '수업 예정'}
+                          </span>
+                        </div>
+                        {fixedLessonForCancel ? (
+                          <div
+                            data-testid="student-upcoming-fixed-private-cancel-action"
+                            data-fixed-cancel-callable="cancelFixedPrivateLessonOccurrence"
+                            data-fixed-cancel-model="fixedCancelLesson"
+                            data-fixed-cancel-cutoff-reason="수업 시작 10시간 전까지만 취소할 수 있습니다."
+                            data-fixed-cancel-exhausted-reason="이 수강권의 취소 가능 횟수를 모두 사용했습니다."
+                            data-fixed-cancel-missing-link-reason="수강권 연결 정보가 없어 학원에 문의해 주세요."
+                            aria-label="고정 예약 1:1 수업 취소 또는 수업 취소 불가"
+                          >
+                            {fixedCancelNode || (
+                              <div
+                                data-testid="student-upcoming-fixed-private-cancel-fallback"
+                                style={{
+                                  display: isMobileStudentBooking ? 'grid' : 'flex',
+                                  gridTemplateColumns: isMobileStudentBooking
+                                    ? 'repeat(2, minmax(0, 1fr))'
+                                    : undefined,
+                                  justifyContent: isMobileStudentBooking ? undefined : 'space-between',
+                                  gap: 10,
+                                  alignItems: 'center',
+                                  flexWrap: isMobileStudentBooking ? undefined : 'wrap',
+                                  marginTop: 12,
+                                  width: isMobileStudentBooking ? '100%' : undefined,
+                                  maxWidth: isMobileStudentBooking ? '100%' : undefined,
+                                  minWidth: 0,
+                                  boxSizing: 'border-box',
+                                }}
+                              >
+                                <p
+                                  style={{
+                                    margin: 0,
+                                    opacity: 0.72,
+                                    fontSize: 13,
+                                    ...studentBookingMobileTextGuardStyle,
+                                  }}
+                                >
+                                  {fixedCancelUnavailableReason ||
+                                    '수강권 연결 정보가 없어 학원에 문의해 주세요.'}
+                                </p>
+                                <span
+                                  style={{
+                                    display: 'inline-flex',
+                                    justifyContent: 'center',
+                                    alignItems: 'center',
+                                    padding: isMobileStudentBooking ? '11px 14px' : '6px 10px',
+                                    minHeight: isMobileStudentBooking ? 44 : undefined,
+                                    borderRadius: 999,
+                                    border: '1px solid #9a3f48',
+                                    background: '#3a1f24',
+                                    color: '#ffd8dc',
+                                    cursor: 'not-allowed',
+                                    fontSize: isMobileStudentBooking ? 14 : 12,
+                                    fontWeight: 800,
+                                    flex: isMobileStudentBooking ? undefined : '0 0 auto',
+                                    ...(isMobileStudentBooking
+                                      ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                      : {}),
+                                  }}
+                                >
+                                  수업 취소 불가
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         ) : null}
-                        <span>
-                          <span style={{ opacity: 0.58, display: 'block', fontSize: 11 }}>
-                            상태
-                          </span>
-                          {item.statusLabel || '수업 예정'}
-                        </span>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    )
+                  })}
+                  {isMobileStudentBooking ? (
+                    <div
+                      aria-hidden="true"
+                      data-testid="student-upcoming-private-lessons-mobile-spacer"
+                      style={{
+                        height: STUDENT_BOOKING_MOBILE_CARD_LIST_BOTTOM_SPACER_HEIGHT,
+                        ...studentBookingMobileContentGuardStyle,
+                      }}
+                    />
+                  ) : null}
                 </div>
               )}
             </section>
@@ -1940,51 +4630,42 @@ export default function StudentBookingPage() {
             <section
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 6 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
-              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>단체반 예약</h2>
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 반 등록 수업</h2>
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                내 반 권한이 있는 수업만 표시됩니다.
+                수강권으로 반에 등록된 수업입니다. 별도 예약 없이 참석하면 됩니다.
               </p>
 
               {accessError ? <p style={{ color: '#f4a7a7' }}>{accessError}</p> : null}
-              {lessonsError ? <p style={{ color: '#f4a7a7' }}>{lessonsError}</p> : null}
               {!accessResolved || accessLoading || lessonsLoading ? (
                 <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
-              ) : sortedLessons.length === 0 ? (
+              ) : sortedFixedMemberLessons.length === 0 ? (
                 <p style={{ opacity: 0.78, marginBottom: 0 }}>
-                  지금 예약 가능한 단체반 수업이 없습니다. 학원 안내 후 다시 확인해 주세요.
+                  아직 예정된 반 등록 수업이 없습니다.
                 </p>
               ) : (
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-                  {sortedLessons.map((lesson) => {
-                    const reservation = reservationByLessonId.get(lesson.id) || null
-                    const isReserved = reservation?.status === 'active'
-                    const reservationId = buildGroupLessonReservationId({
-                      academyId: currentAcademyId,
-                      lessonId: lesson.id,
-                      studentId: scopedStudentId,
-                    })
-                    const isBusy = busyReservationId === reservationId
-                    const canReserve =
-                      !isReserved &&
-                      !busyReservationId &&
-                      lesson.isBookable === true &&
-                      Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
+                  {sortedFixedMemberLessons.map((lesson) => {
+                    const lessonBookingStatusLabel = getFixedMemberLessonStatusLabel(lesson)
 
                     return (
                       <article
                         key={lesson.id}
-                        data-testid="student-booking-lesson-card"
+                        data-testid="student-booking-fixed-lesson-card"
                         data-lesson-id={lesson.id}
+                        data-enrollment-type="fixed"
                         style={{
                           border: '1px solid #283042',
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -1993,10 +4674,15 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
-                            <strong style={{ fontSize: '1rem' }}>{lesson.subject || '그룹 수업'}</strong>
+                          <div style={studentBookingMobileTextGuardStyle}>
+                            <strong style={{ fontSize: '1rem' }}>
+                              {getGroupLessonDisplaySubject(lesson)}
+                            </strong>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {[lesson.date, lesson.time].filter(Boolean).join(' · ') || lesson.id}
                             </div>
@@ -2006,27 +4692,209 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              정원 {getLessonCapacityLabel(lesson)}
-                              {isReserved ? ' · 예약 완료' : ''}
+                              {lessonBookingStatusLabel} · 예약 필요 없음
                             </div>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                            {isReserved ? (
+                          <span
+                            data-testid="student-booking-fixed-member-status"
+                            style={{
+                              padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                              borderRadius: isMobileStudentBooking ? 12 : 10,
+                              border: '1px solid #3a4a66',
+                              background: '#1f2940',
+                              color: '#c8d4ef',
+                              fontWeight: isMobileStudentBooking ? 800 : 600,
+                              fontSize: 13,
+                              alignSelf: 'flex-start',
+                            }}
+                          >
+                            예약 필요 없음
+                          </span>
+                        </div>
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+            </section>
+
+            <section
+              style={{
+                border: '1px solid #2e3240',
+                borderRadius: isMobileStudentBooking ? 20 : 16,
+                background: '#151922',
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 7 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
+              }}
+            >
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>자유 예약 가능한 단체반</h2>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
+                openGroup 수강권 또는 자유 예약 권한으로 직접 예약할 수 있는 수업만 표시됩니다.
+              </p>
+
+              {accessError ? <p style={{ color: '#f4a7a7' }}>{accessError}</p> : null}
+              {lessonsError ? <p style={{ color: '#f4a7a7' }}>{lessonsError}</p> : null}
+              {!accessResolved || accessLoading || lessonsLoading ? (
+                <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
+              ) : sortedGroupFreeBookingLessons.length === 0 ? (
+                <p style={{ opacity: 0.78, marginBottom: 0 }}>
+                  현재 자유 예약 가능한 단체반 수업이 없습니다. 코스 유형, 남은 좌석, 잔여 횟수,
+                  예약 활성 상태를 확인해 주세요.
+                </p>
+              ) : (
+                <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
+                  {sortedGroupFreeBookingLessons.map((lesson) => {
+                    const lessonId = String(lesson.id || '').trim()
+                    const reservation = reservationByLessonId.get(lesson.id) || null
+                    const isReserved =
+                      reservation?.status === 'active' ||
+                      locallyReservedGroupLessonIds.includes(lessonId)
+                    const reservationId = buildGroupLessonReservationId({
+                      academyId: currentAcademyId,
+                      lessonId: lesson.id,
+                      studentId: scopedStudentId,
+                    })
+                    const isBusy = busyReservationId === reservationId
+                    const remainingSeats = Number(
+                      lesson.remainingSeats ?? lesson.seatAvailability?.remainingSeats
+                    )
+                    const hasRemainingSeats = Number.isFinite(remainingSeats)
+                      ? remainingSeats > 0
+                      : Number(lesson.bookedCount ?? 0) < Number(lesson.capacity ?? 0)
+                    const lessonBookingStatusLabel = isReserved
+                      ? '예약 완료'
+                      : lesson.isBookable !== true
+                      ? '예약 비활성'
+                      : lesson.groupTicketStatusLabel
+                        ? lesson.groupTicketStatusLabel
+                        : hasRemainingSeats
+                        ? '예약 가능'
+                        : '마감'
+                    const groupTicketAvailableToBook = Number(lesson.groupTicketAvailableToBook ?? 0)
+                    const hasGroupTicketBalanceProjection =
+                      lesson.groupTicketAvailableToBook !== undefined ||
+                      Boolean(lesson.groupTicketStatusLabel)
+                    const hasGroupTicketAvailability =
+                      !hasGroupTicketBalanceProjection ||
+                      (Number.isFinite(groupTicketAvailableToBook) && groupTicketAvailableToBook > 0)
+                    const groupReserveDisabledReason = isReserved
+                      ? '예약 완료'
+                      : lesson.isBookable !== true
+                      ? '예약 비활성'
+                      : !hasRemainingSeats
+                      ? '마감'
+                      : lesson.groupTicketStatusLabel && !hasGroupTicketAvailability
+                        ? lesson.groupTicketStatusLabel
+                        : '마감'
+                    const canReserve =
+                      !isReserved &&
+                      !busyReservationId &&
+                      lesson.isBookable === true &&
+                      hasRemainingSeats &&
+                      hasGroupTicketAvailability
+                    const reservationPackage = reservation?.packageId
+                      ? studentPackageById.get(String(reservation.packageId || '').trim()) || null
+                      : null
+                    const groupCancelLimitInfo =
+                      isReserved && reservationPackage
+                        ? getGroupCancelLimitInfo(
+                            reservationPackage,
+                            reservations,
+                            scopedStudentId
+                          )
+                        : { enabled: false, remainingCount: null, label: '' }
+                    const cancelLimitReached =
+                      groupCancelLimitInfo.enabled &&
+                      Number(groupCancelLimitInfo.remainingCount ?? 0) <= 0
+                    const canCancelGroupReservation = canShowGroupReservationCancelAction(
+                      reservation,
+                      lesson
+                    )
+                    const cancelDisabled = Boolean(busyReservationId) || cancelLimitReached
+
+                    return (
+                      <article
+                        key={lesson.id}
+                        data-testid="student-booking-lesson-card"
+                        data-lesson-id={lesson.id}
+                        data-enrollment-type="guest"
+                        style={{
+                          border: '1px solid #283042',
+                          borderRadius: 14,
+                          padding: 16,
+                          background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 12,
+                            flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
+                          }}
+                        >
+                          <div style={studentBookingMobileTextGuardStyle}>
+                            <strong style={{ fontSize: '1rem' }}>
+                              {getGroupLessonDisplaySubject(lesson)}
+                            </strong>
+                            <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
+                              {[lesson.date, lesson.time].filter(Boolean).join(' · ') || lesson.id}
+                            </div>
+                            {getGroupCourseTypeLabel(lesson.groupCourseType) ? (
+                              <div style={{ marginTop: 6, opacity: 0.7, fontSize: 13 }}>
+                                {getGroupCourseTypeLabel(lesson.groupCourseType)}
+                              </div>
+                            ) : null}
+                            <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
+                              {lessonBookingStatusLabel} · {getLessonCapacityLabel(lesson)}
+                            </div>
+                            {isReserved && groupCancelLimitInfo.enabled ? (
+                              <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
+                                {groupCancelLimitInfo.label}
+                                {cancelLimitReached ? ' · 취소 한도 도달' : ''}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              ...(isMobileStudentBooking
+                                ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                : {}),
+                            }}
+                          >
+                            {isReserved && canCancelGroupReservation ? (
                               <button
                                 type="button"
                                 onClick={() => cancelReservation(reservation)}
-                                disabled={Boolean(busyReservationId)}
+                                disabled={cancelDisabled}
                                 data-testid="student-booking-cancel-button"
                                 style={{
-                                  padding: '10px 14px',
-                                  borderRadius: 10,
+                                  padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                                  minHeight: isMobileStudentBooking ? 46 : undefined,
+                                  borderRadius: isMobileStudentBooking ? 12 : 10,
                                   border: '1px solid #744242',
                                   background: '#4a2a2a',
                                   color: 'white',
-                                  cursor: busyReservationId ? 'not-allowed' : 'pointer',
+                                  cursor: cancelDisabled ? 'not-allowed' : 'pointer',
+                                  fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                  ...(isMobileStudentBooking
+                                    ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                    : {}),
                                 }}
                               >
-                                {isBusy ? '취소 중...' : '예약 취소'}
+                                {isBusy
+                                  ? '취소 중...'
+                                  : cancelLimitReached
+                                    ? '취소 한도 도달'
+                                    : '예약 취소'}
                               </button>
                             ) : (
                               <button
@@ -2035,15 +4903,24 @@ export default function StudentBookingPage() {
                                 disabled={!canReserve}
                                 data-testid="student-booking-reserve-button"
                                 style={{
-                                  padding: '10px 14px',
-                                  borderRadius: 10,
+                                  padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                                  minHeight: isMobileStudentBooking ? 46 : undefined,
+                                  borderRadius: isMobileStudentBooking ? 12 : 10,
                                   border: '1px solid #48643a',
                                   background: '#20351f',
                                   color: 'white',
                                   cursor: canReserve ? 'pointer' : 'not-allowed',
+                                  fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                  ...(isMobileStudentBooking
+                                    ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                    : {}),
                                 }}
                               >
-                                {isBusy ? '예약 중...' : '예약'}
+                                {isBusy
+                                  ? '예약 중...'
+                                  : canReserve
+                                    ? '단체반 예약'
+                                    : groupReserveDisabledReason}
                               </button>
                             )}
                           </div>
@@ -2056,61 +4933,61 @@ export default function StudentBookingPage() {
             </section>
 
             <section
-              data-testid="student-private-package-summary-section"
+              id="student-private-booking-section"
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
-              }}
-            >
-              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 1:1 수강권</h2>
-              <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                예약은 수강권을 바로 차감하지 않습니다. 실제 수업 후 차감됩니다.
-              </p>
-              {!privateAccessResolved || privateAccessLoading || privateSlotsLoading ? (
-                <p style={{ opacity: 0.8, marginTop: 16, marginBottom: 0 }}>불러오는 중...</p>
-              ) : privatePackageSummaries.length === 0 ? (
-                <p style={{ opacity: 0.78, marginTop: 16, marginBottom: 0 }}>
-                  개인 수강권이 없습니다. 학원에 문의해 주세요.
-                </p>
-              ) : (
-                <div style={{ display: 'grid', gap: 10, marginTop: 16 }}>
-                  {privatePackageSummaries.map((pkg) => (
-                    <article
-                      key={pkg.id}
-                      data-testid="student-private-package-summary-card"
-                      style={{
-                        border: '1px solid #283042',
-                        borderRadius: 12,
-                        padding: 14,
-                        background: '#1a1f2b',
-                      }}
-                    >
-                      <strong style={{ display: 'block', fontSize: '1rem' }}>
-                        {getPrivatePackageSummaryTeacherLabel(pkg)}
-                      </strong>
-                      <div style={{ marginTop: 6, opacity: 0.76, fontSize: 14 }}>
-                        {formatPrivatePackageUsageSummary(pkg)}
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section
-              style={{
-                border: '1px solid #2e3240',
-                borderRadius: 16,
-                background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 3 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>1:1 수업 예약</h2>
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                내 개인 수강권 선생님의 예약 가능한 시간만 표시됩니다.
+                선생님의 주간 1:1 시간표입니다. 수업이 있는 시간은 ‘수업 있음’으로 표시됩니다.
               </p>
+              <div
+                style={{
+                  display: isMobileStudentBooking ? 'grid' : 'inline-flex',
+                  gridTemplateColumns: isMobileStudentBooking
+                    ? 'repeat(2, minmax(0, 1fr))'
+                    : undefined,
+                  gap: 4,
+                  marginTop: 12,
+                  padding: isMobileStudentBooking ? 5 : 4,
+                  border: '1px solid #30384b',
+                  borderRadius: isMobileStudentBooking ? 14 : 8,
+                  background: '#111722',
+                  width: isMobileStudentBooking ? '100%' : undefined,
+                  ...studentBookingMobileOverflowGuardStyle,
+                }}
+              >
+                <button
+                  type="button"
+                  data-testid="private-slot-view-mode-all"
+                  onClick={() => setPrivateSlotViewMode('all')}
+                  aria-pressed={privateSlotViewMode === 'all'}
+                  style={getPrivateSlotViewModeButtonStyle(
+                    privateSlotViewMode === 'all',
+                    isMobileStudentBooking
+                  )}
+                >
+                  전체 시간 보기
+                </button>
+                <button
+                  type="button"
+                  data-testid="private-slot-view-mode-available"
+                  onClick={() => setPrivateSlotViewMode('available')}
+                  aria-pressed={privateSlotViewMode === 'available'}
+                  style={getPrivateSlotViewModeButtonStyle(
+                    privateSlotViewMode === 'available',
+                    isMobileStudentBooking
+                  )}
+                >
+                  예약 가능한 시간만
+                </button>
+              </div>
               <div
                 data-testid="student-private-booking-policy-notice"
                 style={{
@@ -2122,127 +4999,332 @@ export default function StudentBookingPage() {
                   color: 'white',
                   fontSize: 14,
                   lineHeight: 1.6,
+                  ...studentBookingMobileContentGuardStyle,
                 }}
               >
-                <div>예약은 수업 시작 6시간 전까지만 취소할 수 있습니다.</div>
-                <div>학생 직접 취소는 최대 2회까지 가능합니다.</div>
-                <div>2회를 초과하면 학원에 문의해 주세요.</div>
+                <div>예약은 수업 시작 7시간 전까지만 가능합니다.</div>
+                {privateCancelPolicyLines.map((line) => (
+                  <div key={line}>{line}</div>
+                ))}
               </div>
 
               {privateAccessError ? <p style={{ color: '#f4a7a7' }}>{privateAccessError}</p> : null}
               {privateSlotsError ? <p style={{ color: '#f4a7a7' }}>{privateSlotsError}</p> : null}
               {!privateAccessResolved || privateAccessLoading || privateSlotsLoading ? (
                 <p style={{ opacity: 0.8, marginBottom: 0 }}>불러오는 중...</p>
-              ) : sortedPrivateSlots.length === 0 ? (
+              ) : privateCalendarWeeks.length === 0 ? (
                 <p style={{ opacity: 0.78, marginBottom: 0 }}>
                   지금 예약 가능한 1:1 수업 시간이 없습니다. 학원 안내 후 다시 확인해 주세요.
                 </p>
               ) : (
-                <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
-                  {sortedPrivateSlots.map((slot) => {
-                    const reservation = privateReservationBySlotId.get(slot.id) || null
-                    const reservationId = buildPrivateLessonReservationId({
-                      academyId: currentAcademyId,
-                      slotId: slot.id,
-                      studentId: scopedStudentId,
-                    })
-                    const isBusy = busyPrivateReservationId === reservationId
-                    const hasActivePrivateReservation = reservation?.status === 'active'
-                    const isReservedByAnyone =
-                      slot.isReserved === true || String(slot.status || '').trim() === 'reserved'
-                    const matchingPackage =
-                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot.teacher) ||
-                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot.teacherName)
-                    const canReserve =
-                      PRIVATE_SLOT_BOOKING_ENABLED &&
-                      privateSlotBookingPilotEnabled &&
-                      slot.isBookable === true &&
-                      !hasActivePrivateReservation &&
-                      !busyPrivateReservationId &&
-                      slot.status === 'open'
-
-                    return (
-                      <article
-                        key={slot.id}
-                        data-testid="student-private-slot-card"
-                        data-slot-id={slot.id}
+                <div
+                  data-testid="student-private-calendar"
+                  style={{
+                    display: 'grid',
+                    gap: isMobileStudentBooking ? 14 : 18,
+                    marginTop: 16,
+                    ...studentBookingMobileOverflowGuardStyle,
+                  }}
+                >
+                  {privateCalendarWeeks.map((week) => (
+                    <div
+                      key={week.weekStart}
+                      style={{
+                        display: 'grid',
+                        gap: 10,
+                        ...studentBookingMobileOverflowGuardStyle,
+                      }}
+                    >
+                      <div style={{ opacity: 0.76, fontSize: 13, fontWeight: 700 }}>
+                        {week.weekStart} - {week.weekEnd}
+                      </div>
+                      <div
                         style={{
-                          border: '1px solid #283042',
-                          borderRadius: 14,
-                          padding: 16,
-                          background: '#1a1f2b',
+                          display: 'grid',
+                          gridTemplateColumns: isMobileStudentBooking
+                            ? '1fr'
+                            : 'repeat(auto-fit, minmax(150px, 1fr))',
+                          gap: isMobileStudentBooking ? 12 : 10,
+                          ...studentBookingMobileOverflowGuardStyle,
                         }}
                       >
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            gap: 12,
-                            flexWrap: 'wrap',
-                          }}
-                        >
-                          <div>
-                            <strong style={{ fontSize: '1rem' }}>{slot.teacher || '1:1 수업'}</strong>
-                            <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
-                              {[slot.date, slot.time].filter(Boolean).join(' · ') || slot.id}
+                        {week.days.map((day) => (
+                          <div
+                            key={day.date}
+                            data-testid="student-private-calendar-day"
+                            style={{
+                              border: '1px solid #283042',
+                              borderRadius: isMobileStudentBooking ? 16 : 8,
+                              padding: isMobileStudentBooking ? 14 : 10,
+                              background: '#171c27',
+                              minHeight: isMobileStudentBooking ? 0 : 120,
+                              ...studentBookingMobileContentGuardStyle,
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                                alignItems: 'center',
+                                fontSize: isMobileStudentBooking ? 15 : 13,
+                                fontWeight: 800,
+                                marginBottom: 10,
+                              }}
+                            >
+                              <span>{day.date}</span>
+                              {isMobileStudentBooking ? (
+                                <span style={{ opacity: 0.68, fontSize: 12 }}>
+                                  {day.slots.length}개 시간
+                                </span>
+                              ) : null}
                             </div>
-                            <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {Number(slot.durationMinutes || 0) || 50}분 · 오프라인 결제
-                            </div>
-                            {matchingPackage ? (
+                            {day.slots.length === 0 ? (
+                              <div style={{ opacity: 0.68, fontSize: isMobileStudentBooking ? 14 : 13 }}>
+                                가능한 시간이 없습니다
+                              </div>
+                            ) : (
                               <div
-                                data-testid="student-private-slot-package-summary"
-                                style={{ marginTop: 6, opacity: 0.78, fontSize: 13 }}
+                                style={{
+                                  display: 'grid',
+                                  gap: isMobileStudentBooking ? 10 : 8,
+                                  ...studentBookingMobileContentGuardStyle,
+                                }}
                               >
-                                사용 가능 수강권: 잔여{' '}
-                                {toPrivatePackageCount(matchingPackage.remainingCount)}회
+                                {day.slots.map((slot) => {
+                                  const reservation = privateReservationBySlotId.get(slot.id) || null
+                                  const reservationId = buildPrivateLessonReservationId({
+                                    academyId: currentAcademyId,
+                                    slotId: slot.id,
+                                    studentId: scopedStudentId,
+                                  })
+                                  const isBusy = busyPrivateReservationId === reservationId
+                                  const hasActivePrivateReservation = reservation?.status === 'active'
+                                  const bookingStatus = getStudentPrivateSlotStatus(
+                                    slot,
+                                    canUsePrivateBooking
+                                  )
+                                  const studentVisibleStatus = String(
+                                    slot.studentVisibleStatus || ''
+                                  ).trim()
+                                  const isStudentMaskedBusy =
+                                    studentVisibleStatus === 'busy' ||
+                                    bookingStatus === 'no_ticket' ||
+                                    bookingStatus === 'no_makeup'
+                                  const isBusySlot =
+                                    isStudentMaskedBusy ||
+                                    slot.isBusy === true ||
+                                    bookingStatus === 'busy' ||
+                                    bookingStatus === 'reserved' ||
+                                    String(slot.status || '').trim() === 'blocked'
+                                  const canReserve =
+                                    canUsePrivateBooking &&
+                                    bookingStatus === 'available' &&
+                                    slot.isBookable === true &&
+                                    !hasActivePrivateReservation &&
+                                    !busyPrivateReservationId &&
+                                    slot.status === 'open'
+                                  const statusLabel =
+                                    isStudentMaskedBusy
+                                      ? getPrivateSlotDisplayLabel(
+                                          'busy',
+                                          slot.studentVisibleStatusLabel
+                                        )
+                                      : getPrivateSlotDisplayLabel(
+                                          bookingStatus,
+                                          slot.bookingStatusLabel
+                                        )
+                                  const remainingCount = getPrivateSlotAvailableCount(slot)
+                                  const matchingPackage =
+                                    getPrivateSlotPackageSummary(slot) ||
+                                    findPrivatePackageSummaryForTeacher(
+                                      privatePackageSummaries,
+                                      slot.teacherKey
+                                    ) ||
+                                    findPrivatePackageSummaryForTeacher(
+                                      privatePackageSummaries,
+                                      slot.teacher
+                                    ) ||
+                                    findPrivatePackageSummaryForTeacher(
+                                      privatePackageSummaries,
+                                      slot.teacherName
+                                    )
+
+                                  if (isBusySlot) {
+                                    return (
+                                      <article
+                                        key={slot.id}
+                                        data-testid="student-private-busy-slot-card"
+                                        data-slot-id={slot.id}
+                                        style={getPrivateSlotCardStyle(
+                                          isStudentMaskedBusy ? 'busy' : bookingStatus,
+                                          isMobileStudentBooking
+                                        )}
+                                      >
+                                        <div
+                                          style={{
+                                            display: 'grid',
+                                            gap: isMobileStudentBooking ? 8 : 6,
+                                            ...(isMobileStudentBooking
+                                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                              : {}),
+                                          }}
+                                        >
+                                          <div
+                                            style={{
+                                              display: 'flex',
+                                              alignItems: 'flex-start',
+                                              justifyContent: 'space-between',
+                                              gap: 8,
+                                              flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
+                                              ...(isMobileStudentBooking
+                                                ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                                : {}),
+                                            }}
+                                          >
+                                            <strong
+                                              style={{
+                                                fontSize: isMobileStudentBooking ? 15 : 14,
+                                                ...studentBookingMobileTextGuardStyle,
+                                              }}
+                                            >
+                                              {slot.teacherName || slot.teacher || '1:1 수업'}
+                                            </strong>
+                                            <span style={getPrivateSlotBadgeStyle(
+                                              isStudentMaskedBusy ? 'busy' : bookingStatus
+                                            )}>
+                                              {statusLabel}
+                                            </span>
+                                          </div>
+                                          <div
+                                            style={{
+                                              opacity: 0.74,
+                                              fontSize: isMobileStudentBooking ? 14 : 13,
+                                              ...studentBookingMobileTextGuardStyle,
+                                            }}
+                                          >
+                                            {slot.date || day.date} · {slot.time || '-'} ·{' '}
+                                            {Number(slot.durationMinutes || 0) || 60}분
+                                          </div>
+                                        </div>
+                                      </article>
+                                    )
+                                  }
+
+                                  return (
+                                    <article
+                                      key={slot.id}
+                                      data-testid="student-private-slot-card"
+                                      data-slot-id={slot.id}
+                                      data-booking-status={bookingStatus}
+                                      style={getPrivateSlotCardStyle(bookingStatus, isMobileStudentBooking)}
+                                    >
+                                      <div
+                                        style={{
+                                          display: 'grid',
+                                          gap: isMobileStudentBooking ? 8 : 6,
+                                          ...(isMobileStudentBooking
+                                            ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                            : {}),
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            alignItems: 'flex-start',
+                                            justifyContent: 'space-between',
+                                            gap: 8,
+                                            flexWrap: isMobileStudentBooking ? 'wrap' : 'nowrap',
+                                            ...(isMobileStudentBooking
+                                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                              : {}),
+                                          }}
+                                        >
+                                          <strong
+                                            style={{
+                                              fontSize: isMobileStudentBooking ? 15 : 14,
+                                              ...studentBookingMobileTextGuardStyle,
+                                            }}
+                                          >
+                                            {slot.teacherName || slot.teacher || '1:1 수업'}
+                                          </strong>
+                                          <span style={getPrivateSlotBadgeStyle(bookingStatus)}>
+                                            {statusLabel}
+                                          </span>
+                                        </div>
+                                        <div
+                                          style={{
+                                            opacity: 0.74,
+                                            fontSize: isMobileStudentBooking ? 14 : 13,
+                                            ...studentBookingMobileTextGuardStyle,
+                                          }}
+                                        >
+                                          {slot.date || day.date} · {slot.time || '-'} ·{' '}
+                                          {Number(slot.durationMinutes || 0) || 60}분
+                                        </div>
+                                        {bookingStatus === 'not_open' ? (
+                                          <div style={{ opacity: 0.72, fontSize: 12, lineHeight: 1.5 }}>
+                                            <div>{formatPrivateSlotOpenDisplay(slot)} 오픈</div>
+                                            <div>{getPrivateSlotOpenRelativeDisplay(slot)}</div>
+                                          </div>
+                                        ) : null}
+                                        {bookingStatus === 'closed' ? (
+                                          <div style={{ opacity: 0.72, fontSize: 12 }}>
+                                            예약 마감 · 수업 준비 중
+                                          </div>
+                                        ) : null}
+                                        {canReserve ? (
+                                          <div style={{ opacity: 0.72, fontSize: 12 }}>
+                                            예약 가능 {remainingCount}회
+                                          </div>
+                                        ) : null}
+                                        {canReserve && matchingPackage ? (
+                                          <div
+                                            data-testid="student-private-slot-package-summary"
+                                            style={{ opacity: 0.78, fontSize: 12 }}
+                                          >
+                                            사용 가능 수강권: 잔여{' '}
+                                            {toPrivatePackageCount(matchingPackage.remainingCount)}회
+                                          </div>
+                                        ) : null}
+                                        <button
+                                          type="button"
+                                          onClick={() => reservePrivateSlot(slot)}
+                                          disabled={!canReserve}
+                                          data-testid="student-private-slot-reserve-button"
+                                          style={{
+                                            marginTop: isMobileStudentBooking ? 8 : 4,
+                                            padding: isMobileStudentBooking ? '12px 14px' : '9px 10px',
+                                            minHeight: isMobileStudentBooking ? 46 : undefined,
+                                            borderRadius: isMobileStudentBooking ? 12 : 8,
+                                            border: '1px solid #48643a',
+                                            background: canReserve ? '#20351f' : '#242b3a',
+                                            color: 'white',
+                                            cursor: canReserve ? 'pointer' : 'not-allowed',
+                                            fontSize: isMobileStudentBooking ? 14 : undefined,
+                                            fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                            ...(isMobileStudentBooking
+                                              ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                              : {}),
+                                          }}
+                                        >
+                                          {isBusy
+                                            ? '예약 중...'
+                                            : canReserve
+                                              ? '1:1 수업 예약'
+                                              : statusLabel}
+                                        </button>
+                                      </div>
+                                    </article>
+                                  )
+                                })}
                               </div>
-                            ) : null}
-                            {slot.releasedFromFixed === true ||
-                            String(slot.slotType || '').trim() === 'released_fixed' ? (
-                              <div style={{ marginTop: 6, opacity: 0.78, fontSize: 13 }}>
-                                예약 가능 1:1 시간
-                              </div>
-                            ) : null}
+                            )}
                           </div>
-                          {isReservedByAnyone ? (
-                            <span
-                              data-testid="student-private-slot-reserved-badge"
-                              style={{
-                                alignSelf: 'center',
-                                border: '1px solid #445066',
-                                borderRadius: 999,
-                                padding: '8px 12px',
-                                background: '#242b3a',
-                                color: 'white',
-                                fontSize: 14,
-                                fontWeight: 700,
-                              }}
-                            >
-                              예약 완료
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => reservePrivateSlot(slot)}
-                              disabled={!canReserve}
-                              data-testid="student-private-slot-reserve-button"
-                              style={{
-                                padding: '10px 14px',
-                                borderRadius: 10,
-                                border: '1px solid #48643a',
-                                background: '#20351f',
-                                color: 'white',
-                                cursor: canReserve ? 'pointer' : 'not-allowed',
-                              }}
-                            >
-                              {isBusy ? '예약 중...' : canReserve ? '1:1 수업 예약' : '예약 중지'}
-                            </button>
-                          )}
-                        </div>
-                      </article>
-                    )
-                  })}
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </section>
@@ -2250,14 +5332,16 @@ export default function StudentBookingPage() {
             <section
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 5 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
-              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 1:1 수업 예약</h2>
+              <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내가 직접 예약한 1:1</h2>
               <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 14 }}>
-                내 1:1 수업 예약만 표시됩니다.
+                학생이 직접 예약한 1:1 수업만 표시됩니다.
               </p>
 
               {privateReservationsError ? (
@@ -2273,18 +5357,41 @@ export default function StudentBookingPage() {
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {sortedPrivateReservations.map((reservation) => {
                     const slot = privateSlotsById.get(reservation.slotId) || null
-                    const reservationId = buildPrivateLessonReservationId({
-                      academyId: currentAcademyId,
-                      slotId: reservation.slotId,
-                      studentId: scopedStudentId,
-                    })
-                    const isBusy = busyPrivateReservationId === reservationId
-                    const isActive = reservation.status === 'active'
+                    const isActive = isActivePrivateReservationStatus(reservation)
+                    const isFixedReservation = isFixedPrivateReservation(reservation)
+                    const statusLabel = getPrivateReservationStudentStatusLabel(reservation)
+                    const canCancelReservation = canShowPrivateReservationCancelAction(reservation)
+                    const reservationDateTime = [
+                      String(reservation.date || slot?.date || '').trim(),
+                      String(reservation.time || slot?.time || '').trim(),
+                      getPrivateDurationLabel(reservation, slot),
+                    ].filter(Boolean).join(' · ')
                     const matchingPackage =
-                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, reservation.teacher) ||
-                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, reservation.teacherName) ||
-                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot?.teacher) ||
-                      findPrivatePackageSummaryForTeacher(privatePackageSummaries, slot?.teacherName)
+                      getPrivateSlotPackageSummary(slot) ||
+                      findPrivatePackageSummaryForTeacher(
+                        privatePackageSummaries,
+                        reservation.teacherKey
+                      ) ||
+                      findPrivatePackageSummaryForTeacher(
+                        privatePackageSummaries,
+                        reservation.teacher
+                      ) ||
+                      findPrivatePackageSummaryForTeacher(
+                        privatePackageSummaries,
+                        reservation.teacherName
+                      ) ||
+                      findPrivatePackageSummaryForTeacher(
+                        privatePackageSummaries,
+                        slot?.teacherKey
+                      ) ||
+                      findPrivatePackageSummaryForTeacher(
+                        privatePackageSummaries,
+                        slot?.teacher
+                      ) ||
+                      findPrivatePackageSummaryForTeacher(
+                        privatePackageSummaries,
+                        slot?.teacherName
+                      )
 
                     return (
                       <article
@@ -2296,6 +5403,7 @@ export default function StudentBookingPage() {
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -2304,21 +5412,37 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
-                            <strong style={{ fontSize: '1rem' }}>
-                              {reservation.teacher || slot?.teacher || '1:1 수업'}
-                            </strong>
+                          <div style={studentBookingMobileTextGuardStyle}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 8,
+                                flexWrap: 'wrap',
+                                ...(isMobileStudentBooking
+                                  ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                                  : {}),
+                              }}
+                            >
+                              <strong style={{ fontSize: '1rem' }}>
+                                {reservation.teacher || slot?.teacher || '1:1 수업'}
+                              </strong>
+                              <span style={getPrivateSlotBadgeStyle('my_reservation')}>
+                                {isFixedReservation ? '고정 예약' : '내 예약'}
+                              </span>
+                            </div>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
-                              {[reservation.date || slot?.date, reservation.time || slot?.time]
-                                .filter(Boolean)
-                                .join(' · ') || `slotId: ${reservation.slotId}`}
+                              {reservationDateTime || `slotId: ${reservation.slotId}`}
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
-                              {getReservationStatusLabel(reservation)}
+                              {statusLabel}
                             </div>
-                            {isActive ? (
+                            {isActive && canCancelReservation ? (
                               <div style={{ marginTop: 6, opacity: 0.72, fontSize: 13 }}>
                                 결제는 학원 안내에 따라 진행됩니다.
                               </div>
@@ -2333,21 +5457,21 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                           </div>
-                          {isActive && PRIVATE_SLOT_BOOKING_ENABLED && privateSlotBookingPilotEnabled ? (
-                            <button
-                              type="button"
-                              className="student-danger-button"
-                              onClick={() => cancelPrivateReservation(reservation)}
-                              disabled={Boolean(busyPrivateReservationId)}
-                              data-testid="student-private-reservation-cancel-button"
-                            >
-                              {isBusy ? '취소 중...' : '예약 취소'}
-                            </button>
-                          ) : null}
+                          {canCancelReservation ? renderPrivateReservationCancelAction(reservation) : null}
                         </div>
                       </article>
                     )
                   })}
+                  {isMobileStudentBooking ? (
+                    <div
+                      aria-hidden="true"
+                      data-testid="student-private-reservations-mobile-spacer"
+                      style={{
+                        height: STUDENT_BOOKING_MOBILE_CARD_LIST_BOTTOM_SPACER_HEIGHT,
+                        ...studentBookingMobileContentGuardStyle,
+                      }}
+                    />
+                  ) : null}
                 </div>
               )}
             </section>
@@ -2355,9 +5479,11 @@ export default function StudentBookingPage() {
             <section
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 5 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 단체반 예약</h2>
@@ -2383,6 +5509,16 @@ export default function StudentBookingPage() {
                     })
                     const isBusy = busyReservationId === reservationId
                     const isActive = reservation.status === 'active'
+                    const canCancelGroupReservation = canShowGroupReservationCancelAction(
+                      reservation,
+                      lesson
+                    )
+                    const reservationTitle =
+                      String(reservation.subject || lesson?.subject || '').trim() || '그룹 수업'
+                    const reservationDateTime = [
+                      String(reservation.date || lesson?.date || '').trim(),
+                      String(reservation.time || lesson?.time || '').trim(),
+                    ].filter(Boolean).join(' · ')
 
                     return (
                       <article
@@ -2394,6 +5530,7 @@ export default function StudentBookingPage() {
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -2402,16 +5539,17 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
+                          <div style={studentBookingMobileTextGuardStyle}>
                             <strong style={{ fontSize: '1rem' }}>
-                              {lesson?.subject || '그룹 수업'}
+                              {reservationTitle}
                             </strong>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
-                              {lesson
-                                ? [lesson.date, lesson.time].filter(Boolean).join(' · ')
-                                : `lessonId: ${reservation.lessonId}`}
+                              {reservationDateTime || `lessonId: ${reservation.lessonId}`}
                             </div>
                             <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                               {getReservationStatusLabel(reservation)}
@@ -2422,19 +5560,24 @@ export default function StudentBookingPage() {
                               </div>
                             ) : null}
                           </div>
-                          {isActive ? (
+                          {canCancelGroupReservation ? (
                             <button
                               type="button"
                               onClick={() => cancelReservation(reservation)}
                               disabled={Boolean(busyReservationId)}
                               data-testid="student-booking-reservation-cancel-button"
                               style={{
-                                padding: '10px 14px',
-                                borderRadius: 10,
+                                padding: isMobileStudentBooking ? '12px 16px' : '10px 14px',
+                                minHeight: isMobileStudentBooking ? 46 : undefined,
+                                borderRadius: isMobileStudentBooking ? 12 : 10,
                                 border: '1px solid #744242',
                                 background: '#4a2a2a',
                                 color: 'white',
                                 cursor: busyReservationId ? 'not-allowed' : 'pointer',
+                                fontWeight: isMobileStudentBooking ? 800 : undefined,
+                                ...(isMobileStudentBooking
+                                  ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE
+                                  : {}),
                               }}
                             >
                               {isBusy ? '취소 중...' : '예약 취소'}
@@ -2449,11 +5592,14 @@ export default function StudentBookingPage() {
             </section>
 
             <section
+              id="student-lesson-history-section"
               style={{
                 border: '1px solid #2e3240',
-                borderRadius: 16,
+                borderRadius: isMobileStudentBooking ? 20 : 16,
                 background: '#151922',
-                padding: 20,
+                padding: isMobileStudentBooking ? 16 : 20,
+                order: isMobileStudentBooking ? 4 : undefined,
+                ...studentBookingMobileOverflowGuardStyle,
               }}
             >
               <h2 style={{ margin: 0, fontSize: '1.1rem' }}>내 수업 내역</h2>
@@ -2476,15 +5622,27 @@ export default function StudentBookingPage() {
                 <div style={{ display: 'grid', gap: 12, marginTop: 16 }}>
                   {lessonHistoryItems.map((item) => {
                     const dateTimeLabel = [item.date, item.time].filter(Boolean).join(' · ')
+                    const cancellationActorLabel = getLessonHistoryCancelActorLabel(item)
+                    const cancellationDateLabel = formatLessonHistoryCancelledAt(item)
+                    const detailLabels = [
+                      item.teacherLabel ? `선생님 ${item.teacherLabel}` : '',
+                      item.studentName ? `학생 ${item.studentName}` : '',
+                      item.durationLabel || '',
+                      cancellationActorLabel,
+                      cancellationDateLabel ? `취소 처리일: ${cancellationDateLabel}` : '',
+                      item.noDeduction === true ? '수강권 차감 없음' : '',
+                    ].filter(Boolean)
                     return (
                       <article
                         key={item.id}
                         data-testid="student-lesson-history-card"
+                        data-source={item.source || undefined}
                         style={{
                           border: '1px solid #283042',
                           borderRadius: 14,
                           padding: 16,
                           background: '#1a1f2b',
+                          ...studentBookingMobileContentGuardStyle,
                         }}
                       >
                         <div
@@ -2493,14 +5651,25 @@ export default function StudentBookingPage() {
                             justifyContent: 'space-between',
                             gap: 12,
                             flexWrap: 'wrap',
+                            ...(isMobileStudentBooking
+                              ? STUDENT_BOOKING_MOBILE_FLEX_ROW_GUARD_STYLE
+                              : {}),
                           }}
                         >
-                          <div>
+                          <div style={studentBookingMobileTextGuardStyle}>
                             <strong style={{ fontSize: '1rem' }}>{item.title}</strong>
                             <div style={{ marginTop: 6, opacity: 0.74, fontSize: 14 }}>
                               {item.typeLabel}
                               {dateTimeLabel ? ` · ${dateTimeLabel}` : ''}
                             </div>
+                            {detailLabels.length > 0 ? (
+                              <div
+                                data-testid="student-lesson-history-detail"
+                                style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}
+                              >
+                                {detailLabels.join(' · ')}
+                              </div>
+                            ) : null}
                             {!dateTimeLabel ? (
                               <div style={{ marginTop: 6, opacity: 0.68, fontSize: 13 }}>
                                 예약 정보 확인 중
@@ -2527,8 +5696,298 @@ export default function StudentBookingPage() {
                 </div>
               )}
             </section>
+            {isMobileStudentBooking ? (
+              <div
+                aria-hidden="true"
+                data-testid="student-booking-mobile-bottom-spacer"
+                style={{
+                  height: STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM,
+                  ...studentBookingMobileOverflowGuardStyle,
+                }}
+              />
+            ) : null}
           </div>
         )}
+        {privateSlotReserveConfirm ? (
+          <div
+            role="presentation"
+            data-testid="student-private-slot-reserve-confirm-backdrop"
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 40,
+              display: 'grid',
+              placeItems: 'center',
+              padding: isMobileStudentBooking
+                ? `16px 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
+                : 24,
+              background: 'rgba(3, 8, 18, 0.72)',
+              boxSizing: 'border-box',
+              ...studentBookingMobileOverflowGuardStyle,
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="student-private-slot-reserve-confirm-title"
+              data-testid="student-private-slot-reserve-confirm-modal"
+              style={{
+                ...studentBookingMobileOverflowGuardStyle,
+                width: '100%',
+                maxWidth: isMobileStudentBooking ? '100%' : 420,
+                border: '1px solid #435572',
+                borderRadius: isMobileStudentBooking ? 18 : 14,
+                background: '#162033',
+                boxShadow: '0 18px 56px rgba(0, 0, 0, 0.46)',
+                padding: isMobileStudentBooking ? 18 : 20,
+                color: 'white',
+              }}
+            >
+              <h2
+                id="student-private-slot-reserve-confirm-title"
+                style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.15rem' : '1.2rem' }}
+              >
+                1:1 수업을 예약할까요?
+              </h2>
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  border: '1px solid #2d3b53',
+                  borderRadius: 12,
+                  background: '#101827',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                <div>
+                  {[
+                    privateSlotReserveConfirm.slot?.date,
+                    privateSlotReserveConfirm.slot?.time,
+                    privateSlotReserveConfirm.slot?.teacherName ||
+                      privateSlotReserveConfirm.slot?.teacher,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ') || '예약 시간 확인 중'}
+                </div>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  marginTop: 12,
+                  color: '#d7e3f7',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                }}
+              >
+                {privateSlotReserveConfirmMessageLines.map((line, index) => (
+                  <div key={`${index}-${line}`}>{line || ' '}</div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: isMobileStudentBooking ? 'grid' : 'flex',
+                  gridTemplateColumns: isMobileStudentBooking ? '1fr' : undefined,
+                  justifyContent: isMobileStudentBooking ? undefined : 'flex-end',
+                  gap: 8,
+                  flexWrap: isMobileStudentBooking ? undefined : 'wrap',
+                  marginTop: 18,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={closePrivateSlotReserveConfirm}
+                  data-testid="student-private-slot-reserve-confirm-cancel"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #43516a',
+                    background: '#202a3c',
+                    color: '#dbe8ff',
+                    cursor: 'pointer',
+                    fontWeight: 800,
+                    flex: isMobileStudentBooking ? undefined : '0 0 auto',
+                    ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
+                  }}
+                >
+                  취소
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPrivateSlotReserve}
+                  data-testid="student-private-slot-reserve-confirm-submit"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #5b8d5e',
+                    background: '#244b2d',
+                    color: 'white',
+                    cursor: 'pointer',
+                    fontWeight: 900,
+                    flex: isMobileStudentBooking ? undefined : '0 0 auto',
+                    ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
+                  }}
+                >
+                  예약하기
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {privateSlotCancelConfirm ? (
+          <div
+            role="presentation"
+            data-testid="student-private-reservation-cancel-confirm-backdrop"
+            onClick={closePrivateSlotCancelConfirm}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 40,
+              display: 'grid',
+              placeItems: 'center',
+              padding: isMobileStudentBooking
+                ? `16px 12px ${STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM}`
+                : 24,
+              background: 'rgba(3, 8, 18, 0.72)',
+              boxSizing: 'border-box',
+              ...studentBookingMobileOverflowGuardStyle,
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="student-private-reservation-cancel-confirm-title"
+              data-testid="student-private-reservation-cancel-confirm-modal"
+              onClick={(event) => event.stopPropagation()}
+              style={{
+                ...studentBookingMobileOverflowGuardStyle,
+                width: '100%',
+                maxWidth: isMobileStudentBooking ? '100%' : 420,
+                border: '1px solid #73505a',
+                borderRadius: isMobileStudentBooking ? 18 : 14,
+                background: '#162033',
+                boxShadow: '0 18px 56px rgba(0, 0, 0, 0.46)',
+                padding: isMobileStudentBooking ? 18 : 20,
+                color: 'white',
+              }}
+            >
+              <h2
+                id="student-private-reservation-cancel-confirm-title"
+                style={{ margin: 0, fontSize: isMobileStudentBooking ? '1.15rem' : '1.2rem' }}
+              >
+                {privateSlotCancelConfirm.kind === 'fixedLesson'
+                  ? '수업을 취소할까요?'
+                  : '예약을 취소할까요?'}
+              </h2>
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: '10px 12px',
+                  border: '1px solid #3b2f40',
+                  borderRadius: 12,
+                  background: '#221826',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                {privateSlotCancelConfirm.kind === 'fixedLesson' ? (
+                  <div>
+                    {[
+                      getLessonStorageDateString(privateSlotCancelConfirm.lesson),
+                      getLessonDisplayTime(privateSlotCancelConfirm.lesson),
+                      privateSlotCancelConfirm.lesson?.teacherName ||
+                        privateSlotCancelConfirm.lesson?.teacher,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '취소할 수업 확인 중'}
+                  </div>
+                ) : (
+                  <div>
+                    {[
+                      privateSlotCancelConfirm.reservation?.date,
+                      privateSlotCancelConfirm.reservation?.time,
+                      privateSlotCancelConfirm.reservation?.teacherName ||
+                        privateSlotCancelConfirm.reservation?.teacher,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') || '취소할 예약 확인 중'}
+                  </div>
+                )}
+              </div>
+              <div
+                data-testid="student-private-reservation-cancel-confirm-message"
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  marginTop: 12,
+                  color: '#f4d8df',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                }}
+              >
+                {privateSlotCancelConfirmMessageLines.map((line, index) => (
+                  <div key={`${index}-${line}`}>{line || ' '}</div>
+                ))}
+              </div>
+              <div
+                style={{
+                  display: isMobileStudentBooking ? 'grid' : 'flex',
+                  gridTemplateColumns: isMobileStudentBooking ? '1fr' : undefined,
+                  justifyContent: isMobileStudentBooking ? undefined : 'flex-end',
+                  gap: 8,
+                  flexWrap: isMobileStudentBooking ? undefined : 'wrap',
+                  marginTop: 18,
+                  ...studentBookingMobileContentGuardStyle,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={closePrivateSlotCancelConfirm}
+                  data-testid="student-private-reservation-cancel-confirm-cancel"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #43516a',
+                    background: '#202a3c',
+                    color: '#dbe8ff',
+                    cursor: 'pointer',
+                    fontWeight: 800,
+                    flex: isMobileStudentBooking ? undefined : '0 0 auto',
+                    ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
+                  }}
+                >
+                  닫기
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmPrivateSlotCancel}
+                  data-testid="student-private-reservation-cancel-confirm-submit"
+                  style={{
+                    padding: isMobileStudentBooking ? '11px 14px' : '9px 12px',
+                    minHeight: isMobileStudentBooking ? 42 : undefined,
+                    borderRadius: 999,
+                    border: '1px solid #9a3f48',
+                    background: '#3a1f24',
+                    color: '#ffd8dc',
+                    cursor: 'pointer',
+                    fontWeight: 900,
+                    flex: isMobileStudentBooking ? undefined : '0 0 auto',
+                    ...(isMobileStudentBooking ? STUDENT_BOOKING_MOBILE_BUTTON_CLAMP_STYLE : {}),
+                  }}
+                >
+                  {privateSlotCancelConfirm.kind === 'fixedLesson' ? '수업 취소' : '예약 취소'}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   )

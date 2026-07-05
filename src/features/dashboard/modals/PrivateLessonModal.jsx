@@ -5,6 +5,7 @@ import {
 
 export default function PrivateLessonModal({
   isAdmin,
+  canViewPaymentFields = false,
   privateLessonForm,
   setPrivateLessonForm,
   privateLessonFormErrors,
@@ -178,14 +179,18 @@ export default function PrivateLessonModal({
                 {formatGroupStudentStartDate(privateLessonSelectedPackagePreview.expiresAt) ||
                   '—'}
               </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>amountPaid: </span>
-                {privateLessonSelectedPackagePreview.amountPaid ?? '—'}
-              </div>
-              <div>
-                <span style={{ opacity: 0.7 }}>memo: </span>
-                {String(privateLessonSelectedPackagePreview.memo || '').trim() || '—'}
-              </div>
+              {canViewPaymentFields ? (
+                <>
+                  <div>
+                    <span style={{ opacity: 0.7 }}>amountPaid: </span>
+                    {privateLessonSelectedPackagePreview.amountPaid ?? '—'}
+                  </div>
+                  <div>
+                    <span style={{ opacity: 0.7 }}>memo: </span>
+                    {String(privateLessonSelectedPackagePreview.memo || '').trim() || '—'}
+                  </div>
+                </>
+              ) : null}
             </div>
           ) : null}
 

@@ -1,7 +1,6 @@
 import { test, expect } from '@playwright/test';
 import {
   clickGroupRow,
-  getGroupRow,
   getRegisteredStudentsHeading,
   getStudentRow,
   getStudentSearchInput,
@@ -21,61 +20,6 @@ import {
 
 test.setTimeout(90000);
 
-async function expectPostEnrollDialog(page, packageDialog, dialogMessages) {
-  try {
-    await expect(packageDialog).toBeHidden({ timeout: 30000 });
-    const postEnrollDialog = page.getByRole('dialog', { name: '이 반에 바로 등록할까요?' });
-    await expect(postEnrollDialog).toBeVisible({ timeout: 15000 });
-    return postEnrollDialog;
-  } catch (error) {
-    const [bodyText, packageDialogVisible] = await Promise.all([
-      page.locator('body').innerText().catch(() => ''),
-      packageDialog.isVisible().catch(() => false),
-    ]);
-    throw new Error(
-      [
-        'Post-enroll dialog did not appear after group package save.',
-        `Package dialog still visible: ${packageDialogVisible}`,
-        `Browser dialog messages: ${dialogMessages.join(' | ') || '-'}`,
-        `Current URL: ${page.url()}`,
-        'Visible page text:',
-        bodyText.slice(0, 1500),
-        '',
-        `Original error: ${error.message}`,
-      ].join('\n')
-    );
-  }
-}
-
-async function submitPostEnrollDialog(page, postEnrollDialog, dialogMessages) {
-  await postEnrollDialog.getByRole('button', { name: '지금 등록', exact: true }).click();
-  try {
-    await expect(postEnrollDialog).toBeHidden({ timeout: 30000 });
-  } catch (error) {
-    const [bodyText, dialogText, buttonEnabled] = await Promise.all([
-      page.locator('body').innerText().catch(() => ''),
-      postEnrollDialog.innerText().catch(() => ''),
-      postEnrollDialog
-        .getByRole('button', { name: '지금 등록', exact: true })
-        .isEnabled()
-        .catch(() => null),
-    ]);
-    throw new Error(
-      [
-        'Post-enroll dialog did not close after confirming immediate enrollment.',
-        `Current URL: ${page.url()}`,
-        `Confirm button enabled: ${buttonEnabled}`,
-        `Browser dialog messages: ${dialogMessages.join(' | ') || '-'}`,
-        `Dialog text: ${dialogText.slice(0, 1000)}`,
-        'Visible page text:',
-        bodyText.slice(0, 1500),
-        '',
-        `Original error: ${error.message}`,
-      ].join('\n')
-    );
-  }
-}
-
 async function openStudentRow(page) {
   await openDashboardSection(page, '학생 관리');
   const studentSearchInput = getStudentSearchInput(page);
@@ -93,12 +37,12 @@ async function getStudentRowByName(page, studentName) {
 async function openGroupDetail(page) {
   await openDashboardSection(page, '단체반 관리');
 
-  const groupRow = await clickGroupRow(page, TEST_GROUP_NAME);
+  await clickGroupRow(page, TEST_GROUP_NAME);
 
   await expect(getRegisteredStudentsHeading(page, TEST_GROUP_NAME)).toBeVisible();
 }
 
-test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록까지 완료할 수 있다', async ({
+test('관리자가 반 등록 단체반 수강권 저장 시 후속 모달 없이 반 등록이 완료된다', async ({
   page,
   browserName,
 }) => {
@@ -118,7 +62,7 @@ test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     tempStudent = await createTempStudent(page, {
       studentName: tempStudentName,
-      note: 'E2E temporary student for group post enroll confirm test',
+      note: 'E2E temporary student for group auto enrollment test',
     });
 
     const studentRow = await getStudentRowByName(page, tempStudentName);
@@ -129,7 +73,7 @@ test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록
 
     await packageDialog.getByLabel('수강권 유형').selectOption('group');
 
-    const groupSelect = packageDialog.getByLabel('그룹 수업');
+    const groupSelect = packageDialog.getByLabel('등록할 반 선택');
     await expect.poll(async () => await groupSelect.locator('option').count()).toBeGreaterThan(1);
 
     const groupValue = await groupSelect.locator('option').evaluateAll((options, groupName) => {
@@ -141,16 +85,15 @@ test('관리자가 그룹 수강권 생성 후 후속 모달에서 바로 등록
     await groupSelect.selectOption(groupValue);
 
     await packageDialog
-      .getByLabel('시작일')
+      .getByTestId('student-package-start-date-input')
       .fill(await getGroupPackageStartDate(page, { groupName: TEST_GROUP_NAME }));
     await packageDialog.getByLabel('등록 주수').fill('4');
     await packageDialog.getByRole('button', { name: '저장' }).click();
 
-    const postEnrollDialog = await expectPostEnrollDialog(page, packageDialog, dialogMessages);
-    await expect(postEnrollDialog).toContainText(tempStudentName);
-    await expect(postEnrollDialog).toContainText(TEST_GROUP_NAME);
-
-    await submitPostEnrollDialog(page, postEnrollDialog, dialogMessages);
+    await expect(packageDialog).toBeHidden({ timeout: 30000 });
+    await expect(
+      page.getByRole('dialog', { name: '이 반에 바로 등록할까요?' })
+    ).toHaveCount(0);
 
     await openGroupDetail(page);
 

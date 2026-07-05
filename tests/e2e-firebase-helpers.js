@@ -1,3 +1,12 @@
+import {
+  cleanupAdminTempStudentData,
+  cleanupAdminSeededTempCalendarGroupLessonSetup,
+  cleanupAdminSeededTempGroupAttendanceSetup,
+  getAdminGroupPackageStartDate,
+  getAdminSeededGroupAttendanceState,
+  setAdminSeededTempGroupAttendanceState,
+} from './e2e-admin-helpers.js'
+
 const FIREBASE_ENV_KEYS = [
   'VITE_FIREBASE_API_KEY',
   'VITE_FIREBASE_AUTH_DOMAIN',
@@ -45,9 +54,18 @@ export async function createTempStudent(page, params) {
   return runFirebaseTask(page, 'createTempStudent', params);
 }
 
+export async function createTempTeacher(page, params) {
+  return runFirebaseTask(page, 'createTempTeacher', params);
+}
+
 export async function cleanupTempStudentData(page, params) {
+  void page;
   if (!params?.studentId && !params?.studentName) return;
-  await runFirebaseTask(page, 'cleanupTempStudentData', params);
+  try {
+    await cleanupAdminTempStudentData(params);
+  } catch (error) {
+    console.warn(`cleanupTempStudentData warning: ${error?.message || String(error)}`);
+  }
 }
 
 export async function cleanupTempGroupStudentAddSetup(page, params) {
@@ -60,12 +78,21 @@ export async function createTempGroupAttendanceSetup(page, params) {
 }
 
 export async function cleanupTempGroupAttendanceSetup(page, params) {
+  void page;
   if (!params?.packageId && !params?.groupStudentId && !params?.studentId) return;
-  await runFirebaseTask(page, 'cleanupTempGroupAttendanceSetup', params);
+  try {
+    await cleanupAdminSeededTempGroupAttendanceSetup(params);
+  } catch (error) {
+    console.warn(`cleanupTempGroupAttendanceSetup warning: ${error?.message || String(error)}`);
+  }
 }
 
 export async function setTempGroupAttendanceState(page, params) {
   if (!params?.groupLessonId || !params?.studentId || !params?.packageId || !params?.groupStudentId) return;
+  if (params?.strictLessonIdsOnly === true || params?.useAdminSdk === true) {
+    await setAdminSeededTempGroupAttendanceState(params);
+    return;
+  }
   await runFirebaseTask(page, 'setTempGroupAttendanceState', params);
 }
 
@@ -75,11 +102,19 @@ export async function createTempCalendarGroupLessonSetup(page, params) {
 
 export async function cleanupTempCalendarGroupLessonSetup(page, params, options = {}) {
   if (!params?.groupClassId && !params?.groupLessonId && !params?.groupLessonIds?.length) return;
-  await runFirebaseTask(page, 'cleanupTempCalendarGroupLessonSetup', params, options);
+  try {
+    await cleanupAdminSeededTempCalendarGroupLessonSetup({
+      ...params,
+      ...(options || {}),
+    });
+  } catch (error) {
+    console.warn(`cleanupTempCalendarGroupLessonSetup warning: ${error?.message || String(error)}`);
+  }
 }
 
 export async function getGroupPackageStartDate(page, params) {
-  return runFirebaseTask(page, 'getGroupPackageStartDate', params);
+  void page;
+  return getAdminGroupPackageStartDate(params);
 }
 
 export async function getStudentGroupAccessSummary(page, params) {
@@ -91,6 +126,16 @@ export async function getLessonRequestApprovalState(page, params) {
 }
 
 export async function getTempGroupAttendanceState(page, params) {
+  const hasExactFixtureIds = [
+    params?.groupClassId,
+    params?.groupLessonId,
+    params?.groupStudentId,
+    params?.packageId,
+    params?.studentId,
+  ].every((value) => String(value || '').trim());
+  if (params?.strictLessonIdsOnly === true && hasExactFixtureIds) {
+    return getAdminSeededGroupAttendanceState(params);
+  }
   return runFirebaseTask(page, 'getTempGroupAttendanceState', params);
 }
 
@@ -123,6 +168,8 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
       switch (taskName) {
         case 'createTempStudent':
           return createTempStudentTask({ db, firestore, params });
+        case 'createTempTeacher':
+          return createTempTeacherTask({ db, firestore, params });
         case 'cleanupTempStudentData':
           return cleanupTempStudentDataTask({ db, firestore, params });
         case 'createTempGroupStudentAddPackage':
@@ -178,6 +225,25 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           uid: user?.uid || '',
           email: user?.email || '',
         };
+      }
+
+      function logCleanupWarning(label, error) {
+        console.warn(`${label} cleanup warning: ${error?.message || String(error)}`);
+      }
+
+      async function cleanupAllSettled(label, tasks) {
+        const results = await Promise.allSettled(tasks.filter(Boolean));
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            logCleanupWarning(`${label}[${index}]`, result.reason);
+          }
+        });
+        return results;
+      }
+
+      function isE2eFixtureDocId(value) {
+        const id = String(value || '').trim();
+        return id.startsWith('e2e-') || id.startsWith('__e2e_');
       }
 
       async function withFirestoreStep(stepName, context, action) {
@@ -534,6 +600,41 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           studentId: studentRef.id,
           studentName: String(studentName || '').trim(),
         };
+      }
+
+      async function createTempTeacherTask({ db, firestore: firestoreModule, params }) {
+        const { Timestamp, doc, setDoc } = firestoreModule;
+        const academyId = getTaskAcademyId(params);
+        const teacherKey = String(params?.teacherKey || '').trim();
+        const teacherName = String(params?.teacherName || teacherKey || '').trim();
+        const teacherId = String(params?.teacherId || `e2e-teacher-${teacherKey}`).trim();
+        if (!teacherKey) throw new Error('teacherKey is required.');
+        const nowTs = Timestamp.now();
+        await withFirestoreStep(
+          'createTempTeacher.setTeacher',
+          {
+            collection: 'teachers',
+            docId: teacherId,
+            academyId,
+          },
+          () =>
+            setDoc(
+              doc(db, 'teachers', teacherId),
+              {
+                academyId,
+                name: teacherName,
+                teacherName: teacherKey,
+                teacherKey,
+                teacherUid: String(params?.teacherUid || '').trim(),
+                teacherEmail: String(params?.teacherEmail || '').trim(),
+                status: 'active',
+                createdAt: nowTs,
+                updatedAt: nowTs,
+              },
+              { merge: true }
+            )
+        );
+        return { teacherId, teacherName, teacherKey };
       }
 
       async function cleanupTempStudentDataTask({ db, firestore: firestoreModule, params }) {
@@ -895,16 +996,43 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           groupStudentId,
           studentId,
           groupLessonId,
+          creditTransactionId,
+          creditTransactionIds = [],
+          cleanupCreditTransactionsByPackage = false,
           skipCreditTransactionCleanup = false,
         } = params;
         const academyId = getTaskAcademyId(params);
 
-        if (groupStudentId) {
-          await deleteDoc(doc(db, 'groupStudents', groupStudentId)).catch(() => {});
-        }
+        const exactCreditTransactionIds = new Set(
+          [
+            creditTransactionId,
+            ...(Array.isArray(creditTransactionIds) ? creditTransactionIds : []),
+          ]
+            .map((id) => String(id || '').trim())
+            .filter(Boolean)
+        );
 
-        if (packageId) {
-          if (!skipCreditTransactionCleanup) {
+        await cleanupAllSettled('cleanupTempGroupAttendanceSetup.exactDocs', [
+          groupStudentId
+            ? deleteDoc(doc(db, 'groupStudents', String(groupStudentId)))
+            : null,
+          packageId
+            ? deleteDoc(doc(db, 'studentPackages', String(packageId)))
+            : null,
+          studentId
+            ? deleteDoc(doc(db, 'privateStudents', String(studentId)))
+            : null,
+          ...Array.from(exactCreditTransactionIds).map((txId) =>
+            deleteDoc(doc(db, 'creditTransactions', txId))
+          ),
+        ]);
+
+        if (
+          packageId &&
+          !skipCreditTransactionCleanup &&
+          cleanupCreditTransactionsByPackage === true &&
+          exactCreditTransactionIds.size === 0
+        ) {
             const creditTransactionSnap = await withFirestoreStep(
               'cleanupTempGroupAttendanceSetup.getCreditTransactionsByPackage',
               {
@@ -925,7 +1053,8 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
             ).catch(() => null);
 
             if (creditTransactionSnap && !creditTransactionSnap.empty) {
-              await Promise.all(
+              await cleanupAllSettled(
+                'cleanupTempGroupAttendanceSetup.creditTransactionsByPackage',
                 creditTransactionSnap.docs
                   .filter((txDoc) => {
                     if (!groupLessonId && !studentId) return true;
@@ -940,17 +1069,10 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
                     return true;
                   })
                   .map((txDoc) =>
-                    deleteDoc(doc(db, 'creditTransactions', txDoc.id)).catch(() => {})
+                    deleteDoc(doc(db, 'creditTransactions', txDoc.id))
                   )
               );
             }
-          }
-
-          await deleteDoc(doc(db, 'studentPackages', packageId)).catch(() => {});
-        }
-
-        if (studentId) {
-          await deleteDoc(doc(db, 'privateStudents', String(studentId))).catch(() => {});
         }
       }
 
@@ -1116,7 +1238,17 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
         firestore: firestoreModule,
         params,
       }) {
-        const { collection, deleteDoc, doc, getDocs, query, where } = firestoreModule;
+        const {
+          collection,
+          deleteDoc,
+          doc,
+          getDoc,
+          getDocs,
+          query,
+          serverTimestamp,
+          updateDoc,
+          where,
+        } = firestoreModule;
         const { groupClassId, groupLessonId, groupLessonIds, strictLessonIdsOnly = false } = params;
         const academyId = getTaskAcademyId(params);
         const explicitLessonIds = new Set(
@@ -1129,24 +1261,63 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           explicitLessonIds.add(String(groupLessonId));
         }
 
+        async function softCancelGroupLesson(lessonId, { deleteInstead = false } = {}) {
+          const lessonRef = doc(db, 'groupLessons', lessonId);
+          if (deleteInstead && isE2eFixtureDocId(lessonId)) {
+            await deleteDoc(lessonRef);
+            return;
+          }
+          const lessonSnap = await getDoc(lessonRef);
+          if (!lessonSnap.exists()) return;
+          const lesson = lessonSnap.data() || {};
+          if (String(lesson.academyId || '').trim() !== academyId) {
+            throw new Error(
+              `Refusing to cleanup groupLessons/${lessonId}: academyId ${lesson.academyId || '(missing)'} does not match ${academyId}.`
+            );
+          }
+          if (deleteInstead) {
+            await deleteDoc(lessonRef);
+            return;
+          }
+          await updateDoc(lessonRef, {
+            status: 'cancelled',
+            groupClassDeleted: true,
+            cancellationType: 'class_closure',
+            cancelledReason: 'group_class_closed',
+            noDeduction: true,
+            cancelledAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
         if (explicitLessonIds.size > 0) {
-          await Promise.all(
+          await cleanupAllSettled(
+            'cleanupTempCalendarGroupLessonSetup.explicitLessons',
             Array.from(explicitLessonIds).map((lessonId) =>
               withFirestoreStep(
-                'cleanupTempCalendarGroupLessonSetup.deleteKnownGroupLesson',
+                'cleanupTempCalendarGroupLessonSetup.softCancelKnownGroupLesson',
                 {
                   collection: 'groupLessons',
                   docId: lessonId,
                   academyId,
                 },
-                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+                () => softCancelGroupLesson(lessonId, { deleteInstead: strictLessonIdsOnly })
               )
             )
           );
         }
 
+        if (strictLessonIdsOnly) {
+          if (groupClassId) {
+            await cleanupAllSettled('cleanupTempCalendarGroupLessonSetup.strictGroupClass', [
+              deleteDoc(doc(db, 'groupClasses', String(groupClassId))),
+            ]);
+          }
+          return;
+        }
+
         if (groupClassId && !strictLessonIdsOnly) {
-          const [groupLessonsA, groupLessonsB] = await Promise.all([
+          const [groupLessonsAResult, groupLessonsBResult] = await Promise.allSettled([
             withFirestoreStep(
               'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassId',
               {
@@ -1186,6 +1357,22 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
                 )
             )
           ]);
+          const groupLessonsA =
+            groupLessonsAResult.status === 'fulfilled' ? groupLessonsAResult.value : null;
+          const groupLessonsB =
+            groupLessonsBResult.status === 'fulfilled' ? groupLessonsBResult.value : null;
+          if (groupLessonsAResult.status === 'rejected') {
+            logCleanupWarning(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassId',
+              groupLessonsAResult.reason
+            );
+          }
+          if (groupLessonsBResult.status === 'rejected') {
+            logCleanupWarning(
+              'cleanupTempCalendarGroupLessonSetup.getGroupLessonsByGroupClassID',
+              groupLessonsBResult.reason
+            );
+          }
 
           const lessonIds = new Set();
           for (const snap of [groupLessonsA, groupLessonsB]) {
@@ -1193,31 +1380,34 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
             snap.docs.forEach((lessonDoc) => lessonIds.add(lessonDoc.id));
           }
 
-          await Promise.all(
+          await cleanupAllSettled(
+            'cleanupTempCalendarGroupLessonSetup.queriedLessons',
             Array.from(lessonIds).map((lessonId) =>
               withFirestoreStep(
-                'cleanupTempCalendarGroupLessonSetup.deleteQueriedGroupLesson',
+                'cleanupTempCalendarGroupLessonSetup.softCancelQueriedGroupLesson',
                 {
                   collection: 'groupLessons',
                   docId: lessonId,
                   academyId,
                 },
-                () => deleteDoc(doc(db, 'groupLessons', lessonId))
+                () => softCancelGroupLesson(lessonId)
               )
             )
           );
         }
 
         if (groupClassId) {
-          await withFirestoreStep(
-            'cleanupTempCalendarGroupLessonSetup.deleteGroupClass',
-            {
-              collection: 'groupClasses',
-              docId: groupClassId,
-              academyId,
-            },
-            () => deleteDoc(doc(db, 'groupClasses', groupClassId))
-          );
+          await cleanupAllSettled('cleanupTempCalendarGroupLessonSetup.groupClass', [
+            withFirestoreStep(
+              'cleanupTempCalendarGroupLessonSetup.deleteGroupClass',
+              {
+                collection: 'groupClasses',
+                docId: groupClassId,
+                academyId,
+              },
+              () => deleteDoc(doc(db, 'groupClasses', groupClassId))
+            ),
+          ]);
         }
       }
 
@@ -1295,11 +1485,12 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           };
         }
 
-        const [groupLesson, studentPackage, groupStudent, privateStudent] = await Promise.all([
+        const [groupLesson, studentPackage, groupStudent, privateStudent, groupClass] = await Promise.all([
           readDoc('groupLessons', params?.groupLessonId),
           readDoc('studentPackages', params?.packageId),
           readDoc('groupStudents', params?.groupStudentId),
           readDoc('privateStudents', params?.studentId),
+          readDoc('groupClasses', params?.groupClassId),
         ]);
 
         return {
@@ -1308,6 +1499,7 @@ async function runFirebaseTask(page, taskName, params, options = {}) {
           studentPackage,
           groupStudent,
           privateStudent,
+          groupClass,
         };
       }
 

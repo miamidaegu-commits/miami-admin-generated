@@ -1,3 +1,5 @@
+import { normalizeGroupCourseType } from '../group-booking/groupCourseTypes.js'
+
 export const SCHOOL_TIME_ZONE = 'Asia/Seoul'
 export function normalizeText(value = '') {
   return String(value).trim().toLowerCase()
@@ -60,12 +62,233 @@ export function formatTime(date) {
   }).format(date)
 }
 
+function formatStorageDateLabel(dateStr) {
+  const match = String(dateStr || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!match) return ''
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  if (!year || !month || !day) return ''
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short',
+  }).format(new Date(Date.UTC(year, month - 1, day)))
+}
+
+export function formatLessonDateLabel(lesson) {
+  const dateStr = String(lesson?.date || '').trim()
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    return formatStorageDateLabel(dateStr) || dateStr
+  }
+  return formatDate(getLessonDate(lesson))
+}
+
+export function formatLessonTimeLabel(lesson) {
+  const timeStr = String(lesson?.time || '').trim()
+  if (/^([01]\d|2[0-3]):([0-5]\d)$/.test(timeStr)) return timeStr
+  return formatTime(getLessonDate(lesson))
+}
+
 export function getStudentName(lesson) {
   return lesson.studentName || lesson.student || '-'
 }
 
 export function getTeacherName(lesson) {
-  return lesson.teacherName || lesson.teacher || '-'
+  return formatTeacherDisplayName(lesson)
+}
+
+function looksLikeTeacherUid(value) {
+  return (
+    /^[a-z0-9]{20,}$/i.test(String(value || '').trim()) &&
+    !/\s/.test(String(value || '').trim())
+  )
+}
+
+function normalizeTeacherResolverText(value) {
+  return normalizeText(String(value ?? '').replace(/\s+/g, ' '))
+}
+
+function isTeacherPlaceholderValue(value) {
+  const normalized = normalizeTeacherResolverText(value)
+  return (
+    !normalized ||
+    normalized === '기존 선생님' ||
+    normalized === '선생님 선택 필요' ||
+    normalized === '선생님 선택' ||
+    normalized.includes('기존 값 보존') ||
+    normalized === '선생님 미지정' ||
+    normalized === '-' ||
+    normalized === '없음' ||
+    normalized === 'null' ||
+    normalized === 'undefined'
+  )
+}
+
+function cleanTeacherResolverValue(value) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim()
+  return isTeacherPlaceholderValue(text) ? '' : text
+}
+
+function getFirstReadableTeacherValue(values) {
+  return values
+    .map(cleanTeacherResolverValue)
+    .find((value) => value && !looksLikeTeacherUid(value)) || ''
+}
+
+function teacherCandidateMatches(option, candidateKeys) {
+  return [
+    option?.value,
+    option?.key,
+    option?.id,
+    option?.uid,
+    option?.teacherKey,
+    option?.teacherUid,
+    option?.teacherId,
+    option?.teacher,
+    option?.email,
+    option?.teacherEmail,
+    option?.displayName,
+    option?.label,
+    option?.teacherName,
+    option?.teacherDisplayName,
+    option?.name,
+  ]
+    .map(normalizeTeacherResolverText)
+    .some((value) => value && !isTeacherPlaceholderValue(value) && candidateKeys.includes(value))
+}
+
+export function collectTeacherIdentityCandidates(record = {}) {
+  const values = [
+    record?.teacherKey,
+    record?.teacherUid,
+    record?.teacherUID,
+    record?.teacherId,
+    record?.teacherID,
+    record?.teacher,
+    record?.uid,
+    record?.id,
+    record?.value,
+    record?.key,
+    record?.groupClassTeacherKey,
+    record?.groupClassTeacherUid,
+    record?.groupClassTeacherId,
+    record?.groupClassTeacher,
+    record?.groupClassUid,
+    record?.groupClassId,
+    record?.groupClassID,
+    record?.classId,
+    record?.classID,
+    record?.groupId,
+    record?.groupID,
+  ]
+  const seen = new Set()
+  const candidates = []
+  values.forEach((value) => {
+    const clean = cleanTeacherResolverValue(value)
+    const normalized = normalizeTeacherResolverText(clean)
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    candidates.push(clean)
+  })
+  return candidates
+}
+
+export function resolveTeacherOption(record = {}, teacherOptions = []) {
+  const candidateKeys = collectTeacherIdentityCandidates(record).map(normalizeTeacherResolverText)
+  if (candidateKeys.length === 0) return null
+  return (
+    (Array.isArray(teacherOptions) ? teacherOptions : []).find((option) =>
+      teacherCandidateMatches(option, candidateKeys)
+    ) || null
+  )
+}
+
+export function resolveTeacherDisplayName(
+  record,
+  teacherOptions = [],
+  fallback = '선생님 선택 필요'
+) {
+  const directDisplay = getFirstReadableTeacherValue([
+    record?.teacherDisplayName,
+    record?.teacherName,
+    record?.displayName,
+    record?.teacherLabel,
+    record?.groupClassTeacherDisplayName,
+    record?.groupClassTeacherName,
+    record?.groupClassDisplayNameForTeacher,
+    record?.groupClassTeacherLabel,
+  ])
+  if (directDisplay) return directDisplay
+
+  const matchedOption = resolveTeacherOption(record, teacherOptions)
+  const optionDisplay = getFirstReadableTeacherValue([
+    matchedOption?.label,
+    matchedOption?.displayName,
+    matchedOption?.teacherDisplayName,
+    matchedOption?.teacherName,
+    matchedOption?.name,
+    matchedOption?.value,
+    matchedOption?.key,
+  ])
+  if (optionDisplay) return optionDisplay
+
+  const readableCandidate = collectTeacherIdentityCandidates(record).find(
+    (value) => value && !looksLikeTeacherUid(value)
+  )
+  return readableCandidate || fallback
+}
+
+export function resolveTeacherFormValue(record = {}, teacherOptions = []) {
+  const candidates = collectTeacherIdentityCandidates(record)
+  if (candidates.length === 0) return ''
+  const matchedOption = resolveTeacherOption(record, teacherOptions)
+  return String(
+    matchedOption?.value ||
+      matchedOption?.key ||
+      matchedOption?.id ||
+      matchedOption?.uid ||
+      candidates[0] ||
+      ''
+  ).trim()
+}
+
+export function formatTeacherDisplayName(row, fallback = '선생님 선택 필요', teacherOptions = []) {
+  return resolveTeacherDisplayName(row, teacherOptions, fallback)
+}
+
+export function resolveTeacherIdentityFields(selectedValue, teacherSelectOptions = []) {
+  const rawValue = String(selectedValue || '').trim()
+  const options = Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []
+  const option =
+    resolveTeacherOption({ value: rawValue }, options) ||
+    options.find((item) => String(item?.value || '').trim() === rawValue) ||
+    null
+  const displayName = String(
+    option?.label || option?.displayName || option?.teacherDisplayName || option?.teacherName || ''
+  ).trim()
+  const teacherKey = String(option?.teacherKey || option?.value || rawValue || '').trim()
+
+  const teacherName =
+    displayName && !looksLikeTeacherUid(displayName) && !isTeacherPlaceholderValue(displayName)
+      ? displayName
+      : teacherKey && !looksLikeTeacherUid(teacherKey) && !isTeacherPlaceholderValue(teacherKey)
+        ? teacherKey
+        : looksLikeTeacherUid(rawValue) || isTeacherPlaceholderValue(rawValue)
+          ? ''
+          : rawValue || ''
+
+  return {
+    teacher: teacherKey || rawValue,
+    teacherKey: teacherKey || rawValue,
+    teacherUid: String(option?.teacherUid || option?.uid || '').trim(),
+    teacherId: String(option?.teacherId || option?.id || '').trim(),
+    teacherName,
+    teacherDisplayName: teacherName,
+    displayName: teacherName,
+  }
 }
 
 export function formatLessonSessionNumber(lesson) {
@@ -148,7 +371,8 @@ export function lessonTimeInputValue(lesson) {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-export function validateLessonDateTimeSubject(form) {
+export function validateLessonDateTimeSubject(form, options = {}) {
+  const requireSubject = options.requireSubject !== false
   const errors = {}
   const date = String(form.date || '').trim()
   const time = String(form.time || '').trim()
@@ -158,7 +382,7 @@ export function validateLessonDateTimeSubject(form) {
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.date = '날짜 형식이 올바르지 않습니다.'
   if (!time) errors.time = '시간을 선택해주세요.'
   if (time && !/^\d{2}:\d{2}$/.test(time)) errors.time = '시간 형식이 올바르지 않습니다.'
-  if (!subject) errors.subject = '과목을 입력해주세요.'
+  if (requireSubject && !subject) errors.subject = '과목을 입력해주세요.'
 
   return {
     valid: Object.keys(errors).length === 0,
@@ -190,7 +414,8 @@ export function countUsedAsOfTodayForStudent(allLessons, targetStudentName) {
 
 /** remainingCount에 맞춰 status 동기화 (수동 종료 ended는 유지) */
 export function getNextStudentPackageStatus(currentStatus, remainingCount) {
-  if (String(currentStatus || '').toLowerCase() === 'ended') return 'ended'
+  const status = String(currentStatus || '').toLowerCase()
+  if (status === 'ended' || status === 'revoked') return status
   const rem = Number(remainingCount ?? 0)
   if (!Number.isFinite(rem) || rem <= 0) return 'exhausted'
   return 'active'
@@ -278,6 +503,7 @@ export function formatStudentPackageDetailStatusLabel(status) {
   if (raw === 'active') return '사용 중'
   if (raw === 'exhausted') return '소진'
   if (raw === 'ended' || raw === 'inactive') return '종료'
+  if (raw === 'revoked') return '회수됨'
   return String(status)
 }
 
@@ -338,17 +564,22 @@ export function formatCreditTransactionActionTypeLabel(actionType) {
   if (!key) return '-'
   const map = {
     package_created: '수강권 발급',
+    private_package_top_up: '추가 등록',
+    package_top_up: '추가 등록',
     package_adjusted: '총 횟수 조정',
     package_updated: '수강권 정보 수정',
     private_deduct_cancel: '개인 차감취소',
     private_deduct_restore: '개인 차감복구',
     private_reservation_completed_deduct: '1:1 예약 완료 차감',
     private_reservation_no_show_deduct: '1:1 예약 노쇼 차감',
+    auto_private_reservation_deduct: '자동 1:1 예약 차감',
     private_reservation_completed_deduct_reversal: '1:1 예약 완료 차감취소',
     private_reservation_no_show_deduct_reversal: '1:1 예약 노쇼 차감취소',
     group_deduct: '그룹 차감',
+    auto_group_deduct: '자동 그룹 차감',
     group_deduct_restore: '그룹 차감복구',
     package_ended: '수강권 종료',
+    package_revoked: '수강권 회수',
     group_reenroll: '그룹 재등록',
   }
   return map[key] ?? key
@@ -394,6 +625,46 @@ export function formatGroupWeekdaysDisplay(nums) {
 export function jsDateToGroupWeekdayCode(date) {
   const day = date.getDay()
   return day === 0 ? 1 : day + 1
+}
+
+export function isCancelledOrDeletedGroupLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  return status === 'cancelled' || status === 'canceled' || lesson?.groupClassDeleted === true
+}
+
+export function isClassClosureCancelledGroupLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const cancelledReason = String(lesson?.cancelledReason || '').trim().toLowerCase()
+  return (
+    lesson?.groupClassDeleted === true ||
+    cancellationType === 'class_closure' ||
+    (status === 'cancelled' && cancelledReason === 'group_class_closed') ||
+    (status === 'cancelled' && cancelledReason === 'group_class_deleted')
+  )
+}
+
+export function isNoDeductionCancelledGroupLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    lesson?.noDeduction === true &&
+    cancellationType === 'no_deduction'
+  )
+}
+
+export function isActiveGroupClassRow(groupClass) {
+  if (!groupClass) return false
+  const status = String(groupClass.status || 'active').trim().toLowerCase()
+  return (
+    groupClass.deleted !== true &&
+    groupClass.groupClassDeleted !== true &&
+    status !== 'deleted' &&
+    status !== 'cancelled' &&
+    status !== 'canceled' &&
+    status !== 'inactive'
+  )
 }
 
 export function parseYmdToLocalDate(ymd) {
@@ -575,7 +846,7 @@ export function studentPackageAttentionScope(pkg) {
     return `group:${String(pkg.groupClassId ?? '').trim()}`
   }
   if (pt === 'openGroup') {
-    return `openGroup:${String(pkg.groupClassId ?? '').trim()}`
+    return `openGroup:${normalizeGroupCourseType(pkg.groupCourseType)}`
   }
   return `other:${pt || 'na'}:${String(pkg?.id || '')}`
 }
@@ -589,11 +860,17 @@ export function isStudentPackageRowActive(pkg) {
   return s === 'active'
 }
 
-export function buildStudentPackageScopeKey({ packageType, teacher, groupClassId }) {
+export function buildStudentPackageScopeKey({
+  packageType,
+  teacher,
+  groupClassId,
+  groupCourseType,
+}) {
   return studentPackageAttentionScope({
     packageType,
     teacher,
     groupClassId,
+    groupCourseType,
   })
 }
 
@@ -602,7 +879,15 @@ export const GROUP_CLASS_AUTO_LESSON_RANGE_LAST_OFFSET_DAYS = 365 - 1
 
 /** iOS 등 레거시 groupLessons 문서의 groupClassID 필드와 정규 groupClassId 모두 지원 */
 export function getGroupLessonGroupId(gl) {
-  return String(gl?.groupClassId ?? gl?.groupClassID ?? '').trim()
+  return String(
+    gl?.groupClassId ??
+      gl?.groupClassID ??
+      gl?.classId ??
+      gl?.classID ??
+      gl?.groupId ??
+      gl?.groupID ??
+      ''
+  ).trim()
 }
 
 /** 그룹 수강권 제목 미입력 시 저장·표시용 기본 제목 */
@@ -621,7 +906,7 @@ export function buildAutoGroupStudentPackageTitle({
   return `${name} · ${d} 시작 · ${w}주`
 }
 
-/** 정기등록 개인 수강권: 등록 주수 × 주당 횟수 (둘 다 1 이상 정수일 때만 유효, 아니면 0) */
+/** 정기 수강권: 등록 주수 × 주당 횟수 (둘 다 1 이상 정수일 때만 유효, 아니면 0) */
 export function computePrivateRegularTotalCount({ registrationWeeks, weeklyFrequency }) {
   const w =
     typeof registrationWeeks === 'number'
@@ -636,7 +921,7 @@ export function computePrivateRegularTotalCount({ registrationWeeks, weeklyFrequ
   return w * f
 }
 
-/** 개인 정기등록 수강권 제목 미입력 시 저장·표시용 기본 제목 */
+/** 개인 정기 수강권 제목 미입력 시 저장·표시용 기본 제목 */
 export function buildAutoPrivateStudentPackageTitle({
   studentName,
   registrationStartDate,

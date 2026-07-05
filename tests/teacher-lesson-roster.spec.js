@@ -1,0 +1,742 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import admin from 'firebase-admin';
+import { test, expect } from '@playwright/test';
+import { BASE_URL, loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
+import {
+  ADMIN_EMAIL,
+  ADMIN_PASSWORD,
+  DEFAULT_E2E_ACADEMY_ID,
+} from './fixtures/test-data.js';
+import {
+  buildTeacherLessonRoster,
+  formatReservationCancelledAt,
+  formatReservationCreatedAt,
+  formatStudentDirectCancelLabel,
+  getCancellationHandlingLabel,
+  mapCancelledByLabel,
+  STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT,
+} from '../src/features/dashboard/teacherLessonRosterHelpers.js';
+
+const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
+const ADMIN_APP_NAME = 'teacher-lesson-roster-e2e';
+
+function hasServiceAccount() {
+  return fs.existsSync(SERVICE_ACCOUNT_PATH);
+}
+
+function initializeAdmin() {
+  const existing = admin.apps.find((app) => app?.name === ADMIN_APP_NAME);
+  if (existing) return existing;
+  const serviceAccount = JSON.parse(fs.readFileSync(SERVICE_ACCOUNT_PATH, 'utf8'));
+  return admin.initializeApp(
+    {
+      credential: admin.credential.cert(serviceAccount),
+    },
+    ADMIN_APP_NAME
+  );
+}
+
+function getDb() {
+  return initializeAdmin().firestore();
+}
+
+function upcomingMondayYmd(daysFromNow = 7) {
+  const date = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000);
+  while (date.getUTCDay() !== 1) {
+    date.setUTCDate(date.getUTCDate() + 1);
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function privateBookingStatsId(studentId) {
+  return `${DEFAULT_E2E_ACADEMY_ID}__${studentId}`;
+}
+
+test('teacher lesson roster helper groups upcoming, past, and cancelled rows', async () => {
+  const teacher = {
+    id: 'teacher-a',
+    name: 'Roster Teacher A',
+    teacherKey: 'roster-teacher-a',
+    teacherName: 'roster-teacher-a',
+  };
+  const futureDate = '2026-09-07';
+  const pastDate = '2025-01-15';
+  const reservedAt = new Date(Date.UTC(2026, 5, 1, 14, 42));
+  const cancelledAt = new Date(Date.UTC(2026, 5, 1, 15, 15));
+  const roster = buildTeacherLessonRoster({
+    academyId: 'academy-1',
+    teacher,
+    lessons: [
+      {
+        id: 'fixed-future',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-a',
+        studentId: 'student-1',
+        studentName: 'Fixed Future Student',
+        date: futureDate,
+        time: '15:00',
+        subject: 'Fixed Future Lesson',
+      },
+      {
+        id: 'fixed-past',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-a',
+        studentId: 'student-3',
+        studentName: 'Past Student',
+        date: pastDate,
+        time: '16:00',
+        subject: 'Past Fixed Lesson',
+        completed: true,
+      },
+      {
+        id: 'deduct-cancelled',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-a',
+        studentId: 'student-5',
+        studentName: 'Cancelled Lesson Student',
+        date: pastDate,
+        time: '17:00',
+        subject: 'Cancelled Fixed Lesson',
+        isDeductCancelled: true,
+      },
+      {
+        id: 'other-teacher',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-b',
+        studentId: 'student-x',
+        studentName: 'Other Teacher Student',
+        date: futureDate,
+        time: '18:00',
+        subject: 'Other Teacher Lesson',
+      },
+    ],
+    privateLessonReservations: [
+      {
+        id: 'reservation-future',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-a',
+        studentId: 'student-2',
+        studentName: 'Reservation Future Student',
+        date: futureDate,
+        time: '19:00',
+        status: 'active',
+        subject: 'Future Reservation',
+        sourceType: 'open_booking',
+        reservedAt,
+        createdAt: new Date(Date.UTC(2026, 4, 30, 1, 0)),
+      },
+      {
+        id: 'reservation-cancelled',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-a',
+        studentId: 'student-4',
+        studentName: 'Cancelled Reservation Student',
+        date: pastDate,
+        time: '20:00',
+        status: 'cancelled',
+        subject: 'Cancelled Reservation',
+        reservedAt,
+        cancelledAt,
+        cancelledBy: 'student',
+      },
+      {
+        id: 'reservation-admin-cancelled',
+        academyId: 'academy-1',
+        teacher: 'roster-teacher-a',
+        studentId: 'student-6',
+        studentName: 'Admin Cancelled Reservation Student',
+        date: pastDate,
+        time: '21:00',
+        status: 'cancelled',
+        subject: 'Admin Cancelled Reservation',
+        reservedAt,
+        cancelledAt,
+        cancelledBy: 'admin',
+      },
+    ],
+    studentPrivateBookingStats: [
+      {
+        id: 'academy-1__student-2',
+        academyId: 'academy-1',
+        studentId: 'student-2',
+        studentCancelCount: 1,
+      },
+      {
+        id: 'academy-1__student-4',
+        academyId: 'academy-1',
+        studentId: 'student-4',
+        studentCancelCount: 2,
+      },
+      {
+        id: 'academy-1__student-6',
+        academyId: 'academy-1',
+        studentId: 'student-6',
+        studentCancelCount: 3,
+        studentCancelLimit: 6,
+      },
+    ],
+    nowMillis: Date.UTC(2026, 5, 1, 3, 0, 0),
+  });
+
+  expect(formatStudentDirectCancelLabel(1)).toBe('취소 가능 1/2회');
+  expect(formatStudentDirectCancelLabel(2)).toBe('취소 가능 0/2회');
+  expect(formatStudentDirectCancelLabel(2, 6)).toBe('취소 가능 4/6회');
+  expect(STUDENT_PRIVATE_DIRECT_CANCEL_LIMIT).toBe(2);
+
+  expect(roster.upcoming.map((row) => row.studentName)).toEqual([
+    'Fixed Future Student',
+    'Reservation Future Student',
+  ]);
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.directCancelLabel
+  ).toBe('취소 가능 1/2회');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.studentDisplayName
+  ).toBe('Reservation Future Student');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.lessonTypeLabel
+  ).toBe('학생 예약 1:1');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.subjectLabel
+  ).toBe('Future Reservation');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.statusLabel
+  ).toBe('예약 완료');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.cancelAllowanceValue
+  ).toBe('1/2회');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.reservationCreatedAtLabel
+  ).toBe('2026-06-01 23:42');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Reservation Future Student')
+      ?.reservationCancelledAtLabel
+  ).toBe('-');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.lessonTypeLabel
+  ).toBe('고정 1:1');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.subjectLabel
+  ).toBe('Fixed Future Lesson');
+  expect(
+    roster.upcoming.find((row) => row.studentName === 'Fixed Future Student')?.directCancelLabel
+  ).toBe('');
+  expect(roster.past.map((row) => row.studentName)).toEqual(['Past Student']);
+  expect(roster.cancelled.map((row) => row.studentName).sort()).toEqual(
+    [
+      'Admin Cancelled Reservation Student',
+      'Cancelled Lesson Student',
+      'Cancelled Reservation Student',
+    ].sort()
+  );
+  expect(
+    roster.cancelled.find((row) => row.studentName === 'Cancelled Reservation Student')
+      ?.directCancelLabel
+  ).toBe('취소 가능 0/2회');
+  expect(
+    roster.cancelled.find((row) => row.studentName === 'Cancelled Reservation Student')
+      ?.reservationCancelledAtLabel
+  ).toBe('2026-06-02 00:15 · 학생 취소');
+  expect(
+    roster.cancelled.find((row) => row.studentName === 'Admin Cancelled Reservation Student')
+      ?.reservationCancelledAtLabel
+  ).toBe('2026-06-02 00:15 · 관리자 취소');
+  expect(formatReservationCreatedAt({ reservedAt, createdAt: cancelledAt })).toBe(
+    '2026-06-01 23:42'
+  );
+  expect(formatReservationCreatedAt({ createdAt: reservedAt })).toBe('2026-06-01 23:42');
+  expect(formatReservationCreatedAt({})).toBe('기록 없음');
+  expect(formatReservationCancelledAt({ cancelledAt, cancelledBy: 'teacher' })).toBe(
+    '2026-06-02 00:15 · 선생님 취소'
+  );
+  expect(formatReservationCancelledAt({ cancelledBy: 'student' })).toBe('-');
+  expect(mapCancelledByLabel('admin')).toBe('관리자 취소');
+  expect(mapCancelledByLabel({ cancellationReason: 'student_cancelled' })).toBe('학생 취소');
+  expect(mapCancelledByLabel('unknown')).toBe('취소됨');
+  expect(
+    getCancellationHandlingLabel({
+      sourceKind: 'lesson',
+      lesson: { isDeductCancelled: true },
+      bucket: 'cancelled',
+    })
+  ).toBe('차감취소');
+  expect(
+    getCancellationHandlingLabel({
+      sourceKind: 'reservation',
+      reservation: { cancelledBy: 'student' },
+      bucket: 'cancelled',
+    })
+  ).toBe('학생 취소');
+  expect(roster.upcoming.every((row) => !/price|payment|billing/i.test(JSON.stringify(row)))).toBe(
+    true
+  );
+});
+
+test('admin opens teacher lesson roster modal with scoped private lessons', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 teacher roster E2E를 실행합니다.');
+  test.setTimeout(180000);
+
+  const db = getDb();
+  const nowTs = admin.firestore.Timestamp.now();
+  const unique = `${Date.now()}-${testInfo.workerIndex}`;
+  const teacherAId = `e2e-roster-teacher-a-${unique}`;
+  const teacherBId = `e2e-roster-teacher-b-${unique}`;
+  const teacherCId = `e2e-roster-teacher-c-${unique}`;
+  const teacherAKey = `roster-teacher-a-${unique}`;
+  const teacherBKey = `roster-teacher-b-${unique}`;
+  const teacherAName = `Roster Teacher A ${unique}`;
+  const futureDate = upcomingMondayYmd(14);
+  const pastDate = '2025-02-10';
+  const futureFixedLessonId = `e2e-roster-fixed-future-${unique}`;
+  const pastFixedLessonId = `e2e-roster-fixed-past-${unique}`;
+  const otherTeacherLessonId = `e2e-roster-other-teacher-${unique}`;
+  const futureSlotId = `e2e-roster-slot-${unique}`;
+  const futureReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${futureSlotId}__e2e-roster-student-2-${unique}`;
+  const studentCancelledSlotId = `e2e-roster-slot-student-cancelled-${unique}`;
+  const adminCancelledSlotId = `e2e-roster-slot-admin-cancelled-${unique}`;
+  const cancelledReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${studentCancelledSlotId}__e2e-roster-student-4-${unique}`;
+  const adminCancelledReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${adminCancelledSlotId}__e2e-roster-student-5-${unique}`;
+  const student1Id = `e2e-roster-student-1-${unique}`;
+  const student2Id = `e2e-roster-student-2-${unique}`;
+  const student3Id = `e2e-roster-student-3-${unique}`;
+  const student4Id = `e2e-roster-student-4-${unique}`;
+  const student5Id = `e2e-roster-student-5-${unique}`;
+  const reservedAtTs = admin.firestore.Timestamp.fromDate(new Date(Date.UTC(2026, 5, 1, 14, 42)));
+  const cancelledAtTs = admin.firestore.Timestamp.fromDate(new Date(Date.UTC(2026, 5, 1, 15, 15)));
+
+  const refs = [
+    db.collection('teachers').doc(teacherAId),
+    db.collection('teachers').doc(teacherBId),
+    db.collection('teachers').doc(teacherCId),
+    db.collection('lessons').doc(futureFixedLessonId),
+    db.collection('lessons').doc(pastFixedLessonId),
+    db.collection('lessons').doc(otherTeacherLessonId),
+    db.collection('privateLessonSlots').doc(futureSlotId),
+    db.collection('privateLessonSlots').doc(studentCancelledSlotId),
+    db.collection('privateLessonSlots').doc(adminCancelledSlotId),
+    db.collection('privateLessonReservations').doc(futureReservationId),
+    db.collection('privateLessonReservations').doc(cancelledReservationId),
+    db.collection('privateLessonReservations').doc(adminCancelledReservationId),
+    db.collection('privateStudents').doc(student1Id),
+    db.collection('privateStudents').doc(student2Id),
+    db.collection('privateStudents').doc(student3Id),
+    db.collection('privateStudents').doc(student4Id),
+    db.collection('privateStudents').doc(student5Id),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student2Id)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student4Id)),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student5Id)),
+  ];
+
+  try {
+    await Promise.all([
+      db.collection('teachers').doc(teacherAId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: teacherAName,
+        teacherName: teacherAKey,
+        teacherKey: teacherAKey,
+        status: 'active',
+        updatedAt: nowTs,
+        createdAt: nowTs,
+      }),
+      db.collection('teachers').doc(teacherBId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Teacher B ${unique}`,
+        teacherName: teacherBKey,
+        teacherKey: teacherBKey,
+        status: 'active',
+        updatedAt: nowTs,
+        createdAt: nowTs,
+      }),
+      db.collection('teachers').doc(teacherCId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Teacher C ${unique}`,
+        teacherName: `roster-teacher-c-${unique}`,
+        teacherKey: `roster-teacher-c-${unique}`,
+        status: 'active',
+        updatedAt: nowTs,
+        createdAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(student1Id).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Fixed Future ${unique}`,
+        teacher: teacherAKey,
+        status: 'active',
+        updatedAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(student2Id).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Reservation Future ${unique}`,
+        teacher: teacherAKey,
+        status: 'active',
+        updatedAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(student3Id).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Past Student ${unique}`,
+        teacher: teacherAKey,
+        status: 'active',
+        updatedAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(student4Id).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Cancelled Reservation ${unique}`,
+        teacher: teacherAKey,
+        status: 'active',
+        updatedAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(student5Id).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `Roster Admin Cancelled Reservation ${unique}`,
+        teacher: teacherAKey,
+        status: 'active',
+        updatedAt: nowTs,
+      }),
+      db.collection('lessons').doc(futureFixedLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        teacher: teacherAKey,
+        teacherName: teacherAKey,
+        studentId: student1Id,
+        studentName: `Roster Fixed Future ${unique}`,
+        date: futureDate,
+        time: '15:00',
+        subject: `E2E Roster Fixed Future ${unique}`,
+        completed: false,
+        isDeductCancelled: false,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('lessons').doc(pastFixedLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        teacher: teacherAKey,
+        teacherName: teacherAKey,
+        studentId: student3Id,
+        studentName: `Roster Past Student ${unique}`,
+        date: pastDate,
+        time: '16:00',
+        subject: `E2E Roster Fixed Past ${unique}`,
+        completed: true,
+        isDeductCancelled: false,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('lessons').doc(otherTeacherLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        teacher: teacherBKey,
+        teacherName: teacherBKey,
+        studentId: 'other-student',
+        studentName: `Other Teacher Student ${unique}`,
+        date: futureDate,
+        time: '18:00',
+        subject: `E2E Roster Other Teacher ${unique}`,
+        completed: false,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonSlots').doc(futureSlotId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        teacher: teacherAKey,
+        teacherName: teacherAKey,
+        date: futureDate,
+        time: '19:00',
+        subject: `E2E Roster Reservation Slot ${unique}`,
+        durationMinutes: 50,
+        status: 'reserved',
+        reservedStudentId: student2Id,
+        reservationId: futureReservationId,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonReservations').doc(futureReservationId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: futureSlotId,
+        studentId: student2Id,
+        studentName: `Roster Reservation Future ${unique}`,
+        teacher: teacherAKey,
+        teacherName: teacherAKey,
+        date: futureDate,
+        time: '19:00',
+        status: 'active',
+        source: 'student',
+        sourceType: 'open_booking',
+        reservedAt: reservedAtTs,
+        cancelledAt: null,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonReservations').doc(cancelledReservationId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: studentCancelledSlotId,
+        studentId: student4Id,
+        studentName: `Roster Cancelled Reservation ${unique}`,
+        teacher: teacherAKey,
+        teacherName: teacherAKey,
+        date: pastDate,
+        time: '20:00',
+        status: 'cancelled',
+        source: 'student',
+        reservedAt: reservedAtTs,
+        cancelledAt: cancelledAtTs,
+        cancelledBy: 'student',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonReservations').doc(adminCancelledReservationId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: adminCancelledSlotId,
+        studentId: student5Id,
+        studentName: `Roster Admin Cancelled Reservation ${unique}`,
+        teacher: teacherAKey,
+        teacherName: teacherAKey,
+        date: pastDate,
+        time: '21:00',
+        status: 'cancelled',
+        source: 'student',
+        reservedAt: reservedAtTs,
+        cancelledAt: cancelledAtTs,
+        cancelledBy: 'admin',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student2Id)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student2Id,
+        studentCancelCount: 1,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student4Id)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student4Id,
+        studentCancelCount: 3,
+        studentCancelLimit: 6,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(student5Id)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId: student5Id,
+        studentCancelCount: 1,
+        studentCancelLimit: 6,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+    ]);
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '선생님 관리');
+
+    const teacherRows = page.getByTestId('teacher-management-row');
+    await expect
+      .poll(async () => await teacherRows.filter({ hasText: teacherAName }).count(), {
+        message: 'teacher management rows should load the created teacher',
+        timeout: 60000,
+        intervals: [500, 1000, 2000],
+      })
+      .toBeGreaterThan(0);
+
+    const teacherRow = teacherRows.filter({ hasText: teacherAName }).first();
+    await expect(teacherRow).toBeVisible({ timeout: 30000 });
+    await teacherRow.getByTestId('teacher-lesson-roster-open-button').click();
+
+    const modal = page.getByTestId('teacher-lesson-roster-modal');
+    await expect(modal).toBeVisible({ timeout: 15000 });
+    await expect(modal.getByTestId('teacher-lesson-roster-title')).toContainText('수업 현황');
+    await expect(modal).toContainText(teacherAKey);
+
+    const upcomingSection = modal.getByTestId('teacher-lesson-roster-upcoming-section');
+    await expect(upcomingSection).toContainText(`Roster Fixed Future ${unique}`);
+    await expect(upcomingSection).toContainText(`Roster Reservation Future ${unique}`);
+    await expect(upcomingSection).toContainText('취소 가능: 1/2회');
+    await expect(upcomingSection).toContainText('학생:');
+    await expect(upcomingSection).toContainText('구분:');
+    await expect(upcomingSection).toContainText('수업명:');
+    await expect(upcomingSection).toContainText('상태:');
+    const activeReservationRow = upcomingSection
+      .locator('[data-testid="teacher-lesson-roster-row"]')
+      .filter({ hasText: `Roster Reservation Future ${unique}` });
+    await expect(activeReservationRow).toContainText('예약 신청: 2026-06-01 23:42');
+    await expect(activeReservationRow).toContainText('취소 처리: -');
+    await expect(activeReservationRow).not.toContainText('[object Object]');
+    await expect(
+      upcomingSection
+        .locator('[data-testid="teacher-lesson-roster-row"]')
+        .filter({ hasText: `Roster Fixed Future ${unique}` })
+    ).not.toContainText('취소 가능:');
+    await expect(
+      upcomingSection
+        .locator('[data-testid="teacher-lesson-roster-row"]')
+        .filter({ hasText: `Roster Fixed Future ${unique}` })
+    ).not.toContainText('예약 신청:');
+    await expect(upcomingSection).not.toContainText(`Other Teacher Student ${unique}`);
+
+    const pastSection = modal.getByTestId('teacher-lesson-roster-past-section');
+    await expect(pastSection).toContainText(`Roster Past Student ${unique}`);
+
+    const cancelledSection = modal.getByTestId('teacher-lesson-roster-cancelled-section');
+    await expect(cancelledSection).toContainText(`Roster Cancelled Reservation ${unique}`);
+    await expect(cancelledSection).toContainText(`Roster Admin Cancelled Reservation ${unique}`);
+    const studentCancelledRow = cancelledSection
+      .locator('[data-testid="teacher-lesson-roster-row"]')
+      .filter({ hasText: `Roster Cancelled Reservation ${unique}` });
+    await expect(studentCancelledRow).toContainText('취소 처리: 2026-06-02 00:15 · 학생 취소');
+    const adminCancelledRow = cancelledSection
+      .locator('[data-testid="teacher-lesson-roster-row"]')
+      .filter({ hasText: `Roster Admin Cancelled Reservation ${unique}` });
+    await expect(adminCancelledRow).toContainText('취소 처리: 2026-06-02 00:15 · 관리자 취소');
+    await expect(cancelledSection).not.toContainText('[object Object]');
+
+    await expect(modal).not.toContainText(/price|payment|billing|결제|금액/i);
+
+    await modal.getByTestId('teacher-lesson-roster-close-button').click();
+    await expect(modal).toHaveCount(0);
+
+    const emptyTeacherRow = page
+      .getByTestId('teacher-management-row')
+      .filter({ hasText: `Roster Teacher C ${unique}` })
+      .first();
+    await emptyTeacherRow.getByTestId('teacher-lesson-roster-open-button').click();
+    const emptyModal = page.getByTestId('teacher-lesson-roster-modal');
+    await expect(emptyModal).toBeVisible();
+    await expect(emptyModal.getByTestId('teacher-lesson-roster-upcoming-empty')).toContainText(
+      '예정 수업 없음'
+    );
+    await expect(emptyModal.getByTestId('teacher-lesson-roster-past-empty')).toContainText(
+      '지난 수업 없음'
+    );
+  } finally {
+    await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
+  }
+});
+
+test('admin can raise student private cancellation allowance and roster reflects it', async ({
+  page,
+}, testInfo) => {
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 admin allowance E2E를 실행합니다.');
+  test.setTimeout(240000);
+
+  const db = getDb();
+  const nowTs = admin.firestore.Timestamp.now();
+  const unique = `${Date.now()}-${testInfo.workerIndex}-allowance`;
+  const teacherId = `e2e-allowance-teacher-${unique}`;
+  const teacherKey = `allowance-teacher-${unique}`;
+  const teacherName = `Allowance Teacher ${unique}`;
+  const studentId = `e2e-allowance-student-${unique}`;
+  const studentName = `Allowance Student ${unique}`;
+  const futureDate = upcomingMondayYmd(10);
+  const futureSlotId = `e2e-allowance-slot-${unique}`;
+  const futureReservationId = `${DEFAULT_E2E_ACADEMY_ID}__${futureSlotId}__${studentId}`;
+
+  const refs = [
+    db.collection('teachers').doc(teacherId),
+    db.collection('privateStudents').doc(studentId),
+    db.collection('privateLessonSlots').doc(futureSlotId),
+    db.collection('privateLessonReservations').doc(futureReservationId),
+    db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(studentId)),
+  ];
+
+  try {
+    await Promise.all([
+      db.collection('teachers').doc(teacherId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: teacherName,
+        teacherKey,
+        teacherName,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateStudents').doc(studentId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: studentName,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonSlots').doc(futureSlotId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        teacher: teacherKey,
+        teacherName,
+        date: futureDate,
+        time: '18:00',
+        subject: `E2E Allowance Reservation ${unique}`,
+        durationMinutes: 50,
+        status: 'reserved',
+        reservedStudentId: studentId,
+        reservationId: futureReservationId,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('privateLessonReservations').doc(futureReservationId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: futureSlotId,
+        studentId,
+        studentName,
+        teacher: teacherKey,
+        teacherName,
+        date: futureDate,
+        time: '18:00',
+        status: 'active',
+        source: 'student',
+        sourceType: 'open_booking',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPrivateBookingStats').doc(privateBookingStatsId(studentId)).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId,
+        studentCancelCount: 2,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+    ]);
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '학생 관리');
+
+    const studentRow = page.getByTestId('student-row').filter({ hasText: studentName }).first();
+    await expect(studentRow).toBeVisible({ timeout: 15000 });
+    await studentRow.getByTestId('student-cancel-allowance-open-button').click();
+
+    const allowanceModal = page.getByTestId('student-cancel-allowance-modal');
+    await expect(allowanceModal).toBeVisible({ timeout: 15000 });
+    await expect(allowanceModal.getByTestId('student-cancel-allowance-summary')).toContainText(
+      '취소 사용 2/2회 · 남은 0회'
+    );
+
+    await allowanceModal.getByTestId('student-cancel-allowance-limit-input').fill('6');
+    await allowanceModal.getByTestId('student-cancel-allowance-save-button').click();
+    await expect(allowanceModal.getByTestId('student-cancel-allowance-success')).toContainText(
+      '저장'
+    );
+    await expect(allowanceModal.getByTestId('student-cancel-allowance-summary')).toContainText(
+      '취소 사용 2/6회 · 남은 4회'
+    );
+    await allowanceModal.getByTestId('student-cancel-allowance-close-button').click();
+    await expect(allowanceModal).toHaveCount(0);
+
+    await openDashboardSection(page, '선생님 관리');
+    const teacherRow = page
+      .getByTestId('teacher-management-row')
+      .filter({ hasText: teacherName })
+      .first();
+    await expect(teacherRow).toBeVisible({ timeout: 15000 });
+    await teacherRow.getByTestId('teacher-lesson-roster-open-button').click();
+
+    const rosterModal = page.getByTestId('teacher-lesson-roster-modal');
+    await expect(rosterModal).toBeVisible({ timeout: 15000 });
+    await expect(rosterModal.getByTestId('teacher-lesson-roster-upcoming-section')).toContainText(
+      '취소 가능: 4/6회'
+    );
+    await expect(rosterModal).not.toContainText(/price|payment|billing|결제|금액/i);
+  } finally {
+    await Promise.all(refs.map((ref) => ref.delete().catch(() => {})));
+  }
+});

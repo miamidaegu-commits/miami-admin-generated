@@ -1,9 +1,11 @@
 import { expect, test } from '@playwright/test';
-import { loginAsAdmin, openDashboardSection } from './e2e-helpers.js';
+import { loginAsAdmin, openDashboardSection, selectTeacherOption } from './e2e-helpers.js';
 import {
   cleanupAdminSeededCalendarGroupLessonSetup,
+  cleanupAdminSeededPrivatePackageWorkflowCopyFixture,
   cleanupAdminSeededPrivateLessonEditFixture,
   createAdminSeededCalendarGroupLessonSetup,
+  createAdminSeededPrivateReservation,
   createAdminSeededPrivateLessonEditFixture,
   getAdminSeededCalendarGroupLessonState,
 } from './e2e-admin-helpers.js';
@@ -90,17 +92,31 @@ async function collectCalendarDiagnostics(page, selectedDate, fixture = null) {
 }
 
 async function selectCalendarDateByYmd(page, ymd) {
-  const day = Number(String(ymd || '').slice(-2));
-  const dateButton = page.getByRole('button', {
-    name: new RegExp(`^${day}(\\s|$)`),
-  });
+  const dateButton = page.locator(
+    `[data-testid="calendar-day-button"][data-date="${String(ymd || '').trim()}"]`
+  );
   await expect(dateButton).toBeVisible({ timeout: 15000 });
   await dateButton.click();
 }
 
-async function waitForCalendarLessonsSectionReady(page) {
+async function waitForCalendarLessonsSectionReady(page, exactLessonId = '', selectedDate = '') {
   const lessonsSection = page.getByTestId('calendar-lessons-section');
   await expect(lessonsSection).toBeVisible({ timeout: 15000 });
+  if (exactLessonId) {
+    const exactRow = lessonsSection.locator(
+      `[data-testid="calendar-lesson-row"][data-lesson-id="${exactLessonId}"]`
+    );
+    const selectedDateInput = page.getByTestId('group-selected-date-control').getByLabel('선택 날짜');
+    await expect
+      .poll(async () => await exactRow.count(), { timeout: 15000 })
+      .toBeGreaterThan(0)
+      .catch(async () => {});
+    if ((await exactRow.count()) === 0 && selectedDate && (await selectedDateInput.count()) > 0) {
+      await selectedDateInput.fill(selectedDate);
+    }
+    await expect.poll(async () => await exactRow.count(), { timeout: 30000 }).toBeGreaterThan(0);
+    return;
+  }
   await expect(lessonsSection.getByText('불러오는 중...', { exact: true })).toHaveCount(0, {
     timeout: 30000,
   });
@@ -146,7 +162,7 @@ test('캘린더에서 그룹 수업 row를 클릭하면 출결/차감 모달이 
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '캘린더');
     await selectCalendarDateByYmd(page, lessonDate);
-    await waitForCalendarLessonsSectionReady(page);
+    await waitForCalendarLessonsSectionReady(page, tempGroupLessonId, lessonDate);
 
     const groupLessonRow = page.locator(
       `[data-testid="calendar-lesson-row"][data-row-kind="group"][data-lesson-id="${tempGroupLessonId}"]`
@@ -224,7 +240,7 @@ test('단체반 관리 선택 날짜 수업 목록은 개인 수업을 제외하
     await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
     await openDashboardSection(page, '캘린더');
     await selectCalendarDateByYmd(page, lessonDate);
-    await waitForCalendarLessonsSectionReady(page);
+    await waitForCalendarLessonsSectionReady(page, tempGroupLessonId, lessonDate);
 
     const calendarGroupRow = page.locator(
       `[data-testid="calendar-lesson-row"][data-row-kind="group"][data-lesson-id="${tempGroupLessonId}"]`
@@ -243,14 +259,36 @@ test('단체반 관리 선택 날짜 수업 목록은 개인 수업을 제외하
     await expect(calendarPrivateRow.first()).toContainText(tempPrivateSubject);
 
     await openDashboardSection(page, '단체반 관리');
-    await waitForCalendarLessonsSectionReady(page);
+    await expect
+      .poll(async () => {
+        const state = await getAdminSeededCalendarGroupLessonState(tempGroupSetup);
+        return {
+          groupClass: state?.groupClass?.exists === true,
+          groupLesson: state?.groupLesson?.exists === true,
+          lessonDate: state?.groupLesson?.date || '',
+          lessonSubject: state?.groupLesson?.subject || '',
+        };
+      }, { timeout: 15000 })
+      .toEqual({
+        groupClass: true,
+        groupLesson: true,
+        lessonDate,
+        lessonSubject: tempGroupSubject,
+      });
+    await waitForCalendarLessonsSectionReady(page, tempGroupLessonId, lessonDate);
 
     const todaySchedulePanel = await waitForTodaySchedulePanelReady(page);
     await expect(
       todaySchedulePanel.getByRole('heading', { name: '오늘의 단체반 일정', exact: true })
     ).toBeVisible();
-    await expect(todaySchedulePanel).toContainText(tempGroupSubject);
-    await expect(todaySchedulePanel).toContainText(tempGroupName);
+    const todayGroupRow = todaySchedulePanel
+      .getByTestId('today-schedule-row')
+      .filter({ hasText: tempGroupSubject })
+      .filter({ hasText: tempGroupName });
+    await expect
+      .poll(async () => await todayGroupRow.count(), { timeout: 20000 })
+      .toBeGreaterThan(0);
+    await expect(todayGroupRow.first()).toBeVisible();
     await expect(todaySchedulePanel).not.toContainText(tempPrivateStudentName);
     await expect(todaySchedulePanel).not.toContainText(tempPrivateSubject);
 
@@ -294,6 +332,194 @@ test('단체반 관리 선택 날짜 수업 목록은 개인 수업을 제외하
     }
     if (tempGroupSetup) {
       await cleanupAdminSeededCalendarGroupLessonSetup(tempGroupSetup);
+    }
+  }
+});
+
+test('관리자 캘린더 선생님 필터가 월 달력과 선택 날짜 목록, 1:1 예약 기록에 적용된다', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+
+  const uniqueToken = Date.now();
+  const baseDate = new Date(`${getTodayYmdInSeoul()}T00:00:00`);
+  const lessonDate = formatYmd(addDays(baseDate, 19));
+  const teacherA = `calendar-filter-teacher-a-${uniqueToken}`;
+  const teacherB = `calendar-filter-teacher-b-${uniqueToken}`;
+  const groupNameA = `E2E 필터 그룹 A ${uniqueToken}`;
+  const groupSubjectA = `E2E 필터 그룹 과목 A ${uniqueToken}`;
+  const privateStudentA = `E2E 필터 개인 A ${uniqueToken}`;
+  const privateSubjectA = `E2E 필터 개인 과목 A ${uniqueToken}`;
+  const privateStudentB = `E2E 필터 개인 B ${uniqueToken}`;
+  const privateSubjectB = `E2E 필터 개인 과목 B ${uniqueToken}`;
+  const reservationStudentA = `E2E 필터 예약 A ${uniqueToken}`;
+  const reservationStudentB = `E2E 필터 예약 B ${uniqueToken}`;
+  const cancelledReservationStudentA = `E2E 필터 취소 A ${uniqueToken}`;
+  const cancelledReservationStudentB = `E2E 필터 취소 B ${uniqueToken}`;
+
+  let groupSetupA = null;
+  let privateFixtureA = null;
+  let privateFixtureB = null;
+  const reservationIds = [];
+
+  try {
+    groupSetupA = await createAdminSeededCalendarGroupLessonSetup({
+      groupClassId: `e2e-calendar-filter-group-a-${uniqueToken}`,
+      groupLessonId: `e2e-calendar-filter-group-lesson-a-${uniqueToken}`,
+      groupName: groupNameA,
+      teacher: teacherA,
+      teacherName: teacherA,
+      lessonDate,
+      lessonTime: '11:00',
+      lessonSubject: groupSubjectA,
+    });
+    privateFixtureA = await createAdminSeededPrivateLessonEditFixture({
+      unique: `calendar-teacher-filter-a-${uniqueToken}`,
+      studentName: privateStudentA,
+      teacher: teacherA,
+      teacherName: teacherA,
+      date: lessonDate,
+      time: '10:00',
+      subject: privateSubjectA,
+    });
+    privateFixtureB = await createAdminSeededPrivateLessonEditFixture({
+      unique: `calendar-teacher-filter-b-${uniqueToken}`,
+      studentName: privateStudentB,
+      teacher: teacherB,
+      teacherName: teacherB,
+      date: lessonDate,
+      time: '10:30',
+      subject: privateSubjectB,
+    });
+
+    for (const reservationParams of [
+      {
+        reservationId: `e2e-calendar-filter-reservation-a-${uniqueToken}`,
+        studentName: reservationStudentA,
+        teacher: teacherA,
+        teacherName: teacherA,
+        time: '09:00',
+        status: 'active',
+      },
+      {
+        reservationId: `e2e-calendar-filter-reservation-b-${uniqueToken}`,
+        studentName: reservationStudentB,
+        teacher: teacherB,
+        teacherName: teacherB,
+        time: '09:05',
+        status: 'active',
+      },
+      {
+        reservationId: `e2e-calendar-filter-cancelled-a-${uniqueToken}`,
+        studentName: cancelledReservationStudentA,
+        teacher: teacherA,
+        teacherName: teacherA,
+        time: '12:00',
+        status: 'cancelled',
+      },
+      {
+        reservationId: `e2e-calendar-filter-cancelled-b-${uniqueToken}`,
+        studentName: cancelledReservationStudentB,
+        teacher: teacherB,
+        teacherName: teacherB,
+        time: '12:05',
+        status: 'cancelled',
+      },
+    ]) {
+      const reservation = await createAdminSeededPrivateReservation({
+        ...reservationParams,
+        date: lessonDate,
+      });
+      reservationIds.push(reservation.reservationId);
+    }
+
+    await loginAsAdmin(page, ADMIN_EMAIL, ADMIN_PASSWORD);
+    await openDashboardSection(page, '캘린더');
+
+    const teacherFilter = page.getByTestId('calendar-teacher-filter-select');
+    if ((await teacherFilter.count()) === 0) {
+      test.skip(true, '이 product-version 화면에서는 캘린더 선생님 필터가 렌더링되지 않습니다.');
+    }
+    await expect(teacherFilter).toBeVisible({ timeout: 20000 });
+    await expect(teacherFilter).toHaveValue('');
+    await expect(page.getByRole('heading', { name: /전체 선생님 일정/ })).toBeVisible();
+
+    const dateButton = page.locator(`[data-testid="calendar-day-button"][data-date="${lessonDate}"]`);
+    await expect(dateButton).toBeVisible({ timeout: 20000 });
+    await expect(dateButton).toContainText(reservationStudentA, { timeout: 20000 });
+    await expect(dateButton).toContainText(reservationStudentB, { timeout: 20000 });
+    await dateButton.click();
+    await waitForCalendarLessonsSectionReady(page, groupSetupA.groupLessonId, lessonDate);
+
+    await expect(page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${groupSetupA.groupLessonId}"]`)).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${privateFixtureA.lessonId}"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${privateFixtureB.lessonId}"]`)).toBeVisible();
+    await expect(
+      page.locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]').filter({
+        hasText: reservationStudentA,
+      })
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]').filter({
+        hasText: reservationStudentB,
+      })
+    ).toBeVisible();
+
+    await selectTeacherOption(teacherFilter, teacherA);
+    await expect(page.getByRole('heading', { name: new RegExp(`${teacherA} 선생님 일정`) })).toBeVisible();
+    await expect(dateButton).toContainText('수업 3개', { timeout: 20000 });
+    await expect(dateButton).toContainText(reservationStudentA);
+    await expect(dateButton).toContainText(privateStudentA);
+    await expect(dateButton).not.toContainText(reservationStudentB);
+    await expect(dateButton).not.toContainText(privateStudentB);
+
+    await expect(page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${groupSetupA.groupLessonId}"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${privateFixtureA.lessonId}"]`)).toBeVisible();
+    await expect(page.locator(`[data-testid="calendar-lesson-row"][data-lesson-id="${privateFixtureB.lessonId}"]`)).toHaveCount(0, {
+      timeout: 15000,
+    });
+    await expect(
+      page.locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]').filter({
+        hasText: reservationStudentA,
+      })
+    ).toBeVisible();
+    await expect(
+      page.locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]').filter({
+        hasText: reservationStudentB,
+      })
+    ).toHaveCount(0, { timeout: 15000 });
+
+    const historySection = page.getByTestId('private-reservation-history-section');
+    await expect(historySection).toBeVisible({ timeout: 20000 });
+    await expect(historySection.getByTestId('private-reservation-history-row').filter({ hasText: reservationStudentA })).toBeVisible();
+    await expect(
+      historySection.getByTestId('private-reservation-history-row').filter({ hasText: cancelledReservationStudentA })
+    ).toBeVisible();
+    await expect(
+      historySection.getByTestId('private-reservation-history-row').filter({ hasText: reservationStudentB })
+    ).toHaveCount(0, { timeout: 15000 });
+    await expect(
+      historySection.getByTestId('private-reservation-history-row').filter({ hasText: cancelledReservationStudentB })
+    ).toHaveCount(0, { timeout: 15000 });
+  } catch (error) {
+    await testInfo.attach('admin-calendar-teacher-filter-diagnostics', {
+      body: JSON.stringify(await collectCalendarDiagnostics(page, lessonDate, groupSetupA), null, 2),
+      contentType: 'application/json',
+    });
+    throw error;
+  } finally {
+    await cleanupAdminSeededPrivatePackageWorkflowCopyFixture({ reservationIds }).catch(() => {});
+    if (privateFixtureB) {
+      await cleanupAdminSeededPrivateLessonEditFixture(privateFixtureB).catch(() => {});
+    }
+    if (privateFixtureA) {
+      await cleanupAdminSeededPrivateLessonEditFixture(privateFixtureA).catch(() => {});
+    }
+    if (groupSetupA) {
+      await cleanupAdminSeededCalendarGroupLessonSetup(groupSetupA).catch(() => {});
     }
   }
 });

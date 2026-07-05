@@ -183,12 +183,14 @@ async function createStudentBookingFixture(unique, options = {}) {
   const studentId = `e2e-student-booking-student-${unique}`;
   const otherStudentId = `e2e-student-booking-other-${unique}`;
   const eligibleLessonId = `e2e-student-booking-bookable-${unique}`;
+  const studentGroupPackageId = `pkg-${studentId}`;
   const fullLessonId = `e2e-student-booking-full-${unique}`;
   const closedLessonId = `e2e-student-booking-closed-${unique}`;
   const hiddenLessonId = `e2e-student-booking-hidden-${unique}`;
   const pastLessonId = `e2e-student-booking-past-${unique}`;
   const cancelledLessonId = `e2e-student-booking-cancelled-${unique}`;
   const otherHistoryLessonId = `e2e-student-booking-other-history-${unique}`;
+  const fixedStudentIds = [1, 2, 3].map((index) => `e2e-fixed-${index}-${unique}`);
   const blockedGroupName = `숨김반 ${unique}`;
   const eligibleGroupName = `예약반 ${unique}`;
   const studentMembershipRef = db
@@ -330,10 +332,12 @@ async function createStudentBookingFixture(unique, options = {}) {
     db.collection('groupClasses').doc(hiddenGroupClassId),
     db.collection('privateStudents').doc(studentId),
     db.collection('privateStudents').doc(otherStudentId),
-    db.collection('groupStudents').doc(`gs-${studentId}`),
-    db.collection('groupStudents').doc(`gs-${otherStudentId}`),
+    ...fixedStudentIds.map((fixedStudentId) =>
+      db.collection('groupStudents').doc(`gs-${fixedStudentId}`)
+    ),
     db.collection('studentGroupAccess').doc(accessId({ groupClassId: eligibleGroupClassId, studentId })),
     db.collection('studentGroupAccessSummary').doc(accessSummaryId({ studentId })),
+    db.collection('studentPackages').doc(studentGroupPackageId),
     db.collection('groupLessons').doc(eligibleLessonId),
     db.collection('groupLessons').doc(fullLessonId),
     db.collection('groupLessons').doc(closedLessonId),
@@ -400,55 +404,54 @@ async function createStudentBookingFixture(unique, options = {}) {
       createdAt: nowTs,
       updatedAt: nowTs,
     }),
-    db.collection('groupStudents').doc(`gs-${studentId}`).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      groupClassId: eligibleGroupClassId,
-      classID: eligibleGroupClassId,
-      studentId,
-      studentName: `학생 ${unique}`,
-      name: `학생 ${unique}`,
-      teacher: TEACHER_NAME,
-      packageId: `pkg-${studentId}`,
-      packageType: 'group',
-      paidLessons: 8,
-      attendanceCount: 0,
-      status: 'active',
-      studentStatus: 'active',
-      excludedDates: [],
-      breakStartDate: '',
-      breakEndDate: '',
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    }),
-    db.collection('groupStudents').doc(`gs-${otherStudentId}`).set({
-      academyId: DEFAULT_E2E_ACADEMY_ID,
-      groupClassId: eligibleGroupClassId,
-      classID: eligibleGroupClassId,
-      studentId: otherStudentId,
-      studentName: `다른학생 ${unique}`,
-      name: `다른학생 ${unique}`,
-      teacher: TEACHER_NAME,
-      packageId: `pkg-${otherStudentId}`,
-      packageType: 'group',
-      paidLessons: 8,
-      attendanceCount: 0,
-      status: 'active',
-      studentStatus: 'active',
-      excludedDates: [],
-      breakStartDate: '',
-      breakEndDate: '',
-      createdAt: nowTs,
-      updatedAt: nowTs,
-    }),
+    ...fixedStudentIds.map((fixedStudentId, index) =>
+      db.collection('groupStudents').doc(`gs-${fixedStudentId}`).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: eligibleGroupClassId,
+        classID: eligibleGroupClassId,
+        studentId: fixedStudentId,
+        studentName: `고정학생 ${index + 1} ${unique}`,
+        name: `고정학생 ${index + 1} ${unique}`,
+        teacher: TEACHER_NAME,
+        packageId: `pkg-${fixedStudentId}`,
+        packageType: 'group',
+        paidLessons: 8,
+        attendanceCount: 0,
+        status: 'active',
+        studentStatus: 'active',
+        excludedDates: [],
+        breakStartDate: '',
+        breakEndDate: '',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      })
+    ),
     studentLinked
       ? db.collection('studentGroupAccess').doc(accessId({ groupClassId: eligibleGroupClassId, studentId })).set({
           academyId: DEFAULT_E2E_ACADEMY_ID,
           groupClassId: eligibleGroupClassId,
-          groupStudentId: `gs-${studentId}`,
+          groupStudentId: '',
           studentId,
-          packageId: `pkg-${studentId}`,
+          packageId: studentGroupPackageId,
           status: 'active',
           studentStatus: 'active',
+          createdAt: nowTs,
+          updatedAt: nowTs,
+        })
+      : Promise.resolve(),
+    studentLinked
+      ? db.collection('studentPackages').doc(studentGroupPackageId).set({
+          academyId: DEFAULT_E2E_ACADEMY_ID,
+          studentId,
+          studentName: `학생 ${unique}`,
+          title: `E2E 단체 수강권 ${unique}`,
+          packageType: 'group',
+          groupClassId: eligibleGroupClassId,
+          groupClassIds: [eligibleGroupClassId],
+          totalCount: 4,
+          usedCount: 0,
+          remainingCount: 4,
+          status: 'active',
           createdAt: nowTs,
           updatedAt: nowTs,
         })
@@ -470,7 +473,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-03',
       time: '10:00',
       subject: 'Bookable',
-      capacity: 2,
+      capacity: 4,
       bookedCount: 0,
       isBookable: true,
       createdAt: nowTs,
@@ -484,7 +487,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-04',
       time: '11:00',
       subject: 'Full',
-      capacity: 1,
+      capacity: 4,
       bookedCount: 1,
       isBookable: true,
       createdAt: nowTs,
@@ -498,7 +501,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-05',
       time: '13:00',
       subject: 'Closed',
-      capacity: 2,
+      capacity: 4,
       bookedCount: 0,
       isBookable: false,
       createdAt: nowTs,
@@ -512,7 +515,7 @@ async function createStudentBookingFixture(unique, options = {}) {
       date: '2099-05-06',
       time: '14:00',
       subject: 'Hidden',
-      capacity: 2,
+      capacity: 4,
       bookedCount: 1,
       isBookable: true,
       createdAt: nowTs,
@@ -527,7 +530,7 @@ async function createStudentBookingFixture(unique, options = {}) {
           date: '2020-01-03',
           time: '09:00',
           subject: 'Past History',
-          capacity: 2,
+          capacity: 4,
           bookedCount: 1,
           isBookable: true,
           createdAt: nowTs,
@@ -543,7 +546,7 @@ async function createStudentBookingFixture(unique, options = {}) {
           date: '2099-05-07',
           time: '15:00',
           subject: 'Cancelled History',
-          capacity: 2,
+          capacity: 4,
           bookedCount: 0,
           isBookable: true,
           createdAt: nowTs,
@@ -559,7 +562,7 @@ async function createStudentBookingFixture(unique, options = {}) {
           date: '2099-05-08',
           time: '16:00',
           subject: 'Other History',
-          capacity: 2,
+          capacity: 4,
           bookedCount: 1,
           isBookable: true,
           createdAt: nowTs,
@@ -656,6 +659,7 @@ async function createStudentBookingFixture(unique, options = {}) {
     pastLessonId,
     cancelledLessonId,
     otherHistoryLessonId,
+    fixedStudentIds,
     docsToDelete,
     originals,
   };
@@ -712,12 +716,19 @@ test('student self-booking only shows eligible lessons and supports reserve/canc
 
     const fullCard = getLessonCard(page, 'Full');
     await expect(fullCard.getByTestId('student-booking-reserve-button')).toBeDisabled();
+    await expect(fullCard).toContainText('마감');
 
     const bookableCard = getLessonCard(page, 'Bookable');
+    await expect(bookableCard).toContainText('자유 예약 가능');
+    await expect(bookableCard).toContainText('남은 자리 1명');
+    await expect(bookableCard.getByTestId('student-booking-reserve-button')).toHaveText('단체반 예약');
+    await expect(page.locator('body')).not.toContainText('고정학생 1');
+    await expect(page.locator('body')).not.toContainText('차감취소');
     await bookableCard.getByTestId('student-booking-reserve-button').click();
     await expectReservationStatus(db, fixture.eligibleLessonId, fixture.studentId, 'active');
     await expectBookedCount(db, fixture.eligibleLessonId, 1);
     await expect(bookableCard).toContainText('예약 완료', { timeout: 15000 });
+    await expect(bookableCard).toContainText('남은 자리 0명', { timeout: 15000 });
 
     const reservationCard = getReservationCard(page, 'Bookable');
     await expect(reservationCard).toBeVisible({ timeout: 15000 });
@@ -735,6 +746,43 @@ test('student self-booking only shows eligible lessons and supports reserve/canc
     await bookableCard.getByTestId('student-booking-reserve-button').click();
     await expectReservationStatus(db, fixture.eligibleLessonId, fixture.studentId, 'active');
     await expectBookedCount(db, fixture.eligibleLessonId, 1);
+  } finally {
+    if (fixture) {
+      await cleanupStudentBookingFixture(fixture).catch(() => {});
+    }
+  }
+});
+
+test('student sees released fixed group seat without private fixed-student details', async ({
+  page,
+  browserName,
+}, testInfo) => {
+  test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
+  test.skip(!hasServiceAccount(), 'serviceAccountKey.json이 있을 때만 student booking setup을 실행합니다.');
+  test.setTimeout(120000);
+
+  initializeAdmin();
+  const db = admin.firestore();
+  let fixture = null;
+
+  try {
+    fixture = await createStudentBookingFixture(`${Date.now()}-${testInfo.workerIndex}-released`);
+    await db.collection('groupLessons').doc(fixture.eligibleLessonId).set(
+      {
+        releasedFixedStudentIDs: [fixture.fixedStudentIds[0]],
+        updatedAt: admin.firestore.Timestamp.now(),
+      },
+      { merge: true }
+    );
+
+    await loginAsStudent(page, TEST_STUDENT_EMAIL, TEST_STUDENT_PASSWORD);
+
+    const bookableCard = getLessonCard(page, 'Bookable');
+    await expect(bookableCard).toBeVisible({ timeout: 15000 });
+    await expect(bookableCard).toContainText('예약 가능');
+    await expect(bookableCard).toContainText('남은 자리 2명');
+    await expect(page.locator('body')).not.toContainText('고정학생 1');
+    await expect(page.locator('body')).not.toContainText('차감취소');
   } finally {
     if (fixture) {
       await cleanupStudentBookingFixture(fixture).catch(() => {});
@@ -797,9 +845,16 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
   const freeClassId = `e2e-course-free-class-${unique}`;
   const beginnerClassId = `e2e-course-beginner-class-${unique}`;
   const legacyClassId = `e2e-course-legacy-class-${unique}`;
+  const deletedClassId = `e2e-course-deleted-class-${unique}`;
+  const closedClassId = `e2e-course-closed-class-${unique}`;
+  const orphanClassId = `e2e-course-orphan-class-${unique}`;
   const freeLessonId = `e2e-course-free-lesson-${unique}`;
   const beginnerLessonId = `e2e-course-beginner-lesson-${unique}`;
   const legacyLessonId = `e2e-course-legacy-lesson-${unique}`;
+  const deletedLessonId = `e2e-course-deleted-lesson-${unique}`;
+  const closedLessonId = `e2e-course-closed-lesson-${unique}`;
+  const orphanLessonId = `e2e-course-orphan-lesson-${unique}`;
+  const noDeductionLessonId = `e2e-course-no-deduction-lesson-${unique}`;
   const summaryRef = db.collection('studentGroupAccessSummary').doc(accessSummaryId({ studentId }));
   const studentMembershipRef = db
     .collection('academyMemberships')
@@ -814,9 +869,14 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     db.collection('groupClasses').doc(freeClassId),
     db.collection('groupClasses').doc(beginnerClassId),
     db.collection('groupClasses').doc(legacyClassId),
+    db.collection('groupClasses').doc(closedClassId),
     db.collection('groupLessons').doc(freeLessonId),
     db.collection('groupLessons').doc(beginnerLessonId),
     db.collection('groupLessons').doc(legacyLessonId),
+    db.collection('groupLessons').doc(deletedLessonId),
+    db.collection('groupLessons').doc(closedLessonId),
+    db.collection('groupLessons').doc(orphanLessonId),
+    db.collection('groupLessons').doc(noDeductionLessonId),
     db.collection('studentPackages').doc(`e2e-course-beginner-package-${unique}`),
     db.collection('studentPackages').doc(`e2e-course-free-package-${unique}`),
     db.collection('studentPackages').doc(`e2e-course-private-package-${unique}`),
@@ -896,6 +956,22 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
+      db.collection('groupClasses').doc(closedClassId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        name: `운영 종료 ${unique}`,
+        teacher: TEACHER_NAME,
+        teacherName: TEACHER_NAME,
+        maxStudents: 6,
+        time: '13:30',
+        subject: 'Course Closed',
+        groupCourseType: 'free_talking',
+        weekdays: ['목'],
+        status: 'closed',
+        closedFromDate: '2099-06-01',
+        closedReason: 'E2E closed',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
       db.collection('groupLessons').doc(freeLessonId).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
         groupClassId: freeClassId,
@@ -940,6 +1016,73 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         createdAt: nowTs,
         updatedAt: nowTs,
       }),
+      db.collection('groupLessons').doc(deletedLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: deletedClassId,
+        groupClassName: `삭제된 반 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-04',
+        time: '13:00',
+        subject: 'Course Deleted Hidden',
+        groupCourseType: 'free_talking',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        status: 'cancelled',
+        groupClassDeleted: true,
+        cancelledReason: 'group_class_deleted',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(closedLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: closedClassId,
+        groupClassName: `운영 종료 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-07',
+        time: '13:30',
+        subject: 'Course Closed Hidden',
+        groupCourseType: 'free_talking',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(noDeductionLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: freeClassId,
+        groupClassName: `프리토킹 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-06',
+        time: '15:00',
+        subject: 'Course Holiday Hidden',
+        groupCourseType: 'free_talking',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        status: 'cancelled',
+        cancellationType: 'no_deduction',
+        cancelledReason: 'holiday',
+        noDeduction: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('groupLessons').doc(orphanLessonId).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        groupClassId: orphanClassId,
+        groupClassName: `없는 반 ${unique}`,
+        teacher: TEACHER_NAME,
+        date: '2099-06-05',
+        time: '14:00',
+        subject: 'Course Orphan Hidden',
+        groupCourseType: 'free_talking',
+        capacity: 4,
+        bookedCount: 0,
+        isBookable: true,
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
       db.collection('studentPackages').doc(`e2e-course-beginner-package-${unique}`).set({
         academyId: DEFAULT_E2E_ACADEMY_ID,
         studentId,
@@ -949,6 +1092,23 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
         groupClassId: beginnerClassId,
         groupCourseType: 'beginner_conversation',
         title: 'Beginner Course Package',
+        totalCount: 4,
+        usedCount: 0,
+        remainingCount: 4,
+        status: 'active',
+        createdAt: nowTs,
+        updatedAt: nowTs,
+      }),
+      db.collection('studentPackages').doc(`e2e-course-free-package-${unique}`).set({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        studentId,
+        studentName: `코스학생 ${unique}`,
+        teacher: TEACHER_NAME,
+        packageType: 'group',
+        groupClassId: freeClassId,
+        groupClassIds: [freeClassId],
+        groupCourseType: 'free_talking',
+        title: 'Free Talking Course Package',
         totalCount: 4,
         usedCount: 0,
         remainingCount: 4,
@@ -1022,7 +1182,7 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     await expect(page.getByText('Course Free Visible')).toHaveCount(0);
     await summaryRef.set(
       {
-        groupClassIds: [freeClassId, legacyClassId],
+        groupClassIds: [freeClassId, legacyClassId, deletedClassId, closedClassId, orphanClassId],
         groupCourseTypes: ['beginner_conversation'],
         updatedAt: nowTs,
       },
@@ -1031,15 +1191,29 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     await expect
       .poll(async () => getStudentGroupAccessSummary(summaryRef), { timeout: 15000 })
       .toMatchObject({
-        groupClassIds: expect.arrayContaining([freeClassId, legacyClassId]),
+        groupClassIds: expect.arrayContaining([
+          freeClassId,
+          legacyClassId,
+          deletedClassId,
+          closedClassId,
+          orphanClassId,
+        ]),
         groupCourseTypes: expect.arrayContaining(['beginner_conversation']),
       });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: '내 수업 내역' })).toBeVisible({
+      timeout: 15000,
+    });
     await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
     await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);
+    await expect(page.getByText('Course Deleted Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Closed Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Orphan Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Holiday Hidden')).toHaveCount(0);
 
     await summaryRef.set(
       {
-        groupClassIds: [legacyClassId],
+        groupClassIds: [legacyClassId, closedClassId, orphanClassId],
         groupCourseTypes: ['free_talking'],
         updatedAt: nowTs,
       },
@@ -1048,12 +1222,20 @@ test('student group lesson visibility supports groupCourseTypes and legacy group
     await expect
       .poll(async () => getStudentGroupAccessSummary(summaryRef), { timeout: 15000 })
       .toMatchObject({
-        groupClassIds: [legacyClassId],
+        groupClassIds: [legacyClassId, closedClassId, orphanClassId],
         groupCourseTypes: ['free_talking'],
       });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.getByRole('heading', { name: '내 수업 내역' })).toBeVisible({
+      timeout: 15000,
+    });
     await expectLessonCardVisible(page, 'Course Free Visible', summaryRef);
     await expect(page.getByText('Course Beginner Only')).toHaveCount(0);
     await expectLessonCardVisible(page, 'Course Legacy Visible', summaryRef);
+    await expect(page.getByText('Course Deleted Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Closed Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Orphan Hidden')).toHaveCount(0);
+    await expect(page.getByText('Course Holiday Hidden')).toHaveCount(0);
   } finally {
     await Promise.all(refsToDelete.map((ref) => ref.delete().catch(() => {})));
     await Promise.all([

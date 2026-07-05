@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
-import { BASE_URL } from './e2e-helpers.js';
+import { BASE_URL, selectTeacherOption } from './e2e-helpers.js';
 import {
   ADMIN_EMAIL,
   ADMIN_PASSWORD,
@@ -229,17 +229,30 @@ async function expectPanelContains(page, text) {
   await expect(page.getByTestId('today-schedule-panel')).toContainText(text, { timeout: 20000 });
 }
 
-async function expectSummaryCount(page, label, count) {
-  const item = page
+function getSummaryItem(page, label) {
+  return page
     .getByTestId('today-schedule-summary-item')
-    .filter({ hasText: label });
+    .filter({ has: page.getByText(label, { exact: true }) })
+    .first();
+}
+
+function getSummaryItemsByLabel(page, label) {
+  return page
+    .getByTestId('today-schedule-summary-item')
+    .filter({ has: page.getByText(label, { exact: true }) });
+}
+
+async function expectSummaryCount(page, label, count) {
+  const item = getSummaryItem(page, label);
   await expect(item).toContainText(String(count), { timeout: 20000 });
 }
 
+async function expectSummaryLabelHidden(page, label) {
+  await expect(getSummaryItemsByLabel(page, label)).toHaveCount(0);
+}
+
 async function expectSummaryCountAtLeast(page, label, count) {
-  const item = page
-    .getByTestId('today-schedule-summary-item')
-    .filter({ hasText: label });
+  const item = getSummaryItem(page, label);
   await expect
     .poll(async () => {
       const text = (await item.textContent()) || '';
@@ -290,14 +303,18 @@ test.beforeAll(async () => {
   fixture.otherGroupLessonId = `today-other-group-lesson-${unique}`;
   fixture.ownPrivateLessonId = `today-private-lesson-${unique}`;
   fixture.otherPrivateLessonId = `today-other-private-lesson-${unique}`;
+  fixture.releasedFixedLessonId = `today-released-fixed-lesson-${unique}`;
   fixture.ownPrivateSlotId = `today-private-slot-${unique}`;
   fixture.otherPrivateSlotId = `today-other-private-slot-${unique}`;
+  fixture.releasedPrivateSlotId = `today-released-private-slot-${unique}`;
   fixture.ownGroupTitle = `오늘단체수업 ${unique}`;
   fixture.otherGroupTitle = `다른선생단체 ${unique}`;
   fixture.ownPrivateTitle = `오늘개인수업 ${unique}`;
   fixture.otherPrivateTitle = `다른선생개인 ${unique}`;
+  fixture.releasedFixedTitle = `오늘자리공개고정 ${unique}`;
   fixture.ownPrivateReservationTitle = `오늘1대1예약 ${unique}`;
   fixture.otherPrivateReservationTitle = `다른학생1대1 ${unique}`;
+  fixture.cancelledReleasedReservationTitle = `취소된직접예약 ${unique}`;
 
   await cleanupStaleTodayScheduleDocs({ db, today });
   await ensureAdminFixture({ auth, db });
@@ -398,6 +415,15 @@ test.beforeAll(async () => {
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${teacherUser.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${studentUser.uid}`),
     db.collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${emptyStudentUser.uid}`),
+    db.collection('lessons').doc(fixture.releasedFixedLessonId),
+    db.collection('privateLessonSlots').doc(fixture.releasedPrivateSlotId),
+    db.collection('privateLessonReservations').doc(
+      privateReservationId({
+        academyId: DEFAULT_E2E_ACADEMY_ID,
+        slotId: fixture.releasedPrivateSlotId,
+        studentId: fixture.otherStudentId,
+      })
+    ),
   ];
   fixture.docRefs = refs;
 
@@ -586,6 +612,58 @@ test.beforeAll(async () => {
       activePackageIds: [],
       updatedAt: now,
     }),
+    refs[19].set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      student: fixture.studentName,
+      studentName: fixture.studentName,
+      studentId: fixture.studentId,
+      studentID: fixture.studentId,
+      teacher: fixture.teacherName,
+      teacherName: fixture.teacherName,
+      date: today,
+      time: '22:45',
+      packageType: 'private',
+      sourceType: 'fixed-private-slot-assignment',
+      subject: fixture.releasedFixedTitle,
+      status: 'cancelled',
+      cancellationType: 'seat_released',
+      isSeatReleased: true,
+      releasedForPrivateBooking: true,
+      noDeduction: true,
+      updatedAt: now,
+    }),
+    refs[20].set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      teacher: fixture.teacherName,
+      teacherName: fixture.teacherName,
+      date: today,
+      time: '22:45',
+      durationMinutes: 60,
+      subject: fixture.cancelledReleasedReservationTitle,
+      status: 'open',
+      sourceType: 'released_fixed_slot',
+      releasedLessonId: fixture.releasedFixedLessonId,
+      updatedAt: now,
+    }),
+    refs[21].set({
+      academyId: DEFAULT_E2E_ACADEMY_ID,
+      slotId: fixture.releasedPrivateSlotId,
+      studentId: fixture.otherStudentId,
+      studentName: fixture.otherStudentName,
+      teacher: fixture.teacherName,
+      teacherName: fixture.teacherName,
+      date: today,
+      time: '22:45',
+      durationMinutes: 60,
+      subject: fixture.cancelledReleasedReservationTitle,
+      status: 'cancelled',
+      source: 'student',
+      sourceType: 'released_fixed_slot',
+      cancellationReason: 'student_cancelled',
+      cancelledBy: 'student',
+      cancelledAt: now,
+      updatedAt: now,
+    }),
   ]);
 });
 
@@ -607,17 +685,27 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await login(page, ADMIN_EMAIL, ADMIN_PASSWORD, /\/dashboard/);
 
   await expect(page.getByTestId('today-schedule-panel')).toBeVisible({ timeout: 20000 });
+  await expect(page.getByTestId('today-schedule-panel')).toContainText('오늘 수업');
+  await expect(page.getByTestId('today-schedule-panel')).toContainText('이번 달 누적 수업');
+  await expect(page.getByTestId('teacher-lesson-count-stats-panel')).toContainText('선생님별 수업 통계');
+  await expect(page.getByTestId('teacher-lesson-count-stats-panel')).toContainText('오늘 수업');
+  await expect(page.getByTestId('teacher-lesson-count-stats-panel')).toContainText('이번 달 누적 수업');
   await expectPanelContains(page, fixture.ownGroupTitle);
   await expectPanelContains(page, fixture.otherGroupTitle);
   await expectPanelContains(page, fixture.ownPrivateTitle);
   await expectPanelContains(page, fixture.ownPrivateReservationTitle);
   await expectPanelContains(page, fixture.today);
+  await expectPanelContains(page, '오늘 수업');
+  await expectPanelContains(page, '이번 달 누적 수업');
   await expectPanelContains(page, '3회차');
+  await expect(page.getByTestId('today-schedule-panel')).not.toContainText(fixture.releasedFixedTitle);
+  await expect(page.getByTestId('today-schedule-panel')).not.toContainText(
+    fixture.cancelledReleasedReservationTitle
+  );
   await expectSummaryCountAtLeast(page, '개인 수업', 4);
   await expectSummaryCountAtLeast(page, '단체수업', 2);
   await expectPanelContains(page, fixture.studentName);
   await expectPanelContains(page, '예약 완료');
-  await expectPanelContains(page, '예약됨');
 
   const ownReservationRow = page
     .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
@@ -625,8 +713,9 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expect(ownReservationRow).toBeVisible({ timeout: 20000 });
   await expect(ownReservationRow).toContainText(fixture.studentName);
   await expect(ownReservationRow).toContainText(fixture.teacherName);
-  await expect(ownReservationRow).toContainText('예약됨');
-  await expect(ownReservationRow).toContainText('예약 1:1');
+  await expect(ownReservationRow).toContainText('예약 완료');
+  await expect(ownReservationRow).toContainText('학생 예약 1:1');
+  await expect(ownReservationRow).toContainText('학생이 예약 화면에서 직접 예약한 1:1 수업입니다.');
   await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toBeVisible();
   await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toBeVisible();
   await expect(
@@ -640,8 +729,45 @@ test('admin sees academy-scoped 오늘의 일정 on dashboard', async ({ page })
   await expect(notEndedReservationRow.getByRole('button', { name: '수업 종료 후 처리' })).toBeVisible();
   await expect(notEndedReservationRow.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
   await expect(notEndedReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
-  await expect(page.locator('main section button').filter({ hasText: '1:1 예약' }).first()).toBeVisible();
+  await expect(page.locator('main section button').filter({ hasText: '학생예약' }).first()).toBeVisible();
 
+});
+
+test('admin calendar teacher filter scopes 오늘의 일정 summary and rows', async ({ page }) => {
+  await login(page, ADMIN_EMAIL, ADMIN_PASSWORD, /\/dashboard/);
+
+  const panel = page.getByTestId('today-schedule-panel');
+  await expect(panel).toBeVisible({ timeout: 20000 });
+  const teacherFilter = page.getByTestId('calendar-teacher-filter-select');
+  await expect(teacherFilter).toBeVisible({ timeout: 20000 });
+  await expect(teacherFilter).toHaveValue('');
+
+  await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
+  await expect(panel).toContainText(fixture.otherGroupTitle);
+  await expect(panel).toContainText(fixture.ownPrivateTitle);
+  await expect(panel).toContainText(fixture.otherPrivateTitle);
+  await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
+  await expect(panel).toContainText(fixture.otherPrivateReservationTitle);
+  await expectSummaryCountAtLeast(page, '개인 수업', 4);
+  await expectSummaryCountAtLeast(page, '단체수업', 2);
+
+  await selectTeacherOption(teacherFilter, fixture.teacherName);
+
+  await expect(page.getByRole('heading', { name: new RegExp(`${fixture.teacherName} 선생님 일정`) })).toBeVisible();
+  await expectSummaryCount(page, '개인 수업', 2);
+  await expectSummaryCount(page, '단체수업', 1);
+  await expectSummaryCount(page, '차감취소', 0);
+  await expectSummaryCount(page, '마지막 수업', 0);
+  await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
+  await expect(panel).toContainText(fixture.ownPrivateTitle);
+  await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
+  await expect(panel).toContainText(fixture.teacherName);
+  await expect(panel).not.toContainText(fixture.otherGroupTitle);
+  await expect(panel).not.toContainText(fixture.otherPrivateTitle);
+  await expect(panel).not.toContainText(fixture.otherPrivateReservationTitle);
+  await expect(panel).not.toContainText(fixture.otherStudentName);
+  await expect(panel).not.toContainText(fixture.releasedFixedTitle);
+  await expect(panel).not.toContainText(fixture.cancelledReleasedReservationTitle);
 });
 
 test('teacher sees only teacher-owned today schedule rows', async ({ page }) => {
@@ -649,14 +775,24 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
 
   const panel = page.getByTestId('today-schedule-panel');
   await expect(panel).toBeVisible({ timeout: 20000 });
+  await expectSummaryCount(page, '오늘 1:1', 2);
+  await expectSummaryCountAtLeast(page, '이번 달 1:1 누적', 2);
+  await expectSummaryLabelHidden(page, '오늘 수업');
+  await expectSummaryLabelHidden(page, '이번 달 누적 수업');
+  await expectSummaryLabelHidden(page, '이번 달 1:1');
+  await expectSummaryLabelHidden(page, '이번 달 단체수업');
+  await expectSummaryLabelHidden(page, '개인 수업');
+  await expectSummaryLabelHidden(page, '단체수업');
   await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
   await expect(panel).toContainText(fixture.ownPrivateTitle);
   await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
   await expect(panel).toContainText(fixture.today);
-  await expect(panel).toContainText('예약됨');
+  await expect(panel).toContainText('예약 완료');
   await expect(panel).toContainText('3회차');
-  await expectSummaryCount(page, '개인 수업', 2);
   await expect(panel).toContainText(fixture.teacherName);
+  await expect(panel).not.toContainText(fixture.releasedFixedTitle);
+  await expect(panel).not.toContainText(fixture.cancelledReleasedReservationTitle);
+  await expect(panel).not.toContainText('자리 공개됨');
   await expect(panel).not.toContainText(fixture.otherGroupTitle);
   await expect(panel).not.toContainText(fixture.otherPrivateTitle);
   await expect(panel).not.toContainText(fixture.otherStudentName);
@@ -667,7 +803,8 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
   await expect(ownReservationRow).toBeVisible({ timeout: 20000 });
   await expect(ownReservationRow).toContainText(fixture.studentName);
   await expect(ownReservationRow).toContainText(fixture.teacherName);
-  await expect(ownReservationRow).toContainText('예약됨');
+  await expect(ownReservationRow).toContainText('예약 완료');
+  await expect(ownReservationRow).toContainText('학생 예약 1:1');
   await expect(ownReservationRow.getByRole('button', { name: '완료 처리' })).toHaveCount(0);
   await expect(ownReservationRow.getByRole('button', { name: '노쇼 처리' })).toHaveCount(0);
   await expect(
@@ -675,7 +812,7 @@ test('teacher sees only teacher-owned today schedule rows', async ({ page }) => 
       .locator('[data-testid="calendar-lesson-row"][data-row-kind="privateReservation"]')
       .filter({ hasText: fixture.otherPrivateReservationTitle })
   ).toHaveCount(0);
-  await expect(page.locator('main section button').filter({ hasText: '1:1 예약' }).first()).toBeVisible();
+  await expect(page.locator('main section button').filter({ hasText: '학생예약' }).first()).toBeVisible();
 });
 
 test('student sees only own active today reservations on student booking page', async ({ page }) => {
@@ -685,11 +822,11 @@ test('student sees only own active today reservations on student booking page', 
   await expect(panel).toBeVisible({ timeout: 20000 });
   await expect(panel).toContainText(fixture.ownGroupTitle, { timeout: 20000 });
   await expect(panel).toContainText(fixture.ownPrivateReservationTitle);
+  await expect(panel).toContainText('학생 직접예약 1:1');
   await expect(panel).toContainText('예약 완료');
   await expect(panel).not.toContainText(fixture.otherStudentName);
   await expect(panel).not.toContainText(fixture.otherGroupTitle);
   await expect(panel).not.toContainText(fixture.otherPrivateReservationTitle);
-  await expect(panel).not.toContainText('학생');
 
 });
 

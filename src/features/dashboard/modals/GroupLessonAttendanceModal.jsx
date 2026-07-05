@@ -8,10 +8,14 @@ export default function GroupLessonAttendanceModal({
   busyGroupAttendanceStudentId,
   applyGroupLessonAttendanceDeduction,
   applyGroupLessonAttendanceUndo,
+  releaseGroupLessonFixedSeat,
+  restoreGroupLessonFixedSeat,
+  groupLessonSeatAvailability,
   closeGroupLessonAttendanceModal,
 }) {
   function getStatusLabel(row) {
     if (row.isCounted) return '차감됨'
+    if (row.isReleased) return isPastLesson ? '차감취소됨' : '자리 공개됨'
     if (!isPastLesson) return '예정'
     if ((row.remainingCount ?? 0) <= 0) return '수강권 소진'
     return '차감취소됨'
@@ -55,7 +59,7 @@ export default function GroupLessonAttendanceModal({
           id="group-lesson-attendance-modal-title"
           style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}
         >
-          출결 / 차감
+          {isPastLesson ? '출결 / 차감' : '자리 공개 관리'}
         </h2>
         <p style={{ margin: '0 0 6px 0', fontSize: 13, opacity: 0.88 }}>
           {selectedGroupClass.name || '-'}
@@ -64,6 +68,37 @@ export default function GroupLessonAttendanceModal({
           {groupLessonForAttendanceModal.date || '-'} · {groupLessonForAttendanceModal.time || '-'} ·{' '}
           {groupLessonForAttendanceModal.subject || '-'}
         </p>
+        {groupLessonSeatAvailability ? (
+          <div
+            data-testid="group-lesson-seat-summary"
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+              gap: 8,
+              marginBottom: 16,
+              padding: 12,
+              border: '1px solid #2f3a4f',
+              borderRadius: 10,
+              background: '#111722',
+              fontSize: 13,
+            }}
+          >
+            <span>정원 {groupLessonSeatAvailability.capacity}명</span>
+            <span data-testid="group-lesson-fixed-attending-count">
+              반 등록 참석 예정 {groupLessonSeatAvailability.fixedAttendingCount}명
+            </span>
+            <span data-testid="group-lesson-released-seat-count">
+              {isPastLesson ? '반 등록 차감취소' : '반 등록 자리 공개'}{' '}
+              {groupLessonSeatAvailability.releasedFixedSeatCount}명
+            </span>
+            <span data-testid="group-lesson-guest-reserved-count">
+              자유 예약 {groupLessonSeatAvailability.guestReservedCount}명
+            </span>
+            <span data-testid="group-lesson-remaining-seats">
+              남은 자리 {groupLessonSeatAvailability.remainingSeats}명
+            </span>
+          </div>
+        ) : null}
 
         {groupLessonAttendanceModalRows.length === 0 ? (
           <p style={{ margin: 0, fontSize: 13, opacity: 0.75 }}>
@@ -107,7 +142,45 @@ export default function GroupLessonAttendanceModal({
                   </span>
                   <span>{getStatusLabel(row)}</span>
                   <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {isPastLesson && !row.isCounted && row.canDeduct ? (
+                    {row.isReleased ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          restoreGroupLessonFixedSeat(gs, lessonRef)
+                        }
+                        disabled={!row.canRestoreSeat || rowBusy}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #554433',
+                          background: row.canRestoreSeat && !rowBusy ? '#3d352a' : '#2a2a2a',
+                          color: 'white',
+                          cursor: !row.canRestoreSeat || rowBusy ? 'not-allowed' : 'pointer',
+                          fontSize: 12,
+                        }}
+                      >
+                        {rowBusy ? '처리 중' : isPastLesson ? '차감복구' : '자리 복구'}
+                      </button>
+                    ) : !isPastLesson && row.canReleaseSeat ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          releaseGroupLessonFixedSeat(gs, lessonRef)
+                        }
+                        disabled={rowBusy}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: '1px solid #554433',
+                          background: !rowBusy ? '#3d352a' : '#2a2a2a',
+                          color: 'white',
+                          cursor: rowBusy ? 'not-allowed' : 'pointer',
+                          fontSize: 12,
+                        }}
+                      >
+                        {rowBusy ? '처리 중' : '자리 공개'}
+                      </button>
+                    ) : isPastLesson && !row.isCounted && row.canDeduct ? (
                       <button
                         type="button"
                         onClick={() =>

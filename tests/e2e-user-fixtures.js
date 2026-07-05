@@ -24,6 +24,8 @@ const PERMISSION_KEYS = [
   'canEditLesson',
   'canDeleteLesson',
   'canCreateLessonDirectly',
+  'canEditStudentPackageCounts',
+  'canManageOwnLessonDeductions',
   'requiresLessonApproval',
 ];
 
@@ -44,6 +46,8 @@ const USER_SPECS = [
       canEditLesson: true,
       canDeleteLesson: true,
       canCreateLessonDirectly: true,
+      canEditStudentPackageCounts: true,
+      canManageOwnLessonDeductions: true,
       requiresLessonApproval: false,
     },
   },
@@ -63,6 +67,8 @@ const USER_SPECS = [
       canEditLesson: false,
       canDeleteLesson: false,
       canCreateLessonDirectly: false,
+      canEditStudentPackageCounts: false,
+      canManageOwnLessonDeductions: false,
       requiresLessonApproval: false,
     },
   },

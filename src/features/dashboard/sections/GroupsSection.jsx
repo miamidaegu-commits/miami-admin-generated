@@ -1,16 +1,42 @@
-import { formatGroupStudentStartDate, formatGroupWeekdaysDisplay } from '../dashboardViewUtils.js'
+import {
+  formatGroupStudentStartDate,
+  formatGroupWeekdaysDisplay,
+  getTodayStorageDateString,
+  isGroupStudentOperationallyEligibleOnYmd,
+  isNoDeductionCancelledGroupLesson,
+  resolveTeacherDisplayName,
+} from '../dashboardViewUtils.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+import {
+  getGroupClassBookingCapacitySummary,
+  resolveGroupLessonSubject,
+} from '../groupClassRoomUtils.js'
 
-function getLessonReservationStatusLabel(lesson) {
-  if (lesson?.isBookable !== true) return '비활성'
+function getLessonReservationStatusLabel(lesson, seatAvailability) {
+  if (isNoDeductionCancelledGroupLesson(lesson)) return '휴강'
+  if (seatAvailability) return seatAvailability.isFull ? '마감' : '예약 가능'
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
-  if (!Number.isFinite(capacity) || capacity <= 0) return '비활성'
+  if (!Number.isFinite(capacity) || capacity <= 0) return '마감'
   if (Number.isFinite(bookedCount) && bookedCount >= capacity) return '마감'
   return '예약 가능'
 }
 
-function getLessonCapacityLabel(lesson) {
+function getLessonBookableBadgeLabel(lesson) {
+  return lesson?.isBookable === true ? '학생 직접 예약: 가능' : '학생 직접 예약: 비활성'
+}
+
+function isPastGroupLessonForAdmin(lesson) {
+  const date = String(lesson?.date || '').trim()
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) && date < getTodayStorageDateString()
+}
+
+function getGroupLessonAttendanceActionLabel(lesson) {
+  return isPastGroupLessonForAdmin(lesson) ? '출결/차감' : '자리 공개 관리'
+}
+
+function getLessonCapacityLabel(lesson, seatAvailability) {
+  if (seatAvailability) return `${seatAvailability.guestReservedCount} / ${seatAvailability.capacity}`
   const capacity = Number(lesson?.capacity ?? 0)
   const bookedCount = Number(lesson?.bookedCount ?? 0)
   const safeCapacity = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
@@ -38,6 +64,20 @@ function getReservationSourceLabel(source) {
   return source === 'student' ? '학생 예약' : '관리자 예약'
 }
 
+function getGroupClassStatusLabel(status) {
+  const value = String(status || 'active').trim()
+  if (value === 'active') return 'active'
+  if (value === 'inactive') return 'inactive'
+  if (value === 'closed') return 'closed'
+  return value || 'active'
+}
+
+function countActiveGroupStudents(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(
+    (row) => String(row?.status || 'active').trim() === 'active'
+  ).length
+}
+
 export default function GroupsSection({
   sectionTitle = '단체반 관리',
   canManageGroupClasses,
@@ -61,13 +101,16 @@ export default function GroupsSection({
   openGroupLessonAddModal,
   openGroupLessonSeriesModal,
   isAdmin,
+  canViewPaymentFields = false,
   openGroupLessonPurgeModal,
   busyGroupLessonPurge,
+  teacherSelectOptions = [],
   sortedGroupStudentsForSelectedClass,
   handleRemoveGroupStudent,
   sortedGroupLessonsForSelectedClass,
   groupLessonReservations,
   groupLessonReservationsLoading,
+  groupLessonSeatAvailabilityById = {},
   groupReservationModal,
   busyGroupReservationId,
   canManageGroupReservations,
@@ -81,6 +124,7 @@ export default function GroupsSection({
   openGroupLessonAttendanceModal,
   canEditLesson,
   openGroupLessonEditModal,
+  openGroupLessonNoDeductionCancelModal,
   canDeleteLesson,
   handleDeleteGroupLesson,
   getGroupStudentDisplayName,
@@ -90,6 +134,8 @@ export default function GroupsSection({
 }) {
   const reservationActionBusy = Boolean(busyGroupReservationId)
   const modalLesson = groupReservationModal?.lesson
+  const modalLessonSeatAvailability =
+    modalLesson?.id ? groupLessonSeatAvailabilityById[modalLesson.id] || null : null
   const modalLessonActiveReservations = Array.isArray(groupLessonReservations)
     ? groupLessonReservations.filter(
         (reservation) => reservation.lessonId === modalLesson?.id && reservation.status === 'active'
@@ -101,6 +147,29 @@ export default function GroupsSection({
   const modalActiveStudentIds = new Set(
     modalLessonActiveReservations.map((reservation) => String(reservation.studentId || '').trim())
   )
+  const activeFixedStudentCount = countActiveGroupStudents(sortedGroupStudentsForSelectedClass)
+  const selectedGroupCapacitySummary = selectedGroupClass
+    ? getGroupClassBookingCapacitySummary({
+        maxStudents: selectedGroupClass.maxStudents,
+        activeFixedMemberCount: activeFixedStudentCount,
+      })
+    : null
+  const modalLessonDate = String(modalLesson?.date || '').trim()
+  const modalFixedMemberStudentIds = new Set(
+    Array.isArray(sortedGroupStudentsForSelectedClass)
+      ? sortedGroupStudentsForSelectedClass
+          .filter((row) => {
+            const studentId = getGroupStudentStudentId(row)
+            return (
+              studentId &&
+              String(row.status || 'active') === 'active' &&
+              getGroupStudentGroupId(row) === selectedGroupClass?.id &&
+              isGroupStudentOperationallyEligibleOnYmd(row, modalLessonDate)
+            )
+          })
+          .map((row) => getGroupStudentStudentId(row))
+      : []
+  )
   const modalCandidateGroupStudents = Array.isArray(sortedGroupStudentsForSelectedClass)
     ? sortedGroupStudentsForSelectedClass.filter((row) => {
         const studentId = getGroupStudentStudentId(row)
@@ -108,7 +177,8 @@ export default function GroupsSection({
           studentId &&
           String(row.status || 'active') === 'active' &&
           getGroupStudentGroupId(row) === selectedGroupClass?.id &&
-          !modalActiveStudentIds.has(studentId)
+          !modalActiveStudentIds.has(studentId) &&
+          !modalFixedMemberStudentIds.has(studentId)
         )
       })
     : []
@@ -158,13 +228,14 @@ export default function GroupsSection({
           <div
             className="table-head"
             style={{
-              gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr minmax(140px, auto)',
+              gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr 0.8fr minmax(140px, auto)',
             }}
           >
             <span>이름</span>
             <span>선생님</span>
             <span>코스 유형</span>
             <span>최대 인원</span>
+            <span>상태</span>
             <span>작업</span>
           </div>
 
@@ -188,16 +259,17 @@ export default function GroupsSection({
                   }
                 }}
                 style={{
-                  gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr minmax(140px, auto)',
+                  gridTemplateColumns: '1.2fr 1.2fr 1fr 0.9fr 0.8fr minmax(140px, auto)',
                   cursor: 'pointer',
                   outline: isSelected ? '2px solid #6b8cff' : undefined,
                   outlineOffset: -2,
                 }}
               >
                 <span>{group.name || '-'}</span>
-                <span>{group.teacher || group.teacherName || '-'}</span>
+                <span>{resolveTeacherDisplayName(group, teacherSelectOptions, '선생님 선택 필요')}</span>
                 <span>{getGroupCourseTypeLabel(group.groupCourseType) || '-'}</span>
                 <span>{group.maxStudents ?? '-'}</span>
+                <span>{getGroupClassStatusLabel(group.status)}</span>
                 <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   {canManageGroupClasses ? (
                     <button
@@ -236,7 +308,7 @@ export default function GroupsSection({
                         cursor: rowBusy || busyGroupId === '__add__' ? 'not-allowed' : 'pointer',
                       }}
                     >
-                      {rowBusy ? '처리 중...' : '삭제'}
+                      {rowBusy ? '처리 중...' : '반 운영 종료'}
                     </button>
                   ) : null}
                 </span>
@@ -263,15 +335,30 @@ export default function GroupsSection({
             }}
           >
             <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>
-              등록 학생 — {selectedGroupClass.name || '-'}
+              반 등록 학생 — {selectedGroupClass.name || '-'}
             </h3>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
-              담당 선생님 {selectedGroupClass.teacher || '-'} · 정원{' '}
-              {selectedGroupClass.maxStudents ?? '-'}명
+              담당 선생님 {resolveTeacherDisplayName(
+                selectedGroupClass,
+                teacherSelectOptions,
+                '선생님 선택 필요'
+              )} · 정원{' '}
+              {selectedGroupCapacitySummary?.capacity ?? selectedGroupClass.maxStudents ?? '-'}명 · 반 등록{' '}
+              {selectedGroupCapacitySummary?.fixedMemberCount ?? activeFixedStudentCount}명 · 선착순 가능{' '}
+              {selectedGroupCapacitySummary?.fcfsRemainingSeats ?? '-'}명 · 상태{' '}
+              {getGroupClassStatusLabel(selectedGroupClass.status)}
             </p>
             <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
-              기본 시간 {selectedGroupClass.time || '—'} · 과목{' '}
-              {selectedGroupClass.subject || '—'} · 요일{' '}
+              단체반 수강권 발급 시 자동 등록되는 학생 목록입니다. 남은 선착순 좌석은
+              정원에서 반 등록 참석 예정 학생과 자유 예약 학생을 제외해 계산됩니다.
+            </p>
+            <p style={{ margin: '6px 0 0 0', opacity: 0.68, fontSize: 12 }}>
+              기본 시간 {selectedGroupClass.time || '—'} · 수업 표시명{' '}
+              {resolveGroupLessonSubject({
+                subject: selectedGroupClass.subject,
+                groupClassName: selectedGroupClass.name,
+                groupCourseType: selectedGroupClass.groupCourseType,
+              }) || '—'} · 요일{' '}
               {formatGroupWeekdaysDisplay(selectedGroupClass.weekdays) || '—'} · 코스{' '}
               {getGroupCourseTypeLabel(selectedGroupClass.groupCourseType) || '—'}
             </p>
@@ -416,13 +503,18 @@ export default function GroupsSection({
               {canUseDirectLessonCreation
                 ? '특별 수업 추가: 보강·특강 등 날짜 한 건 · 추가 일정 생성: 관리자용으로 기간을 정해 같은 규칙으로 일정을 더 만듭니다.'
                 : '학생 등록과 수강권 관리는 관리자에게 요청해 주세요.'}
+              {canAddStudent
+                ? ' · 반 등록 학생은 단체반 수강권 발급으로 자동 등록됩니다. 아래 학생 등록은 예외 처리용입니다.'
+                : ''}
               {isAdmin ? ' · 이후 일정 삭제: 폐강·일정 정리 시 기준일 이후 일정만 일괄 삭제(관리자).' : ''}
             </p>
 
             {groupStudentsLoading ? (
               <p style={{ opacity: 0.85 }}>학생 목록 불러오는 중...</p>
             ) : sortedGroupStudentsForSelectedClass.length === 0 ? (
-              <p style={{ opacity: 0.8 }}>이 반에 등록된 학생이 없습니다.</p>
+              <p style={{ opacity: 0.8 }}>
+                아직 반 등록 학생이 없습니다. 단체반 수강권을 발급하면 이 목록에 자동으로 표시됩니다.
+              </p>
             ) : (
               <div className="activity-table">
                 <div
@@ -432,10 +524,10 @@ export default function GroupsSection({
                       '1.1fr 0.75fr 0.75fr 1fr minmax(200px, auto)',
                   }}
                 >
-                  <span>학생 이름</span>
-                  <span>차감 횟수</span>
-                  <span>결제 횟수</span>
-                  <span>시작일</span>
+                  <span>반 등록 학생</span>
+                  <span>출석/차감 횟수</span>
+                  <span>{canViewPaymentFields ? '결제 횟수' : '총 횟수'}</span>
+                  <span>반 등록 시작일</span>
                   <span>작업</span>
                 </div>
 
@@ -527,7 +619,7 @@ export default function GroupsSection({
                   <div
                     className="table-head"
                     style={{
-                      gridTemplateColumns: '0.9fr 0.6fr 1fr 1fr 0.75fr 0.75fr minmax(260px, auto)',
+                      gridTemplateColumns: '0.9fr 0.6fr 1fr 1fr 1.6fr 0.75fr minmax(260px, auto)',
                     }}
                   >
                     <span>날짜</span>
@@ -541,6 +633,15 @@ export default function GroupsSection({
 
                   {sortedGroupLessonsForSelectedClass.map((gl) => {
                     const rowBusy = busyGroupLessonId === gl.id
+                    const isNoDeductionCancelled = isNoDeductionCancelledGroupLesson(gl)
+                    const seatAvailability = groupLessonSeatAvailabilityById[gl.id] || null
+                    const reservationStatusLabel = getLessonReservationStatusLabel(gl, seatAvailability)
+                    const bookableBadgeLabel = getLessonBookableBadgeLabel(gl)
+                    const lessonSubject = resolveGroupLessonSubject({
+                      subject: gl.subject,
+                      groupClassName: gl.groupClassName || selectedGroupClass.name,
+                      groupCourseType: gl.groupCourseType || selectedGroupClass.groupCourseType,
+                    })
                     const attendanceBusyThisLesson =
                       Boolean(busyGroupAttendanceStudentId) &&
                       busyGroupAttendanceStudentId.startsWith(`${gl.id}__`)
@@ -549,20 +650,102 @@ export default function GroupsSection({
                         key={gl.id}
                         className="table-row"
                         data-testid="group-lesson-row"
+                        data-lesson-id={gl.id || ''}
                         data-lesson-date={gl.date || ''}
                         data-lesson-time={gl.time || ''}
-                        data-lesson-subject={gl.subject || ''}
+                        data-lesson-subject={lessonSubject}
                         style={{
-                          gridTemplateColumns: '0.9fr 0.6fr 1fr 1fr 0.75fr 0.75fr minmax(260px, auto)',
+                          gridTemplateColumns: '0.9fr 0.6fr 1fr 1fr 1.6fr 0.75fr minmax(260px, auto)',
                         }}
                       >
                         <span>{gl.date || '-'}</span>
                         <span>{gl.time || '-'}</span>
-                        <span>{gl.subject || '-'}</span>
+                        <span>{lessonSubject || '-'}</span>
                         <span>{getGroupCourseTypeLabel(gl.groupCourseType) || '-'}</span>
-                        <span>{getLessonCapacityLabel(gl)}</span>
-                        <span>{getLessonReservationStatusLabel(gl)}</span>
+                        <span
+                          data-testid="group-lesson-seat-summary"
+                          style={{ display: 'grid', gap: 3, fontSize: 12, lineHeight: 1.35 }}
+                        >
+                          <span>정원 {seatAvailability?.capacity ?? Number(gl.capacity ?? 0)}명</span>
+                          <span data-testid="group-lesson-fixed-attending-count">
+                            반 등록 참석 예정 {seatAvailability?.fixedAttendingCount ?? '-'}명
+                          </span>
+                          <span data-testid="group-lesson-released-seat-count">
+                            반 등록 자리 공개 {seatAvailability?.releasedFixedSeatCount ?? '-'}명
+                          </span>
+                          <span data-testid="group-lesson-guest-reserved-count">
+                            자유 예약 {seatAvailability?.guestReservedCount ?? Number(gl.bookedCount ?? 0)}명
+                          </span>
+                          <span data-testid="group-lesson-remaining-seats">
+                            남은 자리 {seatAvailability?.remainingSeats ?? '-'}명
+                          </span>
+                        </span>
+                        <span style={{ display: 'grid', gap: 3 }}>
+                          <span>좌석: {reservationStatusLabel}</span>
+                          <span
+                            data-testid="group-lesson-bookable-badge"
+                            style={{
+                              width: 'fit-content',
+                              padding: '2px 7px',
+                              borderRadius: 999,
+                              border:
+                                gl.isBookable === true
+                                  ? '1px solid #4c7a5c'
+                                  : '1px solid #665044',
+                              background:
+                                gl.isBookable === true
+                                  ? 'rgba(52, 110, 70, 0.28)'
+                                  : 'rgba(90, 65, 45, 0.28)',
+                              color: gl.isBookable === true ? '#bde8c7' : '#f0c7a8',
+                              fontSize: 12,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {bookableBadgeLabel}
+                          </span>
+                          {isNoDeductionCancelled ? (
+                            <span style={{ fontSize: 12, color: '#f1d38a', fontWeight: 700 }}>
+                              차감 없음
+                            </span>
+                          ) : null}
+                        </span>
                         <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <span
+                            data-testid="group-lesson-action-seat-label"
+                            style={{
+                              alignSelf: 'center',
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              border: '1px solid #3c4f68',
+                              background: '#182234',
+                              color: '#dbe8ff',
+                              fontSize: 12,
+                              fontWeight: 700,
+                            }}
+                          >
+                            좌석: {reservationStatusLabel}
+                          </span>
+                          <span
+                            data-testid="group-lesson-action-bookable-label"
+                            style={{
+                              alignSelf: 'center',
+                              padding: '4px 8px',
+                              borderRadius: 999,
+                              border:
+                                gl.isBookable === true
+                                  ? '1px solid #4c7a5c'
+                                  : '1px solid #665044',
+                              background:
+                                gl.isBookable === true
+                                  ? 'rgba(52, 110, 70, 0.28)'
+                                  : 'rgba(90, 65, 45, 0.28)',
+                              color: gl.isBookable === true ? '#bde8c7' : '#f0c7a8',
+                              fontSize: 12,
+                              fontWeight: 700,
+                            }}
+                          >
+                            {bookableBadgeLabel}
+                          </span>
                           {canManageGroupReservations ? (
                             <button
                               type="button"
@@ -570,7 +753,8 @@ export default function GroupsSection({
                               disabled={
                                 rowBusy ||
                                 busyGroupReservationId?.startsWith(`${gl.id}__`) ||
-                                getLessonReservationStatusLabel(gl) !== '예약 가능' ||
+                                gl.isBookable !== true ||
+                                reservationStatusLabel !== '예약 가능' ||
                                 groupLessonReservationsLoading ||
                                 busyGroupLessonId === '__add__' ||
                                 busyGroupId === '__add__' ||
@@ -586,7 +770,7 @@ export default function GroupsSection({
                                 cursor:
                                   rowBusy ||
                                   busyGroupReservationId?.startsWith(`${gl.id}__`) ||
-                                  getLessonReservationStatusLabel(gl) !== '예약 가능' ||
+                                  reservationStatusLabel !== '예약 가능' ||
                                   groupLessonReservationsLoading ||
                                   busyGroupLessonId === '__add__' ||
                                   busyGroupId === '__add__' ||
@@ -641,7 +825,36 @@ export default function GroupsSection({
                                     : 'pointer',
                               }}
                             >
-                              {attendanceBusyThisLesson ? '처리 중' : '출결/차감'}
+                              {attendanceBusyThisLesson ? '처리 중' : getGroupLessonAttendanceActionLabel(gl)}
+                            </button>
+                          ) : null}
+                          {isAdmin && canEditLesson && !isNoDeductionCancelled ? (
+                            <button
+                              type="button"
+                              onClick={() => openGroupLessonNoDeductionCancelModal(gl)}
+                              title="자리 공개가 아니라 이 회차 전체를 차감 없이 닫습니다."
+                              disabled={
+                                rowBusy ||
+                                busyGroupLessonId === '__add__' ||
+                                busyGroupId === '__add__' ||
+                                busyGroupId === selectedGroupClass.id
+                              }
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #665533',
+                                background: '#3a321f',
+                                color: '#ffe8b8',
+                                cursor:
+                                  rowBusy ||
+                                  busyGroupLessonId === '__add__' ||
+                                  busyGroupId === '__add__' ||
+                                  busyGroupId === selectedGroupClass.id
+                                    ? 'not-allowed'
+                                    : 'pointer',
+                              }}
+                            >
+                              수업 전체 휴강
                             </button>
                           ) : null}
                           {canEditLesson ? (
@@ -755,8 +968,19 @@ export default function GroupsSection({
             {groupReservationModal.type === 'add' ? '예약 추가' : '예약 보기'}
           </h2>
           <p style={{ margin: '0 0 16px 0', fontSize: 13, opacity: 0.8 }}>
-            {[modalLesson.date, modalLesson.time, modalLesson.subject].filter(Boolean).join(' · ')}
-            {' '}· 정원 {getLessonCapacityLabel(modalLesson)}
+            {[
+              modalLesson.date,
+              modalLesson.time,
+              resolveGroupLessonSubject({
+                subject: modalLesson.subject,
+                groupClassName: modalLesson.groupClassName || selectedGroupClass?.name,
+                groupCourseType: modalLesson.groupCourseType || selectedGroupClass?.groupCourseType,
+              }),
+            ].filter(Boolean).join(' · ')}
+            {' '}· 정원 {getLessonCapacityLabel(modalLesson, modalLessonSeatAvailability)}
+            {modalLessonSeatAvailability
+              ? ` · 남은 자리 ${modalLessonSeatAvailability.remainingSeats}명`
+              : ''}
           </p>
 
           {groupReservationModal.type === 'add' ? (

@@ -17,8 +17,9 @@ export default function GroupModal({
   const hasTeacherOption = teacherSelectOptions.some((opt) => opt.value === normalizedTeacher)
   const mergedTeacherOptions =
     normalizedTeacher && !hasTeacherOption
-      ? [{ value: normalizedTeacher, label: `기존 값: ${normalizedTeacher}` }, ...teacherSelectOptions]
+      ? [{ value: normalizedTeacher, label: '선생님 선택 필요 (기존 값 보존)' }, ...teacherSelectOptions]
       : teacherSelectOptions
+  const validationMessages = Object.values(groupFormErrors || {}).filter(Boolean)
 
   return (
     <div
@@ -61,9 +62,31 @@ export default function GroupModal({
 
         {groupModal.type === 'add' ? (
           <p style={{ margin: '0 0 14px 0', fontSize: 12, opacity: 0.72, lineHeight: 1.45 }}>
-            반 정보·수업 시간·반복 요일을 저장하면, 시작일부터 약 1년간 수업 일정이 자동으로
-            만들어집니다.
+            수업 시작일은 자동 일정 생성 범위의 시작일입니다. 실제 수업일은 선택한 반복
+            요일에 맞춰 시작일 이후 첫 해당 요일부터 만들어집니다.
           </p>
+        ) : null}
+
+        {validationMessages.length > 0 ? (
+          <div
+            role="alert"
+            data-testid="group-modal-validation-summary"
+            style={{
+              margin: '0 0 14px 0',
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid #7a3d3d',
+              background: '#3a1f1f',
+              color: '#ffd4d4',
+              fontSize: 12,
+              lineHeight: 1.5,
+            }}
+          >
+            <strong style={{ display: 'block', marginBottom: 4 }}>저장할 수 없습니다.</strong>
+            {validationMessages.map((message) => (
+              <div key={message}>{message}</div>
+            ))}
+          </div>
         ) : null}
 
         <div
@@ -156,6 +179,26 @@ export default function GroupModal({
                   </span>
                 ) : null}
               </label>
+
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+                <span style={{ opacity: 0.85 }}>상태</span>
+                <select
+                  value={groupForm.status || 'active'}
+                  onChange={(e) =>
+                    setGroupForm((prev) => ({ ...prev, status: e.target.value }))
+                  }
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid #444',
+                    background: '#1f1f1f',
+                    color: 'white',
+                  }}
+                >
+                  <option value="active">active</option>
+                  <option value="inactive">inactive</option>
+                </select>
+              </label>
             </div>
           </div>
 
@@ -213,10 +256,11 @@ export default function GroupModal({
               </label>
 
               <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
-                <span style={{ opacity: 0.85 }}>과목</span>
+                <span style={{ opacity: 0.85 }}>수업 표시명 (선택)</span>
                 <input
                   type="text"
                   value={groupForm.subject}
+                  placeholder="비워두면 반 이름 또는 코스 유형으로 표시됩니다"
                   onChange={(e) =>
                     setGroupForm((prev) => ({ ...prev, subject: e.target.value }))
                   }
@@ -257,6 +301,11 @@ export default function GroupModal({
                     </option>
                   ))}
                 </select>
+                {groupFormErrors.groupCourseType ? (
+                  <span style={{ color: '#f08080', fontSize: 12 }}>
+                    {groupFormErrors.groupCourseType}
+                  </span>
+                ) : null}
               </label>
             </div>
           </div>

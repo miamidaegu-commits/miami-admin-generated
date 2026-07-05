@@ -547,7 +547,7 @@ export default function TeacherPrivateLessonRequestsSection({
               }}
             >
               <label style={labelStyle}>
-                결제 수업 수
+                총 수업 수
                 <input
                   type="number"
                   min="1"

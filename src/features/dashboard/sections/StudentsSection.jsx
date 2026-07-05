@@ -28,6 +28,14 @@ import {
 } from '../dashboardViewUtils.js'
 import { setStudentPrivateSlotBookingPilotEnabled } from '../../private-booking/studentPrivateAccessSummaryClient.js'
 import { getGroupCourseTypeLabel } from '../../group-booking/groupCourseTypes.js'
+import {
+  computeStudentPrivateCancelAllowance,
+  formatAdminStudentCancelAllowanceSummary,
+  formatPrivatePackageCancelUsageSummary,
+  STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT,
+  STUDENT_PRIVATE_CANCEL_LIMIT_MAX,
+  validateStudentCancelLimitInput,
+} from '../../booking/studentPrivateCancelAllowance.js'
 
 function cleanText(value, fallback = '-') {
   const text = String(value ?? '').trim()
@@ -61,6 +69,39 @@ function toPositiveInteger(value) {
   return Math.floor(n)
 }
 
+function normalizePackageStatus(status) {
+  return String(status == null || String(status).trim() === '' ? 'active' : status)
+    .trim()
+    .toLowerCase()
+}
+
+function mergeInlinePackageRevokeInfo(pkg, revokeInfo) {
+  const status = normalizePackageStatus(pkg?.status)
+  const packageType = String(pkg?.packageType || '').trim()
+  const inlineReasons = []
+  if (!['private', 'group', 'openGroup'].includes(packageType)) {
+    inlineReasons.push('이 수강권 유형은 회수할 수 없습니다.')
+  }
+  if (status === 'revoked') inlineReasons.push('이미 회수된 수강권입니다.')
+  else if (status !== 'active') inlineReasons.push('활성 상태의 수강권만 회수할 수 있습니다.')
+  if (inlineReasons.length === 0) return revokeInfo
+  return {
+    ...revokeInfo,
+    canRevoke: false,
+    reason: inlineReasons[0],
+    reasons: [...inlineReasons, ...((revokeInfo && revokeInfo.reasons) || [])],
+  }
+  if (packageType === 'group' || packageType === 'openGroup') {
+    return {
+      ...revokeInfo,
+      canRevoke: true,
+      reason: '',
+      reasons: [],
+    }
+  }
+  return revokeInfo
+}
+
 function packageKindLabel(packageType) {
   if (packageType === 'private') return '1:1'
   if (packageType === 'group' || packageType === 'openGroup') return '단체반'
@@ -68,7 +109,14 @@ function packageKindLabel(packageType) {
 }
 
 function getPrivatePackageTeacherLabel(pkg) {
-  return cleanText(pkg?.teacher || pkg?.teacherName, '선생님 미지정')
+  return cleanText(pkg?.teacherName || pkg?.teacher, '선생님 미지정')
+}
+
+function formatPrivatePackageTeacherScope(pkg) {
+  const key = String(pkg?.teacherKey || pkg?.teacher || '').trim()
+  const display = String(pkg?.teacherDisplayName || pkg?.teacherName || '').trim()
+  if (display && key && display !== key) return `${display} · ${key}`
+  return display || key || '-'
 }
 
 function formatPrivatePackageUsageSummary(pkg) {
@@ -78,31 +126,131 @@ function formatPrivatePackageUsageSummary(pkg) {
   const used = pkg?.usedCount != null && String(pkg.usedCount).trim() !== ''
     ? toFiniteNumber(pkg.usedCount)
     : usedFallback
-  return `잔여 ${remaining}회 / 총 ${total}회 · 사용 ${used}회`
+  return `총 ${total}회 · 사용 ${used}회 · 남은 ${remaining}회`
 }
 
-function formatPrivatePackageTeacherSummary(packages) {
+function isPackageRegistrationTransaction(row) {
+  const actionType = String(row?.actionType || '').trim()
+  const deltaCount = Number(row?.deltaCount || 0)
+  return (
+    deltaCount > 0 &&
+    (actionType === 'package_created' ||
+      actionType === 'private_package_top_up' ||
+      actionType === 'package_top_up')
+  )
+}
+
+function getRegistrationEntryLabel(row, index) {
+  const explicit = String(row?.registrationLabel || '').trim()
+  if (explicit) return explicit
+  const round = Number(row?.registrationRound ?? row?.roundNumber ?? index + 1)
+  if (Number.isFinite(round) && round > 0) return `${round}회차 등록`
+  return '추가 등록'
+}
+
+function formatRegistrationDelta(row) {
+  const count = Number(row?.deltaCount || 0)
+  if (!Number.isFinite(count) || count === 0) return ''
+  return `${count > 0 ? '+' : ''}${count}회`
+}
+
+function formatRegistrationEntryLine(row, index, pkg) {
+  const label = getRegistrationEntryLabel(row, index)
+  const delta = formatRegistrationDelta(row)
+  const legacyDelta = formatCreditTransactionDeltaCountDisplay(row?.deltaCount)
+  const parts = [
+    label,
+    delta,
+  ].filter(Boolean)
+  const paymentDate = String(row?.paymentDate || (index === 0 ? pkg?.paymentDate || '' : '')).trim()
+  if (paymentDate) parts.push(`결제일 ${paymentDate}`)
+  const amount =
+    row?.amountPaid != null && String(row.amountPaid).trim() !== ''
+      ? String(row.amountPaid).trim()
+      : index === 0 && pkg?.amountPaid != null && String(pkg.amountPaid).trim() !== ''
+        ? String(pkg.amountPaid).trim()
+        : ''
+  if (amount) parts.push(`결제 금액 ${amount}`)
+  const memo =
+    String(row?.registrationMemo || '').trim() ||
+    String(row?.memo || '')
+      .split(' · ')
+      .map((part) => part.trim())
+      .filter((part) => part && part !== label && part !== delta && part !== legacyDelta)
+      .join(' · ')
+      .trim()
+  if (memo) parts.push(`메모: ${memo}`)
+  return parts.join(' · ')
+}
+
+function compactRegistrationSummary(rows) {
+  const list = (Array.isArray(rows) ? rows : []).filter(isPackageRegistrationTransaction)
+  if (list.length <= 1) return ''
+  return `등록 내역: ${list
+    .map((row, index) => `${getRegistrationEntryLabel(row, index)} ${formatRegistrationDelta(row)}`)
+    .join(', ')}`
+}
+
+function packageHasTopUps(pkg, rows = []) {
+  return (
+    Number(pkg?.topUpCount || 0) > 0 ||
+    Boolean(pkg?.lastTopUpAt) ||
+    (Array.isArray(rows) &&
+      rows.some((row) => {
+        const actionType = String(row?.actionType || '').trim()
+        return actionType === 'private_package_top_up' || actionType === 'package_top_up'
+      }))
+  )
+}
+
+function formatPrivateTicketScheduleSummary(balance) {
+  if (!balance) return ''
+  const fixedAllocated = Math.max(0, Number(balance.futureFixedAllocatedCount) || 0)
+  const activeReservations = Math.max(0, Number(balance.activeFutureReservationCount) || 0)
+  const releasedCount = Math.max(0, Number(balance.noDeductionReleasedCount) || 0)
+  const makeupAvailable = Math.max(0, Number(balance.makeupAvailableCount) || 0)
+  const parts = [`고정 예정 ${fixedAllocated}회`]
+  if (activeReservations > 0) parts.push(`보충 예약 ${activeReservations}회`)
+  const availableLabel = releasedCount > activeReservations ? '보충 가능' : '예약 가능'
+  parts.push(`${availableLabel} ${makeupAvailable}회`)
+  return parts.join(' · ')
+}
+
+function formatPrivatePackageTeacherSummary(
+  packages,
+  balanceByPackageId = new Map(),
+  registrationRowsByPackageId = new Map()
+) {
   const privatePackages = (Array.isArray(packages) ? packages : []).filter(
     (pkg) => String(pkg?.packageType || '').trim() === 'private'
   )
-  if (privatePackages.length === 0) return []
+  const rowVisiblePrivatePackages = privatePackages.filter(
+    (pkg) => normalizePackageStatus(pkg?.status) !== 'revoked'
+  )
+  if (rowVisiblePrivatePackages.length === 0) return []
 
-  const activeRemainingPackages = privatePackages.filter(
+  const activeRemainingPackages = rowVisiblePrivatePackages.filter(
     (pkg) => isStudentPackageRowActive(pkg) && toFiniteNumber(pkg.remainingCount) > 0
   )
   const displayPackages =
     activeRemainingPackages.length > 0
       ? activeRemainingPackages
-      : privatePackages.filter((pkg) => isStudentPackageRowActive(pkg)).length > 0
-        ? privatePackages.filter((pkg) => isStudentPackageRowActive(pkg))
-        : privatePackages
+      : rowVisiblePrivatePackages.filter((pkg) => isStudentPackageRowActive(pkg)).length > 0
+        ? rowVisiblePrivatePackages.filter((pkg) => isStudentPackageRowActive(pkg))
+        : rowVisiblePrivatePackages
 
   return displayPackages.map((pkg) => {
     const remaining = toFiniteNumber(pkg.remainingCount)
     const isActive = isStudentPackageRowActive(pkg)
+    const balance = balanceByPackageId.get(String(pkg.id || '').trim())
+    const scheduleText = formatPrivateTicketScheduleSummary(balance)
+    const registrationRows = registrationRowsByPackageId.get(String(pkg.id || '').trim()) || []
     return {
       id: String(pkg.id || `${getPrivatePackageTeacherLabel(pkg)}-${remaining}`),
-      text: `${getPrivatePackageTeacherLabel(pkg)} · ${formatPrivatePackageUsageSummary(pkg)}`,
+      text: `${getPrivatePackageTeacherLabel(pkg)} 수강권 · ${formatPrivatePackageUsageSummary(pkg)}`,
+      scheduleText,
+      registrationSummaryText: compactRegistrationSummary(registrationRows),
+      hasTopUps: packageHasTopUps(pkg, registrationRows),
       statusText: !isActive || remaining <= 0 ? '소진' : '',
       muted: !isActive || remaining <= 0,
     }
@@ -156,6 +304,64 @@ function docDateToMillis(raw) {
   return 0
 }
 
+function docDateToDate(raw) {
+  if (!raw) return null
+  if (raw instanceof Date) return raw
+  if (typeof raw.toDate === 'function') return raw.toDate()
+  if (raw.seconds != null) return new Date(Number(raw.seconds) * 1000)
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const parsed = parseYmdToLocalDate(trimmed)
+      return parsed || null
+    }
+    const ms = Date.parse(trimmed)
+    return Number.isFinite(ms) ? new Date(ms) : null
+  }
+  return null
+}
+
+function formatYmdDate(raw, fallback = '-') {
+  if (!raw) return fallback
+  if (typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.trim())) {
+    return raw.trim()
+  }
+  const date = docDateToDate(raw)
+  if (!date || !Number.isFinite(date.getTime())) return fallback
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')}`
+}
+
+function formatYmdDateTime(raw, fallback = '기록 없음') {
+  const date = docDateToDate(raw)
+  if (!date || !Number.isFinite(date.getTime())) return fallback
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const byType = new Map(parts.map((part) => [part.type, part.value]))
+  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
+}
+
+function formatPackagePaymentDate(pkg) {
+  return formatYmdDate(pkg?.paymentDate || pkg?.paidDate || pkg?.paidAt, '기록 없음')
+}
+
+function formatPackageStartDate(pkg) {
+  return formatYmdDate(pkg?.registrationStartDate || pkg?.startDate, '-')
+}
+
 function ymdTimeToMillis(dateValue, timeValue) {
   const date = String(dateValue || '').trim()
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
@@ -185,7 +391,10 @@ function privateReservationStatusLabel(row, startsAtMs) {
     Boolean(row?.reversalCreditTransactionId) ||
     Boolean(row?.previousOutcomeStatus)
 
-  if (status === 'cancelled' || status === 'canceled') return '예약 취소'
+  const actorLabel = privateReservationCancelActorLabel(row)
+  if (status === 'cancelled' || status === 'canceled' || status === 'student_cancelled') {
+    return actorLabel || '예약 취소'
+  }
   if (wasReversed) return isPast ? '지난 수업 · 차감 취소' : '차감 취소'
   if (wasDeducted) return isPast ? '지난 수업 · 차감 완료' : '차감 완료'
   if (status === 'active' && isPast) return '지난 수업 · 미차감'
@@ -193,10 +402,93 @@ function privateReservationStatusLabel(row, startsAtMs) {
   return cleanText(status, '-')
 }
 
+function privateReservationCancelActorLabel(row) {
+  const status = String(row?.status || '').trim().toLowerCase()
+  const actor = String(
+    row?.cancelledByRole || row?.canceledByRole || row?.cancelledBy || row?.canceledBy || ''
+  )
+    .trim()
+    .toLowerCase()
+  const reason = String(row?.cancellationReason || row?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  if (status.includes('student') || actor.includes('student') || reason.includes('student')) {
+    return '학생 취소'
+  }
+  if (status.includes('teacher') || actor.includes('teacher') || reason.includes('teacher')) {
+    return '선생님 취소'
+  }
+  if (status.includes('admin') || actor.includes('admin') || actor.includes('owner')) {
+    return '관리자 취소'
+  }
+  return ''
+}
+
+function isStudentFixedPrivateSeatReleasedLesson(lesson) {
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const actor = String(
+    lesson?.cancelledByRole || lesson?.canceledByRole || lesson?.cancelledBy || lesson?.canceledBy || ''
+  )
+    .trim()
+    .toLowerCase()
+  const reason = String(lesson?.cancellationReason || lesson?.cancelledReason || '')
+    .trim()
+    .toLowerCase()
+  return (
+    (status === 'cancelled' || status === 'canceled') &&
+    cancellationType === 'seat_released' &&
+    (actor.includes('student') || reason.includes('student_cancelled'))
+  )
+}
+
+function mergePrivateReservationCancellationFromLesson(reservation, linkedLesson) {
+  if (!isStudentFixedPrivateSeatReleasedLesson(linkedLesson)) return reservation
+  return {
+    ...(reservation || {}),
+    status: 'cancelled',
+    cancellationType: linkedLesson.cancellationType || 'seat_released',
+    cancellationReason:
+      linkedLesson.cancellationReason ||
+      linkedLesson.cancelledReason ||
+      reservation?.cancellationReason ||
+      '',
+    cancelledReason:
+      linkedLesson.cancelledReason ||
+      linkedLesson.cancellationReason ||
+      reservation?.cancelledReason ||
+      '',
+    cancelledAt: linkedLesson.cancelledAt || linkedLesson.canceledAt || reservation?.cancelledAt,
+    canceledAt: linkedLesson.canceledAt || linkedLesson.cancelledAt || reservation?.canceledAt,
+    cancelledByRole:
+      linkedLesson.cancelledByRole || linkedLesson.canceledByRole || reservation?.cancelledByRole,
+    canceledByRole:
+      linkedLesson.canceledByRole || linkedLesson.cancelledByRole || reservation?.canceledByRole,
+    cancelledBy: linkedLesson.cancelledBy || linkedLesson.canceledBy || reservation?.cancelledBy,
+    canceledBy: linkedLesson.canceledBy || linkedLesson.cancelledBy || reservation?.canceledBy,
+    noDeduction: true,
+    isSeatReleased: true,
+    releasedForPrivateBooking: true,
+  }
+}
+
+function privateCancellationDetailLabel(row, pkg) {
+  if (!privateReservationCancelActorLabel(row)) return ''
+  const labels = []
+  const cancelledAt = formatYmdDateTime(row?.cancelledAt || row?.canceledAt, '')
+  if (cancelledAt) labels.push(`취소 처리일: ${cancelledAt}`)
+  if (row?.noDeduction === true) labels.push('수강권 차감 없음')
+  if (pkg && String(pkg.packageType || '').trim() === 'private') {
+    labels.push(formatPrivatePackageCancelUsageSummary(pkg))
+  }
+  return labels.filter(Boolean).join(' · ')
+}
+
 function creditTransactionHistoryStatus(row) {
   const actionType = String(row?.actionType || '').trim()
   const delta = Number(row?.deltaCount ?? 0)
   if (actionType === 'group_deduct' || delta < 0) return '출석 처리됨'
+  if (actionType === 'package_revoked') return '회수됨'
   if (actionType.includes('restore') || actionType.includes('cancel') || delta > 0) {
     return '차감 취소'
   }
@@ -288,6 +580,8 @@ export default function StudentsSection({
   studentPackageTableSummaryByStudentId,
   privateLessonProgressByStudentId = new Map(),
   studentPackagesSortedByStudentId,
+  privateTicketBalanceByPackageId = new Map(),
+  privatePackageRevokeInfoByPackageId = new Map(),
   expandedStudentPackageStudentId,
   setExpandedStudentPackageStudentId,
   showAllStudentPackagesInDetail,
@@ -306,6 +600,7 @@ export default function StudentsSection({
   canAddStudent,
   canEditStudent,
   canDeleteStudent,
+  canViewPaymentFields = false,
   copiedStudentPhoneId,
   copyStudentPhone,
   openStudentAddModal,
@@ -313,11 +608,14 @@ export default function StudentsSection({
   handleDeleteStudent,
   openStudentPackageModal,
   openStudentPackageEditModal,
+  canEditStudentPackageCountsForPackage = () => false,
   endStudentPackage,
+  revokeStudentPackage,
   openStudentPackageHistoryModal,
   openStudentPackageReRegisterModal,
   formatStudentFirstRegisteredForTable,
   formatStudentPackageCellSummary,
+  studentPrivateBookingStats = [],
 }) {
   const [studentAccountLinkModalStudent, setStudentAccountLinkModalStudent] = useState(null)
   const [studentAccountEmail, setStudentAccountEmail] = useState('')
@@ -331,10 +629,30 @@ export default function StudentsSection({
   const [studentHistoryError, setStudentHistoryError] = useState('')
   const [studentHistoryGroupReservations, setStudentHistoryGroupReservations] = useState([])
   const [studentHistoryPrivateReservations, setStudentHistoryPrivateReservations] = useState([])
+  const [studentHistoryPrivateLessons, setStudentHistoryPrivateLessons] = useState([])
   const [studentHistoryCreditTransactions, setStudentHistoryCreditTransactions] = useState([])
+  const [packageRegistrationRowsByPackageId, setPackageRegistrationRowsByPackageId] =
+    useState(new Map())
   const [studentPrivateAccessSummaryByStudentId, setStudentPrivateAccessSummaryByStudentId] =
     useState(new Map())
   const [busyPrivateSlotPilotStudentId, setBusyPrivateSlotPilotStudentId] = useState('')
+  const [cancelAllowanceModalStudent, setCancelAllowanceModalStudent] = useState(null)
+  const [cancelAllowanceDraftLimit, setCancelAllowanceDraftLimit] = useState('')
+  const [cancelAllowanceBusy, setCancelAllowanceBusy] = useState(false)
+  const [cancelAllowanceError, setCancelAllowanceError] = useState('')
+  const [cancelAllowanceSuccess, setCancelAllowanceSuccess] = useState('')
+
+  const studentCancelAllowanceByStudentId = useMemo(() => {
+    const map = new Map()
+    ;(Array.isArray(studentPrivateBookingStats) ? studentPrivateBookingStats : []).forEach((row) => {
+      const scopedAcademyId = String(currentAcademyId || '').trim()
+      if (String(row?.academyId || '').trim() !== scopedAcademyId) return
+      const studentId = String(row?.studentId || '').trim()
+      if (!studentId) return
+      map.set(studentId, computeStudentPrivateCancelAllowance(row))
+    })
+    return map
+  }, [studentPrivateBookingStats, currentAcademyId])
 
   useEffect(() => {
     if (!isAdmin || !currentAcademyId) {
@@ -365,6 +683,63 @@ export default function StudentsSection({
 
     return () => unsubscribe()
   }, [currentAcademyId, isAdmin])
+
+  useEffect(() => {
+    if (!isAdmin || !currentAcademyId || !expandedStudentPackageStudentId) {
+      setPackageRegistrationRowsByPackageId(new Map())
+      return undefined
+    }
+
+    const studentId = String(expandedStudentPackageStudentId || '').trim()
+    const packageIds = studentPackages
+      .filter(
+        (pkg) =>
+          String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+          String(pkg.studentId || '').trim() === studentId
+      )
+      .map((pkg) => String(pkg.id || '').trim())
+      .filter(Boolean)
+
+    if (packageIds.length === 0) {
+      setPackageRegistrationRowsByPackageId(new Map())
+      return undefined
+    }
+
+    let cancelled = false
+    async function loadRegistrationRows() {
+      try {
+        const snaps = await Promise.all(
+          packageIds.map((packageId) =>
+            getDocs(
+              query(
+                collection(db, 'creditTransactions'),
+                where('academyId', '==', currentAcademyId),
+                where('packageId', '==', packageId)
+              )
+            )
+          )
+        )
+        if (cancelled) return
+        const next = new Map()
+        snaps.forEach((snap, index) => {
+          const packageId = packageIds[index]
+          const rows = snap.docs
+            .map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+            .filter(isPackageRegistrationTransaction)
+            .sort((a, b) => docDateToMillis(a.createdAt) - docDateToMillis(b.createdAt))
+          next.set(packageId, rows)
+        })
+        setPackageRegistrationRowsByPackageId(next)
+      } catch (error) {
+        console.error('수강권 등록 내역 조회 실패:', error)
+        if (!cancelled) setPackageRegistrationRowsByPackageId(new Map())
+      }
+    }
+    void loadRegistrationRows()
+    return () => {
+      cancelled = true
+    }
+  }, [currentAcademyId, expandedStudentPackageStudentId, isAdmin, studentPackages])
 
   const groupLessonById = useMemo(() => {
     const map = new Map()
@@ -412,6 +787,17 @@ export default function StudentsSection({
   const studentHistoryPackageById = useMemo(() => {
     return new Map(studentHistoryPackages.map((pkg) => [pkg.id, pkg]))
   }, [studentHistoryPackages])
+
+  const studentHistoryPrivateLessonById = useMemo(() => {
+    const map = new Map()
+    studentHistoryPrivateLessons.forEach((lesson) => {
+      const lessonId = cleanText(lesson.id, '')
+      if (lessonId) map.set(lessonId, lesson)
+      const fixedLessonId = cleanText(lesson.fixedLessonId, '')
+      if (fixedLessonId) map.set(fixedLessonId, lesson)
+    })
+    return map
+  }, [studentHistoryPrivateLessons])
 
   const studentHistorySummary = useMemo(() => {
     const activePackages = studentHistoryPackages.filter((pkg) => isStudentPackageRowActive(pkg))
@@ -463,22 +849,32 @@ export default function StudentsSection({
     })
 
     const privateRows = studentHistoryPrivateReservations.map((reservation) => {
-      const date = cleanText(reservation.date, '')
-      const time = cleanText(reservation.time, '')
+      const linkedLessonId = cleanText(reservation.lessonId || reservation.fixedLessonId, '')
+      const linkedLesson = linkedLessonId ? studentHistoryPrivateLessonById.get(linkedLessonId) : null
+      const effectiveReservation = mergePrivateReservationCancellationFromLesson(
+        reservation,
+        linkedLesson
+      )
+      const date = cleanText(effectiveReservation.date || linkedLesson?.date, '')
+      const time = cleanText(effectiveReservation.time || linkedLesson?.time, '')
       const startsAtMs = ymdTimeToMillis(date, time)
-      const pkg = reservation.packageId
-        ? studentHistoryPackageById.get(String(reservation.packageId))
+      const pkg = effectiveReservation.packageId
+        ? studentHistoryPackageById.get(String(effectiveReservation.packageId))
         : null
+      const cancellationDetail = privateCancellationDetailLabel(effectiveReservation, pkg)
       return {
-        key: `private-reservation-${reservation.id}`,
+        key: `private-reservation-${effectiveReservation.id}`,
         date,
         time,
         type: '1:1 수업',
-        teacher: cleanText(reservation.teacher),
+        teacher: cleanText(effectiveReservation.teacher || linkedLesson?.teacher),
         title: '1:1 수업',
-        status: privateReservationStatusLabel(reservation, startsAtMs),
-        packageTitle: cleanText(reservation.packageTitle || pkg?.title, '-'),
-        sortMs: startsAtMs ?? docDateToMillis(reservation.updatedAt),
+        status: privateReservationStatusLabel(effectiveReservation, startsAtMs),
+        packageTitle: cleanText(effectiveReservation.packageTitle || pkg?.title, '-'),
+        detail: cancellationDetail,
+        sortMs:
+          startsAtMs ??
+          docDateToMillis(effectiveReservation.cancelledAt || effectiveReservation.updatedAt),
       }
     })
 
@@ -505,6 +901,7 @@ export default function StudentsSection({
     studentHistoryGroupReservations,
     studentHistoryGroupRows,
     studentHistoryPackageById,
+    studentHistoryPrivateLessonById,
     studentHistoryPrivateReservations,
   ])
 
@@ -533,6 +930,7 @@ export default function StudentsSection({
     setStudentHistoryError('')
     setStudentHistoryGroupReservations([])
     setStudentHistoryPrivateReservations([])
+    setStudentHistoryPrivateLessons([])
     setStudentHistoryCreditTransactions([])
   }
 
@@ -543,6 +941,7 @@ export default function StudentsSection({
     setStudentHistoryError('')
     setStudentHistoryGroupReservations([])
     setStudentHistoryPrivateReservations([])
+    setStudentHistoryPrivateLessons([])
     setStudentHistoryCreditTransactions([])
 
     try {
@@ -553,7 +952,7 @@ export default function StudentsSection({
           String(pkg.studentId || '').trim() === studentId
       )
 
-      const [groupReservationSnap, privateReservationSnap, creditTransactionSnaps] =
+      const [groupReservationSnap, privateReservationSnap, privateLessonSnaps, creditTransactionSnaps] =
         await Promise.all([
           getDocs(
             query(
@@ -569,6 +968,17 @@ export default function StudentsSection({
               where('academyId', '==', currentAcademyId),
               where('studentId', '==', studentId),
               where('status', 'in', ['active', 'cancelled'])
+            )
+          ),
+          Promise.all(
+            ['studentId', 'studentID'].map((fieldName) =>
+              getDocs(
+                query(
+                  collection(db, 'lessons'),
+                  where('academyId', '==', currentAcademyId),
+                  where(fieldName, '==', studentId)
+                )
+              )
             )
           ),
           Promise.all(
@@ -602,6 +1012,20 @@ export default function StudentsSection({
               String(row.studentId || '').trim() === studentId
           )
       )
+      const privateLessonsById = new Map()
+      privateLessonSnaps.forEach((snap) => {
+        snap.docs.forEach((docItem) => {
+          const row = { id: docItem.id, ...docItem.data() }
+          if (
+            String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
+            (String(row.studentId || '').trim() === studentId ||
+              String(row.studentID || '').trim() === studentId)
+          ) {
+            privateLessonsById.set(docItem.id, row)
+          }
+        })
+      })
+      setStudentHistoryPrivateLessons([...privateLessonsById.values()])
       setStudentHistoryCreditTransactions(
         creditTransactionSnaps
           .flatMap((snap) => snap.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() })))
@@ -611,7 +1035,8 @@ export default function StudentsSection({
               String(row.academyId || '').trim() === String(currentAcademyId || '').trim() &&
               String(row.studentId || '').trim() === studentId &&
               (String(row.sourceType || '').trim() === 'groupLesson' ||
-                actionType.includes('deduct'))
+                actionType.includes('deduct') ||
+                actionType === 'package_revoked')
             )
           })
       )
@@ -670,6 +1095,75 @@ export default function StudentsSection({
       alert(`1:1 예약 테스트 권한 변경 실패: ${error.message}`)
     } finally {
       setBusyPrivateSlotPilotStudentId('')
+    }
+  }
+
+  function resolveStudentCancelAllowance(student) {
+    const studentId = String(student?.id || '').trim()
+    if (!studentId) {
+      return computeStudentPrivateCancelAllowance({})
+    }
+    return (
+      studentCancelAllowanceByStudentId.get(studentId) ||
+      computeStudentPrivateCancelAllowance({})
+    )
+  }
+
+  function openCancelAllowanceModal(student) {
+    const allowance = resolveStudentCancelAllowance(student)
+    setCancelAllowanceModalStudent(student)
+    setCancelAllowanceDraftLimit(String(allowance.limit))
+    setCancelAllowanceError('')
+    setCancelAllowanceSuccess('')
+  }
+
+  function closeCancelAllowanceModal() {
+    if (cancelAllowanceBusy) return
+    setCancelAllowanceModalStudent(null)
+    setCancelAllowanceDraftLimit('')
+    setCancelAllowanceError('')
+    setCancelAllowanceSuccess('')
+  }
+
+  async function submitCancelAllowanceUpdate() {
+    if (!cancelAllowanceModalStudent?.id || !currentAcademyId || cancelAllowanceBusy) return
+    const allowance = resolveStudentCancelAllowance(cancelAllowanceModalStudent)
+    const validation = validateStudentCancelLimitInput({
+      limit: cancelAllowanceDraftLimit,
+      used: allowance.used,
+      max: STUDENT_PRIVATE_CANCEL_LIMIT_MAX,
+    })
+    if (!validation.ok) {
+      setCancelAllowanceError(validation.message)
+      setCancelAllowanceSuccess('')
+      return
+    }
+
+    setCancelAllowanceBusy(true)
+    setCancelAllowanceError('')
+    setCancelAllowanceSuccess('')
+    try {
+      const updateStudentPrivateCancelAllowance = httpsCallable(
+        firebaseFunctions,
+        'updateStudentPrivateCancelAllowance'
+      )
+      const result = await updateStudentPrivateCancelAllowance({
+        academyId: currentAcademyId,
+        studentId: cancelAllowanceModalStudent.id,
+        studentCancelLimit: validation.limit,
+      })
+      const data = result?.data || {}
+      const updatedAllowance = computeStudentPrivateCancelAllowance({
+        studentCancelCount: data.studentCancelCount,
+        studentCancelLimit: data.studentCancelLimit,
+      })
+      setCancelAllowanceDraftLimit(String(updatedAllowance.limit))
+      setCancelAllowanceSuccess('취소 가능 한도를 저장했습니다.')
+    } catch (error) {
+      console.error('취소 가능 한도 저장 실패:', error)
+      setCancelAllowanceError(error?.message || '취소 가능 한도 저장에 실패했습니다.')
+    } finally {
+      setCancelAllowanceBusy(false)
     }
   }
 
@@ -1029,7 +1523,9 @@ export default function StudentsSection({
               (pkg) =>
                 String(pkg.academyId || '').trim() === String(currentAcademyId || '').trim() &&
                 String(pkg.studentId || '').trim() === String(student.id || '').trim()
-            )
+            ),
+            privateTicketBalanceByPackageId,
+            packageRegistrationRowsByPackageId
           )
           const isPkgDetailExpanded = expandedStudentPackageStudentId === student.id
           const att = studentAttentionFlagsByStudentId.get(student.id) ?? {
@@ -1047,6 +1543,7 @@ export default function StudentsSection({
             <div
               className="table-row"
               data-testid="student-row"
+              data-student-id={student.id || ''}
               data-student-name={student.name || ''}
               style={{
                 gridTemplateColumns:
@@ -1118,15 +1615,32 @@ export default function StudentsSection({
                     >
                       {summary.text}
                       {summary.statusText ? ` · ${summary.statusText}` : ''}
+                      {summary.scheduleText ? (
+                        <span style={{ display: 'block', fontSize: 12, opacity: 0.82 }}>
+                          {summary.scheduleText}
+                        </span>
+                      ) : null}
+                      {summary.hasTopUps ? (
+                        <span style={{ display: 'block', fontSize: 12, opacity: 0.82 }}>
+                          추가 등록 포함
+                        </span>
+                      ) : null}
+                      {summary.registrationSummaryText ? (
+                        <span style={{ display: 'block', fontSize: 12, opacity: 0.82 }}>
+                          {summary.registrationSummaryText}
+                        </span>
+                      ) : null}
                     </span>
                   ))
                 ) : (
-                  <span>개인 수강권 없음</span>
+                  <span>개인 수강권 등록 필요</span>
                 )}
-                <PrivateLessonProgressSummary
-                  progress={privateLessonProgress}
-                  scheduleOnly={privatePackageTeacherSummary.length === 0}
-                />
+                {privatePackageTeacherSummary.length === 0 ? (
+                  <PrivateLessonProgressSummary
+                    progress={privateLessonProgress}
+                    scheduleOnly
+                  />
+                ) : null}
               </span>
               <span data-testid="student-group-package-cell">
                 {formatStudentPackageCellSummary(
@@ -1281,6 +1795,33 @@ export default function StudentsSection({
                       : privateSlotBookingPilotEnabled
                         ? '1:1 예약 테스트 해제'
                         : '1:1 예약 테스트 허용'}
+                  </button>
+                ) : null}
+                {isAdmin ? (
+                  <button
+                    type="button"
+                    onClick={() => openCancelAllowanceModal(student)}
+                    disabled={
+                      rowBusy ||
+                      busyStudentId === '__add__' ||
+                      cancelAllowanceBusy
+                    }
+                    data-testid="student-cancel-allowance-open-button"
+                    style={{
+                      padding: '6px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #4a5568',
+                      background: '#1f2937',
+                      color: 'white',
+                      cursor:
+                        rowBusy || busyStudentId === '__add__' || cancelAllowanceBusy
+                          ? 'not-allowed'
+                          : 'pointer',
+                      fontSize: 12,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    취소 가능 횟수
                   </button>
                 ) : null}
                 {isAdmin ? (
@@ -1705,9 +2246,27 @@ export default function StudentsSection({
                     }}
                   >
                     {displayedPkgList.map((pkg) => (
+                      (() => {
+                        const packageId = String(pkg.id || '').trim()
+                        const revokeInfo =
+                          mergeInlinePackageRevokeInfo(
+                            pkg,
+                            privatePackageRevokeInfoByPackageId.get(packageId) || {
+                              canRevoke: false,
+                              reason: '회수 가능 여부를 확인할 수 없습니다.',
+                            }
+                          )
+                        const status = normalizePackageStatus(pkg.status)
+                        const revokeDisabled =
+                          !revokeInfo.canRevoke ||
+                          busyStudentPackageActionId != null ||
+                          busyStudentPackageSubmit
+                        return (
                       <div
                         key={pkg.id}
                         data-testid="student-package-card"
+                        data-package-id={pkg.id || ''}
+                        data-teacher-key={cleanText(pkg.teacherKey || pkg.teacher || pkg.teacherName, '')}
                         style={{
                           padding: 12,
                           borderRadius: 10,
@@ -1730,6 +2289,18 @@ export default function StudentsSection({
                           <span>{pkg.title != null && String(pkg.title).trim() ? String(pkg.title) : '-'}</span>
                           <span style={{ opacity: 0.72 }}>상태</span>
                           <span>{formatStudentPackageDetailStatusLabel(pkg.status)}</span>
+                          {status === 'revoked' ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>회수 사유</span>
+                              <span>{cleanText(pkg.revokeReason)}</span>
+                              <span style={{ opacity: 0.72 }}>회수일</span>
+                              <span>{formatYmdDateTime(pkg.revokedAt)}</span>
+                              <span style={{ opacity: 0.72 }}>회수자</span>
+                              <span>{cleanText(pkg.revokedBy || pkg.revokedByUid)}</span>
+                            </>
+                          ) : null}
+                          <span style={{ opacity: 0.72 }}>등록일</span>
+                          <span>{formatYmdDateTime(pkg.createdAt)}</span>
                           <span style={{ opacity: 0.72 }}>연결 반</span>
                           <span>
                             {pkg.groupClassName != null && String(pkg.groupClassName).trim()
@@ -1738,6 +2309,12 @@ export default function StudentsSection({
                           </span>
                           <span style={{ opacity: 0.72 }}>코스 유형</span>
                           <span>{getGroupCourseTypeLabel(pkg.groupCourseType) || '-'}</span>
+                          {String(pkg.packageType || '').trim() === 'private' ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>사용 가능 선생님</span>
+                              <span>{formatPrivatePackageTeacherScope(pkg)}</span>
+                            </>
+                          ) : null}
                           <span style={{ opacity: 0.72 }}>총 횟수</span>
                           <span>
                             {pkg.totalCount != null && pkg.totalCount !== ''
@@ -1756,16 +2333,64 @@ export default function StudentsSection({
                               ? String(pkg.remainingCount)
                               : '-'}
                           </span>
+                          {String(pkg.packageType || '').trim() === 'private' ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>취소 사용</span>
+                              <span>{formatPrivatePackageCancelUsageSummary(pkg)}</span>
+                            </>
+                          ) : null}
+                          <span style={{ opacity: 0.72 }}>수강권 시작일</span>
+                          <span>{formatPackageStartDate(pkg)}</span>
                           <span style={{ opacity: 0.72 }}>만료일</span>
                           <span>{formatGroupStudentStartDate(pkg.expiresAt)}</span>
-                          <span style={{ opacity: 0.72 }}>결제 금액</span>
-                          <span>{formatStudentPackageDetailAmountPaid(pkg.amountPaid)}</span>
-                          <span style={{ opacity: 0.72 }}>메모</span>
-                          <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {formatStudentPackageDetailMemo(pkg.memo)}
-                          </span>
+                          {canViewPaymentFields ? (
+                            <>
+                              <span style={{ opacity: 0.72 }}>결제일</span>
+                              <span>{formatPackagePaymentDate(pkg)}</span>
+                              <span style={{ opacity: 0.72 }}>결제 금액</span>
+                              <span>{formatStudentPackageDetailAmountPaid(pkg.amountPaid)}</span>
+                              <span style={{ opacity: 0.72 }}>메모</span>
+                              <span style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                                {formatStudentPackageDetailMemo(pkg.memo)}
+                              </span>
+                            </>
+                          ) : null}
                         </div>
-                        {isAdmin ? (
+                        {String(pkg.packageType || '').trim() === 'private' ? (() => {
+                          const registrationRows =
+                            packageRegistrationRowsByPackageId.get(String(pkg.id || '').trim()) || []
+                          if (registrationRows.length === 0 && !packageHasTopUps(pkg)) return null
+                          return (
+                            <div
+                              data-testid="student-package-registration-history"
+                              style={{
+                                marginTop: 12,
+                                padding: '10px 12px',
+                                borderRadius: 8,
+                                border: '1px solid var(--border)',
+                                background: 'rgba(255, 255, 255, 0.03)',
+                                fontSize: 13,
+                                lineHeight: 1.55,
+                              }}
+                            >
+                              <div style={{ fontWeight: 600, marginBottom: 6 }}>등록 내역</div>
+                              {registrationRows.length > 0 ? (
+                                <ul style={{ margin: 0, paddingLeft: 18 }}>
+                                  {registrationRows.map((row, index) => (
+                                    <li key={row.id || `${pkg.id}-registration-${index}`}>
+                                      {formatRegistrationEntryLine(row, index, pkg)}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <div style={{ opacity: 0.82 }}>
+                                  추가 등록 포함. 이력 보기에서 상세 내역을 확인하세요.
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })() : null}
+                        {isAdmin || canEditStudentPackageCountsForPackage(pkg) ? (
                           <div
                             style={{
                               display: 'flex',
@@ -1774,29 +2399,32 @@ export default function StudentsSection({
                               flexWrap: 'wrap',
                             }}
                           >
-                            <button
-                              type="button"
-                              onClick={() => openStudentPackageEditModal(pkg)}
-                              data-testid="student-package-edit-button"
-                              disabled={
-                                busyStudentPackageActionId != null || busyStudentPackageSubmit
-                              }
-                              style={{
-                                padding: '6px 12px',
-                                borderRadius: 8,
-                                border: '1px solid #555',
-                                background: '#1f2a44',
-                                color: 'white',
-                                cursor:
+                            {canEditStudentPackageCountsForPackage(pkg) ? (
+                              <button
+                                type="button"
+                                onClick={() => openStudentPackageEditModal(pkg)}
+                                data-testid="student-package-edit-button"
+                                disabled={
                                   busyStudentPackageActionId != null || busyStudentPackageSubmit
-                                    ? 'not-allowed'
-                                    : 'pointer',
-                                fontSize: 13,
-                              }}
-                            >
-                              수정
-                            </button>
-                            <button
+                                }
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 8,
+                                  border: '1px solid #555',
+                                  background: '#1f2a44',
+                                  color: 'white',
+                                  cursor:
+                                    busyStudentPackageActionId != null || busyStudentPackageSubmit
+                                      ? 'not-allowed'
+                                      : 'pointer',
+                                  fontSize: 13,
+                                }}
+                              >
+                                수정
+                              </button>
+                            ) : null}
+                            {isAdmin ? (
+                              <button
                               type="button"
                               onClick={() => openStudentPackageHistoryModal(pkg)}
                               data-testid="student-package-history-button"
@@ -1818,7 +2446,49 @@ export default function StudentsSection({
                             >
                               이력 보기
                             </button>
-                            <button
+                            ) : null}
+                            {isAdmin &&
+                            ['private', 'group', 'openGroup'].includes(
+                              String(pkg.packageType || '').trim()
+                            ) &&
+                            status !== 'revoked' ? (
+                              <div style={{ display: 'grid', gap: 4 }}>
+                                <button
+                                  type="button"
+                                  onClick={() => revokeStudentPackage?.(pkg, revokeInfo)}
+                                  data-testid="student-package-revoke-button"
+                                  data-can-revoke={revokeInfo.canRevoke ? 'true' : 'false'}
+                                  data-revoke-disabled-reason={revokeInfo.reason || ''}
+                                  disabled={revokeDisabled}
+                                  title={
+                                    revokeInfo.canRevoke
+                                      ? '실수로 발급한 수강권을 회수합니다.'
+                                      : revokeInfo.reason
+                                  }
+                                  style={{
+                                    padding: '6px 12px',
+                                    borderRadius: 8,
+                                    border: '1px solid #663333',
+                                    background: '#3a2020',
+                                    color: 'white',
+                                    cursor: revokeDisabled ? 'not-allowed' : 'pointer',
+                                    fontSize: 13,
+                                  }}
+                                >
+                                  수강권 회수
+                                </button>
+                                {!revokeInfo.canRevoke ? (
+                                  <span
+                                    data-testid="student-package-revoke-disabled-reason"
+                                    style={{ fontSize: 12, opacity: 0.74, maxWidth: 240 }}
+                                  >
+                                    {revokeInfo.reason}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {isAdmin ? (
+                              <button
                               type="button"
                               onClick={() => endStudentPackage(pkg)}
                               disabled={
@@ -1843,7 +2513,9 @@ export default function StudentsSection({
                             >
                               종료
                             </button>
-                            {String(pkg.status || 'active').toLowerCase() === 'exhausted' ||
+                            ) : null}
+                            {isAdmin &&
+                            (String(pkg.status || 'active').toLowerCase() === 'exhausted' ||
                             String(pkg.status || 'active').toLowerCase() === 'ended' ? (
                               <button
                                 type="button"
@@ -1866,10 +2538,12 @@ export default function StudentsSection({
                               >
                                 재등록
                               </button>
-                            ) : null}
+                            ) : null)}
                           </div>
                         ) : null}
                       </div>
+                        )
+                      })()
                     ))}
                   </div>
                       )
@@ -2028,7 +2702,7 @@ export default function StudentsSection({
                       data-testid="student-history-package-row"
                       style={{
                         display: 'grid',
-                        gridTemplateColumns: '1.2fr 0.7fr 0.8fr repeat(3, 0.7fr) 0.8fr 1fr',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(145px, 1fr))',
                         gap: 10,
                         alignItems: 'center',
                         padding: 10,
@@ -2047,16 +2721,20 @@ export default function StudentsSection({
                           .filter(Boolean)
                           .join(' · ')}
                       </span>
-                      <span>{cleanText(pkg.teacher)}</span>
+                      <span>등록일 {formatYmdDateTime(pkg.createdAt)}</span>
+                      <span>결제일 {formatPackagePaymentDate(pkg)}</span>
+                      <span>수강권 시작일 {formatPackageStartDate(pkg)}</span>
+                      <span>만료일 {formatGroupStudentStartDate(pkg.expiresAt)}</span>
+                      <span>
+                        사용 가능 선생님{' '}
+                        {String(pkg.packageType || '').trim() === 'private'
+                          ? formatPrivatePackageTeacherScope(pkg)
+                          : cleanText(pkg.teacher)}
+                      </span>
                       <span>총 {cleanText(pkg.totalCount ?? pkg.paidLessons)}</span>
                       <span>사용 {cleanText(pkg.usedCount ?? pkg.attendanceCount)}</span>
                       <span>남은 {cleanText(pkg.remainingCount)}</span>
                       <span>{formatStudentPackageDetailStatusLabel(pkg.status)}</span>
-                      <span>
-                        {[formatGroupStudentStartDate(pkg.startDate), formatGroupStudentStartDate(pkg.expiresAt)]
-                          .filter((v) => v && v !== '-')
-                          .join(' ~ ') || '-'}
-                      </span>
                     </div>
                   ))}
                 </div>
@@ -2093,7 +2771,11 @@ export default function StudentsSection({
                       <span>{cleanText(row.teacher)}</span>
                       <span>{cleanText(row.status)}</span>
                       <span>{cleanText(row.packageTitle)}</span>
-                      <span>{cleanText(row.title)}{row.delta ? ` · ${row.delta}` : ''}</span>
+                      <span>
+                        {cleanText(row.title)}
+                        {row.delta ? ` · ${row.delta}` : ''}
+                        {row.detail ? ` · ${row.detail}` : ''}
+                      </span>
                     </div>
                   ))}
                 </div>
@@ -2300,6 +2982,152 @@ export default function StudentsSection({
               }}
             >
               {studentAccountLinkBusy ? '초대 링크 만드는 중...' : '초대 링크 만들기'}
+            </button>
+          </div>
+        </div>
+      </div>
+    ) : null}
+    {isAdmin && cancelAllowanceModalStudent ? (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="student-cancel-allowance-modal-title"
+        data-testid="student-cancel-allowance-modal"
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 1125,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+          background: 'rgba(0, 0, 0, 0.55)',
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) closeCancelAllowanceModal()
+        }}
+      >
+        <div
+          style={{
+            width: '100%',
+            maxWidth: 420,
+            border: '1px solid #2e3240',
+            borderRadius: 12,
+            background: '#151922',
+            color: 'white',
+            padding: 20,
+            boxSizing: 'border-box',
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <h2
+            id="student-cancel-allowance-modal-title"
+            style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700 }}
+          >
+            취소 가능 횟수
+          </h2>
+          <p style={{ margin: '10px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+            학생: {cleanText(cancelAllowanceModalStudent?.name)}
+          </p>
+          {(() => {
+            const allowance = resolveStudentCancelAllowance(cancelAllowanceModalStudent)
+            return (
+              <div
+                data-testid="student-cancel-allowance-summary"
+                style={{ marginTop: 12, fontSize: 13, lineHeight: 1.7, opacity: 0.9 }}
+              >
+                <div>현재 취소 사용: {allowance.used}회</div>
+                <div>현재 취소 가능 한도: {allowance.limit}회</div>
+                <div>남은 취소 가능: {allowance.remaining}회</div>
+                <div style={{ marginTop: 8, opacity: 0.85 }}>
+                  {formatAdminStudentCancelAllowanceSummary(allowance)}
+                </div>
+              </div>
+            )
+          })()}
+          <label style={{ display: 'grid', gap: 6, marginTop: 16, fontSize: 13 }}>
+            <span>새 취소 가능 한도</span>
+            <input
+              type="number"
+              min={resolveStudentCancelAllowance(cancelAllowanceModalStudent).used}
+              max={STUDENT_PRIVATE_CANCEL_LIMIT_MAX}
+              step={1}
+              value={cancelAllowanceDraftLimit}
+              onChange={(event) => {
+                setCancelAllowanceDraftLimit(event.target.value)
+                setCancelAllowanceError('')
+                setCancelAllowanceSuccess('')
+              }}
+              data-testid="student-cancel-allowance-limit-input"
+              disabled={cancelAllowanceBusy}
+              style={{
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: '1px solid #444',
+                background: '#101521',
+                color: 'white',
+              }}
+            />
+          </label>
+          <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 12 }}>
+            기본 한도는 {STUDENT_PRIVATE_CANCEL_DEFAULT_LIMIT}회이며, 최대{' '}
+            {STUDENT_PRIVATE_CANCEL_LIMIT_MAX}회까지 설정할 수 있습니다.
+          </p>
+          {cancelAllowanceError ? (
+            <p
+              data-testid="student-cancel-allowance-error"
+              style={{ margin: '12px 0 0 0', color: '#f4a7a7', fontSize: 13 }}
+            >
+              {cancelAllowanceError}
+            </p>
+          ) : null}
+          {cancelAllowanceSuccess ? (
+            <p
+              data-testid="student-cancel-allowance-success"
+              style={{ margin: '12px 0 0 0', color: '#9ee6b2', fontSize: 13 }}
+            >
+              {cancelAllowanceSuccess}
+            </p>
+          ) : null}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              gap: 8,
+              marginTop: 18,
+            }}
+          >
+            <button
+              type="button"
+              onClick={closeCancelAllowanceModal}
+              disabled={cancelAllowanceBusy}
+              data-testid="student-cancel-allowance-close-button"
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #555',
+                background: 'transparent',
+                color: 'white',
+                cursor: cancelAllowanceBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              닫기
+            </button>
+            <button
+              type="button"
+              onClick={submitCancelAllowanceUpdate}
+              disabled={cancelAllowanceBusy}
+              data-testid="student-cancel-allowance-save-button"
+              style={{
+                padding: '8px 12px',
+                borderRadius: 8,
+                border: '1px solid #335544',
+                background: '#243528',
+                color: 'white',
+                cursor: cancelAllowanceBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {cancelAllowanceBusy ? '저장 중...' : '저장'}
             </button>
           </div>
         </div>

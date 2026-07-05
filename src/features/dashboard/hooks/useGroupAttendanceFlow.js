@@ -6,7 +6,8 @@ import {
   runTransaction,
   serverTimestamp,
 } from 'firebase/firestore'
-import { db } from '../../../../firebase'
+import { httpsCallable } from 'firebase/functions'
+import { db, functions as firebaseFunctions } from '../../../../firebase'
 import { assertSameAcademy, requireCurrentAcademyId } from '../academyScope.js'
 import {
   SCHOOL_TIME_ZONE,
@@ -195,6 +196,13 @@ export default function useGroupAttendanceFlow({
         const lData = lessonSnap.data()
         assertSameAcademy(lData, scopedAcademyId, '그룹 수업')
         if (getGroupLessonGroupId(lData) !== String(gid)) throw new Error('다른 반 수업입니다.')
+        const lessonStatus = String(lData.status || '').trim().toLowerCase()
+        if (
+          (lessonStatus === 'cancelled' || lessonStatus === 'canceled') &&
+          lData.noDeduction === true
+        ) {
+          throw new Error('휴강 처리된 수업은 차감할 수 없습니다.')
+        }
 
         const pData = pkgSnap.data()
         assertSameAcademy(pData, scopedAcademyId, '수강권')
@@ -400,6 +408,80 @@ export default function useGroupAttendanceFlow({
     }
   }
 
+  async function releaseGroupLessonFixedSeat(groupStudentRow, lesson) {
+    const gid = selectedGroupClass?.id
+    if (!gid || !lesson?.id) return
+    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+      alert('출결 관리 권한이 없습니다.')
+      return
+    }
+
+    const studentId = String(groupStudentRow.studentId || '').trim()
+    if (!studentId) {
+      alert('반 등록에 학생 정보가 없습니다.')
+      return
+    }
+
+    const busyKey = `${lesson.id}__${groupStudentRow.id}`
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(lesson, scopedAcademyId, '그룹 수업')
+      assertSameAcademy(groupStudentRow, scopedAcademyId, '그룹 학생')
+      setBusyGroupAttendanceStudentId(busyKey)
+      const releaseGroupLessonFixedSeatCallable = httpsCallable(
+        firebaseFunctions,
+        'releaseGroupLessonFixedSeat'
+      )
+      await releaseGroupLessonFixedSeatCallable({
+        academyId: scopedAcademyId,
+        lessonId: lesson.id,
+        groupStudentId: groupStudentRow.id,
+      })
+    } catch (error) {
+      console.error('자리 공개 실패:', error)
+      alert(`자리 공개 실패: ${error.message}`)
+    } finally {
+      setBusyGroupAttendanceStudentId(null)
+    }
+  }
+
+  async function restoreGroupLessonFixedSeat(groupStudentRow, lesson) {
+    const gid = selectedGroupClass?.id
+    if (!gid || !lesson?.id) return
+    if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
+      alert('출결 관리 권한이 없습니다.')
+      return
+    }
+
+    const studentId = String(groupStudentRow.studentId || '').trim()
+    if (!studentId) {
+      alert('반 등록에 학생 정보가 없습니다.')
+      return
+    }
+
+    const busyKey = `${lesson.id}__${groupStudentRow.id}`
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(lesson, scopedAcademyId, '그룹 수업')
+      assertSameAcademy(groupStudentRow, scopedAcademyId, '그룹 학생')
+      setBusyGroupAttendanceStudentId(busyKey)
+      const restoreGroupLessonFixedSeatCallable = httpsCallable(
+        firebaseFunctions,
+        'restoreGroupLessonFixedSeat'
+      )
+      await restoreGroupLessonFixedSeatCallable({
+        academyId: scopedAcademyId,
+        lessonId: lesson.id,
+        groupStudentId: groupStudentRow.id,
+      })
+    } catch (error) {
+      console.error('자리 복구 실패:', error)
+      alert(`자리 복구 실패: ${error.message}`)
+    } finally {
+      setBusyGroupAttendanceStudentId(null)
+    }
+  }
+
   async function syncPastGroupLessonAttendance(lesson) {
     if (!(userProfile?.role === 'admin' || userProfile?.canManageAttendance === true)) {
       return
@@ -457,5 +539,7 @@ export default function useGroupAttendanceFlow({
     openCalendarGroupLessonAttendance,
     applyGroupLessonAttendanceDeduction,
     applyGroupLessonAttendanceUndo,
+    releaseGroupLessonFixedSeat,
+    restoreGroupLessonFixedSeat,
   }
 }
