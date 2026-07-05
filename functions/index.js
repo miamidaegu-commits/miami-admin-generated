@@ -456,6 +456,252 @@ function parseStudentCancelLimitInput(value) {
   return n;
 }
 
+const FIXED_PRIVATE_RENEWAL_PACKAGE_MODES = ["draft", "existing"];
+const FIXED_PRIVATE_RENEWAL_BLOCKED_TEACHER_TIME_STATUSES = [
+  "conflict",
+  "missing_info",
+];
+
+function requireFixedPrivateRenewalYmd(data, fieldName) {
+  const value = requireString(data, fieldName);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new HttpsError(
+        "invalid-argument",
+        `${fieldName} must be YYYY-MM-DD.`,
+    );
+  }
+  return value;
+}
+
+function normalizeFixedPrivateRenewalDateList(value, fieldName) {
+  if (!Array.isArray(value)) {
+    throw new HttpsError(
+        "invalid-argument",
+        `${fieldName} must be an array.`,
+    );
+  }
+  return value.map((entry, index) => {
+    const date = normalizeId(entry);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new HttpsError(
+          "invalid-argument",
+          `${fieldName}[${index}] must be YYYY-MM-DD.`,
+      );
+    }
+    return date;
+  });
+}
+
+function normalizeFixedPrivateRenewalExcludedDates(value) {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new HttpsError(
+        "invalid-argument",
+        "excludedDates must be an array.",
+    );
+  }
+  return value.map((entry, index) => {
+    const source = entry && typeof entry === "object" ? entry : {date: entry};
+    const date = normalizeId(source.date || source.ymd || source.value);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new HttpsError(
+          "invalid-argument",
+          `excludedDates[${index}] must include a YYYY-MM-DD date.`,
+      );
+    }
+    const reason = normalizeId(source.reason);
+    const blockType = normalizeId(
+        source.blockType || source.blockReason || source.severity,
+    );
+    const hardBlock = source.hardBlock === true ||
+      source.isHardBlock === true ||
+      blockType === "hard";
+    return {
+      date,
+      reason,
+      hardBlock,
+    };
+  });
+}
+
+function normalizeFixedPrivateRenewalTeacherIdentity(data) {
+  const teacherKey = normalizeTeacherKey(data.teacherKey);
+  const teacherId = normalizeId(data.teacherId);
+  const teacherUid = normalizeId(data.teacherUid);
+  const teacherName = normalizeId(data.teacherName);
+  if (!teacherKey && !teacherId && !teacherUid && !teacherName) {
+    throw new HttpsError(
+        "invalid-argument",
+        "At least one teacher identity is required.",
+    );
+  }
+  return {
+    teacherKey,
+    teacherId,
+    teacherUid,
+    teacherName,
+  };
+}
+
+function buildFixedPrivateRenewalPreviewValidation(data) {
+  const academyId = requireString(data, "academyId");
+  const requestId = requireString(data, "requestId");
+  const seedLessonId = requireString(data, "seedLessonId");
+  const studentId = requireString(data, "studentId");
+  const teacher = normalizeFixedPrivateRenewalTeacherIdentity(data);
+  const weekday = normalizeId(data.weekday);
+  const time = requireString(data, "time");
+  const durationMinutes = Number(data.durationMinutes);
+  const startDate = requireFixedPrivateRenewalYmd(data, "startDate");
+  const endDate = requireFixedPrivateRenewalYmd(data, "endDate");
+  const count = Number(data.count);
+  const lessonName = normalizeId(data.lessonName);
+  const packageMode = normalizeId(data.packageMode);
+  const teacherTimePreparation =
+    data.teacherTimePreparation &&
+    typeof data.teacherTimePreparation === "object" ?
+      data.teacherTimePreparation :
+      {};
+  const teacherTimeStatus = normalizeId(teacherTimePreparation.status);
+  const candidateDates = normalizeFixedPrivateRenewalDateList(
+      data.candidateDates,
+      "candidateDates",
+  );
+  const assignableDates = normalizeFixedPrivateRenewalDateList(
+      data.assignableDates,
+      "assignableDates",
+  );
+  const excludedDates = normalizeFixedPrivateRenewalExcludedDates(
+      data.excludedDates,
+  );
+
+  validateAcademyId(academyId);
+  if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+    throw new HttpsError(
+        "invalid-argument",
+        "durationMinutes must be greater than 0.",
+    );
+  }
+  if (!Number.isFinite(count) || count <= 0) {
+    throw new HttpsError(
+        "invalid-argument",
+        "count must be greater than 0.",
+    );
+  }
+  if (!Number.isInteger(count)) {
+    throw new HttpsError("invalid-argument", "count must be an integer.");
+  }
+  if (!FIXED_PRIVATE_RENEWAL_PACKAGE_MODES.includes(packageMode)) {
+    throw new HttpsError(
+        "invalid-argument",
+        "packageMode must be draft or existing.",
+    );
+  }
+  if (packageMode === "draft" && !data.draftPackage) {
+    throw new HttpsError(
+        "invalid-argument",
+        "draftPackage is required for draft packageMode.",
+    );
+  }
+  if (packageMode === "existing" && !normalizeId(data.existingPackageId)) {
+    throw new HttpsError(
+        "invalid-argument",
+        "existingPackageId is required for existing packageMode.",
+    );
+  }
+  if (assignableDates.length > count) {
+    throw new HttpsError(
+        "invalid-argument",
+        "assignableDates.length must not exceed count.",
+    );
+  }
+  if (assignableDates.length === 0) {
+    throw new HttpsError(
+        "failed-precondition",
+        "At least one assignable date is required.",
+    );
+  }
+  if (
+    FIXED_PRIVATE_RENEWAL_BLOCKED_TEACHER_TIME_STATUSES.includes(
+        teacherTimeStatus,
+    )
+  ) {
+    throw new HttpsError(
+        "failed-precondition",
+        `teacherTimePreparation.status ${teacherTimeStatus} blocks renewal.`,
+    );
+  }
+  if (data.previewOnly !== true) {
+    throw new HttpsError(
+        "failed-precondition",
+        "previewOnly must be true for fixed private renewal dry run.",
+    );
+  }
+  if (data.dryRun !== true) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Actual fixed private renewal save is not enabled yet.",
+    );
+  }
+
+  const hardBlockedExcludedDates = excludedDates.filter((date) => {
+    return date.hardBlock;
+  });
+  const warnings = hardBlockedExcludedDates.length > 0 ?
+    [{
+      code: "excluded_dates_include_hard_block",
+      message:
+        "excludedDates includes hard block dates; skeleton returns " +
+        "validation only and does not write.",
+      dates: hardBlockedExcludedDates.map((date) => date.date),
+    }] :
+    [];
+
+  const renewalBatchIdCandidate =
+    `fixedPrivateRenewal_${academyId}_${requestId}`;
+  const wouldCreate = {
+    studentPackage: packageMode === "draft",
+    teacherTemplate: teacherTimeStatus === "create",
+    reactivateTeacherTemplate: teacherTimeStatus === "reactivate",
+    lessons: assignableDates.length,
+    privateLessonSlots: assignableDates.length,
+    privateLessonReservations: assignableDates.length,
+  };
+
+  return {
+    academyId,
+    requestId,
+    idempotencyKey: requestId,
+    renewalBatchIdCandidate,
+    warnings,
+    normalizedPlan: {
+      academyId,
+      seedLessonId,
+      studentId,
+      ...teacher,
+      weekday,
+      time,
+      durationMinutes,
+      startDate,
+      endDate,
+      count,
+      lessonName,
+      packageMode,
+      existingPackageId: normalizeId(data.existingPackageId),
+      hasDraftPackage: packageMode === "draft",
+      teacherTimePreparation: {
+        status: teacherTimeStatus,
+        templateId: normalizeId(teacherTimePreparation.templateId),
+        action: normalizeId(teacherTimePreparation.action),
+      },
+      candidateDates,
+      assignableDates,
+      excludedDates,
+    },
+    wouldCreate,
+  };
+}
+
 async function requireAcademyAdmin(db, academyId, uid) {
   const membershipId = `${academyId}_${uid}`;
   const membershipSnap = await db
@@ -7348,6 +7594,41 @@ exports.adminCancelPrivateLessonReservation = onCall(
             releasedForPrivateBooking: !shouldCloseSlot,
           };
         });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.createFixedPrivateLessonRenewal = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+
+        const data = request.data || {};
+        const validation = buildFixedPrivateRenewalPreviewValidation(data);
+        await requireAcademyAdmin(
+            admin.firestore(),
+            validation.academyId,
+            request.auth.uid,
+        );
+
+        // Actual persistence is intentionally disabled for this skeleton PR.
+        return {
+          ok: true,
+          previewOnly: true,
+          dryRun: true,
+          requestId: validation.requestId,
+          idempotencyKey: validation.idempotencyKey,
+          renewalBatchIdCandidate: validation.renewalBatchIdCandidate,
+          normalizedPlan: validation.normalizedPlan,
+          warnings: validation.warnings,
+          wouldCreate: validation.wouldCreate,
+          nextStep: "Actual write will be implemented in a later PR.",
+        };
       } catch (error) {
         throw asHttpsError(error);
       }
