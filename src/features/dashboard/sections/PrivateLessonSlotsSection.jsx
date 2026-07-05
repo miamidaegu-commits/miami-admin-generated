@@ -465,8 +465,13 @@ export default function PrivateLessonSlotsSection({
   fixedPrivateRenewalServerPreview = null,
   fixedPrivateRenewalServerPreviewBusy = false,
   fixedPrivateRenewalServerPreviewError = '',
+  fixedPrivateRenewalServerPreviewPayload = null,
+  fixedPrivateRenewalCommitBusy = false,
+  fixedPrivateRenewalCommitError = '',
+  fixedPrivateRenewalCommitResult = null,
   fixedPrivateRenewalServerPreviewDisabledReason = '',
   previewFixedPrivateRenewalOnServer,
+  onCommitFixedPrivateRenewal,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -536,6 +541,33 @@ export default function PrivateLessonSlotsSection({
         fixedPrivateRenewalConfirmationTeacherTimeStatus
       )
   )
+  const canCommitFixedPrivateRenewal = Boolean(
+    canOpenFixedPrivateRenewalConfirmModal &&
+      fixedPrivateRenewalServerPreviewPayload &&
+      typeof onCommitFixedPrivateRenewal === 'function' &&
+      !fixedPrivateRenewalCommitBusy &&
+      !fixedPrivateRenewalCommitResult
+  )
+  const fixedPrivateRenewalCommitCreated = fixedPrivateRenewalCommitResult?.created || {}
+  const fixedPrivateRenewalCommitBatchId =
+    fixedPrivateRenewalCommitResult?.renewalBatchIdCandidate ||
+    fixedPrivateRenewalCommitResult?.renewalBatchId ||
+    ''
+  const fixedPrivateRenewalCommitLessonIds = Array.isArray(
+    fixedPrivateRenewalCommitCreated.lessons
+  )
+    ? fixedPrivateRenewalCommitCreated.lessons
+    : []
+  const fixedPrivateRenewalCommitSlotIds = Array.isArray(
+    fixedPrivateRenewalCommitCreated.privateLessonSlots
+  )
+    ? fixedPrivateRenewalCommitCreated.privateLessonSlots
+    : []
+  const fixedPrivateRenewalCommitReservationIds = Array.isArray(
+    fixedPrivateRenewalCommitCreated.privateLessonReservations
+  )
+    ? fixedPrivateRenewalCommitCreated.privateLessonReservations
+    : []
   const fixedPrivateRenewalConfirmationSeedLesson = fixedPrivateRenewalPlan?.seedLesson || {}
   const fixedPrivateRenewalConfirmationStudentLabel =
     fixedPrivateRenewalDraftPackage?.studentName ||
@@ -2727,9 +2759,9 @@ export default function PrivateLessonSlotsSection({
                   기존 고정 일정에 표시되는 고정 수업 패턴과 자리 공개된 수업도 같은 시간
                   연장 기준으로 선택할 수 있습니다.
                   <br />
-                  이번 단계에서는 저장하지 않고 미리보기만 제공합니다.
+                  먼저 저장하지 않고 미리보기로 생성 예정 항목을 확인합니다.
                   <br />
-                  실제 연장 저장 기능은 다음 단계에서 제공됩니다.
+                  서버 검증 통과 후 최종 확인에서 실제 생성할 수 있습니다.
                 </p>
                 <p
                   data-testid="private-fixed-renewal-auto-prefill-note"
@@ -3180,7 +3212,7 @@ export default function PrivateLessonSlotsSection({
                   <br />
                   서버 기준으로 생성 예정 항목을 확인합니다.
                   <br />
-                  실제 저장은 다음 단계에서 제공합니다.
+                  최종 확인에서 실제 생성 전 한 번 더 확인합니다.
                   <br />
                   수강권 발행이나 수업 저장은 아직 실행되지 않습니다.
                 </span>
@@ -3283,7 +3315,7 @@ export default function PrivateLessonSlotsSection({
                     ) : null}
                     {fixedPrivateRenewalServerPreview.nextStep ? (
                       <span style={{ opacity: 0.76 }}>
-                        nextStep: 실제 저장은 다음 단계에서 제공합니다.
+                        nextStep: 최종 확인 모달에서 실제 생성을 진행할 수 있습니다.
                       </span>
                     ) : null}
                     {canOpenFixedPrivateRenewalConfirmModal ? (
@@ -4084,10 +4116,8 @@ export default function PrivateLessonSlotsSection({
                 lineHeight: 1.6,
               }}
             >
-              <span>아직 저장하지 않습니다.</span>
-              <span>실제 저장은 다음 단계에서 제공합니다.</span>
-              <span>수강권 발행이나 수업 저장은 실행되지 않습니다.</span>
-              <span>서버 검증 결과를 다시 확인하는 단계입니다.</span>
+              <span>아직 저장하지 않습니다. 아래 생성 버튼을 누르기 전까지는 실행되지 않습니다.</span>
+              <span>서버 검증 결과를 다시 확인한 뒤 실제 생성을 진행하세요.</span>
             </div>
 
             <div
@@ -4227,12 +4257,116 @@ export default function PrivateLessonSlotsSection({
             </div>
 
             <div
+              data-testid="private-fixed-renewal-commit-warning-note"
+              style={{
+                display: 'grid',
+                gap: 4,
+                marginTop: 14,
+                padding: 12,
+                border: '1px solid #7a4d18',
+                borderRadius: 8,
+                background: '#20170c',
+                color: '#ffd89a',
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              <span>이 버튼을 누르면 수강권과 고정 수업이 실제 생성됩니다.</span>
+              <span>생성 후에는 기존 관리 화면에서 확인/수정할 수 있습니다.</span>
+              <span>중복 클릭을 막기 위해 처리 중에는 버튼이 잠깁니다.</span>
+            </div>
+
+            {fixedPrivateRenewalCommitError ? (
+              <div
+                data-testid="private-fixed-renewal-commit-error"
+                role="alert"
+                style={{
+                  marginTop: 14,
+                  padding: 12,
+                  border: '1px solid #7f1d1d',
+                  borderRadius: 8,
+                  background: '#2a1010',
+                  color: '#fecaca',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong>저장 중 오류가 발생했습니다.</strong>
+                <div style={{ marginTop: 4, wordBreak: 'break-word' }}>
+                  {fixedPrivateRenewalCommitError}
+                </div>
+              </div>
+            ) : null}
+
+            {fixedPrivateRenewalCommitResult ? (
+              <div
+                data-testid="private-fixed-renewal-commit-result"
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  marginTop: 14,
+                  padding: 12,
+                  border: '1px solid #1f6f43',
+                  borderRadius: 8,
+                  background: '#0f2419',
+                  color: '#c7f9d4',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong>연장 생성이 완료되었습니다</strong>
+                <span>목록에 자동 반영됩니다. 기존 고정 1:1 수업 일정에서 확인하세요.</span>
+                <span data-testid="private-fixed-renewal-commit-result-batch-id">
+                  batchId: {fixedPrivateRenewalCommitBatchId || '-'}
+                </span>
+                <span>idempotentReplay: {fixedPrivateRenewalCommitResult.idempotentReplay ? '예' : '아니오'}</span>
+                <div
+                  data-testid="private-fixed-renewal-commit-result-created"
+                  style={{ display: 'grid', gap: 4 }}
+                >
+                  <span>
+                    packageId:{' '}
+                    {fixedPrivateRenewalCommitCreated.packageId ||
+                      fixedPrivateRenewalCommitCreated.studentPackage ||
+                      '-'}
+                  </span>
+                  <span>templateId: {fixedPrivateRenewalCommitCreated.templateId || '-'}</span>
+                  <span>lessons: {fixedPrivateRenewalCommitLessonIds.length}개</span>
+                  <span>slots: {fixedPrivateRenewalCommitSlotIds.length}개</span>
+                  <span>reservations: {fixedPrivateRenewalCommitReservationIds.length}개</span>
+                </div>
+              </div>
+            ) : null}
+
+            <div
               style={{
                 display: 'flex',
+                gap: 8,
                 justifyContent: 'flex-end',
                 marginTop: 18,
               }}
             >
+              <button
+                type="button"
+                data-testid="private-fixed-renewal-commit-button"
+                onClick={onCommitFixedPrivateRenewal}
+                disabled={!canCommitFixedPrivateRenewal}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #60a5fa',
+                  background: canCommitFixedPrivateRenewal ? '#2563eb' : '#1f2937',
+                  color: canCommitFixedPrivateRenewal ? 'white' : '#9ca3af',
+                  cursor: canCommitFixedPrivateRenewal ? 'pointer' : 'not-allowed',
+                  fontWeight: 700,
+                }}
+              >
+                {fixedPrivateRenewalCommitBusy ? (
+                  <span data-testid="private-fixed-renewal-commit-loading">생성 중...</span>
+                ) : (
+                  '위 내용으로 연장 생성'
+                )}
+              </button>
               <button
                 type="button"
                 data-testid="private-fixed-renewal-confirmation-close"

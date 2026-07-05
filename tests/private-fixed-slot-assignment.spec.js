@@ -788,13 +788,16 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('서버 검증 결과');
   expect(privateSlotsSectionSource).toContain('이 단계에서는 저장하지 않습니다');
   expect(privateSlotsSectionSource).toContain('서버 기준으로 생성 예정 항목을 확인합니다');
-  expect(privateSlotsSectionSource).toContain('실제 저장은 다음 단계에서 제공합니다');
+  expect(privateSlotsSectionSource).toContain('최종 확인에서 실제 생성 전 한 번 더 확인합니다');
   expect(privateSlotsSectionSource).toContain('수강권 발행이나 수업 저장은 아직 실행되지 않습니다');
   expect(privateSlotsSectionSource).toContain('생성 예정 항목 확인');
   expect(privateSlotsSectionSource).toContain('최종 확인');
   expect(privateSlotsSectionSource).toContain('아직 저장하지 않습니다');
-  expect(privateSlotsSectionSource).toContain('수강권 발행이나 수업 저장은 실행되지 않습니다');
-  expect(privateSlotsSectionSource).toContain('서버 검증 결과를 다시 확인하는 단계입니다');
+  expect(privateSlotsSectionSource).toContain('이 버튼을 누르면 수강권과 고정 수업이 실제 생성됩니다');
+  expect(privateSlotsSectionSource).toContain('생성 후에는 기존 관리 화면에서 확인/수정할 수 있습니다');
+  expect(privateSlotsSectionSource).toContain('중복 클릭을 막기 위해 처리 중에는 버튼이 잠깁니다');
+  expect(privateSlotsSectionSource).toContain('위 내용으로 연장 생성');
+  expect(privateSlotsSectionSource).toContain('연장 생성이 완료되었습니다');
   expect(privateSlotsSectionSource).toContain('showFixedPrivateRenewalConfirmModal');
   expect(privateSlotsSectionSource).toContain('canOpenFixedPrivateRenewalConfirmModal');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-open');
@@ -806,6 +809,13 @@ test('fixed private assignment source requires package and links generated docum
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-warnings');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-dates');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-no-write-note');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-button');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-loading');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-error');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result-batch-id');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result-created');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-warning-note');
   expect(privateSlotsSectionSource).toContain('fixedPrivateRenewalServerPreview.ok === true');
   expect(privateSlotsSectionSource).toContain('fixedPrivateRenewalServerPreview.dryRun === true');
   expect(privateSlotsSectionSource).toContain('fixedPrivateRenewalServerPreview.previewOnly === true');
@@ -845,8 +855,12 @@ test('fixed private assignment source requires package and links generated docum
   );
   expect(privateSlotsSectionSource).toContain('기존 고정 일정에 표시되는 고정 수업 패턴');
   expect(privateSlotsSectionSource).toContain('자리 공개된 수업도 같은 시간');
-  expect(privateSlotsSectionSource).toContain('이번 단계에서는 저장하지 않고 미리보기만 제공합니다');
-  expect(privateSlotsSectionSource).toContain('실제 연장 저장 기능은 다음 단계에서 제공됩니다');
+  expect(privateSlotsSectionSource).toContain(
+    '먼저 저장하지 않고 미리보기로 생성 예정 항목을 확인합니다'
+  );
+  expect(privateSlotsSectionSource).toContain(
+    '서버 검증 통과 후 최종 확인에서 실제 생성할 수 있습니다'
+  );
   expect(privateSlotsSectionSource).toContain('저장하지 않고 미리보기');
   expect(privateSlotsSectionSource).toContain('여러 요일과 여러 시간을 한 번에 등록합니다.');
   expect(privateSlotsSectionSource).toContain('요일 1개와 시간 1개만 입력하면 개별 추가처럼 사용할 수 있습니다.');
@@ -1069,15 +1083,25 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
   expect(dashboardSource).toContain('fixedPrivateRenewalServerPreview');
   expect(dashboardSource).toContain('fixedPrivateRenewalServerPreviewBusy');
   expect(dashboardSource).toContain('fixedPrivateRenewalServerPreviewError');
+  expect(dashboardSource).toContain('fixedPrivateRenewalServerPreviewPayload');
+  expect(dashboardSource).toContain('fixedPrivateRenewalCommitBusy');
+  expect(dashboardSource).toContain('fixedPrivateRenewalCommitError');
+  expect(dashboardSource).toContain('fixedPrivateRenewalCommitResult');
+  expect(dashboardSource).toContain('handleCommitFixedPrivateRenewal');
   expect(dashboardSource).toContain("httpsCallable(firebaseFunctions, 'createFixedPrivateLessonRenewal')");
   expect(dashboardSource).toContain('dryRun: true');
   expect(dashboardSource).toContain('previewOnly: true');
   expect(dashboardSource).toContain('commit: false');
+  expect(dashboardSource).toContain('commit: true');
+  expect(dashboardSource).toContain('dryRun: false');
+  expect(dashboardSource).toContain('previewOnly: false');
   expect(dashboardSource).toContain('새 수강권 초안');
   expect(dashboardSource).toContain('previewOnly');
   expect(privateSlotsSectionSource).toContain('선생님 시간 준비');
   expect(privateSlotsSectionSource).toContain('기존 남은 수강권으로 미리보기');
-  expect(privateSlotsSectionSource).toContain('이번 단계에서는 저장하지 않고 미리보기만 제공합니다');
+  expect(privateSlotsSectionSource).toContain(
+    '서버 검증 통과 후 최종 확인에서 실제 생성할 수 있습니다'
+  );
   expect(privateSlotsSectionSource).toContain('생성 예정 항목 확인');
   expect(privateSlotsSectionSource).toContain('아직 저장하지 않습니다');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-modal');
@@ -1089,17 +1113,61 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
     'private-fixed-renewal-confirmation-idempotency-key'
   );
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-confirmation-no-write-note');
-  expect(privateSlotsSectionSource).toContain('서버 검증 결과를 다시 확인하는 단계입니다');
-  expect(privateSlotsSectionSource).not.toContain('createFixedPrivateLessonRenewal');
-  expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('commit: true');
-  expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('dryRun: false');
-  expect(`${dashboardSource}\n${privateSlotsSectionSource}`).not.toContain('previewOnly: false');
+  expect(privateSlotsSectionSource).toContain('위 내용으로 연장 생성');
+  expect(privateSlotsSectionSource).toContain('이 버튼을 누르면 수강권과 고정 수업이 실제 생성됩니다');
+  expect(privateSlotsSectionSource).toContain('생성 후에는 기존 관리 화면에서 확인/수정할 수 있습니다');
+  expect(privateSlotsSectionSource).toContain('중복 클릭을 막기 위해 처리 중에는 버튼이 잠깁니다');
+  expect(privateSlotsSectionSource).toContain('연장 생성이 완료되었습니다');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-button');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-loading');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-error');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result-batch-id');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-result-created');
+  expect(privateSlotsSectionSource).toContain('private-fixed-renewal-commit-warning-note');
   expect(privateSlotsSectionSource).not.toContain('private-fixed-renewal-submit-button');
   expect(privateSlotsSectionSource).not.toContain('>연장 저장<');
   expect(privateSlotsSectionSource).not.toContain('>연장 생성<');
   expect(privateSlotsSectionSource).not.toContain('>수강권 발행<');
   expect(privateSlotsSectionSource).not.toContain('>선생님 시간 생성<');
   expect(privateSlotsSectionSource).not.toContain('>시간표 활성화<');
+
+  const previewHandlerStart = dashboardSource.indexOf(
+    'async function previewFixedPrivateRenewalOnServer()'
+  );
+  const commitHandlerStart = dashboardSource.indexOf(
+    'async function handleCommitFixedPrivateRenewal()'
+  );
+  const afterCommitHandlerStart = dashboardSource.indexOf(
+    'const privateLessonTeacherSelectOptions',
+    commitHandlerStart
+  );
+  expect(previewHandlerStart).toBeGreaterThanOrEqual(0);
+  expect(commitHandlerStart).toBeGreaterThan(previewHandlerStart);
+  expect(afterCommitHandlerStart).toBeGreaterThan(commitHandlerStart);
+
+  const previewHandlerSource = dashboardSource.slice(previewHandlerStart, commitHandlerStart);
+  const commitHandlerSource = dashboardSource.slice(commitHandlerStart, afterCommitHandlerStart);
+  const outsideCommitHandlerSource = [
+    dashboardSource.slice(0, commitHandlerStart),
+    dashboardSource.slice(afterCommitHandlerStart),
+    privateSlotsSectionSource,
+  ].join('\n');
+  expect(previewHandlerSource).toContain('dryRun: true');
+  expect(previewHandlerSource).toContain('previewOnly: true');
+  expect(previewHandlerSource).toContain('commit: false');
+  expect(previewHandlerSource).not.toContain('commit: true');
+  expect(previewHandlerSource).not.toContain('dryRun: false');
+  expect(previewHandlerSource).not.toContain('previewOnly: false');
+  expect(commitHandlerSource).toContain('fixedPrivateRenewalServerPreviewPayload');
+  expect(commitHandlerSource).toContain('requestId');
+  expect(commitHandlerSource).toContain('idempotencyKey');
+  expect(commitHandlerSource).toContain('commit: true');
+  expect(commitHandlerSource).toContain('dryRun: false');
+  expect(commitHandlerSource).toContain('previewOnly: false');
+  expect(outsideCommitHandlerSource).not.toContain('commit: true');
+  expect(outsideCommitHandlerSource).not.toContain('dryRun: false');
+  expect(outsideCommitHandlerSource).not.toContain('previewOnly: false');
 });
 
 test('admin can assign fixed private lessons from a weekly template', async ({
