@@ -1326,7 +1326,10 @@ function getComputedPrivatePackageSummaries(packageSummary) {
     summaries.forEach((summary) => {
       const packageId = normalizeId(summary && summary.packageId);
       if (!packageId || byPackageId.has(packageId)) return;
-      byPackageId.set(packageId, sanitizeComputedPrivatePackageSummary(summary));
+      byPackageId.set(
+          packageId,
+          sanitizeComputedPrivatePackageSummary(summary),
+      );
     });
   });
   return Array.from(byPackageId.values()).sort((a, b) => {
