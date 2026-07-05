@@ -3,6 +3,7 @@ const {setGlobalOptions} = require("firebase-functions/v2");
 const {onCall, HttpsError} = require("firebase-functions/v2/https");
 const {onSchedule} = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
+const crypto = require("crypto");
 const {
   STUDENT_ACCOUNT_PERMISSIONS,
   TEACHER_ACCOUNT_PERMISSIONS,
@@ -29,6 +30,7 @@ const PRIVATE_SLOT_BOOKING_CUTOFF_MS = 7 * 60 * 60 * 1000;
 const PRIVATE_SLOT_AVAILABILITY_LIMIT = 100;
 const PRIVATE_SLOT_QUERY_CHUNK_SIZE = 10;
 const PRIVATE_TEMPLATE_SLOT_PREFIX = "template";
+const FIXED_PRIVATE_RENEWAL_MAX_ASSIGNABLE_COUNT = 52;
 
 const GROUP_COURSE_TYPE_CANONICAL = [
   "일반 영어회화",
@@ -543,7 +545,78 @@ function normalizeFixedPrivateRenewalTeacherIdentity(data) {
   };
 }
 
+function getFixedPrivateRenewalMode(data) {
+  const commit = data && data.commit === true;
+  const dryRun = data && data.dryRun === true;
+  const previewOnly = data && data.previewOnly === true;
+  if (commit) {
+    if (data.dryRun !== false || data.previewOnly !== false) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Write mode requires commit: true, dryRun: false, " +
+          "and previewOnly: false.",
+      );
+    }
+    return {commit: true, dryRun: false, previewOnly: false};
+  }
+  if (!dryRun || !previewOnly) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Actual fixed private renewal save is not enabled yet.",
+    );
+  }
+  return {commit: false, dryRun: true, previewOnly: true};
+}
+
+function requireUniqueFixedPrivateRenewalDates(dates, fieldName) {
+  const seen = new Set();
+  dates.forEach((date) => {
+    if (seen.has(date)) {
+      throw new HttpsError(
+          "invalid-argument",
+          `${fieldName} must not contain duplicate dates.`,
+      );
+    }
+    seen.add(date);
+  });
+}
+
+function sanitizeFixedPrivateRenewalDocId(value) {
+  const safe = normalizeId(value).replace(/[^A-Za-z0-9_-]/g, "_");
+  if (!safe) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Unable to build fixed private renewal document id.",
+    );
+  }
+  return safe.slice(0, 480);
+}
+
+function stableStringify(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return "{" + Object.keys(value).sort().map((key) => {
+      return `${JSON.stringify(key)}:${stableStringify(value[key])}`;
+    }).join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+
+function hashFixedPrivateRenewalPayload(payload) {
+  return crypto
+      .createHash("sha256")
+      .update(stableStringify(payload))
+      .digest("hex");
+}
+
+function ymdToCompactDate(ymd) {
+  return normalizeId(ymd).replace(/-/g, "");
+}
+
 function buildFixedPrivateRenewalPreviewValidation(data) {
+  const mode = getFixedPrivateRenewalMode(data || {});
   const academyId = requireString(data, "academyId");
   const requestId = requireString(data, "requestId");
   const seedLessonId = requireString(data, "seedLessonId");
@@ -576,6 +649,17 @@ function buildFixedPrivateRenewalPreviewValidation(data) {
   );
 
   validateAcademyId(academyId);
+  const weekdayNumber = Number(weekday);
+  if (!Number.isInteger(weekdayNumber) || weekdayNumber < 0 ||
+      weekdayNumber > 6) {
+    throw new HttpsError(
+        "invalid-argument",
+        "weekday must be between 0 and 6.",
+    );
+  }
+  if (!/^([01]\d|2[0-3]):([0-5]\d)$/.test(time)) {
+    throw new HttpsError("invalid-argument", "time must be HH:MM.");
+  }
   if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
     throw new HttpsError(
         "invalid-argument",
@@ -621,6 +705,27 @@ function buildFixedPrivateRenewalPreviewValidation(data) {
         "At least one assignable date is required.",
     );
   }
+  requireUniqueFixedPrivateRenewalDates(assignableDates, "assignableDates");
+  requireUniqueFixedPrivateRenewalDates(candidateDates, "candidateDates");
+  if (
+    mode.commit &&
+    assignableDates.length > FIXED_PRIVATE_RENEWAL_MAX_ASSIGNABLE_COUNT
+  ) {
+    throw new HttpsError(
+        "invalid-argument",
+        "assignableDates.length must be " +
+        `${FIXED_PRIVATE_RENEWAL_MAX_ASSIGNABLE_COUNT} or less.`,
+    );
+  }
+  const outsideRangeDate = assignableDates.find((date) => {
+    return date < startDate || date > endDate;
+  });
+  if (outsideRangeDate) {
+    throw new HttpsError(
+        "invalid-argument",
+        "assignableDates must be within startDate and endDate.",
+    );
+  }
   if (
     FIXED_PRIVATE_RENEWAL_BLOCKED_TEACHER_TIME_STATUSES.includes(
         teacherTimeStatus,
@@ -631,22 +736,16 @@ function buildFixedPrivateRenewalPreviewValidation(data) {
         `teacherTimePreparation.status ${teacherTimeStatus} blocks renewal.`,
     );
   }
-  if (data.previewOnly !== true) {
-    throw new HttpsError(
-        "failed-precondition",
-        "previewOnly must be true for fixed private renewal dry run.",
-    );
-  }
-  if (data.dryRun !== true) {
-    throw new HttpsError(
-        "failed-precondition",
-        "Actual fixed private renewal save is not enabled yet.",
-    );
-  }
 
   const hardBlockedExcludedDates = excludedDates.filter((date) => {
     return date.hardBlock;
   });
+  if (mode.commit && hardBlockedExcludedDates.length > 0) {
+    throw new HttpsError(
+        "failed-precondition",
+        "excludedDates includes hard block dates.",
+    );
+  }
   const warnings = hardBlockedExcludedDates.length > 0 ?
     [{
       code: "excluded_dates_include_hard_block",
@@ -658,7 +757,9 @@ function buildFixedPrivateRenewalPreviewValidation(data) {
     [];
 
   const renewalBatchIdCandidate =
-    `fixedPrivateRenewal_${academyId}_${requestId}`;
+    sanitizeFixedPrivateRenewalDocId(
+        `fixedPrivateRenewal_${academyId}_${requestId}`,
+    );
   const wouldCreate = {
     studentPackage: packageMode === "draft",
     teacherTemplate: teacherTimeStatus === "create",
@@ -671,6 +772,9 @@ function buildFixedPrivateRenewalPreviewValidation(data) {
   return {
     academyId,
     requestId,
+    commit: mode.commit,
+    dryRun: mode.dryRun,
+    previewOnly: mode.previewOnly,
     idempotencyKey: requestId,
     renewalBatchIdCandidate,
     warnings,
@@ -679,7 +783,7 @@ function buildFixedPrivateRenewalPreviewValidation(data) {
       seedLessonId,
       studentId,
       ...teacher,
-      weekday,
+      weekday: weekdayNumber,
       time,
       durationMinutes,
       startDate,
@@ -700,6 +804,888 @@ function buildFixedPrivateRenewalPreviewValidation(data) {
     },
     wouldCreate,
   };
+}
+
+function buildFixedPrivateRenewalPayloadHash(validation) {
+  return hashFixedPrivateRenewalPayload({
+    requestId: validation.requestId,
+    normalizedPlan: validation.normalizedPlan,
+    wouldCreate: validation.wouldCreate,
+  });
+}
+
+function buildFixedPrivateRenewalDeterministicIds(validation) {
+  const batchId = validation.renewalBatchIdCandidate;
+  const packageId = sanitizeFixedPrivateRenewalDocId(`${batchId}__package`);
+  const templateId = sanitizeFixedPrivateRenewalDocId(`${batchId}__template`);
+  const creditTransactionId = sanitizeFixedPrivateRenewalDocId(
+      `${batchId}__package_created`,
+  );
+  const occurrences = validation.normalizedPlan.assignableDates.map((date) => {
+    const safeDate = ymdToCompactDate(date);
+    const lessonId = sanitizeFixedPrivateRenewalDocId(
+        `${batchId}__lesson__${safeDate}`,
+    );
+    const slotId = sanitizeFixedPrivateRenewalDocId(
+        `${batchId}__slot__${safeDate}`,
+    );
+    return {
+      date,
+      lessonId,
+      slotId,
+      reservationId: privateReservationDocId({
+        academyId: validation.academyId,
+        slotId,
+        studentId: validation.normalizedPlan.studentId,
+      }),
+    };
+  });
+  return {
+    batchId,
+    packageId,
+    templateId,
+    creditTransactionId,
+    occurrences,
+  };
+}
+
+function assertFixedPrivateRenewalCheckpointMatches({
+  checkpoint,
+  payloadHash,
+}) {
+  if (!checkpoint || checkpoint.status !== "completed") {
+    throw new HttpsError(
+        "failed-precondition",
+        "Fixed private renewal batch is already in progress or incomplete.",
+    );
+  }
+  if (normalizeId(checkpoint.payloadHash) !== payloadHash) {
+    throw new HttpsError(
+        "already-exists",
+        "requestId was already used for a different fixed private renewal.",
+    );
+  }
+}
+
+function buildFixedPrivateRenewalResultFromCheckpoint({
+  validation,
+  checkpoint,
+}) {
+  return {
+    ok: true,
+    committed: true,
+    idempotentReplay: true,
+    previewOnly: false,
+    dryRun: false,
+    requestId: validation.requestId,
+    idempotencyKey: validation.idempotencyKey,
+    renewalBatchIdCandidate: validation.renewalBatchIdCandidate,
+    normalizedPlan: validation.normalizedPlan,
+    warnings: validation.warnings,
+    wouldCreate: validation.wouldCreate,
+    created: checkpoint.created || {},
+  };
+}
+
+function buildFixedPrivateRenewalDryRunResult(validation) {
+  return {
+    ok: true,
+    previewOnly: true,
+    dryRun: true,
+    commitRequiredForWrite: true,
+    requestId: validation.requestId,
+    idempotencyKey: validation.idempotencyKey,
+    renewalBatchIdCandidate: validation.renewalBatchIdCandidate,
+    normalizedPlan: validation.normalizedPlan,
+    warnings: validation.warnings,
+    wouldCreate: validation.wouldCreate,
+    nextStep: "Call with commit: true, dryRun: false, and previewOnly: false.",
+  };
+}
+
+function getFixedPrivateRenewalTeacherKeys(plan) {
+  return uniqueNormalizedTeacherKeyList([
+    plan.teacherKey,
+    plan.teacherUid,
+    plan.teacherId,
+    plan.teacherName,
+  ]);
+}
+
+function assertFixedPrivateRenewalTeacherMatches({
+  expected,
+  actual,
+  label,
+}) {
+  const expectedKeys = getFixedPrivateRenewalTeacherKeys(expected);
+  const actualKeys = uniqueNormalizedTeacherKeyList([
+    actual && actual.teacherKey,
+    actual && actual.teacherUid,
+    actual && actual.teacherUID,
+    actual && actual.teacherId,
+    actual && actual.teacher,
+    actual && actual.teacherName,
+  ]);
+  if (
+    expectedKeys.length > 0 &&
+    actualKeys.length > 0 &&
+    !expectedKeys.some((key) => actualKeys.includes(key))
+  ) {
+    throw new HttpsError(
+        "failed-precondition",
+        `${label} teacher does not match renewal teacher.`,
+    );
+  }
+}
+
+function buildFixedPrivateRenewalPackagePayload({
+  validation,
+  studentData,
+  actor,
+  now,
+}) {
+  const plan = validation.normalizedPlan;
+  const packageTitle = normalizeId(plan.lessonName) || "연장 자동 초안";
+  return {
+    academyId: validation.academyId,
+    studentId: plan.studentId,
+    studentName: normalizeId(studentData.name || studentData.studentName) ||
+      normalizeId(studentData.displayName) ||
+      "-",
+    teacher: plan.teacherKey || plan.teacherUid || plan.teacherName,
+    teacherName: plan.teacherName || plan.teacherKey || plan.teacherUid,
+    teacherKey: plan.teacherKey,
+    teacherDisplayName: plan.teacherName || plan.teacherKey,
+    teacherUid: plan.teacherUid,
+    teacherEmail: "",
+    teacherId: plan.teacherId,
+    packageType: "private",
+    groupClassId: null,
+    groupClassName: null,
+    title: packageTitle,
+    totalCount: plan.count,
+    usedCount: 0,
+    remainingCount: plan.count,
+    status: "active",
+    privatePackageMode: "countBased",
+    registrationStartDate: plan.startDate,
+    registrationWeeks: null,
+    coverageEndDate: plan.endDate,
+    startDate: plan.startDate,
+    endDate: plan.endDate,
+    expiresAt: timestampFromMillis(
+        getSeoulDateTimeMillis(plan.endDate, "23:59"),
+    ),
+    paymentDate: "",
+    amountPaid: 0,
+    memo: "연장 자동 초안 · 고정 개인 연장",
+    sourceType: "fixed-private-renewal",
+    renewalSeedLessonId: plan.seedLessonId,
+    renewalBatchId: validation.renewalBatchIdCandidate,
+    createdBy: actor.actorUid,
+    createdByUid: actor.actorUid,
+    createdByName: actor.actorName,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function buildFixedPrivateRenewalCreditPayload({
+  validation,
+  packageId,
+  packageData,
+  actor,
+  now,
+}) {
+  const plan = validation.normalizedPlan;
+  return {
+    academyId: validation.academyId,
+    studentId: plan.studentId,
+    studentName: packageData.studentName,
+    teacher: packageData.teacher,
+    packageId,
+    packageType: "private",
+    packageTitle: packageData.title,
+    groupClassName: "",
+    sourceType: "fixed-private-renewal",
+    sourceId: validation.renewalBatchIdCandidate,
+    actionType: "package_created",
+    deltaCount: plan.count,
+    memo: `고정 1:1 연장 · ${plan.startDate} ~ ${plan.endDate} · ` +
+      `${plan.count}회`,
+    actorUid: actor.actorUid,
+    actorRole: actor.actorRole,
+    actorName: actor.actorName,
+    reason: "fixed-private-renewal",
+    createdAt: now,
+  };
+}
+
+function buildFixedPrivateRenewalTemplatePayload({
+  validation,
+  actor,
+  now,
+}) {
+  const plan = validation.normalizedPlan;
+  return {
+    academyId: validation.academyId,
+    teacher: plan.teacherKey || plan.teacherUid || plan.teacherName,
+    teacherName: plan.teacherName || plan.teacherKey || plan.teacherUid,
+    teacherKey: plan.teacherKey,
+    teacherUid: plan.teacherUid,
+    teacherId: plan.teacherId,
+    weekday: plan.weekday,
+    time: plan.time,
+    durationMinutes: plan.durationMinutes,
+    status: "active",
+    effectiveStartDate: plan.startDate,
+    effectiveEndDate: plan.endDate,
+    useForFixedAssignment: true,
+    openForStudentBooking: false,
+    sourceType: "fixed-private-renewal",
+    renewalBatchId: validation.renewalBatchIdCandidate,
+    createdByUid: actor.actorUid,
+    createdByName: actor.actorName,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function buildFixedPrivateRenewalOccurrencePayloads({
+  validation,
+  occurrence,
+  packageId,
+  packageData,
+  templateId,
+  actor,
+  now,
+}) {
+  const plan = validation.normalizedPlan;
+  const startMillis = getSeoulDateTimeMillis(occurrence.date, plan.time);
+  const startTimestamp = timestampFromMillis(startMillis);
+  const subject = plan.lessonName || "고정 1:1";
+  const packageTitle = normalizeId(packageData.title) || "고정 1:1";
+  const teacher = {
+    teacher: plan.teacherKey || plan.teacherUid || plan.teacherName,
+    teacherName: plan.teacherName || plan.teacherKey || plan.teacherUid,
+    teacherKey: plan.teacherKey,
+    teacherUid: plan.teacherUid,
+    teacherUID: plan.teacherUid,
+    teacherId: plan.teacherId,
+    teacherEmail: normalizeId(packageData.teacherEmail),
+  };
+  const fixedBase = {
+    academyId: validation.academyId,
+    studentId: plan.studentId,
+    studentID: plan.studentId,
+    studentName: packageData.studentName,
+    ...teacher,
+    date: occurrence.date,
+    time: plan.time,
+    subject,
+    durationMinutes: plan.durationMinutes,
+    packageId,
+    deductionPackageId: packageId,
+    linkedPackageId: packageId,
+    fixedPrivatePackageId: packageId,
+    packageName: packageTitle,
+    packageTitle,
+    packageTeacherKey: plan.teacherKey || teacher.teacher,
+    packageType: "private",
+    source: "fixed_admin",
+    sourceType: "fixed-private-slot-assignment",
+    reservationType: "fixed",
+    privateLessonAvailabilityTemplateId: templateId,
+    fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+  };
+  const slot = {
+    academyId: validation.academyId,
+    ...teacher,
+    date: occurrence.date,
+    time: plan.time,
+    durationMinutes: plan.durationMinutes,
+    status: "reserved",
+    slotType: "fixed",
+    isBookable: false,
+    reservedStudentId: plan.studentId,
+    fixedStudentId: plan.studentId,
+    fixedStudentName: packageData.studentName,
+    reservationId: occurrence.reservationId,
+    lessonId: occurrence.lessonId,
+    fixedLessonId: occurrence.lessonId,
+    packageId,
+    deductionPackageId: packageId,
+    linkedPackageId: packageId,
+    fixedPrivatePackageId: packageId,
+    packageName: packageTitle,
+    packageTitle,
+    packageTeacherKey: plan.teacherKey || teacher.teacher,
+    privateLessonAvailabilityTemplateId: templateId,
+    fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+    createdByUid: actor.actorUid,
+    startAt: startTimestamp,
+    reservedAt: now,
+    cancelledAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  const reservation = {
+    academyId: validation.academyId,
+    slotId: occurrence.slotId,
+    studentName: packageData.studentName,
+    studentId: plan.studentId,
+    ...teacher,
+    date: occurrence.date,
+    time: plan.time,
+    subject,
+    status: "active",
+    source: "fixed_admin",
+    sourceType: "fixed-private-slot-assignment",
+    reservationType: "fixed",
+    lessonId: occurrence.lessonId,
+    fixedLessonId: occurrence.lessonId,
+    packageId,
+    deductionPackageId: packageId,
+    linkedPackageId: packageId,
+    fixedPrivatePackageId: packageId,
+    packageName: packageTitle,
+    packageTitle,
+    packageTeacherKey: plan.teacherKey || teacher.teacher,
+    privateLessonAvailabilityTemplateId: templateId,
+    fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+    durationMinutes: plan.durationMinutes,
+    reservedAt: now,
+    createdAt: now,
+    updatedAt: now,
+    cancelledAt: null,
+  };
+  const lesson = {
+    ...fixedBase,
+    id: occurrence.lessonId,
+    lessonId: occurrence.lessonId,
+    fixedLessonId: occurrence.lessonId,
+    reservationId: occurrence.reservationId,
+    slotId: occurrence.slotId,
+    scheduleDate: occurrence.date,
+    scheduleTime: plan.time,
+    status: "active",
+    createdByUid: actor.actorUid,
+    startAt: startTimestamp,
+    startsAt: startTimestamp,
+    cancelledAt: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  return {slot, reservation, lesson};
+}
+
+function getFixedPrivateRenewalPackageTitle(packageData) {
+  return normalizeId(
+      packageData &&
+      (packageData.packageTitle || packageData.title || packageData.name),
+  ) || "고정 1:1";
+}
+
+async function loadFixedPrivateRenewalPackageUsageRows(transaction, db, {
+  academyId,
+  studentId,
+  packageId,
+}) {
+  const [lessonSnap, reservationSnap] = await Promise.all([
+    transaction.get(
+        db
+            .collection("lessons")
+            .where("academyId", "==", academyId)
+            .where("studentId", "==", studentId)
+            .where("packageId", "==", packageId),
+    ),
+    transaction.get(
+        db
+            .collection("privateLessonReservations")
+            .where("academyId", "==", academyId)
+            .where("studentId", "==", studentId)
+            .where("packageId", "==", packageId),
+    ),
+  ]);
+  return {
+    privateLessons: lessonSnap.docs.map((docSnap) => {
+      return {id: docSnap.id, ...docSnap.data()};
+    }),
+    privateReservations: reservationSnap.docs.map((docSnap) => {
+      return {id: docSnap.id, ...docSnap.data()};
+    }),
+  };
+}
+
+function assertFixedPrivateRenewalStudent({
+  studentSnap,
+  validation,
+}) {
+  if (!studentSnap.exists) {
+    throw new HttpsError("not-found", "Student not found.");
+  }
+  const studentData = studentSnap.data() || {};
+  if (normalizeId(studentData.academyId) !== validation.academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Student does not belong to academy.",
+    );
+  }
+  return studentData;
+}
+
+function assertFixedPrivateRenewalSeedLesson({
+  seedLessonSnap,
+  validation,
+}) {
+  if (!seedLessonSnap.exists) {
+    throw new HttpsError("not-found", "Seed lesson not found.");
+  }
+  const plan = validation.normalizedPlan;
+  const seedLesson = seedLessonSnap.data() || {};
+  if (normalizeId(seedLesson.academyId) !== validation.academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Seed lesson does not belong to academy.",
+    );
+  }
+  const seedStudentId = normalizeId(
+      seedLesson.studentId || seedLesson.studentID,
+  );
+  if (seedStudentId !== plan.studentId) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Seed lesson student does not match renewal student.",
+    );
+  }
+  if (!isFixedPrivateLessonOccurrence(seedLesson)) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Seed lesson is not a fixed private lesson occurrence.",
+    );
+  }
+  assertFixedPrivateRenewalTeacherMatches({
+    expected: plan,
+    actual: seedLesson,
+    label: "Seed lesson",
+  });
+  return seedLesson;
+}
+
+function assertFixedPrivateRenewalExistingPackage({
+  packageSnap,
+  validation,
+  usageRows,
+}) {
+  if (!packageSnap.exists) {
+    throw new HttpsError("not-found", "Student package not found.");
+  }
+  const plan = validation.normalizedPlan;
+  const packageData = packageSnap.data() || {};
+  const teacherKeys = getFixedPrivateRenewalTeacherKeys(plan);
+  const firstDate = plan.assignableDates[0] || plan.startDate;
+  const rejectReason = getPrivatePackageRejectReason({
+    pkg: packageData,
+    academyId: validation.academyId,
+    studentId: plan.studentId,
+    teacherKey: plan.teacherKey,
+    teacherKeys,
+    lessonDate: firstDate,
+  });
+  if (rejectReason) {
+    throw new HttpsError(
+        "failed-precondition",
+        `Package cannot be used for renewal: ${rejectReason}.`,
+    );
+  }
+  const uncoveredDate = plan.assignableDates.find((date) => {
+    return !privatePackageCoversDate(packageData, date);
+  });
+  if (uncoveredDate) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Package does not cover every renewal date.",
+    );
+  }
+  const usage = computePrivateTeacherPackageUsage({
+    privatePackage: packageData,
+    packageId: packageSnap.id,
+    privateLessons: usageRows.privateLessons,
+    privateReservations: usageRows.privateReservations,
+    academyId: validation.academyId,
+    studentId: plan.studentId,
+    teacherKeys,
+  });
+  if (usage.makeupAvailableCount < plan.assignableDates.length) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Package does not have enough unallocated count for renewal.",
+    );
+  }
+  return {
+    id: packageSnap.id,
+    data: {
+      ...packageData,
+      studentName: normalizeId(packageData.studentName) || "-",
+      title: getFixedPrivateRenewalPackageTitle(packageData),
+    },
+    usage,
+  };
+}
+
+function assertFixedPrivateRenewalTemplate({
+  templateSnap,
+  validation,
+  allowInactive = false,
+}) {
+  if (!templateSnap.exists) {
+    throw new HttpsError("not-found", "Teacher time template not found.");
+  }
+  const plan = validation.normalizedPlan;
+  const template = templateSnap.data() || {};
+  if (normalizeId(template.academyId) !== validation.academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Teacher time template does not belong to academy.",
+    );
+  }
+  assertFixedPrivateRenewalTeacherMatches({
+    expected: plan,
+    actual: template,
+    label: "Teacher time template",
+  });
+  if (Number(template.weekday) !== plan.weekday ||
+      normalizeId(template.time) !== plan.time ||
+      Number(template.durationMinutes || 0) !== plan.durationMinutes) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Teacher time template does not match renewal schedule.",
+    );
+  }
+  const status = normalizeId(template.status || "active").toLowerCase();
+  if (allowInactive) {
+    if (!["active", "inactive"].includes(status)) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Teacher time template cannot be reactivated.",
+      );
+    }
+  } else if (status !== "active") {
+    throw new HttpsError(
+        "failed-precondition",
+        "Teacher time template is not active.",
+    );
+  }
+  return template;
+}
+
+function getFixedPrivateRenewalTemplateRef({db, validation, ids}) {
+  const plan = validation.normalizedPlan;
+  const status = plan.teacherTimePreparation.status;
+  if (status === "create") {
+    return db.collection("privateLessonAvailabilityTemplates")
+        .doc(ids.templateId);
+  }
+  const templateId = normalizeId(plan.teacherTimePreparation.templateId);
+  if (!templateId) {
+    throw new HttpsError(
+        "invalid-argument",
+        "teacherTimePreparation.templateId is required.",
+    );
+  }
+  return db.collection("privateLessonAvailabilityTemplates").doc(templateId);
+}
+
+async function assertFixedPrivateRenewalNoScheduleConflicts({
+  transaction,
+  db,
+  validation,
+}) {
+  const plan = validation.normalizedPlan;
+  for (const date of plan.assignableDates) {
+    const hasConflict = await hasTeacherScheduleConflict(transaction, db, {
+      academyId: validation.academyId,
+      teacher: plan.teacherKey,
+      teacherName: plan.teacherName,
+      teacherKey: plan.teacherKey,
+      teacherUid: plan.teacherUid,
+      teacherUID: plan.teacherUid,
+      date,
+      time: plan.time,
+      durationMinutes: plan.durationMinutes,
+    });
+    if (hasConflict) {
+      throw new HttpsError(
+          "failed-precondition",
+          `Teacher schedule conflict exists on ${date}.`,
+      );
+    }
+  }
+}
+
+function assertNoFixedPrivateRenewalDeterministicDocs({
+  docSnaps,
+}) {
+  const existing = docSnaps.find((snap) => snap.exists);
+  if (existing) {
+    throw new HttpsError(
+        "already-exists",
+        `Renewal document already exists: ${existing.ref.path}.`,
+    );
+  }
+}
+
+async function runFixedPrivateRenewalWriteTransaction({
+  db,
+  auth,
+  membership,
+  validation,
+}) {
+  const ids = buildFixedPrivateRenewalDeterministicIds(validation);
+  const payloadHash = buildFixedPrivateRenewalPayloadHash(validation);
+  const actor = buildAdminActorContext(auth, membership);
+  return db.runTransaction(async (transaction) => {
+    const plan = validation.normalizedPlan;
+    const batchRef = db.collection("fixedPrivateRenewalBatches")
+        .doc(ids.batchId);
+    const studentRef = db.collection("privateStudents").doc(plan.studentId);
+    const seedLessonRef = db.collection("lessons").doc(plan.seedLessonId);
+    const isDraftPackage = plan.packageMode === "draft";
+    const packageRef = db.collection("studentPackages")
+        .doc(isDraftPackage ? ids.packageId : plan.existingPackageId);
+    const creditRef = db.collection("creditTransactions")
+        .doc(ids.creditTransactionId);
+    const summaryRef = db
+        .collection("studentPrivateAccessSummary")
+        .doc(`${validation.academyId}__${plan.studentId}`);
+    const templateRef = getFixedPrivateRenewalTemplateRef({
+      db,
+      validation,
+      ids,
+    });
+    const occurrenceRefs = ids.occurrences.map((occurrence) => {
+      return {
+        occurrence,
+        lessonRef: db.collection("lessons").doc(occurrence.lessonId),
+        slotRef: db.collection("privateLessonSlots").doc(occurrence.slotId),
+        reservationRef: db
+            .collection("privateLessonReservations")
+            .doc(occurrence.reservationId),
+      };
+    });
+
+    const baseReads = [
+      transaction.get(batchRef),
+      transaction.get(studentRef),
+      transaction.get(seedLessonRef),
+      transaction.get(packageRef),
+      transaction.get(templateRef),
+      ...occurrenceRefs.flatMap((refs) => {
+        return [
+          transaction.get(refs.lessonRef),
+          transaction.get(refs.slotRef),
+          transaction.get(refs.reservationRef),
+        ];
+      }),
+    ];
+    if (isDraftPackage) baseReads.push(transaction.get(creditRef));
+    const readSnaps = await Promise.all(baseReads);
+    const batchSnap = readSnaps[0];
+    if (batchSnap.exists) {
+      const checkpoint = batchSnap.data() || {};
+      assertFixedPrivateRenewalCheckpointMatches({checkpoint, payloadHash});
+      return buildFixedPrivateRenewalResultFromCheckpoint({
+        validation,
+        checkpoint,
+      });
+    }
+
+    const studentData = assertFixedPrivateRenewalStudent({
+      studentSnap: readSnaps[1],
+      validation,
+    });
+    assertFixedPrivateRenewalSeedLesson({
+      seedLessonSnap: readSnaps[2],
+      validation,
+    });
+
+    let packageResult = null;
+    let usageRows = {privateLessons: [], privateReservations: []};
+    if (isDraftPackage) {
+      if (readSnaps[3].exists) {
+        throw new HttpsError(
+            "already-exists",
+            "Deterministic student package already exists.",
+        );
+      }
+      packageResult = {
+        id: ids.packageId,
+        data: buildFixedPrivateRenewalPackagePayload({
+          validation,
+          studentData,
+          actor,
+          now: admin.firestore.FieldValue.serverTimestamp(),
+        }),
+      };
+    } else {
+      usageRows = await loadFixedPrivateRenewalPackageUsageRows(
+          transaction,
+          db,
+          {
+            academyId: validation.academyId,
+            studentId: plan.studentId,
+            packageId: plan.existingPackageId,
+          },
+      );
+      packageResult = assertFixedPrivateRenewalExistingPackage({
+        packageSnap: readSnaps[3],
+        validation,
+        usageRows,
+      });
+    }
+
+    const teacherTimeStatus = plan.teacherTimePreparation.status;
+    const templateSnap = readSnaps[4];
+    let templateId = templateRef.id;
+    if (teacherTimeStatus === "create") {
+      if (templateSnap.exists) {
+        throw new HttpsError(
+            "already-exists",
+            "Deterministic teacher time template already exists.",
+        );
+      }
+    } else {
+      assertFixedPrivateRenewalTemplate({
+        templateSnap,
+        validation,
+        allowInactive: teacherTimeStatus === "reactivate",
+      });
+      templateId = templateRef.id;
+    }
+
+    const deterministicDocSnaps = readSnaps.slice(5);
+    assertNoFixedPrivateRenewalDeterministicDocs({
+      docSnaps: deterministicDocSnaps,
+    });
+    if (isDraftPackage && readSnaps[readSnaps.length - 1].exists) {
+      throw new HttpsError(
+          "already-exists",
+          "Deterministic credit transaction already exists.",
+      );
+    }
+    await assertFixedPrivateRenewalNoScheduleConflicts({
+      transaction,
+      db,
+      validation,
+    });
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    if (isDraftPackage) {
+      transaction.create(packageRef, {
+        ...packageResult.data,
+        createdAt: now,
+        updatedAt: now,
+      });
+      transaction.create(creditRef, buildFixedPrivateRenewalCreditPayload({
+        validation,
+        packageId: packageResult.id,
+        packageData: packageResult.data,
+        actor,
+        now,
+      }));
+      transaction.set(summaryRef, {
+        academyId: validation.academyId,
+        studentId: plan.studentId,
+        teacherKeys: admin.firestore.FieldValue.arrayUnion(
+            ...getFixedPrivateRenewalTeacherKeys(plan),
+        ),
+        activePackageIds: admin.firestore.FieldValue.arrayUnion(
+            packageResult.id,
+        ),
+        createdAt: now,
+        updatedAt: now,
+      }, {merge: true});
+    }
+
+    if (teacherTimeStatus === "create") {
+      transaction.create(templateRef, buildFixedPrivateRenewalTemplatePayload({
+        validation,
+        actor,
+        now,
+      }));
+    } else if (teacherTimeStatus === "reactivate") {
+      transaction.update(templateRef, {
+        status: "active",
+        useForFixedAssignment: true,
+        openForStudentBooking: false,
+        sourceType: "fixed-private-renewal",
+        renewalBatchId: validation.renewalBatchIdCandidate,
+        updatedAt: now,
+        updatedByUid: actor.actorUid,
+        updatedByName: actor.actorName,
+      });
+    }
+
+    occurrenceRefs.forEach((refs) => {
+      const payloads = buildFixedPrivateRenewalOccurrencePayloads({
+        validation,
+        occurrence: refs.occurrence,
+        packageId: packageResult.id,
+        packageData: packageResult.data,
+        templateId,
+        actor,
+        now,
+      });
+      transaction.create(refs.lessonRef, payloads.lesson);
+      transaction.create(refs.slotRef, payloads.slot);
+      transaction.create(refs.reservationRef, payloads.reservation);
+    });
+
+    const created = {
+      studentPackage: isDraftPackage ? packageResult.id : "",
+      packageId: packageResult.id,
+      teacherTemplate: teacherTimeStatus === "create" ? templateId : "",
+      reactivatedTeacherTemplate:
+        teacherTimeStatus === "reactivate" ? templateId : "",
+      templateId,
+      lessons: ids.occurrences.map((occurrence) => occurrence.lessonId),
+      privateLessonSlots: ids.occurrences.map((occurrence) => {
+        return occurrence.slotId;
+      }),
+      privateLessonReservations: ids.occurrences.map((occurrence) => {
+        return occurrence.reservationId;
+      }),
+    };
+    transaction.create(batchRef, {
+      academyId: validation.academyId,
+      requestId: validation.requestId,
+      payloadHash,
+      status: "completed",
+      packageMode: plan.packageMode,
+      packageId: packageResult.id,
+      templateId,
+      assignableDates: plan.assignableDates,
+      created,
+      actor,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return {
+      ok: true,
+      committed: true,
+      idempotentReplay: false,
+      previewOnly: false,
+      dryRun: false,
+      requestId: validation.requestId,
+      idempotencyKey: validation.idempotencyKey,
+      renewalBatchIdCandidate: validation.renewalBatchIdCandidate,
+      normalizedPlan: validation.normalizedPlan,
+      warnings: validation.warnings,
+      wouldCreate: validation.wouldCreate,
+      created,
+    };
+  });
 }
 
 async function requireAcademyAdmin(db, academyId, uid) {
@@ -7610,25 +8596,23 @@ exports.createFixedPrivateLessonRenewal = onCall(
 
         const data = request.data || {};
         const validation = buildFixedPrivateRenewalPreviewValidation(data);
-        await requireAcademyAdmin(
-            admin.firestore(),
+        const db = admin.firestore();
+        const membership = await requireAcademyAdmin(
+            db,
             validation.academyId,
             request.auth.uid,
         );
 
-        // Actual persistence is intentionally disabled for this skeleton PR.
-        return {
-          ok: true,
-          previewOnly: true,
-          dryRun: true,
-          requestId: validation.requestId,
-          idempotencyKey: validation.idempotencyKey,
-          renewalBatchIdCandidate: validation.renewalBatchIdCandidate,
-          normalizedPlan: validation.normalizedPlan,
-          warnings: validation.warnings,
-          wouldCreate: validation.wouldCreate,
-          nextStep: "Actual write will be implemented in a later PR.",
-        };
+        if (!validation.commit) {
+          return buildFixedPrivateRenewalDryRunResult(validation);
+        }
+
+        return await runFixedPrivateRenewalWriteTransaction({
+          db,
+          auth: request.auth,
+          membership,
+          validation,
+        });
       } catch (error) {
         throw asHttpsError(error);
       }
