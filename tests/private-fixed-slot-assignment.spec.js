@@ -577,8 +577,16 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain('setFixedPrivateRenewalPackageId(FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID)');
   expect(dashboardSource).toContain('FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID');
   expect(dashboardSource).toContain('shouldUseDraftPackage');
+  expect(dashboardSource).toContain('selectedActualPackage');
+  expect(dashboardSource).toContain('isUsingFixedPrivateRenewalDraftPackage');
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftCount');
   expect(dashboardSource).toContain('fixedPrivateRenewalDraftPackage');
+  expect(dashboardSource).toContain('availableAssignmentCount: draftCount');
+  expect(dashboardSource).toContain('makeupAvailableCount: draftCount');
+  expect(dashboardSource).toContain('usedCount: 0');
+  expect(dashboardSource).toContain('remainingCount: draftCount');
+  expect(dashboardSource).toContain('selectedPackage?.previewOnly === true');
+  expect(dashboardSource).toContain('selectedPackage.remainingCount ?? selectedPackage.totalCount ?? 0');
   expect(dashboardSource).toContain('fixedPrivateRenewalAutoSuggestion');
   expect(dashboardSource).toContain('teacherTimePreparation');
   expect(dashboardSource).toContain('fixedPrivateRenewalTeacherTimePreparation');
@@ -608,6 +616,12 @@ test('fixed private assignment source requires package and links generated docum
   expect(dashboardSource).toContain("reason: '남은 횟수 부족'");
   expect(dashboardSource).toContain("reason: '선생님 시간 없음'");
   expect(dashboardSource).toContain("reason: '이미 예약/배정된 시간'");
+  expect(dashboardSource).toMatch(
+    /isUsingFixedPrivateRenewalDraftPackage[\s\S]*selectedPackage\.remainingCount \?\? selectedPackage\.totalCount \?\? 0[\s\S]*computePrivateTeacherPackageUsage/
+  );
+  expect(dashboardSource).toMatch(
+    /const selectedActualPackage =[\s\S]*!shouldUseDraftPackage && packageId[\s\S]*studentPackages\.find/
+  );
   expect(dashboardSource).toContain('비활성 시간표');
   expect(dashboardSource).toContain('기존 고정 수업 정보 부족');
   expect(dashboardSource).toContain('수강권 선택 필요');

@@ -6822,6 +6822,8 @@ export default function Dashboard() {
       totalCount: draftCount,
       usedCount: 0,
       remainingCount: draftCount,
+      availableAssignmentCount: draftCount,
+      makeupAvailableCount: draftCount,
       registrationStartDate: startDate,
       startDate,
       expiresAt: endDate,
@@ -6918,9 +6920,16 @@ export default function Dashboard() {
     const shouldUseDraftPackage =
       packageId === FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID ||
       (!packageId && fixedPrivateRenewalDraftPackage)
+    const selectedActualPackage =
+      !shouldUseDraftPackage && packageId
+        ? studentPackages.find((pkg) => String(pkg.id || '').trim() === packageId) || null
+        : null
     const selectedPackage = shouldUseDraftPackage
       ? fixedPrivateRenewalDraftPackage
-      : studentPackages.find((pkg) => String(pkg.id || '').trim() === packageId) || null
+      : selectedActualPackage
+    const isUsingFixedPrivateRenewalDraftPackage =
+      selectedPackage?.previewOnly === true &&
+      String(selectedPackage?.id || '').trim() === FIXED_PRIVATE_RENEWAL_DRAFT_PACKAGE_ID
     const basePlan = {
       previewOnly: true,
       seedLesson,
@@ -7116,19 +7125,28 @@ export default function Dashboard() {
       conflictFreeDates.push(date)
     })
 
-    const balance = computePrivateTeacherPackageUsage({
-      privatePackage: selectedPackage,
-      privateLessons: lessons,
-      privateReservations: privateLessonReservations,
-      academyId: currentAcademyId,
-      studentId,
-      teacher: teacherFields.teacher,
-      teacherKey: teacherFields.teacherKey,
-      teacherUid: teacherFields.teacherUid,
-      teacherUID: teacherFields.teacherUID,
-      teacherId: teacherFields.teacherId,
-    })
-    const availableAssignmentCount = Math.max(0, Number(balance.makeupAvailableCount) || 0)
+    const availableAssignmentCount = isUsingFixedPrivateRenewalDraftPackage
+      ? Math.max(
+          0,
+          Number(selectedPackage.remainingCount ?? selectedPackage.totalCount ?? 0) || 0
+        )
+      : Math.max(
+          0,
+          Number(
+            computePrivateTeacherPackageUsage({
+              privatePackage: selectedPackage,
+              privateLessons: lessons,
+              privateReservations: privateLessonReservations,
+              academyId: currentAcademyId,
+              studentId,
+              teacher: teacherFields.teacher,
+              teacherKey: teacherFields.teacherKey,
+              teacherUid: teacherFields.teacherUid,
+              teacherUID: teacherFields.teacherUID,
+              teacherId: teacherFields.teacherId,
+            }).makeupAvailableCount
+          ) || 0
+        )
     const assignableDates = conflictFreeDates.slice(0, availableAssignmentCount)
     conflictFreeDates.slice(availableAssignmentCount).forEach((date) => {
       excludedDates.push({ date, time, reason: '남은 횟수 부족' })
