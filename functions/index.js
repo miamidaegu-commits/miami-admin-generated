@@ -1714,6 +1714,12 @@ const FIXED_PRIVATE_RESCHEDULE_BLOCKED_CANCELLATION_TYPES = [
 
 // eslint-disable-next-line max-len
 const FIXED_PRIVATE_RESCHEDULE_DRY_RUN_ONLY_MESSAGE = "actual fixed private lesson reschedule is not enabled in this dry-run callable";
+// eslint-disable-next-line max-len
+const FIXED_PRIVATE_RESCHEDULE_COMMIT_GUARD_MESSAGE = "actual fixed private lesson reschedule requires commit true, dryRun false, previewOnly false";
+// eslint-disable-next-line max-len
+const FIXED_PRIVATE_RESCHEDULE_DATE_MOVE_DISABLED_MESSAGE = "fixed private reschedule date move is not enabled yet";
+// eslint-disable-next-line max-len
+const FIXED_PRIVATE_RESCHEDULE_PACKAGE_CHANGE_DISABLED_MESSAGE = "fixed private reschedule package change is not enabled yet";
 
 function getFixedPrivateRescheduleMode(data) {
   if (data && data.commit === true) {
@@ -1729,6 +1735,17 @@ function getFixedPrivateRescheduleMode(data) {
     );
   }
   return {commit: false, dryRun: true, previewOnly: true};
+}
+
+function getFixedPrivateRescheduleCommitMode(data) {
+  if (!data || data.commit !== true || data.dryRun !== false ||
+      data.previewOnly !== false) {
+    throw new HttpsError(
+        "failed-precondition",
+        FIXED_PRIVATE_RESCHEDULE_COMMIT_GUARD_MESSAGE,
+    );
+  }
+  return {commit: true, dryRun: false, previewOnly: false};
 }
 
 function requireFixedPrivateRescheduleYmd(data, fieldName) {
@@ -1855,6 +1872,76 @@ function buildFixedPrivateRescheduleValidation(data) {
     rangeEnd,
     target,
   };
+}
+
+function buildFixedPrivateRescheduleCommitValidation(data) {
+  const mode = getFixedPrivateRescheduleCommitMode(data || {});
+  const requestId = requireString(data, "requestId");
+  const academyId = requireString(data, "academyId");
+  const selectedLessonId = requireString(data, "selectedLessonId");
+  const scopeMode = normalizeId(data && data.scopeMode);
+  validateAcademyId(academyId);
+  if (!FIXED_PRIVATE_RESCHEDULE_SCOPE_MODES.includes(scopeMode)) {
+    throw new HttpsError(
+        "invalid-argument",
+        "scopeMode must be single, future_series, package_remaining, " +
+        "or date_range.",
+    );
+  }
+  let rangeStart = optionalFixedPrivateRescheduleYmd(data, "rangeStart");
+  let rangeEnd = optionalFixedPrivateRescheduleYmd(data, "rangeEnd");
+  if (scopeMode === "date_range") {
+    rangeStart = requireFixedPrivateRescheduleYmd(data, "rangeStart");
+    rangeEnd = requireFixedPrivateRescheduleYmd(data, "rangeEnd");
+    if (rangeStart > rangeEnd) {
+      throw new HttpsError(
+          "invalid-argument",
+          "rangeStart must be before or equal to rangeEnd.",
+      );
+    }
+  }
+  const target = normalizeFixedPrivateRescheduleTarget(data || {});
+  if (target.targetPackageId) {
+    throw new HttpsError(
+        "failed-precondition",
+        FIXED_PRIVATE_RESCHEDULE_PACKAGE_CHANGE_DISABLED_MESSAGE,
+    );
+  }
+  if (target.targetDate && scopeMode !== "single") {
+    throw new HttpsError(
+        "invalid-argument",
+        "targetDate is only allowed for single scope commit.",
+    );
+  }
+  const batchId = sanitizeFixedPrivateRenewalDocId(
+      `fixedPrivateReschedule_${academyId}_${requestId}`,
+  );
+  return {
+    ...mode,
+    requestId,
+    academyId,
+    selectedLessonId,
+    scopeMode,
+    rangeStart,
+    rangeEnd,
+    target,
+    batchId,
+  };
+}
+
+function buildFixedPrivateReschedulePayloadHash(validation) {
+  return hashFixedPrivateRenewalPayload({
+    requestId: validation.requestId,
+    academyId: validation.academyId,
+    selectedLessonId: validation.selectedLessonId,
+    scopeMode: validation.scopeMode,
+    rangeStart: validation.rangeStart,
+    rangeEnd: validation.rangeEnd,
+    target: validation.target,
+    commit: validation.commit,
+    dryRun: validation.dryRun,
+    previewOnly: validation.previewOnly,
+  });
 }
 
 function getFixedPrivateRescheduleLessonId(lesson) {
@@ -2811,6 +2898,753 @@ async function buildFixedPrivateReschedulePreviewResult({
       "Frontend can show this dry-run result before enabling a later " +
       "commit flow.",
   };
+}
+
+function assertFixedPrivateRescheduleCheckpointMatches({
+  checkpoint,
+  payloadHash,
+}) {
+  if (!checkpoint || checkpoint.status !== "completed") {
+    throw new HttpsError(
+        "failed-precondition",
+        "Fixed private reschedule batch is already in progress or incomplete.",
+    );
+  }
+  if (normalizeId(checkpoint.payloadHash) !== payloadHash) {
+    throw new HttpsError(
+        "already-exists",
+        "requestId was already used for a different fixed private reschedule.",
+    );
+  }
+}
+
+function buildFixedPrivateRescheduleUpdatedFromCheckpoint(checkpoint) {
+  const updated = checkpoint && checkpoint.updated ? checkpoint.updated : {};
+  return {
+    lessons: normalizeIdList(updated.lessons || checkpoint.updatedLessonIds),
+    privateLessonSlots: normalizeIdList(
+        updated.privateLessonSlots || checkpoint.updatedSlotIds,
+    ),
+    privateLessonReservations: normalizeIdList(
+        updated.privateLessonReservations ||
+        checkpoint.updatedReservationIds,
+    ),
+    teacherTemplateId: normalizeId(
+        updated.teacherTemplateId || checkpoint.teacherTemplateId,
+    ),
+    teacherTemplateAction: normalizeId(
+        updated.teacherTemplateAction || checkpoint.teacherTemplateAction,
+    ),
+  };
+}
+
+function buildFixedPrivateRescheduleResultFromCheckpoint({
+  validation,
+  checkpoint,
+}) {
+  return {
+    ok: true,
+    committed: true,
+    dryRun: false,
+    previewOnly: false,
+    requestId: validation.requestId,
+    batchId: validation.batchId,
+    idempotentReplay: true,
+    scopeMode: validation.scopeMode,
+    updated: buildFixedPrivateRescheduleUpdatedFromCheckpoint(checkpoint),
+    excludedLessons: checkpoint.excludedLessons || [],
+    warnings: checkpoint.warnings || [],
+    normalizedPlan: checkpoint.normalizedPlan || {},
+    nextStep: "Fixed private lesson schedule update completed.",
+  };
+}
+
+function getFixedPrivateRescheduleTemplateWritePlan({
+  validation,
+  teacherTimePreparation,
+}) {
+  const status = normalizeId(teacherTimePreparation &&
+    teacherTimePreparation.status);
+  if (["conflict", "missing_info", "duplicate"].includes(status)) {
+    throw new HttpsError(
+        "failed-precondition",
+        `teacherTimePreparation.status ${status} blocks reschedule.`,
+    );
+  }
+  const items = Array.isArray(teacherTimePreparation &&
+    teacherTimePreparation.items) ?
+    teacherTimePreparation.items :
+    [];
+  if (items.length !== 1) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Fixed private reschedule requires one teacher template target.",
+    );
+  }
+  const item = items[0] || {};
+  if (status === "create") {
+    return {
+      action: "create",
+      templateId: sanitizeFixedPrivateRenewalDocId(
+          `fixedPrivateRescheduleTemplate_${validation.academyId}_` +
+          validation.requestId,
+      ),
+      candidate: item.candidate || {},
+    };
+  }
+  const templateId = normalizeId(item.templateId);
+  if (!templateId) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Teacher template id is required before commit.",
+    );
+  }
+  return {
+    action: status === "reactivate" ? "reactivate" : "ready",
+    templateId,
+    candidate: item.candidate || {},
+  };
+}
+
+function throwFixedPrivateReschedulePlanError(message, details = {}) {
+  throw new HttpsError("failed-precondition", message, details);
+}
+
+function assertFixedPrivateRescheduleCommitPlan({plan, validation}) {
+  const conflicts = Array.isArray(plan.conflicts) ? plan.conflicts : [];
+  const warnings = Array.isArray(plan.warnings) ? plan.warnings : [];
+  const includedLessons = Array.isArray(plan.includedLessons) ?
+    plan.includedLessons :
+    [];
+  if (includedLessons.length === 0) {
+    throwFixedPrivateReschedulePlanError(
+        "Fixed private reschedule scope is empty.",
+        {conflicts, warnings},
+    );
+  }
+  if (conflicts.length > 0) {
+    throwFixedPrivateReschedulePlanError(
+        "Fixed private reschedule conflicts must be resolved before commit.",
+        {conflicts, warnings},
+    );
+  }
+  const templateStatus = normalizeId(plan.teacherTimePreparation &&
+    plan.teacherTimePreparation.status);
+  if (["conflict", "missing_info", "duplicate"].includes(templateStatus)) {
+    throwFixedPrivateReschedulePlanError(
+        `teacherTimePreparation.status ${templateStatus} blocks reschedule.`,
+        {conflicts, warnings},
+    );
+  }
+  const multiplePatternWarning = warnings.find((warning) => {
+    return normalizeId(warning && warning.code) ===
+      "package_scope_may_include_multiple_patterns";
+  });
+  if (multiplePatternWarning) {
+    throwFixedPrivateReschedulePlanError(
+        "package scope includes multiple patterns; use a narrower scope " +
+        "before committing",
+        {conflicts, warnings},
+    );
+  }
+  includedLessons.forEach((row) => {
+    if ((row.linkedSlotIds || []).length === 0) {
+      throwFixedPrivateReschedulePlanError(
+          "linked private lesson slot is required before commit",
+          {lessonId: row.id, conflicts, warnings},
+      );
+    }
+    if ((row.linkedReservationIds || []).length === 0) {
+      throwFixedPrivateReschedulePlanError(
+          "linked private lesson reservation is required before commit",
+          {lessonId: row.id, conflicts, warnings},
+      );
+    }
+    const targetDate = normalizeId(row.target && row.target.date);
+    if (targetDate && targetDate !== row.date) {
+      throw new HttpsError(
+          "failed-precondition",
+          FIXED_PRIVATE_RESCHEDULE_DATE_MOVE_DISABLED_MESSAGE,
+      );
+    }
+  });
+  if (validation.target && validation.target.targetPackageId) {
+    throw new HttpsError(
+        "failed-precondition",
+        FIXED_PRIVATE_RESCHEDULE_PACKAGE_CHANGE_DISABLED_MESSAGE,
+    );
+  }
+}
+
+function assertFixedPrivateRescheduleCurrentLesson({
+  row,
+  lessonSnap,
+  validation,
+}) {
+  if (!lessonSnap || !lessonSnap.exists) {
+    throw new HttpsError("not-found", "Included lesson not found.");
+  }
+  const lesson = {id: lessonSnap.id, ...lessonSnap.data()};
+  if (normalizeId(lesson.academyId) !== validation.academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Included lesson academy mismatch.",
+    );
+  }
+  const inactiveReason = getFixedPrivateRescheduleExcludedReason(lesson);
+  if (inactiveReason) {
+    throw new HttpsError(
+        "failed-precondition",
+        `Included lesson cannot be rescheduled: ${inactiveReason}.`,
+    );
+  }
+  if (getFixedPrivateRescheduleStudentId(lesson) !== row.studentId ||
+      getFixedPrivateRescheduleDate(lesson) !== row.date ||
+      getFixedPrivateRescheduleTime(lesson) !== row.time ||
+      getFixedPrivateRescheduleDuration(lesson) !== row.durationMinutes) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Included lesson changed before commit.",
+    );
+  }
+  return lesson;
+}
+
+function assertFixedPrivateRescheduleLinkedSlot({row, slotSnap}) {
+  if (!slotSnap || !slotSnap.exists) {
+    throw new HttpsError(
+        "failed-precondition",
+        "linked private lesson slot is required before commit",
+    );
+  }
+  const slot = {id: slotSnap.id, ...slotSnap.data()};
+  const slotLessonId = normalizeId(slot.lessonId || slot.fixedLessonId);
+  if (normalizeId(slot.academyId) !== row.academyId ||
+      (slotLessonId && slotLessonId !== row.id) ||
+      getPrivateRowStudentId(slot) !== row.studentId ||
+      normalizeId(slot.date) !== row.date ||
+      normalizeId(slot.time || slot.startTime) !== row.time ||
+      getPrivateScheduleDurationMinutes(slot) !== row.durationMinutes ||
+      normalizeId(slot.status).toLowerCase() !== "reserved") {
+    throw new HttpsError(
+        "failed-precondition",
+        "Linked private lesson slot changed before commit.",
+    );
+  }
+  return slot;
+}
+
+function assertFixedPrivateRescheduleLinkedReservation({row, reservationSnap}) {
+  if (!reservationSnap || !reservationSnap.exists) {
+    throw new HttpsError(
+        "failed-precondition",
+        "linked private lesson reservation is required before commit",
+    );
+  }
+  const reservation = {id: reservationSnap.id, ...reservationSnap.data()};
+  const reservationLessonId = normalizeId(
+      reservation.lessonId || reservation.fixedLessonId,
+  );
+  if (normalizeId(reservation.academyId) !== row.academyId ||
+      (reservationLessonId && reservationLessonId !== row.id) ||
+      getPrivateRowStudentId(reservation) !== row.studentId ||
+      normalizeId(reservation.date) !== row.date ||
+      normalizeId(reservation.time || reservation.startTime) !== row.time ||
+      getPrivateScheduleDurationMinutes(reservation) !== row.durationMinutes ||
+      normalizeId(reservation.status).toLowerCase() !== "active") {
+    throw new HttpsError(
+        "failed-precondition",
+        "Linked private lesson reservation changed before commit.",
+    );
+  }
+  return reservation;
+}
+
+async function loadFixedPrivateRescheduleConflictRowsInTransaction(
+    transaction,
+    db,
+    {
+      academyId,
+      dates,
+    },
+) {
+  const lessons = [];
+  const slots = [];
+  const reservations = [];
+  for (const date of dates) {
+    const [lessonSnap, slotSnap, reservationSnap] = await Promise.all([
+      transaction.get(db.collection("lessons")
+          .where("academyId", "==", academyId)
+          .where("date", "==", date)
+          .limit(500)),
+      transaction.get(db.collection("privateLessonSlots")
+          .where("academyId", "==", academyId)
+          .where("date", "==", date)
+          .limit(500)),
+      transaction.get(db.collection("privateLessonReservations")
+          .where("academyId", "==", academyId)
+          .where("date", "==", date)
+          .limit(500)),
+    ]);
+    lessonSnap.docs.forEach((docSnap) => lessons.push({
+      id: docSnap.id,
+      ...docSnap.data(),
+    }));
+    slotSnap.docs.forEach((docSnap) => slots.push({
+      id: docSnap.id,
+      ...docSnap.data(),
+    }));
+    reservationSnap.docs.forEach((docSnap) => reservations.push({
+      id: docSnap.id,
+      ...docSnap.data(),
+    }));
+  }
+  return {lessons, slots, reservations};
+}
+
+async function loadFixedPrivateReschedulePackagesInTransaction(
+    transaction,
+    db,
+    packageIds,
+) {
+  const uniquePackageIds = normalizeIdList(packageIds);
+  const packages = new Map();
+  const snaps = await Promise.all(uniquePackageIds.map((packageId) => {
+    return transaction.get(db.collection("studentPackages").doc(packageId));
+  }));
+  snaps.forEach((snap) => {
+    if (snap.exists) packages.set(snap.id, {id: snap.id, ...snap.data()});
+  });
+  return packages;
+}
+
+function buildFixedPrivateRescheduleTeacherPatch(target) {
+  const teacher = normalizeId(
+      target.teacherKey ||
+      target.teacherUid ||
+      target.teacherName ||
+      target.teacherId,
+  );
+  return {
+    teacher,
+    teacherName: normalizeId(target.teacherName || teacher),
+    teacherKey: normalizeTeacherKey(target.teacherKey || teacher),
+    teacherUid: normalizeId(target.teacherUid),
+    teacherUID: normalizeId(target.teacherUid),
+    teacherId: normalizeId(target.teacherId),
+  };
+}
+
+function buildFixedPrivateRescheduleLessonPatch({
+  row,
+  templateId,
+  batchId,
+  actor,
+  now,
+}) {
+  const target = row.target || {};
+  const startAt = timestampFromMillis(
+      getSeoulDateTimeMillis(row.date, target.time),
+  );
+  const patch = {
+    date: row.date,
+    scheduleDate: row.date,
+    time: target.time,
+    startTime: target.time,
+    scheduleTime: target.time,
+    durationMinutes: target.durationMinutes,
+    subject: target.lessonName,
+    lessonName: target.lessonName,
+    title: target.lessonName,
+    ...buildFixedPrivateRescheduleTeacherPatch(target),
+    privateLessonAvailabilityTemplateId: templateId,
+    fixedPrivateRescheduleBatchId: batchId,
+    rescheduleBatchId: batchId,
+    status: "active",
+    updatedAt: now,
+    updatedBy: actor.actorUid,
+    updatedByUid: actor.actorUid,
+    updatedByName: actor.actorName,
+  };
+  if (startAt) {
+    patch.startAt = startAt;
+    patch.startsAt = startAt;
+  }
+  return patch;
+}
+
+function buildFixedPrivateRescheduleSlotPatch({
+  row,
+  templateId,
+  batchId,
+  actor,
+  now,
+}) {
+  const target = row.target || {};
+  const startAt = timestampFromMillis(
+      getSeoulDateTimeMillis(row.date, target.time),
+  );
+  const patch = {
+    date: row.date,
+    time: target.time,
+    startTime: target.time,
+    durationMinutes: target.durationMinutes,
+    ...buildFixedPrivateRescheduleTeacherPatch(target),
+    privateLessonAvailabilityTemplateId: templateId,
+    fixedPrivateRescheduleBatchId: batchId,
+    status: "reserved",
+    openForStudentBooking: false,
+    isBookable: false,
+    useForFixedAssignment: true,
+    updatedAt: now,
+    updatedBy: actor.actorUid,
+    updatedByUid: actor.actorUid,
+    updatedByName: actor.actorName,
+  };
+  if (startAt) patch.startAt = startAt;
+  return patch;
+}
+
+function buildFixedPrivateRescheduleReservationPatch({
+  row,
+  templateId,
+  batchId,
+  actor,
+  now,
+}) {
+  const target = row.target || {};
+  return {
+    date: row.date,
+    time: target.time,
+    startTime: target.time,
+    durationMinutes: target.durationMinutes,
+    subject: target.lessonName,
+    lessonName: target.lessonName,
+    title: target.lessonName,
+    ...buildFixedPrivateRescheduleTeacherPatch(target),
+    privateLessonAvailabilityTemplateId: templateId,
+    fixedPrivateRescheduleBatchId: batchId,
+    status: "active",
+    updatedAt: now,
+    updatedBy: actor.actorUid,
+    updatedByUid: actor.actorUid,
+    updatedByName: actor.actorName,
+  };
+}
+
+function buildFixedPrivateRescheduleTemplatePayload({
+  validation,
+  templatePlan,
+  actor,
+  now,
+}) {
+  const candidate = templatePlan.candidate || {};
+  return {
+    academyId: validation.academyId,
+    teacher: candidate.teacherKey ||
+      candidate.teacherUid ||
+      candidate.teacherName,
+    teacherId: normalizeId(candidate.teacherId),
+    teacherUid: normalizeId(candidate.teacherUid),
+    teacherName: normalizeId(candidate.teacherName),
+    teacherKey: normalizeTeacherKey(candidate.teacherKey),
+    weekday: Number(candidate.weekday),
+    time: normalizeId(candidate.time),
+    startTime: normalizeId(candidate.time),
+    durationMinutes: Number(candidate.durationMinutes),
+    status: "active",
+    effectiveStartDate: normalizeId(candidate.effectiveStartDate),
+    effectiveEndDate: normalizeId(candidate.effectiveEndDate),
+    useForFixedAssignment: true,
+    openForStudentBooking: false,
+    sourceType: "fixed-private-reschedule",
+    fixedPrivateRescheduleBatchId: validation.batchId,
+    createdAt: now,
+    createdBy: actor.actorUid,
+    createdByUid: actor.actorUid,
+    createdByName: actor.actorName,
+    updatedAt: now,
+    updatedBy: actor.actorUid,
+    updatedByUid: actor.actorUid,
+    updatedByName: actor.actorName,
+  };
+}
+
+function buildFixedPrivateRescheduleCommitResult({
+  validation,
+  updated,
+  excludedLessons,
+  warnings,
+  normalizedPlan,
+  idempotentReplay = false,
+}) {
+  return {
+    ok: true,
+    committed: true,
+    dryRun: false,
+    previewOnly: false,
+    requestId: validation.requestId,
+    batchId: validation.batchId,
+    idempotentReplay,
+    scopeMode: validation.scopeMode,
+    updated,
+    excludedLessons,
+    warnings,
+    normalizedPlan,
+    nextStep: "Fixed private lesson schedule update completed.",
+  };
+}
+
+async function runFixedPrivateRescheduleWriteTransaction({
+  db,
+  auth,
+  membership,
+  validation,
+}) {
+  const initialPlan = await buildFixedPrivateReschedulePreviewResult({
+    db,
+    validation,
+  });
+  assertFixedPrivateRescheduleCommitPlan({plan: initialPlan, validation});
+  const payloadHash = buildFixedPrivateReschedulePayloadHash(validation);
+  const actor = buildAdminActorContext(auth, membership);
+  const batchRef = db.collection("fixedPrivateRescheduleBatches")
+      .doc(validation.batchId);
+  return db.runTransaction(async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (batchSnap.exists) {
+      const checkpoint = batchSnap.data() || {};
+      assertFixedPrivateRescheduleCheckpointMatches({
+        checkpoint,
+        payloadHash,
+      });
+      return buildFixedPrivateRescheduleResultFromCheckpoint({
+        validation,
+        checkpoint,
+      });
+    }
+
+    const includedLessons = initialPlan.includedLessons || [];
+    const includedLessonIds = includedLessons.map((row) => row.id);
+    const updatedSlotIds = normalizeIdList(includedLessons.flatMap((row) => {
+      return row.linkedSlotIds || [];
+    }));
+    const updatedReservationIds = normalizeIdList(
+        includedLessons.flatMap((row) => {
+          return row.linkedReservationIds || [];
+        }),
+    );
+    const lessonSnaps = await Promise.all(includedLessonIds.map((lessonId) => {
+      return transaction.get(db.collection("lessons").doc(lessonId));
+    }));
+    const slotSnaps = await Promise.all(updatedSlotIds.map((slotId) => {
+      return transaction.get(db.collection("privateLessonSlots").doc(slotId));
+    }));
+    const reservationSnaps = await Promise.all(updatedReservationIds.map(
+        (reservationId) => {
+          return transaction.get(
+              db.collection("privateLessonReservations").doc(reservationId),
+          );
+        },
+    ));
+    const lessonSnapById = new Map(lessonSnaps.map((snap) => [snap.id, snap]));
+    const slotSnapById = new Map(slotSnaps.map((snap) => [snap.id, snap]));
+    const reservationSnapById =
+      new Map(reservationSnaps.map((snap) => [snap.id, snap]));
+
+    includedLessons.forEach((row) => {
+      assertFixedPrivateRescheduleCurrentLesson({
+        row,
+        lessonSnap: lessonSnapById.get(row.id),
+        validation,
+      });
+      (row.linkedSlotIds || []).forEach((slotId) => {
+        assertFixedPrivateRescheduleLinkedSlot({
+          row,
+          slotSnap: slotSnapById.get(slotId),
+        });
+      });
+      (row.linkedReservationIds || []).forEach((reservationId) => {
+        assertFixedPrivateRescheduleLinkedReservation({
+          row,
+          reservationSnap: reservationSnapById.get(reservationId),
+        });
+      });
+    });
+
+    const targetDates = normalizeIdList(includedLessons.map((row) => {
+      return row.target && row.target.date;
+    }));
+    const [templateSnap, conflictRows, packages] = await Promise.all([
+      transaction.get(db.collection("privateLessonAvailabilityTemplates")
+          .where("academyId", "==", validation.academyId)
+          .limit(500)),
+      loadFixedPrivateRescheduleConflictRowsInTransaction(
+          transaction,
+          db,
+          {
+            academyId: validation.academyId,
+            dates: targetDates,
+          },
+      ),
+      loadFixedPrivateReschedulePackagesInTransaction(
+          transaction,
+          db,
+          includedLessons.map((row) => row.target && row.target.packageId),
+      ),
+    ]);
+    const templates = templateSnap.docs.map((docSnap) => {
+      return {id: docSnap.id, ...docSnap.data()};
+    });
+    const teacherTimePreparation =
+      buildFixedPrivateRescheduleTeacherTimePreparation({
+        templates,
+        includedLessons,
+      });
+    const conflictGuardConflicts = buildFixedPrivateRescheduleConflicts({
+      includedLessons,
+      conflictRows,
+    });
+    const packageGuard = buildFixedPrivateReschedulePackageConflicts({
+      academyId: validation.academyId,
+      includedLessons,
+      packages,
+    });
+    const warnings = [
+      ...(initialPlan.warnings || []),
+      ...packageGuard.warnings,
+    ];
+    const transactionPlan = {
+      ...initialPlan,
+      teacherTimePreparation,
+      conflicts: [
+        ...teacherTimePreparation.conflicts,
+        ...conflictGuardConflicts,
+        ...packageGuard.conflicts,
+      ],
+      warnings,
+    };
+    assertFixedPrivateRescheduleCommitPlan({
+      plan: transactionPlan,
+      validation,
+    });
+
+    const templatePlan = getFixedPrivateRescheduleTemplateWritePlan({
+      validation,
+      teacherTimePreparation,
+    });
+    const templateRef = db.collection("privateLessonAvailabilityTemplates")
+        .doc(templatePlan.templateId);
+    if (templatePlan.action === "create") {
+      const newTemplateSnap = await transaction.get(templateRef);
+      if (newTemplateSnap.exists) {
+        throw new HttpsError(
+            "already-exists",
+            "Deterministic teacher template already exists.",
+        );
+      }
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    if (templatePlan.action === "create") {
+      transaction.set(templateRef, buildFixedPrivateRescheduleTemplatePayload({
+        validation,
+        templatePlan,
+        actor,
+        now,
+      }));
+    } else if (templatePlan.action === "reactivate") {
+      transaction.update(templateRef, {
+        status: "active",
+        useForFixedAssignment: true,
+        openForStudentBooking: false,
+        fixedPrivateRescheduleBatchId: validation.batchId,
+        updatedAt: now,
+        updatedBy: actor.actorUid,
+        updatedByUid: actor.actorUid,
+        updatedByName: actor.actorName,
+      });
+    }
+
+    includedLessons.forEach((row) => {
+      transaction.update(
+          db.collection("lessons").doc(row.id),
+          buildFixedPrivateRescheduleLessonPatch({
+            row,
+            templateId: templatePlan.templateId,
+            batchId: validation.batchId,
+            actor,
+            now,
+          }),
+      );
+      (row.linkedSlotIds || []).forEach((slotId) => {
+        transaction.update(
+            db.collection("privateLessonSlots").doc(slotId),
+            buildFixedPrivateRescheduleSlotPatch({
+              row,
+              templateId: templatePlan.templateId,
+              batchId: validation.batchId,
+              actor,
+              now,
+            }),
+        );
+      });
+      (row.linkedReservationIds || []).forEach((reservationId) => {
+        transaction.update(
+            db.collection("privateLessonReservations").doc(reservationId),
+            buildFixedPrivateRescheduleReservationPatch({
+              row,
+              templateId: templatePlan.templateId,
+              batchId: validation.batchId,
+              actor,
+              now,
+            }),
+        );
+      });
+    });
+
+    const updated = {
+      lessons: includedLessonIds,
+      privateLessonSlots: updatedSlotIds,
+      privateLessonReservations: updatedReservationIds,
+      teacherTemplateId: templatePlan.templateId,
+      teacherTemplateAction: templatePlan.action,
+    };
+    const checkpoint = {
+      academyId: validation.academyId,
+      requestId: validation.requestId,
+      payloadHash,
+      status: "completed",
+      selectedLessonId: validation.selectedLessonId,
+      scopeMode: validation.scopeMode,
+      includedLessonIds,
+      excludedLessons: initialPlan.excludedLessons || [],
+      updatedLessonIds: updated.lessons,
+      updatedSlotIds: updated.privateLessonSlots,
+      updatedReservationIds: updated.privateLessonReservations,
+      teacherTemplateId: templatePlan.templateId,
+      teacherTemplateAction: templatePlan.action,
+      target: validation.target,
+      updated,
+      warnings,
+      normalizedPlan: initialPlan.normalizedPlan || {},
+      sourceType: "fixed-private-reschedule",
+      createdAt: now,
+      createdBy: actor.actorUid,
+      createdByUid: actor.actorUid,
+      createdByName: actor.actorName,
+      completedAt: now,
+    };
+    transaction.set(batchRef, checkpoint);
+
+    return buildFixedPrivateRescheduleCommitResult({
+      validation,
+      updated,
+      excludedLessons: checkpoint.excludedLessons,
+      warnings,
+      normalizedPlan: checkpoint.normalizedPlan,
+    });
+  });
 }
 
 async function requireAcademyAdmin(db, academyId, uid) {
@@ -9733,6 +10567,43 @@ exports.previewFixedPrivateLessonRescheduleScope = onCall({
     );
     return await buildFixedPrivateReschedulePreviewResult({
       db,
+      validation,
+    });
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+exports.updateFixedPrivateLessonScheduleScope = onCall({
+  region: REGION,
+  cors: true,
+}, async (request) => {
+  try {
+    // Static guard: commit !== true dryRun !== false previewOnly !== false.
+    // Static guard: requestId selectedLessonId scopeMode.
+    // Static guard: fixedPrivateRescheduleBatches payloadHash.
+    // Static guard: idempotentReplay.
+    // Static guard: runTransaction transaction.get.
+    // Static guard: transaction.set transaction.update.
+    // Static guard: lessons privateLessonSlots privateLessonReservations.
+    // Static guard: teacherTimePreparation teacherTemplateAction.
+    // Static guard: normalizedPlan.
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required.");
+    }
+
+    const data = request.data || {};
+    const validation = buildFixedPrivateRescheduleCommitValidation(data);
+    const db = admin.firestore();
+    const membership = await requireAcademyAdmin(
+        db,
+        validation.academyId,
+        request.auth.uid,
+    );
+    return await runFixedPrivateRescheduleWriteTransaction({
+      db,
+      auth: request.auth,
+      membership,
       validation,
     });
   } catch (error) {

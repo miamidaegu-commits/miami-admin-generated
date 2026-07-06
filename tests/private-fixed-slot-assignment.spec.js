@@ -1265,7 +1265,7 @@ test('fixed private reschedule dry-run callable is bounded and read-only', () =>
     'exports.previewFixedPrivateLessonRescheduleScope = onCall('
   );
   const callableEnd = functionsSource.indexOf(
-    'exports.createFixedPrivateLessonRenewal = onCall(',
+    'exports.updateFixedPrivateLessonScheduleScope = onCall(',
     callableStart
   );
   expect(helperStart).toBeGreaterThanOrEqual(0);
@@ -1344,6 +1344,117 @@ test('fixed private reschedule dry-run callable is bounded and read-only', () =>
   expect(rescheduleCallableBlock).not.toContain('previewOnly: false');
 
   const protectedPaths = [
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  expect(changedProtectedFiles).toEqual([]);
+});
+
+test('fixed private reschedule commit callable uses guarded transaction write mode', () => {
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const helperStart = functionsSource.indexOf('const FIXED_PRIVATE_RESCHEDULE_SCOPE_MODES');
+  const helperEnd = functionsSource.indexOf('async function requireAcademyAdmin', helperStart);
+  const previewCallableStart = functionsSource.indexOf(
+    'exports.previewFixedPrivateLessonRescheduleScope = onCall('
+  );
+  const commitCallableStart = functionsSource.indexOf(
+    'exports.updateFixedPrivateLessonScheduleScope = onCall('
+  );
+  const commitCallableEnd = functionsSource.indexOf(
+    'exports.createFixedPrivateLessonRenewal = onCall(',
+    commitCallableStart
+  );
+  expect(helperStart).toBeGreaterThanOrEqual(0);
+  expect(helperEnd).toBeGreaterThan(helperStart);
+  expect(previewCallableStart).toBeGreaterThanOrEqual(0);
+  expect(commitCallableStart).toBeGreaterThan(previewCallableStart);
+  expect(commitCallableEnd).toBeGreaterThan(commitCallableStart);
+
+  const rescheduleHelperSource = functionsSource.slice(helperStart, helperEnd);
+  const previewCallableBlock = functionsSource.slice(previewCallableStart, commitCallableStart);
+  const commitCallableBlock = functionsSource.slice(commitCallableStart, commitCallableEnd);
+  const writeSkeletonSource = `${rescheduleHelperSource}\n${commitCallableBlock}`;
+
+  [
+    'updateFixedPrivateLessonScheduleScope',
+    'requireAcademyAdmin',
+    'fixedPrivateRescheduleBatches',
+    'fixedPrivateReschedule_',
+    'payloadHash',
+    'idempotentReplay',
+    'committed',
+    'dryRun: false',
+    'previewOnly: false',
+    'commit: true',
+    'actual fixed private lesson reschedule requires commit true, dryRun false, previewOnly false',
+    'fixed private reschedule date move is not enabled yet',
+    'fixed private reschedule package change is not enabled yet',
+    'package scope includes multiple patterns',
+    'linked private lesson slot is required before commit',
+    'linked private lesson reservation is required before commit',
+    'fixedPrivateRescheduleBatchId',
+    'rescheduleBatchId',
+    'transaction.get',
+    'transaction.update',
+    'transaction.set',
+    'useForFixedAssignment',
+    'openForStudentBooking',
+    'status: "completed"',
+    'runFixedPrivateRescheduleWriteTransaction',
+    'buildFixedPrivateRescheduleCommitValidation',
+    'buildFixedPrivateReschedulePayloadHash',
+    'assertFixedPrivateRescheduleCheckpointMatches',
+    'buildFixedPrivateRescheduleResultFromCheckpoint',
+    'buildFixedPrivateRescheduleTemplatePayload',
+    'privateLessonSlots',
+    'privateLessonReservations',
+    'teacherTemplateAction',
+    'privateLessonAvailabilityTemplates',
+  ].forEach((token) => {
+    expect(writeSkeletonSource).toContain(token);
+  });
+  expect(writeSkeletonSource).toContain('data.commit !== true');
+  expect(writeSkeletonSource).toContain('data.dryRun !== false');
+  expect(writeSkeletonSource).toContain('data.previewOnly !== false');
+  expect(writeSkeletonSource).toContain('target.targetPackageId');
+  expect(writeSkeletonSource).toContain('targetDate && targetDate !== row.date');
+  expect(writeSkeletonSource).toContain('db.runTransaction');
+
+  [
+    'writeBatch',
+    'runTransaction',
+    '.set(',
+    '.update(',
+    '.delete(',
+    '.create(',
+    '.add(',
+    'transaction.set',
+    'transaction.update',
+    'transaction.create',
+    'transaction.delete',
+  ].forEach((writeToken) => {
+    expect(previewCallableBlock).not.toContain(writeToken);
+  });
+  expect(previewCallableBlock).not.toContain('commit: true');
+  expect(previewCallableBlock).not.toContain('dryRun: false');
+  expect(previewCallableBlock).not.toContain('previewOnly: false');
+
+  const protectedPaths = [
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -1518,7 +1629,6 @@ test('fixed private reschedule frontend calls dry-run preview only', () => {
   });
 
   const protectedPaths = [
-    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',
