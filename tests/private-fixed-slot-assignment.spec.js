@@ -1143,6 +1143,74 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-created-lesson-row');
   expect(privateSlotsSectionSource).toContain('private-fixed-renewal-created-lesson-badge');
   expect(privateSlotsSectionSource).toContain('private-fixed-lesson-row');
+  [
+    '수정 범위 미리보기',
+    '고정 수업 수정 범위 미리보기',
+    '이 수업만 수정',
+    '이 날짜부터 이후 고정 수업에 적용',
+    '이 수강권 안의 남은 고정 수업에 적용',
+    '직접 날짜 범위 선택',
+    '아직 저장하지 않습니다',
+    '실제 수정은 다음 단계에서 제공합니다',
+    '저장 전 서버 검증이 필요합니다',
+    'selectedFixedRescheduleLesson',
+    'fixedRescheduleScopeMode',
+    'showFixedRescheduleScopePreview',
+    'private-fixed-reschedule-scope-preview-open',
+    'private-fixed-reschedule-scope-preview-panel',
+    'private-fixed-reschedule-scope-mode-single',
+    'private-fixed-reschedule-scope-mode-future-series',
+    'private-fixed-reschedule-scope-mode-package-remaining',
+    'private-fixed-reschedule-scope-mode-date-range',
+    'private-fixed-reschedule-scope-preview-result',
+    'private-fixed-reschedule-scope-included-count',
+    'private-fixed-reschedule-scope-excluded-count',
+    'private-fixed-reschedule-scope-included-row',
+    'private-fixed-reschedule-scope-warning',
+    'private-fixed-reschedule-scope-no-write-note',
+    'private-fixed-reschedule-scope-close',
+  ].forEach((token) => {
+    expect(privateSlotsSectionSource).toContain(token);
+  });
+  const rescheduleHelperStart = privateSlotsSectionSource.indexOf(
+    'function getFixedRescheduleStudentId'
+  );
+  const reschedulePreviewPanelStart = privateSlotsSectionSource.indexOf(
+    'private-fixed-reschedule-scope-preview-panel'
+  );
+  const reschedulePreviewPanelEnd = privateSlotsSectionSource.indexOf(
+    '{fixedPrivateLessonAction ?',
+    reschedulePreviewPanelStart
+  );
+  expect(rescheduleHelperStart).toBeGreaterThanOrEqual(0);
+  expect(reschedulePreviewPanelStart).toBeGreaterThan(rescheduleHelperStart);
+  expect(reschedulePreviewPanelEnd).toBeGreaterThan(reschedulePreviewPanelStart);
+  const rescheduleScopeSource = [
+    privateSlotsSectionSource.slice(rescheduleHelperStart, rescheduleHelperStart + 5500),
+    privateSlotsSectionSource.slice(reschedulePreviewPanelStart, reschedulePreviewPanelEnd),
+  ].join('\n');
+  [
+    'createFixedPrivateLessonRenewal',
+    'updateFixedPrivateLessonScheduleScope',
+    'rescheduleFixedPrivateLessons',
+    'commit: true',
+    'runTransaction',
+    'writeBatch',
+    'updateDoc',
+    'setDoc',
+    'addDoc',
+    'deleteDoc',
+  ].forEach((token) => {
+    expect(rescheduleScopeSource).not.toContain(token);
+  });
+  const rescheduleButtonLabels = Array.from(
+    rescheduleScopeSource.matchAll(/<button[\s\S]*?<\/button>/g)
+  ).map((match) => match[0].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+  ['저장', '수정 저장', '범위 수정 실행', '이 범위로 수정', '고정 수업 수정 실행'].forEach(
+    (label) => {
+      expect(rescheduleButtonLabels).not.toContain(label);
+    }
+  );
   expect(privateSlotsSectionSource).not.toContain('private-fixed-renewal-submit-button');
   expect(privateSlotsSectionSource).not.toContain('>연장 저장<');
   expect(privateSlotsSectionSource).not.toContain('>연장 생성<');
