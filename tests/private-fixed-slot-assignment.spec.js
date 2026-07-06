@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
 import {
@@ -1254,6 +1255,114 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
   expect(outsideCommitHandlerSource).not.toContain('commit: true');
   expect(outsideCommitHandlerSource).not.toContain('dryRun: false');
   expect(outsideCommitHandlerSource).not.toContain('previewOnly: false');
+});
+
+test('fixed private reschedule dry-run callable is bounded and read-only', () => {
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const helperStart = functionsSource.indexOf('const FIXED_PRIVATE_RESCHEDULE_SCOPE_MODES');
+  const helperEnd = functionsSource.indexOf('async function requireAcademyAdmin', helperStart);
+  const callableStart = functionsSource.indexOf(
+    'exports.previewFixedPrivateLessonRescheduleScope = onCall('
+  );
+  const callableEnd = functionsSource.indexOf(
+    'exports.createFixedPrivateLessonRenewal = onCall(',
+    callableStart
+  );
+  expect(helperStart).toBeGreaterThanOrEqual(0);
+  expect(helperEnd).toBeGreaterThan(helperStart);
+  expect(callableStart).toBeGreaterThanOrEqual(0);
+  expect(callableEnd).toBeGreaterThan(callableStart);
+
+  const rescheduleSkeletonSource = [
+    functionsSource.slice(helperStart, helperEnd),
+    functionsSource.slice(callableStart, callableEnd),
+  ].join('\n');
+  const rescheduleCallableBlock = functionsSource.slice(callableStart, callableEnd);
+
+  [
+    'previewFixedPrivateLessonRescheduleScope',
+    'requireAcademyAdmin',
+    'dryRun',
+    'previewOnly',
+    'commit',
+    'selectedLessonId',
+    'scopeMode',
+    'single',
+    'future_series',
+    'package_remaining',
+    'date_range',
+    'includedLessons',
+    'excludedLessons',
+    'teacherTimePreparation',
+    'wouldUpdate',
+    'conflicts',
+    'warnings',
+    'normalizedPlan',
+    'nextStep',
+    'targetDate',
+    'targetTime',
+    'targetDurationMinutes',
+    'linked_slot_missing',
+    'linked_reservation_missing',
+    'package_scope_may_include_multiple_patterns',
+    'actual fixed private lesson reschedule is not enabled in this dry-run callable',
+    'no_target_change_requested',
+    'buildFixedPrivateReschedulePreviewResult',
+    'buildFixedPrivateRescheduleValidation',
+    'privateLessonSlots',
+    'privateLessonReservations',
+    'privateLessonAvailabilityTemplates',
+    'studentPackages',
+  ].forEach((token) => {
+    expect(rescheduleSkeletonSource).toContain(token);
+  });
+
+  expect(rescheduleSkeletonSource).toContain('data.commit === true');
+  expect(rescheduleSkeletonSource).toContain('data.dryRun !== true');
+  expect(rescheduleSkeletonSource).toContain('data.previewOnly !== true');
+  ['single', 'future_series', 'package_remaining', 'date_range'].forEach((scopeMode) => {
+    expect(rescheduleSkeletonSource).toContain(`"${scopeMode}"`);
+  });
+
+  [
+    'writeBatch',
+    'runTransaction',
+    '.set(',
+    '.update(',
+    '.delete(',
+    '.create(',
+    '.add(',
+    'transaction.set',
+    'transaction.update',
+    'transaction.create',
+    'transaction.delete',
+  ].forEach((writeToken) => {
+    expect(rescheduleCallableBlock).not.toContain(writeToken);
+  });
+  expect(rescheduleCallableBlock).not.toContain('commit: true');
+  expect(rescheduleCallableBlock).not.toContain('dryRun: false');
+  expect(rescheduleCallableBlock).not.toContain('previewOnly: false');
+
+  const protectedPaths = [
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  expect(changedProtectedFiles).toEqual([]);
 });
 
 test('admin can assign fixed private lessons from a weekly template', async ({
