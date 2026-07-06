@@ -587,6 +587,12 @@ export default function PrivateLessonSlotsSection({
   fixedPrivateRenewalServerPreviewDisabledReason = '',
   previewFixedPrivateRenewalOnServer,
   onCommitFixedPrivateRenewal,
+  fixedRescheduleServerPreview = null,
+  fixedRescheduleServerPreviewBusy = false,
+  fixedRescheduleServerPreviewError = '',
+  fixedRescheduleServerPreviewPayload = null,
+  onPreviewFixedRescheduleScopeOnServer,
+  onClearFixedRescheduleServerPreview,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -749,8 +755,13 @@ export default function PrivateLessonSlotsSection({
     setTimeout(scrollToCreatedLessons, 0)
   }
 
+  function clearFixedRescheduleServerPreview() {
+    onClearFixedRescheduleServerPreview?.()
+  }
+
   function openFixedRescheduleScopePreview(lesson) {
     const date = getFixedRescheduleLessonDate(lesson)
+    clearFixedRescheduleServerPreview()
     setSelectedFixedRescheduleLesson(lesson)
     setFixedRescheduleScopeMode('single')
     setFixedRescheduleRangeStart(date)
@@ -759,7 +770,33 @@ export default function PrivateLessonSlotsSection({
   }
 
   function closeFixedRescheduleScopePreview() {
+    clearFixedRescheduleServerPreview()
     setShowFixedRescheduleScopePreview(false)
+  }
+
+  function changeFixedRescheduleScopeMode(nextScopeMode) {
+    clearFixedRescheduleServerPreview()
+    setFixedRescheduleScopeMode(nextScopeMode)
+  }
+
+  function changeFixedRescheduleRangeStart(nextRangeStart) {
+    clearFixedRescheduleServerPreview()
+    setFixedRescheduleRangeStart(nextRangeStart)
+  }
+
+  function changeFixedRescheduleRangeEnd(nextRangeEnd) {
+    clearFixedRescheduleServerPreview()
+    setFixedRescheduleRangeEnd(nextRangeEnd)
+  }
+
+  function previewFixedRescheduleScopeOnServer() {
+    if (fixedRescheduleServerPreviewDisabledReason) return
+    onPreviewFixedRescheduleScopeOnServer?.({
+      selectedLesson: selectedFixedRescheduleLesson,
+      scopeMode: fixedRescheduleScopeMode,
+      rangeStart: fixedRescheduleRangeStart,
+      rangeEnd: fixedRescheduleRangeEnd,
+    })
   }
 
   function openAvailabilityTemplateEdit(template) {
@@ -1047,6 +1084,45 @@ export default function PrivateLessonSlotsSection({
     selectedFixedRescheduleLesson,
     sortedFixedPrivateLessons,
   ])
+  const fixedRescheduleServerPreviewDisabledReason = useMemo(() => {
+    if (fixedRescheduleServerPreviewBusy) return '서버 기준 검증 중입니다.'
+    if (!selectedFixedRescheduleLesson) return '서버 검증에 사용할 고정 수업을 선택해 주세요.'
+    if (!fixedRescheduleScopeMode) return '수정 범위를 선택해 주세요.'
+    if (
+      fixedRescheduleScopeMode === 'date_range' &&
+      (!isYmd(fixedRescheduleRangeStart) ||
+        !isYmd(fixedRescheduleRangeEnd) ||
+        fixedRescheduleRangeEnd < fixedRescheduleRangeStart)
+    ) {
+      return '직접 날짜 범위의 시작일과 종료일을 확인해 주세요.'
+    }
+    if (typeof onPreviewFixedRescheduleScopeOnServer !== 'function') {
+      return '서버 기준 범위 검증을 실행할 수 없습니다.'
+    }
+    return ''
+  }, [
+    fixedRescheduleRangeEnd,
+    fixedRescheduleRangeStart,
+    fixedRescheduleScopeMode,
+    fixedRescheduleServerPreviewBusy,
+    onPreviewFixedRescheduleScopeOnServer,
+    selectedFixedRescheduleLesson,
+  ])
+  const fixedRescheduleServerPreviewConflicts = Array.isArray(
+    fixedRescheduleServerPreview?.conflicts
+  )
+    ? fixedRescheduleServerPreview.conflicts
+    : []
+  const fixedRescheduleServerPreviewWarnings = Array.isArray(
+    fixedRescheduleServerPreview?.warnings
+  )
+    ? fixedRescheduleServerPreview.warnings
+    : []
+  const fixedRescheduleServerPreviewWouldUpdate =
+    fixedRescheduleServerPreview?.wouldUpdate || {}
+  const fixedRescheduleServerPreviewPlan = fixedRescheduleServerPreview?.normalizedPlan || {}
+  const fixedRescheduleServerPreviewTeacherTime =
+    fixedRescheduleServerPreview?.teacherTimePreparation || {}
 
   const selectedPrivateBoardTeacherOption = useMemo(() => {
     if (teacherSelectOptions.length === 0) return null
@@ -4872,7 +4948,7 @@ export default function PrivateLessonSlotsSection({
                   name="fixed-reschedule-scope-mode"
                   value="single"
                   checked={fixedRescheduleScopeMode === 'single'}
-                  onChange={() => setFixedRescheduleScopeMode('single')}
+                  onChange={() => changeFixedRescheduleScopeMode('single')}
                   data-testid="private-fixed-reschedule-scope-mode-single"
                 />
                 이 수업만 수정
@@ -4883,7 +4959,7 @@ export default function PrivateLessonSlotsSection({
                   name="fixed-reschedule-scope-mode"
                   value="future_series"
                   checked={fixedRescheduleScopeMode === 'future_series'}
-                  onChange={() => setFixedRescheduleScopeMode('future_series')}
+                  onChange={() => changeFixedRescheduleScopeMode('future_series')}
                   data-testid="private-fixed-reschedule-scope-mode-future-series"
                 />
                 이 날짜부터 이후 고정 수업에 적용
@@ -4894,7 +4970,7 @@ export default function PrivateLessonSlotsSection({
                   name="fixed-reschedule-scope-mode"
                   value="package_remaining"
                   checked={fixedRescheduleScopeMode === 'package_remaining'}
-                  onChange={() => setFixedRescheduleScopeMode('package_remaining')}
+                  onChange={() => changeFixedRescheduleScopeMode('package_remaining')}
                   data-testid="private-fixed-reschedule-scope-mode-package-remaining"
                 />
                 이 수강권 안의 남은 고정 수업에 적용
@@ -4905,7 +4981,7 @@ export default function PrivateLessonSlotsSection({
                   name="fixed-reschedule-scope-mode"
                   value="date_range"
                   checked={fixedRescheduleScopeMode === 'date_range'}
-                  onChange={() => setFixedRescheduleScopeMode('date_range')}
+                  onChange={() => changeFixedRescheduleScopeMode('date_range')}
                   data-testid="private-fixed-reschedule-scope-mode-date-range"
                 />
                 직접 날짜 범위 선택
@@ -4926,7 +5002,7 @@ export default function PrivateLessonSlotsSection({
                   <input
                     type="date"
                     value={fixedRescheduleRangeStart}
-                    onChange={(event) => setFixedRescheduleRangeStart(event.target.value)}
+                    onChange={(event) => changeFixedRescheduleRangeStart(event.target.value)}
                     style={{
                       padding: '8px 10px',
                       borderRadius: 8,
@@ -4941,7 +5017,7 @@ export default function PrivateLessonSlotsSection({
                   <input
                     type="date"
                     value={fixedRescheduleRangeEnd}
-                    onChange={(event) => setFixedRescheduleRangeEnd(event.target.value)}
+                    onChange={(event) => changeFixedRescheduleRangeEnd(event.target.value)}
                     style={{
                       padding: '8px 10px',
                       borderRadius: 8,
@@ -5043,6 +5119,175 @@ export default function PrivateLessonSlotsSection({
                       {getFixedRescheduleLessonTime(lesson) || '-'} · {reason}
                     </span>
                   ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div
+              data-testid="private-fixed-reschedule-server-preview-no-write-note"
+              style={{
+                display: 'grid',
+                gap: 4,
+                padding: 12,
+                border: '1px solid #3b4252',
+                borderRadius: 8,
+                background: '#111722',
+                color: '#d7def0',
+                fontSize: 13,
+                lineHeight: 1.6,
+                marginTop: 12,
+              }}
+            >
+              <span>이 단계에서는 저장하지 않습니다.</span>
+              <span>서버 기준으로 변경 범위를 검증합니다.</span>
+              <span>실제 수정은 다음 단계에서 제공합니다.</span>
+              <span>수업, 슬롯, 예약 문서는 아직 수정되지 않습니다.</span>
+            </div>
+
+            <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  data-testid="private-fixed-reschedule-server-preview-button"
+                  onClick={previewFixedRescheduleScopeOnServer}
+                  disabled={Boolean(fixedRescheduleServerPreviewDisabledReason)}
+                  style={{
+                    padding: '9px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #60a5fa',
+                    background: fixedRescheduleServerPreviewDisabledReason ? '#1f2937' : '#2563eb',
+                    color: fixedRescheduleServerPreviewDisabledReason ? '#9ca3af' : 'white',
+                    cursor: fixedRescheduleServerPreviewDisabledReason ? 'not-allowed' : 'pointer',
+                    fontWeight: 700,
+                  }}
+                >
+                  {fixedRescheduleServerPreviewBusy ? (
+                    <span data-testid="private-fixed-reschedule-server-preview-loading">
+                      서버 기준 검증 중...
+                    </span>
+                  ) : (
+                    '서버 기준 범위 검증'
+                  )}
+                </button>
+                <span style={{ opacity: 0.72, fontSize: 12, lineHeight: 1.5 }}>
+                  서버 데이터 기준으로 포함/제외 수업과 충돌 여부를 다시 확인합니다.
+                </span>
+              </div>
+
+              {fixedRescheduleServerPreviewDisabledReason &&
+              !fixedRescheduleServerPreviewBusy ? (
+                <span style={{ color: '#f5c17a', fontSize: 12 }}>
+                  {fixedRescheduleServerPreviewDisabledReason}
+                </span>
+              ) : null}
+
+              {fixedRescheduleServerPreviewError ? (
+                <div
+                  data-testid="private-fixed-reschedule-server-preview-error"
+                  style={{
+                    padding: 12,
+                    border: '1px solid #7f1d1d',
+                    borderRadius: 8,
+                    background: '#2b1111',
+                    color: '#fecaca',
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {fixedRescheduleServerPreviewError}
+                </div>
+              ) : null}
+
+              {fixedRescheduleServerPreview ? (
+                <div
+                  data-testid="private-fixed-reschedule-server-preview-result"
+                  style={{
+                    display: 'grid',
+                    gap: 10,
+                    padding: 12,
+                    border: '1px solid #294064',
+                    borderRadius: 8,
+                    background: '#101724',
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <strong>서버 기준 범위 검증 결과</strong>
+                  <div data-testid="private-fixed-reschedule-server-preview-ok">
+                    {fixedRescheduleServerPreview.ok ? '통과' : '확인 필요'} · dryRun{' '}
+                    {fixedRescheduleServerPreview.dryRun ? 'true' : 'false'} · previewOnly{' '}
+                    {fixedRescheduleServerPreview.previewOnly ? 'true' : 'false'}
+                  </div>
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <span data-testid="private-fixed-reschedule-server-preview-included-count">
+                      포함 {fixedRescheduleServerPreview.includedLessons?.length || 0}건
+                    </span>
+                    <span data-testid="private-fixed-reschedule-server-preview-excluded-count">
+                      제외 {fixedRescheduleServerPreview.excludedLessons?.length || 0}건
+                    </span>
+                  </div>
+                  <div data-testid="private-fixed-reschedule-server-preview-would-update">
+                    wouldUpdate: lessons {Number(fixedRescheduleServerPreviewWouldUpdate.lessons || 0)} ·
+                    slots {Number(fixedRescheduleServerPreviewWouldUpdate.privateLessonSlots || 0)} ·
+                    reservations{' '}
+                    {Number(fixedRescheduleServerPreviewWouldUpdate.privateLessonReservations || 0)} ·
+                    template {fixedRescheduleServerPreviewWouldUpdate.teacherTemplateAction || '-'}
+                  </div>
+                  <div data-testid="private-fixed-reschedule-server-preview-teacher-time">
+                    teacherTimePreparation: {fixedRescheduleServerPreviewTeacherTime.status || '-'}
+                  </div>
+                  <div data-testid="private-fixed-reschedule-server-preview-normalized-plan">
+                    normalizedPlan: {fixedRescheduleServerPreviewPlan.scopeMode || '-'} · count{' '}
+                    {Number(fixedRescheduleServerPreviewPlan.count || 0)} · from{' '}
+                    {fixedRescheduleServerPreviewPlan.from || '-'} · to{' '}
+                    {fixedRescheduleServerPreviewPlan.to || '-'}
+                    {fixedRescheduleServerPreviewPayload?.requestId ? (
+                      <> · requestId {fixedRescheduleServerPreviewPayload.requestId}</>
+                    ) : null}
+                  </div>
+                  {fixedRescheduleServerPreviewConflicts.length > 0 ? (
+                    <div style={{ display: 'grid', gap: 4, color: '#fca5a5' }}>
+                      <strong>conflicts</strong>
+                      {fixedRescheduleServerPreviewConflicts.map((conflict, index) => (
+                        <span
+                          key={`fixed-reschedule-server-conflict-${index}`}
+                          data-testid="private-fixed-reschedule-server-preview-conflict"
+                        >
+                          {typeof conflict === 'string'
+                            ? conflict
+                            : conflict.message || conflict.code || JSON.stringify(conflict)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span data-testid="private-fixed-reschedule-server-preview-conflict">
+                      서버 기준 conflict 없음
+                    </span>
+                  )}
+                  {fixedRescheduleServerPreviewWarnings.length > 0 ? (
+                    <div style={{ display: 'grid', gap: 4, color: '#f5c17a' }}>
+                      <strong>warnings</strong>
+                      {fixedRescheduleServerPreviewWarnings.map((warning, index) => (
+                        <span
+                          key={`fixed-reschedule-server-warning-${index}`}
+                          data-testid="private-fixed-reschedule-server-preview-warning"
+                        >
+                          {typeof warning === 'string'
+                            ? warning
+                            : warning.message || warning.code || JSON.stringify(warning)}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span data-testid="private-fixed-reschedule-server-preview-warning">
+                      서버 기준 warning 없음
+                    </span>
+                  )}
+                  {fixedRescheduleServerPreview.nextStep ? (
+                    <span data-testid="private-fixed-reschedule-server-preview-next-step">
+                      {fixedRescheduleServerPreview.nextStep}
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </div>
