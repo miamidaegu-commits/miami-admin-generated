@@ -1378,6 +1378,15 @@ test('fixed private reschedule frontend calls dry-run preview only', () => {
     'fixedRescheduleServerPreviewPayload',
     'previewFixedRescheduleScopeOnServer',
     'clearFixedRescheduleServerPreview',
+    'targetDraft',
+    'targetTime',
+    'targetTeacherUid',
+    'targetTeacherName',
+    'targetTeacherKey',
+    'targetTeacherId',
+    'targetDurationMinutes',
+    'targetLessonName',
+    'targetDate',
     'dryRun: true',
     'previewOnly: true',
     'commit: false',
@@ -1392,6 +1401,35 @@ test('fixed private reschedule frontend calls dry-run preview only', () => {
     'fixedRescheduleServerPreviewPayload',
     'previewFixedRescheduleScopeOnServer',
     'clearFixedRescheduleServerPreview',
+    'fixedRescheduleTargetDraft',
+    '변경 후 값',
+    '변경 후 날짜',
+    '변경 후 시간',
+    '변경 후 선생님',
+    '변경 후 수업 길이',
+    '변경 후 수업명',
+    '선택하지 않은 항목은 기존 값을 유지합니다',
+    '서버 검증 후 충돌 여부를 확인하세요',
+    'targetDraft',
+    'targetTime',
+    'targetTeacherUid',
+    'targetTeacherName',
+    'targetTeacherKey',
+    'targetTeacherId',
+    'targetDurationMinutes',
+    'targetLessonName',
+    'targetDate',
+    'private-fixed-reschedule-target-date',
+    'private-fixed-reschedule-target-time',
+    'private-fixed-reschedule-target-teacher',
+    'private-fixed-reschedule-target-duration',
+    'private-fixed-reschedule-target-lesson-name',
+    'private-fixed-reschedule-target-summary',
+    'private-fixed-reschedule-target-summary-time',
+    'private-fixed-reschedule-target-summary-teacher',
+    'private-fixed-reschedule-target-summary-duration',
+    'private-fixed-reschedule-target-summary-lesson-name',
+    'private-fixed-reschedule-target-summary-date',
     '서버 기준 범위 검증',
     '서버 기준 범위 검증 결과',
     '서버 기준 검증 중',
@@ -1452,12 +1490,22 @@ test('fixed private reschedule frontend calls dry-run preview only', () => {
   expect(rescheduleHandlerSource).toContain('dryRun: true');
   expect(rescheduleHandlerSource).toContain('previewOnly: true');
   expect(rescheduleHandlerSource).toContain('commit: false');
+  expect(rescheduleHandlerSource).toContain('targetDraft');
+  expect(rescheduleHandlerSource).toContain('targetTime');
+  expect(rescheduleHandlerSource).toContain('targetTeacherUid');
+  expect(rescheduleHandlerSource).toContain('targetTeacherName');
+  expect(rescheduleHandlerSource).toContain('targetTeacherKey');
+  expect(rescheduleHandlerSource).toContain('targetTeacherId');
+  expect(rescheduleHandlerSource).toContain('targetDurationMinutes');
+  expect(rescheduleHandlerSource).toContain('targetLessonName');
+  expect(rescheduleHandlerSource).toContain('targetDate');
   [
     'commit: true',
     'dryRun: false',
     'previewOnly: false',
     'updateFixedPrivateLessonScheduleScope',
     'rescheduleFixedPrivateLessons',
+    'targetPackageId',
     'updateDoc',
     'writeBatch',
     'runTransaction',

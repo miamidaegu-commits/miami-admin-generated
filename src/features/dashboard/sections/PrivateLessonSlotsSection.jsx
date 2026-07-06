@@ -224,6 +224,27 @@ function getPrivateSlotTeacherDisplay(row) {
   return `${displayName} · ${identity}`
 }
 
+function getFixedRescheduleLessonName(lesson) {
+  return String(lesson?.subject || lesson?.lessonName || lesson?.name || lesson?.title || '1:1 수업').trim()
+}
+
+function buildFixedRescheduleTargetDraft(lesson) {
+  return {
+    targetDate: getFixedRescheduleLessonDate(lesson),
+    targetTime: getFixedRescheduleLessonTime(lesson),
+    targetTeacherKey: String(
+      lesson?.teacherKey || lesson?.teacherUid || lesson?.teacherUID || lesson?.teacherName || lesson?.teacher || ''
+    ).trim(),
+    targetTeacherUid: String(lesson?.teacherUid || lesson?.teacherUID || '').trim(),
+    targetTeacherName: String(
+      lesson?.teacherName || lesson?.displayName || lesson?.teacher || lesson?.name || ''
+    ).trim(),
+    targetTeacherId: String(lesson?.teacherId || lesson?.teacherID || '').trim(),
+    targetDurationMinutes: String(getFixedRescheduleDurationMinutes(lesson) || 60),
+    targetLessonName: getFixedRescheduleLessonName(lesson),
+  }
+}
+
 function isYmd(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').trim())
 }
@@ -632,6 +653,9 @@ export default function PrivateLessonSlotsSection({
   const [fixedRescheduleScopeMode, setFixedRescheduleScopeMode] = useState('single')
   const [fixedRescheduleRangeStart, setFixedRescheduleRangeStart] = useState('')
   const [fixedRescheduleRangeEnd, setFixedRescheduleRangeEnd] = useState('')
+  const [fixedRescheduleTargetDraft, setFixedRescheduleTargetDraft] = useState(
+    buildFixedRescheduleTargetDraft(null)
+  )
   const [showFixedRescheduleScopePreview, setShowFixedRescheduleScopePreview] = useState(false)
   const fixedPrivateLessonsSectionRef = useRef(null)
   const fixedPrivateRenewalConfirmationPlan =
@@ -759,9 +783,14 @@ export default function PrivateLessonSlotsSection({
     onClearFixedRescheduleServerPreview?.()
   }
 
+  function resetFixedRescheduleTargetDraft(lesson) {
+    setFixedRescheduleTargetDraft(buildFixedRescheduleTargetDraft(lesson))
+  }
+
   function openFixedRescheduleScopePreview(lesson) {
     const date = getFixedRescheduleLessonDate(lesson)
     clearFixedRescheduleServerPreview()
+    resetFixedRescheduleTargetDraft(lesson)
     setSelectedFixedRescheduleLesson(lesson)
     setFixedRescheduleScopeMode('single')
     setFixedRescheduleRangeStart(date)
@@ -789,6 +818,41 @@ export default function PrivateLessonSlotsSection({
     setFixedRescheduleRangeEnd(nextRangeEnd)
   }
 
+  function changeFixedRescheduleTargetDraft(nextPatch) {
+    clearFixedRescheduleServerPreview()
+    setFixedRescheduleTargetDraft((prev) => ({
+      ...prev,
+      ...nextPatch,
+    }))
+  }
+
+  function changeFixedRescheduleTargetTeacher(nextValue) {
+    clearFixedRescheduleServerPreview()
+    const selectedOption =
+      teacherSelectOptions.find((option) => String(option.value || '') === String(nextValue || '')) ||
+      null
+    if (!selectedOption) {
+      const defaultDraft = buildFixedRescheduleTargetDraft(selectedFixedRescheduleLesson)
+      setFixedRescheduleTargetDraft((prev) => ({
+        ...prev,
+        targetTeacherId: defaultDraft.targetTeacherId,
+        targetTeacherKey: defaultDraft.targetTeacherKey,
+        targetTeacherName: defaultDraft.targetTeacherName,
+        targetTeacherUid: defaultDraft.targetTeacherUid,
+      }))
+      return
+    }
+    setFixedRescheduleTargetDraft((prev) => ({
+      ...prev,
+      targetTeacherId: String(selectedOption.teacherId || '').trim(),
+      targetTeacherKey: String(selectedOption.teacherKey || selectedOption.value || '').trim(),
+      targetTeacherName: String(
+        selectedOption.displayName || selectedOption.teacherName || selectedOption.label || ''
+      ).trim(),
+      targetTeacherUid: String(selectedOption.teacherUid || selectedOption.value || '').trim(),
+    }))
+  }
+
   function previewFixedRescheduleScopeOnServer() {
     if (fixedRescheduleServerPreviewDisabledReason) return
     onPreviewFixedRescheduleScopeOnServer?.({
@@ -796,6 +860,7 @@ export default function PrivateLessonSlotsSection({
       scopeMode: fixedRescheduleScopeMode,
       rangeStart: fixedRescheduleRangeStart,
       rangeEnd: fixedRescheduleRangeEnd,
+      targetDraft: fixedRescheduleTargetDraft,
     })
   }
 
@@ -1123,6 +1188,22 @@ export default function PrivateLessonSlotsSection({
   const fixedRescheduleServerPreviewPlan = fixedRescheduleServerPreview?.normalizedPlan || {}
   const fixedRescheduleServerPreviewTeacherTime =
     fixedRescheduleServerPreview?.teacherTimePreparation || {}
+  const fixedRescheduleTargetTeacherOption = useMemo(() => {
+    const draftKeys = getFixedRescheduleTeacherKeys({
+      teacherId: fixedRescheduleTargetDraft.targetTeacherId,
+      teacherKey: fixedRescheduleTargetDraft.targetTeacherKey,
+      teacherName: fixedRescheduleTargetDraft.targetTeacherName,
+      teacherUid: fixedRescheduleTargetDraft.targetTeacherUid,
+    })
+    return (
+      teacherSelectOptions.find((option) => {
+        const optionKeys = getTeacherOptionKeys(option)
+        return draftKeys.some((key) => optionKeys.includes(key))
+      }) || null
+    )
+  }, [fixedRescheduleTargetDraft, teacherSelectOptions])
+  const fixedRescheduleServerPreviewTargetSummary =
+    fixedRescheduleServerPreview?.includedLessons?.[0]?.target || {}
 
   const selectedPrivateBoardTeacherOption = useMemo(() => {
     if (teacherSelectOptions.length === 0) return null
@@ -5031,6 +5112,138 @@ export default function PrivateLessonSlotsSection({
             ) : null}
 
             <div
+              data-testid="private-fixed-reschedule-target-inputs"
+              style={{
+                display: 'grid',
+                gap: 10,
+                padding: 12,
+                border: '1px solid #293246',
+                borderRadius: 8,
+                background: '#101724',
+                fontSize: 13,
+                lineHeight: 1.6,
+                marginBottom: 14,
+              }}
+            >
+              <strong>변경 후 값</strong>
+              <div style={{ display: 'grid', gap: 4, color: '#d7def0' }}>
+                <span>선택하지 않은 항목은 기존 값을 유지합니다.</span>
+                <span>서버 검증 후 충돌 여부를 확인하세요.</span>
+                <span>아직 저장하지 않습니다.</span>
+                <span>실제 수정은 다음 단계에서 제공합니다.</span>
+              </div>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gap: 10,
+                }}
+              >
+                {fixedRescheduleScopeMode === 'single' ? (
+                  <label style={{ display: 'grid', gap: 4 }}>
+                    <span>변경 후 날짜</span>
+                    <input
+                      type="date"
+                      value={fixedRescheduleTargetDraft.targetDate}
+                      data-testid="private-fixed-reschedule-target-date"
+                      onChange={(event) =>
+                        changeFixedRescheduleTargetDraft({ targetDate: event.target.value })
+                      }
+                      style={{
+                        padding: '8px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #444',
+                        background: '#1f1f1f',
+                        color: 'white',
+                      }}
+                    />
+                  </label>
+                ) : null}
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span>변경 후 시간</span>
+                  <input
+                    type="time"
+                    value={fixedRescheduleTargetDraft.targetTime}
+                    data-testid="private-fixed-reschedule-target-time"
+                    onChange={(event) =>
+                      changeFixedRescheduleTargetDraft({ targetTime: event.target.value })
+                    }
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span>변경 후 선생님</span>
+                  <select
+                    value={fixedRescheduleTargetTeacherOption?.value || ''}
+                    data-testid="private-fixed-reschedule-target-teacher"
+                    disabled={teacherSelectOptions.length === 0}
+                    onChange={(event) => changeFixedRescheduleTargetTeacher(event.target.value)}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  >
+                    <option value="">기존 선생님 유지</option>
+                    {teacherSelectOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span>변경 후 수업 길이</span>
+                  <input
+                    type="number"
+                    min="1"
+                    value={fixedRescheduleTargetDraft.targetDurationMinutes}
+                    data-testid="private-fixed-reschedule-target-duration"
+                    onChange={(event) =>
+                      changeFixedRescheduleTargetDraft({
+                        targetDurationMinutes: event.target.value,
+                      })
+                    }
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span>변경 후 수업명</span>
+                  <input
+                    type="text"
+                    value={fixedRescheduleTargetDraft.targetLessonName}
+                    data-testid="private-fixed-reschedule-target-lesson-name"
+                    onChange={(event) =>
+                      changeFixedRescheduleTargetDraft({ targetLessonName: event.target.value })
+                    }
+                    placeholder="1:1 수업"
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div
               data-testid="private-fixed-reschedule-scope-preview-result"
               style={{
                 display: 'grid',
@@ -5142,6 +5355,8 @@ export default function PrivateLessonSlotsSection({
               <span>서버 기준으로 변경 범위를 검증합니다.</span>
               <span>실제 수정은 다음 단계에서 제공합니다.</span>
               <span>수업, 슬롯, 예약 문서는 아직 수정되지 않습니다.</span>
+              <span>선택하지 않은 항목은 기존 값을 유지합니다.</span>
+              <span>서버 검증 후 충돌 여부를 확인하세요.</span>
             </div>
 
             <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
@@ -5245,6 +5460,41 @@ export default function PrivateLessonSlotsSection({
                       <> · requestId {fixedRescheduleServerPreviewPayload.requestId}</>
                     ) : null}
                   </div>
+                  {fixedRescheduleServerPreviewTargetSummary.date ||
+                  fixedRescheduleServerPreviewTargetSummary.time ||
+                  fixedRescheduleServerPreviewTargetSummary.teacherName ||
+                  fixedRescheduleServerPreviewTargetSummary.teacherKey ||
+                  fixedRescheduleServerPreviewTargetSummary.durationMinutes ||
+                  fixedRescheduleServerPreviewTargetSummary.lessonName ? (
+                    <div
+                      data-testid="private-fixed-reschedule-target-summary"
+                      style={{ display: 'grid', gap: 4 }}
+                    >
+                      <strong>변경 후 값 요약</strong>
+                      <span data-testid="private-fixed-reschedule-target-summary-date">
+                        변경 후 날짜: {fixedRescheduleServerPreviewTargetSummary.date || '-'}
+                      </span>
+                      <span data-testid="private-fixed-reschedule-target-summary-time">
+                        변경 후 시간: {fixedRescheduleServerPreviewTargetSummary.time || '-'}
+                      </span>
+                      <span data-testid="private-fixed-reschedule-target-summary-teacher">
+                        변경 후 선생님:{' '}
+                        {fixedRescheduleServerPreviewTargetSummary.teacherName ||
+                          fixedRescheduleServerPreviewTargetSummary.teacherKey ||
+                          fixedRescheduleServerPreviewTargetSummary.teacherUid ||
+                          '-'}
+                      </span>
+                      <span data-testid="private-fixed-reschedule-target-summary-duration">
+                        변경 후 수업 길이:{' '}
+                        {Number(fixedRescheduleServerPreviewTargetSummary.durationMinutes || 0) ||
+                          '-'}
+                        분
+                      </span>
+                      <span data-testid="private-fixed-reschedule-target-summary-lesson-name">
+                        변경 후 수업명: {fixedRescheduleServerPreviewTargetSummary.lessonName || '-'}
+                      </span>
+                    </div>
+                  ) : null}
                   {fixedRescheduleServerPreviewConflicts.length > 0 ? (
                     <div style={{ display: 'grid', gap: 4, color: '#fca5a5' }}>
                       <strong>conflicts</strong>

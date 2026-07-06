@@ -7439,6 +7439,7 @@ export default function Dashboard() {
     scopeMode,
     rangeStart,
     rangeEnd,
+    targetDraft,
   } = {}) {
     setFixedRescheduleServerPreviewPayload(null)
 
@@ -7467,6 +7468,27 @@ export default function Dashboard() {
         dryRun: true,
         previewOnly: true,
         commit: false,
+      }
+      const safeTargetDraft = targetDraft || {}
+      const targetTime = String(safeTargetDraft.targetTime || '').trim()
+      const targetTeacherUid = String(safeTargetDraft.targetTeacherUid || '').trim()
+      const targetTeacherName = String(safeTargetDraft.targetTeacherName || '').trim()
+      const targetTeacherKey = String(safeTargetDraft.targetTeacherKey || '').trim()
+      const targetTeacherId = String(safeTargetDraft.targetTeacherId || '').trim()
+      const targetLessonName = String(safeTargetDraft.targetLessonName || '').trim()
+      const targetDurationRaw = Number(safeTargetDraft.targetDurationMinutes)
+      const targetDate = String(safeTargetDraft.targetDate || '').trim()
+      if (targetTime) payload.targetTime = targetTime
+      if (targetTeacherUid) payload.targetTeacherUid = targetTeacherUid
+      if (targetTeacherName) payload.targetTeacherName = targetTeacherName
+      if (targetTeacherKey) payload.targetTeacherKey = targetTeacherKey
+      if (targetTeacherId) payload.targetTeacherId = targetTeacherId
+      if (targetLessonName) payload.targetLessonName = targetLessonName
+      if (Number.isFinite(targetDurationRaw) && targetDurationRaw > 0) {
+        payload.targetDurationMinutes = Math.floor(targetDurationRaw)
+      }
+      if (safeScopeMode === 'single' && targetDate) {
+        payload.targetDate = targetDate
       }
 
       setFixedRescheduleServerPreviewBusy(true)
