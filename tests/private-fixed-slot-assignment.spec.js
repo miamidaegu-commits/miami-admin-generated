@@ -1344,8 +1344,133 @@ test('fixed private reschedule dry-run callable is bounded and read-only', () =>
   expect(rescheduleCallableBlock).not.toContain('previewOnly: false');
 
   const protectedPaths = [
-    'Dashboard.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  expect(changedProtectedFiles).toEqual([]);
+});
+
+test('fixed private reschedule frontend calls dry-run preview only', () => {
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const privateSlotsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+
+  [
+    'previewFixedPrivateLessonRescheduleScope',
+    'fixedRescheduleServerPreview',
+    'fixedRescheduleServerPreviewBusy',
+    'fixedRescheduleServerPreviewError',
+    'fixedRescheduleServerPreviewPayload',
+    'previewFixedRescheduleScopeOnServer',
+    'clearFixedRescheduleServerPreview',
+    'dryRun: true',
+    'previewOnly: true',
+    'commit: false',
+  ].forEach((token) => {
+    expect(dashboardSource).toContain(token);
+  });
+
+  [
+    'fixedRescheduleServerPreview',
+    'fixedRescheduleServerPreviewBusy',
+    'fixedRescheduleServerPreviewError',
+    'fixedRescheduleServerPreviewPayload',
+    'previewFixedRescheduleScopeOnServer',
+    'clearFixedRescheduleServerPreview',
+    '서버 기준 범위 검증',
+    '서버 기준 범위 검증 결과',
+    '서버 기준 검증 중',
+    '이 단계에서는 저장하지 않습니다',
+    '서버 기준으로 변경 범위를 검증합니다',
+    '실제 수정은 다음 단계에서 제공합니다',
+    '수업, 슬롯, 예약 문서는 아직 수정되지 않습니다',
+    'private-fixed-reschedule-server-preview-button',
+    'private-fixed-reschedule-server-preview-loading',
+    'private-fixed-reschedule-server-preview-result',
+    'private-fixed-reschedule-server-preview-ok',
+    'private-fixed-reschedule-server-preview-included-count',
+    'private-fixed-reschedule-server-preview-excluded-count',
+    'private-fixed-reschedule-server-preview-would-update',
+    'private-fixed-reschedule-server-preview-teacher-time',
+    'private-fixed-reschedule-server-preview-conflict',
+    'private-fixed-reschedule-server-preview-warning',
+    'private-fixed-reschedule-server-preview-normalized-plan',
+    'private-fixed-reschedule-server-preview-next-step',
+    'private-fixed-reschedule-server-preview-error',
+    'private-fixed-reschedule-server-preview-no-write-note',
+  ].forEach((token) => {
+    expect(privateSlotsSectionSource).toContain(token);
+  });
+
+  const handlerStart = dashboardSource.indexOf(
+    'async function previewFixedRescheduleScopeOnServer'
+  );
+  const handlerEnd = dashboardSource.indexOf(
+    'const privateLessonTeacherSelectOptions',
+    handlerStart
+  );
+  expect(handlerStart).toBeGreaterThanOrEqual(0);
+  expect(handlerEnd).toBeGreaterThan(handlerStart);
+  const rescheduleHandlerSource = dashboardSource.slice(handlerStart, handlerEnd);
+
+  const sectionHandlerStart = privateSlotsSectionSource.indexOf(
+    'function openFixedRescheduleScopePreview'
+  );
+  const sectionHandlerEnd = privateSlotsSectionSource.indexOf(
+    'function openAvailabilityTemplateEdit',
+    sectionHandlerStart
+  );
+  const panelStart = privateSlotsSectionSource.indexOf(
+    'private-fixed-reschedule-scope-preview-panel'
+  );
+  const panelEnd = privateSlotsSectionSource.indexOf('{fixedPrivateLessonAction ?', panelStart);
+  expect(sectionHandlerStart).toBeGreaterThanOrEqual(0);
+  expect(sectionHandlerEnd).toBeGreaterThan(sectionHandlerStart);
+  expect(panelStart).toBeGreaterThanOrEqual(0);
+  expect(panelEnd).toBeGreaterThan(panelStart);
+  const rescheduleSectionSource = [
+    privateSlotsSectionSource.slice(sectionHandlerStart, sectionHandlerEnd),
+    privateSlotsSectionSource.slice(panelStart, panelEnd),
+  ].join('\n');
+
+  expect(rescheduleHandlerSource).toContain("httpsCallable(firebaseFunctions, 'previewFixedPrivateLessonRescheduleScope')");
+  expect(rescheduleHandlerSource).toContain('dryRun: true');
+  expect(rescheduleHandlerSource).toContain('previewOnly: true');
+  expect(rescheduleHandlerSource).toContain('commit: false');
+  [
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    'updateFixedPrivateLessonScheduleScope',
+    'rescheduleFixedPrivateLessons',
+    'updateDoc',
+    'writeBatch',
+    'runTransaction',
+    'setDoc',
+    'addDoc',
+    'deleteDoc',
+  ].forEach((token) => {
+    expect(rescheduleHandlerSource).not.toContain(token);
+    expect(rescheduleSectionSource).not.toContain(token);
+  });
+
+  const protectedPaths = [
+    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',

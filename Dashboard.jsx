@@ -1453,6 +1453,12 @@ export default function Dashboard() {
     useState('')
   const [fixedPrivateRenewalServerPreviewPayload, setFixedPrivateRenewalServerPreviewPayload] =
     useState(null)
+  const [fixedRescheduleServerPreview, setFixedRescheduleServerPreview] = useState(null)
+  const [fixedRescheduleServerPreviewBusy, setFixedRescheduleServerPreviewBusy] =
+    useState(false)
+  const [fixedRescheduleServerPreviewError, setFixedRescheduleServerPreviewError] = useState('')
+  const [fixedRescheduleServerPreviewPayload, setFixedRescheduleServerPreviewPayload] =
+    useState(null)
   const [fixedPrivateRenewalCommitBusy, setFixedPrivateRenewalCommitBusy] = useState(false)
   const [fixedPrivateRenewalCommitError, setFixedPrivateRenewalCommitError] = useState('')
   const [fixedPrivateRenewalCommitResult, setFixedPrivateRenewalCommitResult] = useState(null)
@@ -7422,6 +7428,68 @@ export default function Dashboard() {
     }
   }
 
+  function clearFixedRescheduleServerPreview() {
+    setFixedRescheduleServerPreview(null)
+    setFixedRescheduleServerPreviewError('')
+    setFixedRescheduleServerPreviewPayload(null)
+  }
+
+  async function previewFixedRescheduleScopeOnServer({
+    selectedLesson,
+    scopeMode,
+    rangeStart,
+    rangeEnd,
+  } = {}) {
+    setFixedRescheduleServerPreviewPayload(null)
+
+    try {
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const selectedLessonId = String(
+        selectedLesson?.id || selectedLesson?.lessonId || selectedLesson?.fixedLessonId || ''
+      ).trim()
+      const safeScopeMode = String(scopeMode || '').trim()
+      if (!selectedLesson || !selectedLessonId) {
+        throw new Error('서버 검증에 사용할 고정 수업 정보가 없습니다.')
+      }
+      if (!safeScopeMode) {
+        throw new Error('서버 검증에 사용할 수정 범위를 선택해 주세요.')
+      }
+      const requestId = `fixedPrivateRescheduleDryRun_${scopedAcademyId || 'academy'}_${selectedLessonId}_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`
+      const payload = {
+        requestId,
+        academyId: scopedAcademyId,
+        selectedLessonId,
+        scopeMode: safeScopeMode,
+        rangeStart: String(rangeStart || '').trim(),
+        rangeEnd: String(rangeEnd || '').trim(),
+        dryRun: true,
+        previewOnly: true,
+        commit: false,
+      }
+
+      setFixedRescheduleServerPreviewBusy(true)
+      setFixedRescheduleServerPreviewError('')
+      setFixedRescheduleServerPreview(null)
+      const callable = httpsCallable(firebaseFunctions, 'previewFixedPrivateLessonRescheduleScope')
+      const result = await callable(payload)
+      const previewData = result?.data || null
+      setFixedRescheduleServerPreview(previewData)
+      setFixedRescheduleServerPreviewPayload(
+        previewData?.dryRun === true && previewData?.previewOnly === true ? payload : null
+      )
+    } catch (error) {
+      console.error('고정 1:1 수정 범위 서버 검증 실패:', error)
+      setFixedRescheduleServerPreview(null)
+      setFixedRescheduleServerPreviewError(
+        error?.message || '서버 기준 범위 검증에 실패했습니다.'
+      )
+    } finally {
+      setFixedRescheduleServerPreviewBusy(false)
+    }
+  }
+
   const privateLessonTeacherSelectOptions = isAdmin
     ? teacherSelectOptions
     : teacherGroupClassKey
@@ -7498,6 +7566,12 @@ export default function Dashboard() {
     fixedPrivateRenewalServerPreviewDisabledReason,
     previewFixedPrivateRenewalOnServer,
     onCommitFixedPrivateRenewal: handleCommitFixedPrivateRenewal,
+    fixedRescheduleServerPreview,
+    fixedRescheduleServerPreviewBusy,
+    fixedRescheduleServerPreviewError,
+    fixedRescheduleServerPreviewPayload,
+    onPreviewFixedRescheduleScopeOnServer: previewFixedRescheduleScopeOnServer,
+    onClearFixedRescheduleServerPreview: clearFixedRescheduleServerPreview,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',
