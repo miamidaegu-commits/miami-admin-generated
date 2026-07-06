@@ -80,6 +80,121 @@ function fixedLessonMatchesReservation(lesson, reservation) {
   return lessonTeacherKeys.some((key) => key && reservationTeacherLabel.includes(key))
 }
 
+function getFixedRescheduleStudentId(lesson) {
+  return String(lesson?.studentId || lesson?.studentID || '').trim()
+}
+
+function getFixedRescheduleLessonId(lesson) {
+  return String(lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || '').trim()
+}
+
+function getFixedRescheduleLessonDate(lesson) {
+  return String(lesson?.date || lesson?.lessonDate || lesson?.scheduleDate || '').trim()
+}
+
+function getFixedRescheduleLessonTime(lesson) {
+  return String(lesson?.time || lesson?.startTime || lesson?.scheduleTime || '').trim()
+}
+
+function getFixedRescheduleDurationMinutes(lesson) {
+  const duration = Number(
+    lesson?.durationMinutes ||
+      lesson?.duration ||
+      lesson?.lessonDurationMinutes ||
+      lesson?.classDurationMinutes
+  )
+  return Number.isFinite(duration) && duration > 0 ? Math.floor(duration) : 60
+}
+
+function getFixedRescheduleWeekday(lesson) {
+  const date = getFixedRescheduleLessonDate(lesson)
+  if (!isYmd(date)) return ''
+  const parsed = new Date(`${date}T00:00:00`)
+  return Number.isNaN(parsed.getTime()) ? '' : String(parsed.getDay())
+}
+
+function getFixedReschedulePackageIds(lesson) {
+  const seen = new Set()
+  const ids = []
+  ;[
+    lesson?.packageId,
+    lesson?.deductionPackageId,
+    lesson?.linkedPackageId,
+    lesson?.fixedPrivatePackageId,
+  ].forEach((value) => {
+    const id = String(value || '').trim()
+    if (!id || seen.has(id)) return
+    seen.add(id)
+    ids.push(id)
+  })
+  return ids
+}
+
+function getFixedReschedulePrimaryPackageId(lesson) {
+  return getFixedReschedulePackageIds(lesson)[0] || ''
+}
+
+function getFixedRescheduleTeacherKeys(lesson) {
+  const seen = new Set()
+  const keys = []
+  ;[
+    lesson?.teacherUid,
+    lesson?.teacherUID,
+    lesson?.teacherId,
+    lesson?.teacherID,
+    lesson?.teacherKey,
+    lesson?.teacher,
+    lesson?.teacherName,
+  ].forEach((value) => {
+    const key = String(value || '').trim().toLowerCase()
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    keys.push(key)
+  })
+  return keys
+}
+
+function fixedRescheduleTeacherMatches(a, b) {
+  const left = getFixedRescheduleTeacherKeys(a)
+  const right = new Set(getFixedRescheduleTeacherKeys(b))
+  return left.length > 0 && left.some((key) => right.has(key))
+}
+
+function isFixedRescheduleActiveLesson(lesson) {
+  const status = String(lesson?.status || 'active').trim().toLowerCase()
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const outcome = String(lesson?.outcome || lesson?.attendanceStatus || '').trim().toLowerCase()
+  if (['cancelled', 'canceled', 'deleted', 'archived', 'completed'].includes(status)) return false
+  if (['completed', 'no_show', 'no-show'].includes(outcome)) return false
+  if (['lesson_cancelled', 'lesson_canceled', 'fixed_lesson_cancelled'].includes(cancellationType)) {
+    return false
+  }
+  if (lesson?.completed === true || lesson?.isSeatReleased === true) return false
+  if (lesson?.releasedForPrivateBooking === true) return false
+  return isFixedPrivateLesson(lesson)
+}
+
+function fixedRescheduleSamePattern(a, b) {
+  if (getFixedRescheduleStudentId(a) !== getFixedRescheduleStudentId(b)) return false
+  if (!fixedRescheduleTeacherMatches(a, b)) return false
+  if (getFixedRescheduleWeekday(a) !== getFixedRescheduleWeekday(b)) return false
+  if (getFixedRescheduleLessonTime(a) !== getFixedRescheduleLessonTime(b)) return false
+  if (getFixedRescheduleDurationMinutes(a) !== getFixedRescheduleDurationMinutes(b)) return false
+  const templateA = String(a?.privateLessonAvailabilityTemplateId || '').trim()
+  const templateB = String(b?.privateLessonAvailabilityTemplateId || '').trim()
+  if (templateA && templateB && templateA !== templateB) return false
+  const packageIdsA = getFixedReschedulePackageIds(a)
+  const packageIdsB = new Set(getFixedReschedulePackageIds(b))
+  if (packageIdsA.length > 0 && packageIdsB.size > 0) {
+    return packageIdsA.some((packageId) => packageIdsB.has(packageId))
+  }
+  return true
+}
+
+function getFixedRescheduleBatchId(lesson) {
+  return String(lesson?.fixedPrivateAssignmentBatchId || '').trim()
+}
+
 const WEEKDAY_OPTIONS = [
   { value: '1', label: '월요일' },
   { value: '2', label: '화요일' },
@@ -507,6 +622,11 @@ export default function PrivateLessonSlotsSection({
   const [showPastFixedPrivateLessons, setShowPastFixedPrivateLessons] = useState(false)
   const [showFixedPrivateRenewalConfirmModal, setShowFixedPrivateRenewalConfirmModal] =
     useState(false)
+  const [selectedFixedRescheduleLesson, setSelectedFixedRescheduleLesson] = useState(null)
+  const [fixedRescheduleScopeMode, setFixedRescheduleScopeMode] = useState('single')
+  const [fixedRescheduleRangeStart, setFixedRescheduleRangeStart] = useState('')
+  const [fixedRescheduleRangeEnd, setFixedRescheduleRangeEnd] = useState('')
+  const [showFixedRescheduleScopePreview, setShowFixedRescheduleScopePreview] = useState(false)
   const fixedPrivateLessonsSectionRef = useRef(null)
   const fixedPrivateRenewalConfirmationPlan =
     fixedPrivateRenewalServerPreview?.normalizedPlan || {}
@@ -627,6 +747,19 @@ export default function PrivateLessonSlotsSection({
       return
     }
     setTimeout(scrollToCreatedLessons, 0)
+  }
+
+  function openFixedRescheduleScopePreview(lesson) {
+    const date = getFixedRescheduleLessonDate(lesson)
+    setSelectedFixedRescheduleLesson(lesson)
+    setFixedRescheduleScopeMode('single')
+    setFixedRescheduleRangeStart(date)
+    setFixedRescheduleRangeEnd(date)
+    setShowFixedRescheduleScopePreview(true)
+  }
+
+  function closeFixedRescheduleScopePreview() {
+    setShowFixedRescheduleScopePreview(false)
   }
 
   function openAvailabilityTemplateEdit(template) {
@@ -792,6 +925,128 @@ export default function PrivateLessonSlotsSection({
   ])
   const visibleFixedPrivateLessons = fixedPrivateLessonView.visibleLessons
   const hiddenFixedPrivateLessonCount = fixedPrivateLessonView.hiddenByDefaultCount
+  const fixedRescheduleScopePreview = useMemo(() => {
+    const selected = selectedFixedRescheduleLesson
+    if (!selected) {
+      return {
+        includedLessons: [],
+        excludedLessons: [],
+        warnings: [],
+      }
+    }
+
+    const selectedId = getFixedRescheduleLessonId(selected)
+    const selectedDate = getFixedRescheduleLessonDate(selected)
+    const selectedStudentId = getFixedRescheduleStudentId(selected)
+    const selectedBatchId = getFixedRescheduleBatchId(selected)
+    const selectedPackageIds = new Set(getFixedReschedulePackageIds(selected))
+    const warnings = []
+
+    if (fixedRescheduleScopeMode === 'package_remaining') {
+      warnings.push(
+        '같은 수강권에 여러 시간 패턴이 포함될 수 있습니다. 실제 저장 전 서버 검증이 필요합니다.'
+      )
+      if (selectedPackageIds.size === 0) {
+        warnings.push('선택한 수업의 수강권 연결 정보가 없어 후보 계산이 제한됩니다.')
+      }
+    }
+    if (fixedRescheduleScopeMode === 'future_series' && !selectedBatchId) {
+      warnings.push('배치 ID가 없어 학생/선생님/요일/시간/길이 기준으로 후보를 계산합니다.')
+    }
+
+    const rangeStart =
+      fixedRescheduleScopeMode === 'date_range'
+        ? String(fixedRescheduleRangeStart || '').trim()
+        : selectedDate
+    const rangeEnd =
+      fixedRescheduleScopeMode === 'date_range'
+        ? String(fixedRescheduleRangeEnd || '').trim()
+        : ''
+
+    if (
+      fixedRescheduleScopeMode === 'date_range' &&
+      (!isYmd(rangeStart) || !isYmd(rangeEnd) || rangeEnd < rangeStart)
+    ) {
+      warnings.push('직접 날짜 범위의 시작일과 종료일을 확인해 주세요.')
+    }
+
+    function hasPackageOverlap(lesson) {
+      if (selectedPackageIds.size === 0) return false
+      return getFixedReschedulePackageIds(lesson).some((packageId) =>
+        selectedPackageIds.has(packageId)
+      )
+    }
+
+    function isRelevantLesson(lesson) {
+      if (!isFixedPrivateLesson(lesson)) return false
+      const lessonId = getFixedRescheduleLessonId(lesson)
+      const lessonStudentId = getFixedRescheduleStudentId(lesson)
+      if (fixedRescheduleScopeMode === 'single') return lessonId === selectedId
+      if (!selectedStudentId || lessonStudentId !== selectedStudentId) return false
+      if (fixedRescheduleScopeMode === 'future_series') {
+        return selectedBatchId ? getFixedRescheduleBatchId(lesson) === selectedBatchId : true
+      }
+      if (fixedRescheduleScopeMode === 'package_remaining') return hasPackageOverlap(lesson)
+      return fixedRescheduleSamePattern(selected, lesson)
+    }
+
+    function getOutOfScopeReason(lesson) {
+      const date = getFixedRescheduleLessonDate(lesson)
+      if (!isFixedRescheduleActiveLesson(lesson)) return '수정 대상이 아닌 상태'
+      if (fixedRescheduleScopeMode === 'single') {
+        return getFixedRescheduleLessonId(lesson) === selectedId ? '' : '선택한 수업 아님'
+      }
+      if (
+        fixedRescheduleScopeMode !== 'date_range' &&
+        (!isYmd(date) || !isYmd(selectedDate) || date < selectedDate)
+      ) {
+        return '선택한 날짜 이전'
+      }
+      if (fixedRescheduleScopeMode === 'future_series' && !selectedBatchId) {
+        return fixedRescheduleSamePattern(selected, lesson) ? '' : '패턴 다름'
+      }
+      if (fixedRescheduleScopeMode === 'package_remaining') {
+        return hasPackageOverlap(lesson) ? '' : '수강권 다름'
+      }
+      if (fixedRescheduleScopeMode === 'date_range') {
+        if (!isYmd(rangeStart) || !isYmd(rangeEnd) || rangeEnd < rangeStart) return '날짜 범위 필요'
+        if (date < rangeStart || date > rangeEnd) return '날짜 범위 밖'
+        return fixedRescheduleSamePattern(selected, lesson) ? '' : '패턴 다름'
+      }
+      return ''
+    }
+
+    const includedLessons = []
+    const excludedLessons = []
+    sortedFixedPrivateLessons
+      .filter(isRelevantLesson)
+      .forEach((lesson) => {
+        const reason = getOutOfScopeReason(lesson)
+        if (reason) {
+          excludedLessons.push({ lesson, reason })
+          return
+        }
+        includedLessons.push(lesson)
+      })
+
+    const sortByDateTime = (a, b) =>
+      `${getFixedRescheduleLessonDate(a)} ${getFixedRescheduleLessonTime(a)}`.localeCompare(
+        `${getFixedRescheduleLessonDate(b)} ${getFixedRescheduleLessonTime(b)}`,
+        'ko'
+      )
+
+    return {
+      includedLessons: includedLessons.sort(sortByDateTime),
+      excludedLessons: excludedLessons.sort((a, b) => sortByDateTime(a.lesson, b.lesson)),
+      warnings,
+    }
+  }, [
+    fixedRescheduleRangeEnd,
+    fixedRescheduleRangeStart,
+    fixedRescheduleScopeMode,
+    selectedFixedRescheduleLesson,
+    sortedFixedPrivateLessons,
+  ])
 
   const selectedPrivateBoardTeacherOption = useMemo(() => {
     if (teacherSelectOptions.length === 0) return null
@@ -3866,22 +4121,40 @@ export default function PrivateLessonSlotsSection({
                       </span>
                       <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                         {!isCancelled ? (
-                          <button
-                            type="button"
-                            onClick={() => setFixedPrivateLessonAction(lesson)}
-                            disabled={busy}
-                            data-testid="private-fixed-lesson-action-button"
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 8,
-                              border: '1px solid #4a6fff55',
-                              background: '#1f2a44',
-                              color: 'white',
-                              cursor: busy ? 'not-allowed' : 'pointer',
-                            }}
-                          >
-                            {busy ? '처리 중...' : '고정수업 처리'}
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => openFixedRescheduleScopePreview(lesson)}
+                              disabled={busy}
+                              data-testid="private-fixed-reschedule-scope-preview-open"
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #34d39966',
+                                background: '#123327',
+                                color: '#d7ffe8',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              수정 범위 미리보기
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setFixedPrivateLessonAction(lesson)}
+                              disabled={busy}
+                              data-testid="private-fixed-lesson-action-button"
+                              style={{
+                                padding: '6px 10px',
+                                borderRadius: 8,
+                                border: '1px solid #4a6fff55',
+                                background: '#1f2a44',
+                                color: 'white',
+                                cursor: busy ? 'not-allowed' : 'pointer',
+                              }}
+                            >
+                              {busy ? '처리 중...' : '고정수업 처리'}
+                            </button>
+                          </>
                         ) : (
                           <span style={{ opacity: 0.65, fontSize: 12 }}>처리 완료</span>
                         )}
@@ -4481,6 +4754,304 @@ export default function PrivateLessonSlotsSection({
                 type="button"
                 data-testid="private-fixed-renewal-confirmation-close"
                 onClick={() => setShowFixedPrivateRenewalConfirmModal(false)}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: 'white',
+                  cursor: 'pointer',
+                }}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showFixedRescheduleScopePreview && selectedFixedRescheduleLesson ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="private-fixed-reschedule-scope-preview-title"
+          data-testid="private-fixed-reschedule-scope-preview-panel"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.58)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1006,
+            padding: 16,
+          }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeFixedRescheduleScopePreview()
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 760,
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="private-fixed-reschedule-scope-preview-title"
+              style={{ margin: '0 0 8px 0', fontSize: 18 }}
+            >
+              고정 수업 수정 범위 미리보기
+            </h2>
+            <div
+              data-testid="private-fixed-reschedule-scope-no-write-note"
+              style={{
+                display: 'grid',
+                gap: 4,
+                padding: 12,
+                border: '1px solid #3b4252',
+                borderRadius: 8,
+                background: '#111722',
+                color: '#d7def0',
+                fontSize: 13,
+                lineHeight: 1.6,
+                marginBottom: 14,
+              }}
+            >
+              <span>아직 저장하지 않습니다.</span>
+              <span>변경 범위에 포함될 수업만 미리 확인합니다.</span>
+              <span>실제 수정은 다음 단계에서 제공합니다.</span>
+              <span>이 미리보기는 현재 화면 데이터 기준입니다.</span>
+              <span>저장 전 서버 검증이 필요합니다.</span>
+            </div>
+
+            <div
+              data-testid="private-fixed-reschedule-scope-selected-lesson"
+              style={{
+                display: 'grid',
+                gap: 4,
+                padding: 12,
+                border: '1px solid #293246',
+                borderRadius: 8,
+                background: '#101724',
+                fontSize: 13,
+                lineHeight: 1.6,
+                marginBottom: 14,
+              }}
+            >
+              <strong>선택한 수업</strong>
+              <span>
+                {getFixedRescheduleLessonDate(selectedFixedRescheduleLesson) || '-'}{' '}
+                {getFixedRescheduleLessonTime(selectedFixedRescheduleLesson) || '-'} ·{' '}
+                {getPrivateSlotTeacherDisplay(selectedFixedRescheduleLesson)} ·{' '}
+                {selectedFixedRescheduleLesson.studentName ||
+                  selectedFixedRescheduleLesson.student ||
+                  selectedFixedRescheduleLesson.studentId ||
+                  '-'}
+              </span>
+              <span>
+                package:{' '}
+                {getFixedReschedulePrimaryPackageId(selectedFixedRescheduleLesson) || '-'} · batch:{' '}
+                {getFixedRescheduleBatchId(selectedFixedRescheduleLesson) || '-'} · template:{' '}
+                {selectedFixedRescheduleLesson.privateLessonAvailabilityTemplateId || '-'}
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gap: 8, marginBottom: 14 }}>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+                <input
+                  type="radio"
+                  name="fixed-reschedule-scope-mode"
+                  value="single"
+                  checked={fixedRescheduleScopeMode === 'single'}
+                  onChange={() => setFixedRescheduleScopeMode('single')}
+                  data-testid="private-fixed-reschedule-scope-mode-single"
+                />
+                이 수업만 수정
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+                <input
+                  type="radio"
+                  name="fixed-reschedule-scope-mode"
+                  value="future_series"
+                  checked={fixedRescheduleScopeMode === 'future_series'}
+                  onChange={() => setFixedRescheduleScopeMode('future_series')}
+                  data-testid="private-fixed-reschedule-scope-mode-future-series"
+                />
+                이 날짜부터 이후 고정 수업에 적용
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+                <input
+                  type="radio"
+                  name="fixed-reschedule-scope-mode"
+                  value="package_remaining"
+                  checked={fixedRescheduleScopeMode === 'package_remaining'}
+                  onChange={() => setFixedRescheduleScopeMode('package_remaining')}
+                  data-testid="private-fixed-reschedule-scope-mode-package-remaining"
+                />
+                이 수강권 안의 남은 고정 수업에 적용
+              </label>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+                <input
+                  type="radio"
+                  name="fixed-reschedule-scope-mode"
+                  value="date_range"
+                  checked={fixedRescheduleScopeMode === 'date_range'}
+                  onChange={() => setFixedRescheduleScopeMode('date_range')}
+                  data-testid="private-fixed-reschedule-scope-mode-date-range"
+                />
+                직접 날짜 범위 선택
+              </label>
+            </div>
+
+            {fixedRescheduleScopeMode === 'date_range' ? (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                  gap: 10,
+                  marginBottom: 14,
+                }}
+              >
+                <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                  <span>시작일</span>
+                  <input
+                    type="date"
+                    value={fixedRescheduleRangeStart}
+                    onChange={(event) => setFixedRescheduleRangeStart(event.target.value)}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                </label>
+                <label style={{ display: 'grid', gap: 4, fontSize: 13 }}>
+                  <span>종료일</span>
+                  <input
+                    type="date"
+                    value={fixedRescheduleRangeEnd}
+                    onChange={(event) => setFixedRescheduleRangeEnd(event.target.value)}
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #444',
+                      background: '#1f1f1f',
+                      color: 'white',
+                    }}
+                  />
+                </label>
+              </div>
+            ) : null}
+
+            <div
+              data-testid="private-fixed-reschedule-scope-preview-result"
+              style={{
+                display: 'grid',
+                gap: 10,
+                padding: 12,
+                border: '1px solid #293246',
+                borderRadius: 8,
+                background: '#101724',
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              <strong>
+                scope mode:{' '}
+                {fixedRescheduleScopeMode === 'single'
+                  ? '이 수업만 수정'
+                  : fixedRescheduleScopeMode === 'future_series'
+                    ? '이 날짜부터 이후 고정 수업에 적용'
+                    : fixedRescheduleScopeMode === 'package_remaining'
+                      ? '이 수강권 안의 남은 고정 수업에 적용'
+                      : '직접 날짜 범위 선택'}
+              </strong>
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <span data-testid="private-fixed-reschedule-scope-included-count">
+                  포함 예정 수업 {fixedRescheduleScopePreview.includedLessons.length}건
+                </span>
+                <span data-testid="private-fixed-reschedule-scope-excluded-count">
+                  제외된 수업 {fixedRescheduleScopePreview.excludedLessons.length}건
+                </span>
+              </div>
+
+              {fixedRescheduleScopePreview.warnings.length > 0 ? (
+                <div style={{ display: 'grid', gap: 4, color: '#f5c17a' }}>
+                  {fixedRescheduleScopePreview.warnings.map((warning) => (
+                    <span key={warning} data-testid="private-fixed-reschedule-scope-warning">
+                      {warning}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span data-testid="private-fixed-reschedule-scope-warning" style={{ opacity: 0.72 }}>
+                  현재 화면 데이터 기준으로 추가 경고는 없습니다.
+                </span>
+              )}
+
+              <div style={{ display: 'grid', gap: 6 }}>
+                <strong>포함 예정 목록</strong>
+                {fixedRescheduleScopePreview.includedLessons.length === 0 ? (
+                  <span style={{ opacity: 0.72 }}>포함될 수업이 없습니다.</span>
+                ) : (
+                  fixedRescheduleScopePreview.includedLessons.map((lesson) => (
+                    <div
+                      key={getFixedRescheduleLessonId(lesson)}
+                      data-testid="private-fixed-reschedule-scope-included-row"
+                      style={{
+                        display: 'grid',
+                        gap: 2,
+                        padding: '8px 10px',
+                        border: '1px solid #26364f',
+                        borderRadius: 8,
+                        background: '#151d2c',
+                      }}
+                    >
+                      <span>
+                        {getFixedRescheduleLessonDate(lesson) || '-'}{' '}
+                        {getFixedRescheduleLessonTime(lesson) || '-'} ·{' '}
+                        {getPrivateSlotTeacherDisplay(lesson)} ·{' '}
+                        {lesson.studentName || lesson.student || lesson.studentId || '-'}
+                      </span>
+                      <span style={{ opacity: 0.75 }}>
+                        package {getFixedReschedulePrimaryPackageId(lesson) || '-'} · batch{' '}
+                        {getFixedRescheduleBatchId(lesson) || '-'} · template{' '}
+                        {lesson.privateLessonAvailabilityTemplateId || '-'}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {fixedRescheduleScopePreview.excludedLessons.length > 0 ? (
+                <div style={{ display: 'grid', gap: 4, opacity: 0.76 }}>
+                  <strong>제외된 수업</strong>
+                  {fixedRescheduleScopePreview.excludedLessons.slice(0, 8).map(({ lesson, reason }) => (
+                    <span key={`${getFixedRescheduleLessonId(lesson)}:${reason}`}>
+                      {getFixedRescheduleLessonDate(lesson) || '-'}{' '}
+                      {getFixedRescheduleLessonTime(lesson) || '-'} · {reason}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                type="button"
+                data-testid="private-fixed-reschedule-scope-close"
+                onClick={closeFixedRescheduleScopePreview}
                 style={{
                   padding: '9px 14px',
                   borderRadius: 8,
