@@ -612,8 +612,14 @@ export default function PrivateLessonSlotsSection({
   fixedRescheduleServerPreviewBusy = false,
   fixedRescheduleServerPreviewError = '',
   fixedRescheduleServerPreviewPayload = null,
+  fixedRescheduleCommitBusy = false,
+  fixedRescheduleCommitError = '',
+  fixedRescheduleCommitResult = null,
+  fixedRescheduleCommitPayload = null,
   onPreviewFixedRescheduleScopeOnServer,
   onClearFixedRescheduleServerPreview,
+  onCommitFixedReschedule,
+  onClearFixedRescheduleCommitState,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -648,6 +654,8 @@ export default function PrivateLessonSlotsSection({
   const [showPastPrivateLessonSlots, setShowPastPrivateLessonSlots] = useState(false)
   const [showPastFixedPrivateLessons, setShowPastFixedPrivateLessons] = useState(false)
   const [showFixedPrivateRenewalConfirmModal, setShowFixedPrivateRenewalConfirmModal] =
+    useState(false)
+  const [showFixedRescheduleCommitConfirmModal, setShowFixedRescheduleCommitConfirmModal] =
     useState(false)
   const [selectedFixedRescheduleLesson, setSelectedFixedRescheduleLesson] = useState(null)
   const [fixedRescheduleScopeMode, setFixedRescheduleScopeMode] = useState('single')
@@ -780,7 +788,13 @@ export default function PrivateLessonSlotsSection({
   }
 
   function clearFixedRescheduleServerPreview() {
+    setShowFixedRescheduleCommitConfirmModal(false)
     onClearFixedRescheduleServerPreview?.()
+  }
+
+  function closeFixedRescheduleCommitConfirmModal() {
+    setShowFixedRescheduleCommitConfirmModal(false)
+    onClearFixedRescheduleCommitState?.()
   }
 
   function resetFixedRescheduleTargetDraft(lesson) {
@@ -855,6 +869,7 @@ export default function PrivateLessonSlotsSection({
 
   function previewFixedRescheduleScopeOnServer() {
     if (fixedRescheduleServerPreviewDisabledReason) return
+    setShowFixedRescheduleCommitConfirmModal(false)
     onPreviewFixedRescheduleScopeOnServer?.({
       selectedLesson: selectedFixedRescheduleLesson,
       scopeMode: fixedRescheduleScopeMode,
@@ -1188,6 +1203,51 @@ export default function PrivateLessonSlotsSection({
   const fixedRescheduleServerPreviewPlan = fixedRescheduleServerPreview?.normalizedPlan || {}
   const fixedRescheduleServerPreviewTeacherTime =
     fixedRescheduleServerPreview?.teacherTimePreparation || {}
+  const fixedRescheduleServerPreviewIncludedLessons = Array.isArray(
+    fixedRescheduleServerPreview?.includedLessons
+  )
+    ? fixedRescheduleServerPreview.includedLessons
+    : []
+  const fixedRescheduleServerPreviewExcludedLessons = Array.isArray(
+    fixedRescheduleServerPreview?.excludedLessons
+  )
+    ? fixedRescheduleServerPreview.excludedLessons
+    : []
+  const fixedRescheduleCommitTeacherTimeStatus = String(
+    fixedRescheduleServerPreviewTeacherTime.status ||
+      fixedRescheduleServerPreviewPlan.teacherTimePreparation?.status ||
+      ''
+  ).trim()
+  const canOpenFixedRescheduleCommitConfirmModal = Boolean(
+    fixedRescheduleServerPreview &&
+      fixedRescheduleServerPreview.ok === true &&
+      fixedRescheduleServerPreviewPayload &&
+      fixedRescheduleServerPreviewIncludedLessons.length > 0 &&
+      fixedRescheduleServerPreviewConflicts.length === 0 &&
+      !['conflict', 'missing_info'].includes(fixedRescheduleCommitTeacherTimeStatus) &&
+      !fixedRescheduleCommitBusy &&
+      !fixedRescheduleCommitResult
+  )
+  const canCommitFixedReschedule = Boolean(
+    canOpenFixedRescheduleCommitConfirmModal &&
+      typeof onCommitFixedReschedule === 'function' &&
+      !fixedRescheduleCommitBusy &&
+      !fixedRescheduleCommitResult
+  )
+  const fixedRescheduleCommitUpdated = fixedRescheduleCommitResult?.updated || {}
+  const fixedRescheduleCommitUpdatedLessons = Array.isArray(fixedRescheduleCommitUpdated.lessons)
+    ? fixedRescheduleCommitUpdated.lessons
+    : []
+  const fixedRescheduleCommitUpdatedSlots = Array.isArray(
+    fixedRescheduleCommitUpdated.privateLessonSlots
+  )
+    ? fixedRescheduleCommitUpdated.privateLessonSlots
+    : []
+  const fixedRescheduleCommitUpdatedReservations = Array.isArray(
+    fixedRescheduleCommitUpdated.privateLessonReservations
+  )
+    ? fixedRescheduleCommitUpdated.privateLessonReservations
+    : []
   const fixedRescheduleTargetTeacherOption = useMemo(() => {
     const draftKeys = getFixedRescheduleTeacherKeys({
       teacherId: fixedRescheduleTargetDraft.targetTeacherId,
@@ -1204,6 +1264,12 @@ export default function PrivateLessonSlotsSection({
   }, [fixedRescheduleTargetDraft, teacherSelectOptions])
   const fixedRescheduleServerPreviewTargetSummary =
     fixedRescheduleServerPreview?.includedLessons?.[0]?.target || {}
+
+  useEffect(() => {
+    if (!canOpenFixedRescheduleCommitConfirmModal && !fixedRescheduleCommitResult) {
+      setShowFixedRescheduleCommitConfirmModal(false)
+    }
+  }, [canOpenFixedRescheduleCommitConfirmModal, fixedRescheduleCommitResult])
 
   const selectedPrivateBoardTeacherOption = useMemo(() => {
     if (teacherSelectOptions.length === 0) return null
@@ -5538,6 +5604,37 @@ export default function PrivateLessonSlotsSection({
                       {fixedRescheduleServerPreview.nextStep}
                     </span>
                   ) : null}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gap: 8,
+                      paddingTop: 8,
+                      borderTop: '1px solid #293246',
+                    }}
+                  >
+                    <span style={{ color: '#d7def0' }}>
+                      서버 검증이 통과한 경우에만 실제 수정 전 최종 확인을 진행합니다.
+                    </span>
+                    <span style={{ color: '#9ca3af' }}>아직 이 버튼만으로는 수정되지 않습니다.</span>
+                    <button
+                      type="button"
+                      data-testid="private-fixed-reschedule-commit-confirm-open"
+                      disabled={!canOpenFixedRescheduleCommitConfirmModal}
+                      onClick={() => setShowFixedRescheduleCommitConfirmModal(true)}
+                      style={{
+                        justifySelf: 'start',
+                        padding: '8px 12px',
+                        borderRadius: 8,
+                        border: '1px solid #60a5fa',
+                        background: canOpenFixedRescheduleCommitConfirmModal ? '#2563eb' : '#1f2937',
+                        color: canOpenFixedRescheduleCommitConfirmModal ? 'white' : '#9ca3af',
+                        cursor: canOpenFixedRescheduleCommitConfirmModal ? 'pointer' : 'not-allowed',
+                        fontWeight: 700,
+                      }}
+                    >
+                      수정 내용 최종 확인
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </div>
@@ -5554,6 +5651,378 @@ export default function PrivateLessonSlotsSection({
                   background: 'transparent',
                   color: 'white',
                   cursor: 'pointer',
+                }}
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showFixedRescheduleCommitConfirmModal && selectedFixedRescheduleLesson ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="private-fixed-reschedule-commit-confirm-title"
+          data-testid="private-fixed-reschedule-commit-confirm-modal"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.62)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1007,
+            padding: 16,
+          }}
+          onClick={(event) => {
+            if (event.target === event.currentTarget && !fixedRescheduleCommitBusy) {
+              closeFixedRescheduleCommitConfirmModal()
+            }
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              maxWidth: 860,
+              maxHeight: '90vh',
+              overflowY: 'auto',
+              background: '#151922',
+              border: '1px solid #2e3240',
+              borderRadius: 12,
+              padding: 20,
+              color: 'white',
+              boxSizing: 'border-box',
+            }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h2
+              id="private-fixed-reschedule-commit-confirm-title"
+              style={{ margin: '0 0 8px 0', fontSize: 18 }}
+            >
+              고정 수업 수정 최종 확인
+            </h2>
+            <div
+              style={{
+                display: 'grid',
+                gap: 4,
+                padding: 12,
+                border: '1px solid #3b4252',
+                borderRadius: 8,
+                background: '#111722',
+                color: '#d7def0',
+                fontSize: 13,
+                lineHeight: 1.6,
+                marginBottom: 14,
+              }}
+            >
+              <span>아직 수정하지 않았습니다.</span>
+              <span>아래 생성/수정 버튼을 누르면 고정 수업, 슬롯, 예약 문서가 실제 수정됩니다.</span>
+              <span>실행 전 변경 범위와 변경 후 값을 다시 확인하세요.</span>
+            </div>
+
+            <div style={{ display: 'grid', gap: 12, fontSize: 13, lineHeight: 1.6 }}>
+              <div
+                data-testid="private-fixed-reschedule-commit-selected-lesson"
+                style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}
+              >
+                <strong>선택한 수업</strong>
+                <div>
+                  {getFixedRescheduleLessonDate(selectedFixedRescheduleLesson) || '-'}{' '}
+                  {getFixedRescheduleLessonTime(selectedFixedRescheduleLesson) || '-'} · 학생{' '}
+                  {selectedFixedRescheduleLesson.studentName ||
+                    selectedFixedRescheduleLesson.student ||
+                    getFixedRescheduleStudentId(selectedFixedRescheduleLesson) ||
+                    '-'}{' '}
+                  · 선생님 {getPrivateSlotTeacherDisplay(selectedFixedRescheduleLesson)}
+                </div>
+                <div>
+                  package {getFixedReschedulePrimaryPackageId(selectedFixedRescheduleLesson) || '-'} ·
+                  batch {getFixedRescheduleBatchId(selectedFixedRescheduleLesson) || '-'} · template{' '}
+                  {selectedFixedRescheduleLesson.privateLessonAvailabilityTemplateId || '-'}
+                </div>
+              </div>
+
+              <div
+                data-testid="private-fixed-reschedule-commit-scope-summary"
+                style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}
+              >
+                <strong>변경 범위</strong>
+                <div>
+                  scope mode {fixedRescheduleServerPreview?.scopeMode || fixedRescheduleScopeMode || '-'} ·
+                  included {fixedRescheduleServerPreviewIncludedLessons.length}건 · excluded{' '}
+                  {fixedRescheduleServerPreviewExcludedLessons.length}건
+                </div>
+              </div>
+
+              <div
+                data-testid="private-fixed-reschedule-commit-before-summary"
+                style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}
+              >
+                <strong>변경 전 값</strong>
+                <div>기존 날짜: {getFixedRescheduleLessonDate(selectedFixedRescheduleLesson) || '-'}</div>
+                <div>기존 시간: {getFixedRescheduleLessonTime(selectedFixedRescheduleLesson) || '-'}</div>
+                <div>기존 선생님: {getPrivateSlotTeacherDisplay(selectedFixedRescheduleLesson)}</div>
+                <div>
+                  기존 수업 길이: {getFixedRescheduleDurationMinutes(selectedFixedRescheduleLesson)}분
+                </div>
+                <div>기존 수업명: {getFixedRescheduleLessonName(selectedFixedRescheduleLesson)}</div>
+              </div>
+
+              <div
+                data-testid="private-fixed-reschedule-commit-target-summary"
+                style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}
+              >
+                <strong>변경 후 값</strong>
+                <div>targetDate: {fixedRescheduleServerPreviewTargetSummary.date || '-'}</div>
+                <div>targetTime: {fixedRescheduleServerPreviewTargetSummary.time || '-'}</div>
+                <div>
+                  targetTeacherName:{' '}
+                  {fixedRescheduleServerPreviewTargetSummary.teacherName ||
+                    fixedRescheduleServerPreviewTargetSummary.teacherKey ||
+                    fixedRescheduleServerPreviewTargetSummary.teacherUid ||
+                    '-'}
+                </div>
+                <div>
+                  targetDurationMinutes:{' '}
+                  {Number(fixedRescheduleServerPreviewTargetSummary.durationMinutes || 0) || '-'}
+                </div>
+                <div>targetLessonName: {fixedRescheduleServerPreviewTargetSummary.lessonName || '-'}</div>
+              </div>
+
+              <div
+                data-testid="private-fixed-reschedule-commit-would-update"
+                style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}
+              >
+                <strong>수정 예정 항목</strong>
+                <div>
+                  lessons {Number(fixedRescheduleServerPreviewWouldUpdate.lessons || 0)}건 ·
+                  privateLessonSlots{' '}
+                  {Number(fixedRescheduleServerPreviewWouldUpdate.privateLessonSlots || 0)}건 ·
+                  privateLessonReservations{' '}
+                  {Number(fixedRescheduleServerPreviewWouldUpdate.privateLessonReservations || 0)}건
+                </div>
+                <div>
+                  teacherTemplateAction{' '}
+                  {fixedRescheduleServerPreviewWouldUpdate.teacherTemplateAction || '-'} ·
+                  teacherTimePreparation.status {fixedRescheduleCommitTeacherTimeStatus || '-'}
+                </div>
+              </div>
+
+              <div style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}>
+                <strong>included lessons</strong>
+                <div style={{ display: 'grid', gap: 4, marginTop: 6 }}>
+                  {fixedRescheduleServerPreviewIncludedLessons.map((lesson, index) => (
+                    <span
+                      key={`fixed-reschedule-commit-included-${lesson.id || index}`}
+                      data-testid="private-fixed-reschedule-commit-included-row"
+                    >
+                      {lesson.date || '-'} {lesson.time || '-'} · 학생{' '}
+                      {lesson.studentName || lesson.studentId || '-'} · 선생님{' '}
+                      {lesson.teacherName || lesson.teacherKey || lesson.teacherUid || '-'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}>
+                <strong>excluded lessons</strong>
+                <div style={{ display: 'grid', gap: 4, marginTop: 6 }}>
+                  {fixedRescheduleServerPreviewExcludedLessons.length > 0 ? (
+                    fixedRescheduleServerPreviewExcludedLessons.map((lesson, index) => (
+                      <span
+                        key={`fixed-reschedule-commit-excluded-${lesson.id || index}`}
+                        data-testid="private-fixed-reschedule-commit-excluded-row"
+                      >
+                        {lesson.date || '-'} {lesson.time || '-'} ·{' '}
+                        {lesson.reason || lesson.message || lesson.code || '-'}
+                      </span>
+                    ))
+                  ) : (
+                    <span data-testid="private-fixed-reschedule-commit-excluded-row">제외 없음</span>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}>
+                <strong>warnings/conflicts</strong>
+                <div style={{ display: 'grid', gap: 4, marginTop: 6 }}>
+                  {fixedRescheduleServerPreviewConflicts.length > 0 ? (
+                    fixedRescheduleServerPreviewConflicts.map((conflict, index) => (
+                      <span
+                        key={`fixed-reschedule-commit-conflict-${index}`}
+                        data-testid="private-fixed-reschedule-commit-conflict"
+                        style={{ color: '#fca5a5' }}
+                      >
+                        conflicts가 있다면 commit 불가 ·{' '}
+                        {typeof conflict === 'string'
+                          ? conflict
+                          : conflict.message || conflict.code || JSON.stringify(conflict)}
+                      </span>
+                    ))
+                  ) : (
+                    <span data-testid="private-fixed-reschedule-commit-conflict">
+                      commit 차단 conflict 없음
+                    </span>
+                  )}
+                  {fixedRescheduleServerPreviewWarnings.length > 0 ? (
+                    fixedRescheduleServerPreviewWarnings.map((warning, index) => (
+                      <span
+                        key={`fixed-reschedule-commit-warning-${index}`}
+                        data-testid="private-fixed-reschedule-commit-warning"
+                        style={{ color: '#f5c17a' }}
+                      >
+                        {typeof warning === 'string'
+                          ? warning
+                          : warning.message || warning.code || JSON.stringify(warning)}
+                      </span>
+                    ))
+                  ) : (
+                    <span data-testid="private-fixed-reschedule-commit-warning">warning 없음</span>
+                  )}
+                </div>
+              </div>
+
+              <div
+                data-testid="private-fixed-reschedule-commit-request-id"
+                style={{ padding: 12, border: '1px solid #293246', borderRadius: 8 }}
+              >
+                <strong>requestId / batch 후보</strong>
+                <div>requestId: {fixedRescheduleServerPreviewPayload?.requestId || '-'}</div>
+                <div>
+                  payload source: 서버 dryRun 통과 시 보관한 fixedRescheduleServerPreviewPayload를
+                  그대로 사용합니다.
+                </div>
+              </div>
+            </div>
+
+            {fixedRescheduleCommitError ? (
+              <div
+                data-testid="private-fixed-reschedule-commit-error"
+                style={{
+                  display: 'grid',
+                  gap: 4,
+                  marginTop: 14,
+                  padding: 12,
+                  border: '1px solid #7f1d1d',
+                  borderRadius: 8,
+                  background: '#2f1111',
+                  color: '#fecaca',
+                  fontSize: 13,
+                }}
+              >
+                <strong>수정 실행 중 오류가 발생했습니다.</strong>
+                <span>{fixedRescheduleCommitError}</span>
+                <span>변경 범위를 다시 서버 검증한 뒤 시도하세요.</span>
+                <span>같은 요청을 반복하지 말고 상태를 확인하세요.</span>
+              </div>
+            ) : null}
+
+            {fixedRescheduleCommitResult ? (
+              <div
+                data-testid="private-fixed-reschedule-commit-result"
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  marginTop: 14,
+                  padding: 12,
+                  border: '1px solid #166534',
+                  borderRadius: 8,
+                  background: '#102719',
+                  color: '#dcfce7',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong>고정 수업 수정이 완료되었습니다</strong>
+                <span data-testid="private-fixed-reschedule-commit-result-batch-id">
+                  batchId: {fixedRescheduleCommitResult.batchId || '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-commit-result-idempotent-replay">
+                  idempotentReplay: {fixedRescheduleCommitResult.idempotentReplay ? '예' : '아니오'}
+                </span>
+                <span data-testid="private-fixed-reschedule-commit-result-updated">
+                  updated lessons {fixedRescheduleCommitUpdatedLessons.length}건 ·
+                  privateLessonSlots {fixedRescheduleCommitUpdatedSlots.length}건 ·
+                  privateLessonReservations {fixedRescheduleCommitUpdatedReservations.length}건
+                </span>
+                <span data-testid="private-fixed-reschedule-commit-result-teacher-template">
+                  teacherTemplateAction {fixedRescheduleCommitUpdated.teacherTemplateAction || '-'} ·
+                  teacherTemplateId {fixedRescheduleCommitUpdated.teacherTemplateId || '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-commit-result-normalized-plan">
+                  normalizedPlan:{' '}
+                  {JSON.stringify(fixedRescheduleCommitResult.normalizedPlan || {})}
+                </span>
+                <span>nextStep: {fixedRescheduleCommitResult.nextStep || '-'}</span>
+                <span>requestId: {fixedRescheduleCommitPayload?.requestId || '-'}</span>
+              </div>
+            ) : null}
+
+            <div
+              data-testid="private-fixed-reschedule-commit-warning-note"
+              style={{
+                display: 'grid',
+                gap: 4,
+                marginTop: 14,
+                padding: 12,
+                border: '1px solid #92400e',
+                borderRadius: 8,
+                background: '#231609',
+                color: '#fed7aa',
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              <span>이 버튼을 누르면 고정 수업, 슬롯, 예약 문서가 실제 수정됩니다.</span>
+              <span>처리 중에는 중복 클릭을 막기 위해 버튼이 잠깁니다.</span>
+              <span>수정 후에는 기존 고정 1:1 수업 일정에서 확인할 수 있습니다.</span>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                gap: 8,
+                justifyContent: 'flex-end',
+                marginTop: 18,
+              }}
+            >
+              <button
+                type="button"
+                data-testid="private-fixed-reschedule-commit-button"
+                onClick={onCommitFixedReschedule}
+                disabled={!canCommitFixedReschedule}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #60a5fa',
+                  background: canCommitFixedReschedule ? '#2563eb' : '#1f2937',
+                  color: canCommitFixedReschedule ? 'white' : '#9ca3af',
+                  cursor: canCommitFixedReschedule ? 'pointer' : 'not-allowed',
+                  fontWeight: 700,
+                }}
+              >
+                {fixedRescheduleCommitBusy ? (
+                  <span data-testid="private-fixed-reschedule-commit-loading">
+                    고정 수업 수정 중...
+                  </span>
+                ) : (
+                  '위 내용으로 고정 수업 수정'
+                )}
+              </button>
+              <button
+                type="button"
+                data-testid="private-fixed-reschedule-commit-close"
+                onClick={closeFixedRescheduleCommitConfirmModal}
+                disabled={fixedRescheduleCommitBusy}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: 8,
+                  border: '1px solid #555',
+                  background: 'transparent',
+                  color: fixedRescheduleCommitBusy ? '#9ca3af' : 'white',
+                  cursor: fixedRescheduleCommitBusy ? 'not-allowed' : 'pointer',
                 }}
               >
                 닫기
