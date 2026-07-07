@@ -1459,6 +1459,10 @@ export default function Dashboard() {
   const [fixedRescheduleServerPreviewError, setFixedRescheduleServerPreviewError] = useState('')
   const [fixedRescheduleServerPreviewPayload, setFixedRescheduleServerPreviewPayload] =
     useState(null)
+  const [fixedRescheduleCommitBusy, setFixedRescheduleCommitBusy] = useState(false)
+  const [fixedRescheduleCommitError, setFixedRescheduleCommitError] = useState('')
+  const [fixedRescheduleCommitResult, setFixedRescheduleCommitResult] = useState(null)
+  const [fixedRescheduleCommitPayload, setFixedRescheduleCommitPayload] = useState(null)
   const [fixedPrivateRenewalCommitBusy, setFixedPrivateRenewalCommitBusy] = useState(false)
   const [fixedPrivateRenewalCommitError, setFixedPrivateRenewalCommitError] = useState('')
   const [fixedPrivateRenewalCommitResult, setFixedPrivateRenewalCommitResult] = useState(null)
@@ -7428,10 +7432,18 @@ export default function Dashboard() {
     }
   }
 
+  function clearFixedRescheduleCommitState() {
+    setFixedRescheduleCommitBusy(false)
+    setFixedRescheduleCommitError('')
+    setFixedRescheduleCommitResult(null)
+    setFixedRescheduleCommitPayload(null)
+  }
+
   function clearFixedRescheduleServerPreview() {
     setFixedRescheduleServerPreview(null)
     setFixedRescheduleServerPreviewError('')
     setFixedRescheduleServerPreviewPayload(null)
+    clearFixedRescheduleCommitState()
   }
 
   async function previewFixedRescheduleScopeOnServer({
@@ -7442,6 +7454,7 @@ export default function Dashboard() {
     targetDraft,
   } = {}) {
     setFixedRescheduleServerPreviewPayload(null)
+    clearFixedRescheduleCommitState()
 
     try {
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
@@ -7509,6 +7522,62 @@ export default function Dashboard() {
       )
     } finally {
       setFixedRescheduleServerPreviewBusy(false)
+    }
+  }
+
+  async function handleCommitFixedPrivateReschedule() {
+    if (fixedRescheduleCommitBusy || fixedRescheduleCommitResult) return
+
+    try {
+      const previewData = fixedRescheduleServerPreview || {}
+      const includedLessons = Array.isArray(previewData.includedLessons)
+        ? previewData.includedLessons
+        : []
+      const conflicts = Array.isArray(previewData.conflicts) ? previewData.conflicts : []
+      const teacherTimePreparationStatus = String(
+        previewData.teacherTimePreparation?.status ||
+          previewData.normalizedPlan?.teacherTimePreparation?.status ||
+          ''
+      ).trim()
+      if (!fixedRescheduleServerPreviewPayload) {
+        throw new Error('실행할 서버 검증 payload가 없습니다. 범위를 다시 검증해 주세요.')
+      }
+      if (previewData.ok !== true) {
+        throw new Error('서버 검증을 통과한 결과만 실제 수정할 수 있습니다.')
+      }
+      if (includedLessons.length === 0) {
+        throw new Error('수정 대상 수업이 없습니다. 범위를 다시 확인해 주세요.')
+      }
+      if (conflicts.length > 0) {
+        throw new Error('충돌이 있는 범위는 실제 수정할 수 없습니다.')
+      }
+      if (['conflict', 'missing_info'].includes(teacherTimePreparationStatus)) {
+        throw new Error('선생님 시간 준비 상태를 먼저 해결해 주세요.')
+      }
+
+      const payload = {
+        ...fixedRescheduleServerPreviewPayload,
+        commit: true,
+        dryRun: false,
+        previewOnly: false,
+      }
+
+      setFixedRescheduleCommitBusy(true)
+      setFixedRescheduleCommitError('')
+      setFixedRescheduleCommitResult(null)
+      setFixedRescheduleCommitPayload(payload)
+      const callable = httpsCallable(firebaseFunctions, 'updateFixedPrivateLessonScheduleScope')
+      const result = await callable(payload)
+      const commitData = result?.data || null
+      setFixedRescheduleCommitResult(commitData)
+      setFixedRescheduleCommitPayload(payload)
+    } catch (error) {
+      console.error('고정 1:1 수업 수정 실행 실패:', error)
+      setFixedRescheduleCommitResult(null)
+      setFixedRescheduleCommitPayload(null)
+      setFixedRescheduleCommitError(error?.message || '고정 수업 수정 실행에 실패했습니다.')
+    } finally {
+      setFixedRescheduleCommitBusy(false)
     }
   }
 
@@ -7592,8 +7661,14 @@ export default function Dashboard() {
     fixedRescheduleServerPreviewBusy,
     fixedRescheduleServerPreviewError,
     fixedRescheduleServerPreviewPayload,
+    fixedRescheduleCommitBusy,
+    fixedRescheduleCommitError,
+    fixedRescheduleCommitResult,
+    fixedRescheduleCommitPayload,
     onPreviewFixedRescheduleScopeOnServer: previewFixedRescheduleScopeOnServer,
     onClearFixedRescheduleServerPreview: clearFixedRescheduleServerPreview,
+    onCommitFixedReschedule: handleCommitFixedPrivateReschedule,
+    onClearFixedRescheduleCommitState: clearFixedRescheduleCommitState,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',

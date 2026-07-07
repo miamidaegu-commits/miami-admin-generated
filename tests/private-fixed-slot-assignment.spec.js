@@ -1453,8 +1453,6 @@ test('fixed private reschedule commit callable uses guarded transaction write mo
   expect(previewCallableBlock).not.toContain('previewOnly: false');
 
   const protectedPaths = [
-    'Dashboard.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -1570,7 +1568,7 @@ test('fixed private reschedule frontend calls dry-run preview only', () => {
     'async function previewFixedRescheduleScopeOnServer'
   );
   const handlerEnd = dashboardSource.indexOf(
-    'const privateLessonTeacherSelectOptions',
+    'async function handleCommitFixedPrivateReschedule',
     handlerStart
   );
   expect(handlerStart).toBeGreaterThanOrEqual(0);
@@ -1629,6 +1627,164 @@ test('fixed private reschedule frontend calls dry-run preview only', () => {
   });
 
   const protectedPaths = [
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  expect(changedProtectedFiles).toEqual([]);
+});
+
+test('fixed private reschedule frontend connects guarded commit confirmation UI', () => {
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const privateSlotsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+  const testSource = fs.readFileSync(
+    path.join(process.cwd(), 'tests/private-fixed-slot-assignment.spec.js'),
+    'utf8'
+  );
+
+  [
+    'updateFixedPrivateLessonScheduleScope',
+    'handleCommitFixedPrivateReschedule',
+    'fixedRescheduleCommitBusy',
+    'fixedRescheduleCommitError',
+    'fixedRescheduleCommitResult',
+    'fixedRescheduleCommitPayload',
+    'fixedRescheduleServerPreviewPayload',
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+  ].forEach((token) => {
+    expect(dashboardSource).toContain(token);
+  });
+
+  [
+    'showFixedRescheduleCommitConfirmModal',
+    'fixedRescheduleCommitBusy',
+    'fixedRescheduleCommitError',
+    'fixedRescheduleCommitResult',
+    'fixedRescheduleCommitPayload',
+    'onCommitFixedReschedule',
+    'onClearFixedRescheduleCommitState',
+    '수정 내용 최종 확인',
+    '고정 수업 수정 최종 확인',
+    '위 내용으로 고정 수업 수정',
+    '고정 수업 수정 중',
+    '고정 수업 수정이 완료되었습니다',
+    '이 버튼을 누르면 고정 수업, 슬롯, 예약 문서가 실제 수정됩니다',
+    '처리 중에는 중복 클릭을 막기 위해 버튼이 잠깁니다',
+    'private-fixed-reschedule-commit-confirm-open',
+    'private-fixed-reschedule-commit-confirm-modal',
+    'private-fixed-reschedule-commit-selected-lesson',
+    'private-fixed-reschedule-commit-scope-summary',
+    'private-fixed-reschedule-commit-before-summary',
+    'private-fixed-reschedule-commit-target-summary',
+    'private-fixed-reschedule-commit-would-update',
+    'private-fixed-reschedule-commit-included-row',
+    'private-fixed-reschedule-commit-excluded-row',
+    'private-fixed-reschedule-commit-warning',
+    'private-fixed-reschedule-commit-conflict',
+    'private-fixed-reschedule-commit-request-id',
+    'private-fixed-reschedule-commit-button',
+    'private-fixed-reschedule-commit-loading',
+    'private-fixed-reschedule-commit-warning-note',
+    'private-fixed-reschedule-commit-result',
+    'private-fixed-reschedule-commit-result-batch-id',
+    'private-fixed-reschedule-commit-result-idempotent-replay',
+    'private-fixed-reschedule-commit-result-updated',
+    'private-fixed-reschedule-commit-result-teacher-template',
+    'private-fixed-reschedule-commit-result-normalized-plan',
+    'private-fixed-reschedule-commit-error',
+    'private-fixed-reschedule-commit-close',
+  ].forEach((token) => {
+    expect(privateSlotsSectionSource).toContain(token);
+  });
+
+  const commitHandlerStart = dashboardSource.indexOf(
+    'async function handleCommitFixedPrivateReschedule'
+  );
+  const commitHandlerEnd = dashboardSource.indexOf(
+    'const privateLessonTeacherSelectOptions',
+    commitHandlerStart
+  );
+  expect(commitHandlerStart).toBeGreaterThanOrEqual(0);
+  expect(commitHandlerEnd).toBeGreaterThan(commitHandlerStart);
+  const commitHandlerSource = dashboardSource.slice(commitHandlerStart, commitHandlerEnd);
+  expect(commitHandlerSource).toContain('...fixedRescheduleServerPreviewPayload');
+  expect(commitHandlerSource).toContain('commit: true');
+  expect(commitHandlerSource).toContain('dryRun: false');
+  expect(commitHandlerSource).toContain('previewOnly: false');
+  expect(commitHandlerSource).toContain(
+    "httpsCallable(firebaseFunctions, 'updateFixedPrivateLessonScheduleScope')"
+  );
+  expect(commitHandlerSource).not.toContain('Date.now()');
+  expect(commitHandlerSource).not.toContain('Math.random()');
+  expect(commitHandlerSource).not.toContain('targetDraft');
+
+  const rescheduleFrontendStart = dashboardSource.indexOf(
+    'function clearFixedRescheduleCommitState'
+  );
+  const rescheduleFrontendEnd = dashboardSource.indexOf(
+    'const privateLessonTeacherSelectOptions',
+    rescheduleFrontendStart
+  );
+  expect(rescheduleFrontendStart).toBeGreaterThanOrEqual(0);
+  expect(rescheduleFrontendEnd).toBeGreaterThan(rescheduleFrontendStart);
+  const dashboardRescheduleFrontendSource = dashboardSource.slice(
+    rescheduleFrontendStart,
+    rescheduleFrontendEnd
+  );
+  const dashboardRescheduleFrontendWithoutCommitHandler = [
+    dashboardRescheduleFrontendSource.slice(0, commitHandlerStart - rescheduleFrontendStart),
+    dashboardRescheduleFrontendSource.slice(commitHandlerEnd - rescheduleFrontendStart),
+  ].join('\n');
+  ['commit: true', 'dryRun: false', 'previewOnly: false'].forEach((token) => {
+    expect(dashboardRescheduleFrontendWithoutCommitHandler).not.toContain(token);
+    expect(privateSlotsSectionSource).not.toContain(token);
+  });
+
+  const modalStart = privateSlotsSectionSource.indexOf(
+    'private-fixed-reschedule-commit-confirm-modal'
+  );
+  const modalEnd = privateSlotsSectionSource.indexOf('{fixedPrivateLessonAction ?', modalStart);
+  expect(modalStart).toBeGreaterThanOrEqual(0);
+  expect(modalEnd).toBeGreaterThan(modalStart);
+  const modalSource = privateSlotsSectionSource.slice(modalStart, modalEnd);
+  const commitButtonLabelMatches = modalSource.match(/위 내용으로 고정 수업 수정/g) || [];
+  expect(commitButtonLabelMatches.length).toBe(1);
+  [
+    '수정 저장',
+    '이 범위로 수정',
+    '범위 수정 실행',
+    '바로 수정',
+    '자동 수정',
+  ].forEach((forbiddenLabel) => {
+    expect(modalSource).not.toContain(forbiddenLabel);
+  });
+  expect(modalSource).not.toContain('>저장<');
+
+  const commitButtonTestId = 'private-fixed-reschedule-commit-button';
+  const clickToken = 'cli' + 'ck';
+  expect(testSource).not.toContain(`${commitButtonTestId}.${clickToken}`);
+  expect(testSource).not.toContain(`getByTestId('${commitButtonTestId}').${clickToken}`);
+  expect(testSource).not.toContain(`getByTestId("${commitButtonTestId}").${clickToken}`);
+
+  const protectedPaths = [
+    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',
