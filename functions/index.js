@@ -1695,6 +1695,12 @@ const FIXED_PRIVATE_RESCHEDULE_SCOPE_MODES = [
   "date_range",
 ];
 
+const FIXED_PRIVATE_RESCHEDULE_INSPECT_MODES = [
+  "before_commit",
+  "after_commit",
+  "generic",
+];
+
 const FIXED_PRIVATE_RESCHEDULE_BLOCKED_STATUSES = [
   "cancelled",
   "canceled",
@@ -1746,6 +1752,17 @@ function getFixedPrivateRescheduleCommitMode(data) {
     );
   }
   return {commit: true, dryRun: false, previewOnly: false};
+}
+
+function normalizeFixedPrivateRescheduleInspectMode(data) {
+  const mode = normalizeId(data && data.inspectMode) || "before_commit";
+  if (!FIXED_PRIVATE_RESCHEDULE_INSPECT_MODES.includes(mode)) {
+    throw new HttpsError(
+        "invalid-argument",
+        "inspectMode must be before_commit, after_commit, or generic.",
+    );
+  }
+  return mode;
 }
 
 function requireFixedPrivateRescheduleYmd(data, fieldName) {
@@ -1913,9 +1930,10 @@ function buildFixedPrivateRescheduleCommitValidation(data) {
         "targetDate is only allowed for single scope commit.",
     );
   }
-  const batchId = sanitizeFixedPrivateRenewalDocId(
-      `fixedPrivateReschedule_${academyId}_${requestId}`,
-  );
+  const batchId = getFixedPrivateRescheduleBatchIdCandidate({
+    academyId,
+    requestId,
+  });
   return {
     ...mode,
     requestId,
@@ -1942,6 +1960,12 @@ function buildFixedPrivateReschedulePayloadHash(validation) {
     dryRun: validation.dryRun,
     previewOnly: validation.previewOnly,
   });
+}
+
+function getFixedPrivateRescheduleBatchIdCandidate(validation) {
+  return sanitizeFixedPrivateRenewalDocId(
+      `fixedPrivateReschedule_${validation.academyId}_${validation.requestId}`,
+  );
 }
 
 function getFixedPrivateRescheduleLessonId(lesson) {
@@ -2052,6 +2076,63 @@ function summarizeFixedPrivateRescheduleLesson(lesson) {
     fixedPrivateAssignmentBatchId: getFixedPrivateRescheduleBatchId(lesson),
     privateLessonAvailabilityTemplateId:
       getFixedPrivateRescheduleTemplateId(lesson),
+  };
+}
+
+function summarizeFixedPrivateRescheduleLiveLesson(lesson) {
+  return {
+    ...summarizeFixedPrivateRescheduleLesson(lesson),
+    status: normalizeId((lesson && lesson.status) || "active"),
+    outcome: normalizeId(lesson && (lesson.outcome || lesson.attendanceStatus)),
+    cancellationType: normalizeId(lesson && lesson.cancellationType),
+    privateLessonSlotId: normalizeId(lesson && (
+      lesson.privateLessonSlotId || lesson.slotId
+    )),
+    privateLessonReservationId: normalizeId(lesson && (
+      lesson.privateLessonReservationId || lesson.reservationId
+    )),
+    excludedReason: getFixedPrivateRescheduleExcludedReason(lesson),
+  };
+}
+
+function summarizeFixedPrivateRescheduleLinkedDoc(row) {
+  return {
+    id: normalizeId(row && row.id),
+    academyId: normalizeId(row && row.academyId),
+    date: normalizeId(row && (row.date || row.lessonDate || row.scheduleDate)),
+    time: normalizeId(row && (row.time || row.startTime || row.scheduleTime)),
+    studentId: getPrivateRowStudentId(row),
+    teacherName: normalizeId(row && (row.teacherName || row.teacher)),
+    teacherKey: normalizeTeacherKey(row && row.teacherKey),
+    teacherUid: normalizeId(row && (row.teacherUid || row.teacherUID)),
+    durationMinutes: getPrivateScheduleDurationMinutes(row),
+    status: normalizeId(row && row.status),
+    lessonId: normalizeId(row && row.lessonId),
+    fixedLessonId: normalizeId(row && row.fixedLessonId),
+    packageId: normalizeId(row && (row.packageId || row.deductionPackageId)),
+    templateId: normalizeId(row && (
+      row.availabilityTemplateId ||
+      row.privateLessonAvailabilityTemplateId
+    )),
+  };
+}
+
+function normalizeFixedPrivateRescheduleInspectorTarget(validation) {
+  const target = validation.target || {};
+  const teacher = target.targetTeacher || {};
+  return {
+    targetDate: normalizeId(target.targetDate),
+    targetTime: normalizeId(target.targetTime),
+    targetDurationMinutes: target.targetDurationMinutes || null,
+    targetLessonName: normalizeId(target.targetLessonName),
+    targetPackageId: normalizeId(target.targetPackageId),
+    targetTeacher: target.targetTeacher ? {
+      teacherId: normalizeId(teacher.teacherId),
+      teacherUid: normalizeId(teacher.teacherUid),
+      teacherName: normalizeId(teacher.teacherName),
+      teacherKey: normalizeTeacherKey(teacher.teacherKey),
+    } : null,
+    hasAnyTargetChange: target.hasAnyTargetChange === true,
   };
 }
 
@@ -2897,6 +2978,302 @@ async function buildFixedPrivateReschedulePreviewResult({
     nextStep:
       "Frontend can show this dry-run result before enabling a later " +
       "commit flow.",
+  };
+}
+
+async function getFixedPrivateRescheduleLiveLessonSummary(db, validation) {
+  const lessonSnap = await db
+      .collection("lessons")
+      .doc(validation.selectedLessonId)
+      .get();
+  if (!lessonSnap.exists) {
+    return {exists: false, id: validation.selectedLessonId};
+  }
+  return {
+    exists: true,
+    ...summarizeFixedPrivateRescheduleLiveLesson({
+      id: lessonSnap.id,
+      ...lessonSnap.data(),
+    }),
+  };
+}
+
+async function getFixedPrivateRescheduleInspectorLinkedDocs(db, preview) {
+  const slotIds = normalizeIdList((preview.includedLessons || []).flatMap(
+      (row) => row.linkedSlotIds || [],
+  ));
+  const reservationIds = normalizeIdList(
+      (preview.includedLessons || []).flatMap(
+          (row) => row.linkedReservationIds || [],
+      ),
+  );
+  const [slotSnaps, reservationSnaps] = await Promise.all([
+    Promise.all(slotIds.map((slotId) =>
+      db.collection("privateLessonSlots").doc(slotId).get(),
+    )),
+    Promise.all(reservationIds.map((reservationId) =>
+      db.collection("privateLessonReservations").doc(reservationId).get(),
+    )),
+  ]);
+  const privateLessonSlots = slotSnaps.map((snap) => {
+    return snap.exists ?
+      {exists: true, ...summarizeFixedPrivateRescheduleLinkedDoc({
+        id: snap.id,
+        ...snap.data(),
+      })} :
+      {exists: false, id: snap.id};
+  });
+  const privateLessonReservations = reservationSnaps.map((snap) => {
+    return snap.exists ?
+      {exists: true, ...summarizeFixedPrivateRescheduleLinkedDoc({
+        id: snap.id,
+        ...snap.data(),
+      })} :
+      {exists: false, id: snap.id};
+  });
+  return {
+    privateLessonSlots,
+    privateLessonReservations,
+    counts: {
+      privateLessonSlots: privateLessonSlots.length,
+      privateLessonReservations: privateLessonReservations.length,
+      missingPrivateLessonSlots:
+        privateLessonSlots.filter((row) => !row.exists).length,
+      missingPrivateLessonReservations:
+        privateLessonReservations.filter((row) => !row.exists).length,
+    },
+  };
+}
+
+async function getFixedPrivateRescheduleInspectorCheckpoint(db, {
+  validation,
+  batchIdCandidate,
+}) {
+  const commitPayloadHashCandidate = buildFixedPrivateReschedulePayloadHash({
+    ...validation,
+    commit: true,
+    dryRun: false,
+    previewOnly: false,
+  });
+  const batchSnap = await db
+      .collection("fixedPrivateRescheduleBatches")
+      .doc(batchIdCandidate)
+      .get();
+  if (!batchSnap.exists) {
+    return {
+      exists: false,
+      code: "after_commit_batch_missing",
+      batchId: batchIdCandidate,
+      payloadHashCandidate: commitPayloadHashCandidate,
+    };
+  }
+  const checkpoint = batchSnap.data() || {};
+  return {
+    exists: true,
+    code: "checkpoint_already_exists",
+    batchId: batchSnap.id,
+    requestId: normalizeId(checkpoint.requestId),
+    status: normalizeId(checkpoint.status),
+    selectedLessonId: normalizeId(checkpoint.selectedLessonId),
+    scopeMode: normalizeId(checkpoint.scopeMode),
+    payloadHashMatches:
+      normalizeId(checkpoint.payloadHash) === commitPayloadHashCandidate,
+    updated: buildFixedPrivateRescheduleUpdatedFromCheckpoint(checkpoint),
+    includedLessonIds: normalizeIdList(checkpoint.includedLessonIds),
+    excludedLessons: Array.isArray(checkpoint.excludedLessons) ?
+      checkpoint.excludedLessons :
+      [],
+    teacherTemplateId: normalizeId(checkpoint.teacherTemplateId),
+    teacherTemplateAction: normalizeId(checkpoint.teacherTemplateAction),
+  };
+}
+
+async function getFixedPrivateRescheduleInspectorLessonSnapshots(db, {
+  academyId,
+  selectedLesson,
+}) {
+  const sameBatchLessons = [];
+  const samePackageLessons = [];
+  const batchId = normalizeId(selectedLesson.fixedPrivateAssignmentBatchId);
+  const packageId = normalizeId(selectedLesson.packageId);
+  if (batchId) {
+    const batchSnap = await db.collection("lessons")
+        .where("academyId", "==", academyId)
+        .where("fixedPrivateAssignmentBatchId", "==", batchId)
+        .limit(100)
+        .get();
+    batchSnap.docs.forEach((docSnap) => {
+      sameBatchLessons.push(summarizeFixedPrivateRescheduleLiveLesson({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
+    });
+  }
+  if (packageId) {
+    const packageSnap = await db.collection("lessons")
+        .where("academyId", "==", academyId)
+        .where("packageId", "==", packageId)
+        .limit(100)
+        .get();
+    packageSnap.docs.forEach((docSnap) => {
+      samePackageLessons.push(summarizeFixedPrivateRescheduleLiveLesson({
+        id: docSnap.id,
+        ...docSnap.data(),
+      }));
+    });
+  }
+  return {
+    sameBatchLessons,
+    samePackageLessons,
+    counts: {
+      sameBatchLessons: sameBatchLessons.length,
+      samePackageLessons: samePackageLessons.length,
+    },
+  };
+}
+
+function buildFixedPrivateRescheduleInspectorConsistency({
+  preview,
+  linkedDocs,
+  checkpoint,
+  inspectMode,
+}) {
+  const conflicts = Array.isArray(preview.conflicts) ? preview.conflicts : [];
+  const warnings = Array.isArray(preview.warnings) ? preview.warnings : [];
+  const includedLessons = Array.isArray(preview.includedLessons) ?
+    preview.includedLessons :
+    [];
+  const wouldUpdate = preview.wouldUpdate || {};
+  const teacherTimeStatus = normalizeId(
+      preview.teacherTimePreparation && preview.teacherTimePreparation.status,
+  );
+  const linkedSlotCountMatches =
+    Number(wouldUpdate.privateLessonSlots || 0) ===
+    linkedDocs.counts.privateLessonSlots;
+  const linkedReservationCountMatches =
+    Number(wouldUpdate.privateLessonReservations || 0) ===
+    linkedDocs.counts.privateLessonReservations;
+  const missingLinkedDocs =
+    linkedDocs.counts.missingPrivateLessonSlots +
+    linkedDocs.counts.missingPrivateLessonReservations;
+  const checkpointBlocksBeforeCommit =
+    inspectMode === "before_commit" && checkpoint.exists === true;
+  const checkpointMissingAfterCommit =
+    inspectMode === "after_commit" && checkpoint.exists !== true;
+  return {
+    ok: preview.ok === true &&
+      includedLessons.length > 0 &&
+      conflicts.length === 0 &&
+      !["conflict", "missing_info", "duplicate"].includes(teacherTimeStatus) &&
+      linkedSlotCountMatches &&
+      linkedReservationCountMatches &&
+      missingLinkedDocs === 0 &&
+      !checkpointBlocksBeforeCommit &&
+      !checkpointMissingAfterCommit,
+    canProceedToCommitCandidate: inspectMode !== "after_commit" &&
+      preview.ok === true &&
+      conflicts.length === 0 &&
+      missingLinkedDocs === 0 &&
+      checkpoint.exists !== true,
+    dryRunOk: preview.ok === true,
+    inspectMode,
+    includedCount: includedLessons.length,
+    excludedCount: Array.isArray(preview.excludedLessons) ?
+      preview.excludedLessons.length :
+      0,
+    conflictCount: conflicts.length,
+    warningCount: warnings.length,
+    linkedSlotCountMatches,
+    linkedReservationCountMatches,
+    missingLinkedDocs,
+    teacherTimeStatus,
+    checkpointExists: checkpoint.exists === true,
+    checkpointCode: normalizeId(checkpoint.code),
+    afterCommitTargetMismatch: false,
+    afterCommitTargetMismatchCode: "after_commit_target_mismatch",
+  };
+}
+
+async function buildFixedPrivateRescheduleInspectorResult({
+  db,
+  validation,
+  inspectMode,
+}) {
+  const batchIdCandidate =
+    getFixedPrivateRescheduleBatchIdCandidate(validation);
+  const preview = await buildFixedPrivateReschedulePreviewResult({
+    db,
+    validation,
+  });
+  const [selectedLesson, linkedDocs, checkpoint] = await Promise.all([
+    getFixedPrivateRescheduleLiveLessonSummary(db, validation),
+    getFixedPrivateRescheduleInspectorLinkedDocs(db, preview),
+    getFixedPrivateRescheduleInspectorCheckpoint(db, {
+      validation,
+      batchIdCandidate,
+    }),
+  ]);
+  const lessonSnapshots =
+    await getFixedPrivateRescheduleInspectorLessonSnapshots(db, {
+      academyId: validation.academyId,
+      selectedLesson,
+    });
+  const normalizedTarget =
+    normalizeFixedPrivateRescheduleInspectorTarget(validation);
+  const targetConflicts = {
+    conflicts: preview.conflicts || [],
+    conflictCount: (preview.conflicts || []).length,
+    checkedDates: preview.normalizedPlan &&
+      preview.normalizedPlan.targetDates ?
+      preview.normalizedPlan.targetDates :
+      [],
+  };
+  const targetTemplate = preview.teacherTimePreparation || {};
+  const fixedPrivateRescheduleBatch = checkpoint;
+  const consistency = buildFixedPrivateRescheduleInspectorConsistency({
+    preview,
+    linkedDocs,
+    checkpoint,
+    inspectMode,
+  });
+  return {
+    ok: true,
+    readOnly: true,
+    inspectOnly: true,
+    inspectMode,
+    dryRun: true,
+    previewOnly: true,
+    commit: false,
+    requestId: validation.requestId,
+    selectedLessonId: validation.selectedLessonId,
+    scopeMode: validation.scopeMode,
+    batchIdCandidate,
+    selectedLesson,
+    normalizedTarget,
+    linkedSlot: {
+      rows: linkedDocs.privateLessonSlots,
+      count: linkedDocs.counts.privateLessonSlots,
+      missingCount: linkedDocs.counts.missingPrivateLessonSlots,
+    },
+    linkedReservation: {
+      rows: linkedDocs.privateLessonReservations,
+      count: linkedDocs.counts.privateLessonReservations,
+      missingCount: linkedDocs.counts.missingPrivateLessonReservations,
+    },
+    linkedDocs,
+    targetTemplate,
+    targetConflicts,
+    targetConflictInspection: targetConflicts,
+    teacherTemplateInspection: targetTemplate,
+    fixedPrivateRescheduleBatch,
+    checkpointInspection: fixedPrivateRescheduleBatch,
+    sameBatchLessons: lessonSnapshots.sameBatchLessons,
+    samePackageLessons: lessonSnapshots.samePackageLessons,
+    dryRunPreview: preview,
+    consistency,
+    canProceedToCommitCandidate: consistency.canProceedToCommitCandidate,
+    nextStep:
+      "Review this read-only inspector result before any controlled write QA.",
   };
 }
 
@@ -10605,6 +10982,39 @@ exports.updateFixedPrivateLessonScheduleScope = onCall({
       auth: request.auth,
       membership,
       validation,
+    });
+  } catch (error) {
+    throw asHttpsError(error);
+  }
+});
+
+exports.inspectFixedPrivateLessonRescheduleScope = onCall({
+  region: REGION,
+  cors: true,
+}, async (request) => {
+  try {
+    // Static guard: readOnly inspectOnly dryRun previewOnly commit false.
+    // Static guard: before_commit after_commit generic normalizedTarget.
+    // Static guard: selectedLesson linkedSlot linkedReservation.
+    // Static guard: targetTemplate targetConflicts.
+    // Static guard: fixedPrivateRescheduleBatch consistency.
+    if (!request.auth) {
+      throw new HttpsError("unauthenticated", "Login required.");
+    }
+
+    const data = request.data || {};
+    const validation = buildFixedPrivateRescheduleValidation(data);
+    const inspectMode = normalizeFixedPrivateRescheduleInspectMode(data);
+    const db = admin.firestore();
+    await requireAcademyAdmin(
+        db,
+        validation.academyId,
+        request.auth.uid,
+    );
+    return await buildFixedPrivateRescheduleInspectorResult({
+      db,
+      validation,
+      inspectMode,
     });
   } catch (error) {
     throw asHttpsError(error);
