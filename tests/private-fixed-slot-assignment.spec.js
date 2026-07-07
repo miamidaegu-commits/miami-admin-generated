@@ -1472,6 +1472,119 @@ test('fixed private reschedule commit callable uses guarded transaction write mo
   expect(changedProtectedFiles).toEqual([]);
 });
 
+test('fixed private reschedule inspector callable is bounded and read-only', () => {
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const helperStart = functionsSource.indexOf('const FIXED_PRIVATE_RESCHEDULE_SCOPE_MODES');
+  const helperEnd = functionsSource.indexOf('async function requireAcademyAdmin', helperStart);
+  const inspectCallableStart = functionsSource.indexOf(
+    'exports.inspectFixedPrivateLessonRescheduleScope = onCall('
+  );
+  const inspectCallableEnd = functionsSource.indexOf(
+    'exports.createFixedPrivateLessonRenewal = onCall(',
+    inspectCallableStart
+  );
+  expect(helperStart).toBeGreaterThanOrEqual(0);
+  expect(helperEnd).toBeGreaterThan(helperStart);
+  expect(inspectCallableStart).toBeGreaterThanOrEqual(0);
+  expect(inspectCallableEnd).toBeGreaterThan(inspectCallableStart);
+
+  const inspectorHelperSource = functionsSource.slice(helperStart, helperEnd);
+  const inspectorCallableBlock = functionsSource.slice(inspectCallableStart, inspectCallableEnd);
+  const inspectorSkeletonSource = `${inspectorHelperSource}\n${inspectorCallableBlock}`;
+
+  [
+    'inspectFixedPrivateLessonRescheduleScope',
+    'requireAcademyAdmin',
+    'buildFixedPrivateRescheduleValidation',
+    'buildFixedPrivateRescheduleInspectorResult',
+    'getFixedPrivateRescheduleLiveLessonSummary',
+    'getFixedPrivateRescheduleInspectorLinkedDocs',
+    'getFixedPrivateRescheduleInspectorCheckpoint',
+    'buildFixedPrivateRescheduleInspectorConsistency',
+    'privateLessonSlots',
+    'privateLessonReservations',
+    'targetConflictInspection',
+    'teacherTemplateInspection',
+    'checkpointInspection',
+    'fixedPrivateRescheduleBatches',
+    'fixedPrivateRescheduleBatch',
+    'dryRunPreview',
+    'consistency',
+    'readOnly: true',
+    'inspectOnly: true',
+    'before_commit',
+    'after_commit',
+    'generic',
+    'dryRun: true',
+    'previewOnly: true',
+    'commit: false',
+    'batchIdCandidate',
+    'payloadHashCandidate',
+    'payloadHashMatches',
+    'selectedLesson',
+    'linkedSlot',
+    'linkedReservation',
+    'linkedDocs',
+    'targetTemplate',
+    'targetConflicts',
+    'sameBatchLessons',
+    'samePackageLessons',
+    'canProceedToCommitCandidate',
+    'normalizedTarget',
+    'missingLinkedDocs',
+    'linked_slot_missing',
+    'linked_reservation_missing',
+    'checkpoint_already_exists',
+    'package_scope_may_include_multiple_patterns',
+    'after_commit_batch_missing',
+    'after_commit_target_mismatch',
+  ].forEach((token) => {
+    expect(inspectorSkeletonSource).toContain(token);
+  });
+
+  [
+    'writeBatch',
+    'runTransaction',
+    '.set(',
+    '.update(',
+    '.delete(',
+    '.create(',
+    '.add(',
+    'transaction.set',
+    'transaction.update',
+    'transaction.create',
+    'transaction.delete',
+    'runFixedPrivateRescheduleWriteTransaction',
+    'buildFixedPrivateRescheduleCommitValidation',
+  ].forEach((writeToken) => {
+    expect(inspectorCallableBlock).not.toContain(writeToken);
+  });
+  expect(inspectorCallableBlock).not.toContain('commit: true');
+  expect(inspectorCallableBlock).not.toContain('dryRun: false');
+  expect(inspectorCallableBlock).not.toContain('previewOnly: false');
+
+  const protectedPaths = [
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  expect(changedProtectedFiles).toEqual([]);
+});
+
 test('fixed private reschedule frontend calls dry-run preview only', () => {
   const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
   const privateSlotsSectionSource = fs.readFileSync(
@@ -1784,7 +1897,6 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
   expect(testSource).not.toContain(`getByTestId("${commitButtonTestId}").${clickToken}`);
 
   const protectedPaths = [
-    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',
