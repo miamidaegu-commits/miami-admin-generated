@@ -1569,8 +1569,6 @@ test('fixed private reschedule inspector callable is bounded and read-only', () 
     'package-lock.json',
     'functions/package.json',
     'functions/package-lock.json',
-    'Dashboard.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'StudentBookingPage.jsx',
     'index.css',
   ];
@@ -1897,6 +1895,132 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
   expect(testSource).not.toContain(`getByTestId("${commitButtonTestId}").${clickToken}`);
 
   const protectedPaths = [
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  expect(changedProtectedFiles).toEqual([]);
+});
+
+test('fixed private reschedule frontend connects read-only inspector gate', () => {
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const privateSlotsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+  const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+
+  [
+    'inspectFixedPrivateLessonRescheduleScope',
+    'inspectFixedRescheduleStateOnServer',
+    'fixedRescheduleInspectorResult',
+    'fixedRescheduleInspectorBusy',
+    'fixedRescheduleInspectorError',
+    'fixedRescheduleInspectorPayload',
+    'clearFixedRescheduleInspectorState',
+    "mode: 'before_commit'",
+    'readOnly',
+    'canProceedToCommitCandidate',
+  ].forEach((token) => {
+    expect(dashboardSource).toContain(token);
+  });
+
+  [
+    'DB 원장 확인',
+    'DB 원장 확인 중',
+    'DB 원장 확인 결과',
+    '실제 수정 전 DB 원장 확인을 먼저 실행하세요',
+    '이 확인은 read-only이며 수업, 슬롯, 예약 문서를 수정하지 않습니다',
+    '원장 확인이 통과하면 실제 수정 버튼이 활성화됩니다',
+    'readOnly',
+    'canProceedToCommitCandidate',
+    'selectedLesson',
+    'linkedSlot',
+    'linkedReservation',
+    'targetTemplate',
+    'targetConflicts',
+    'fixedPrivateRescheduleBatch',
+    'consistency',
+    'private-fixed-reschedule-inspector-button',
+    'private-fixed-reschedule-inspector-loading',
+    'private-fixed-reschedule-inspector-result',
+    'private-fixed-reschedule-inspector-readonly',
+    'private-fixed-reschedule-inspector-selected-lesson',
+    'private-fixed-reschedule-inspector-linked-slot',
+    'private-fixed-reschedule-inspector-linked-reservation',
+    'private-fixed-reschedule-inspector-target-template',
+    'private-fixed-reschedule-inspector-conflict',
+    'private-fixed-reschedule-inspector-batch',
+    'private-fixed-reschedule-inspector-consistency',
+    'private-fixed-reschedule-inspector-warning',
+    'private-fixed-reschedule-inspector-error',
+    'private-fixed-reschedule-inspector-next-step',
+    'private-fixed-reschedule-commit-gated-note',
+    'private-fixed-reschedule-inspector-no-write-note',
+  ].forEach((token) => {
+    expect(privateSlotsSectionSource).toContain(token);
+  });
+
+  const inspectorHandlerStart = dashboardSource.indexOf(
+    'async function inspectFixedRescheduleStateOnServer'
+  );
+  const inspectorHandlerEnd = dashboardSource.indexOf(
+    'async function handleCommitFixedPrivateReschedule',
+    inspectorHandlerStart
+  );
+  expect(inspectorHandlerStart).toBeGreaterThanOrEqual(0);
+  expect(inspectorHandlerEnd).toBeGreaterThan(inspectorHandlerStart);
+  const inspectorHandlerSource = dashboardSource.slice(
+    inspectorHandlerStart,
+    inspectorHandlerEnd
+  );
+
+  expect(inspectorHandlerSource).toContain('...fixedRescheduleServerPreviewPayload');
+  expect(inspectorHandlerSource).toContain("mode: 'before_commit'");
+  expect(inspectorHandlerSource).toContain('httpsCallable(');
+  expect(inspectorHandlerSource).toContain('firebaseFunctions');
+  expect(inspectorHandlerSource).toContain("'inspectFixedPrivateLessonRescheduleScope'");
+  expect(inspectorHandlerSource).not.toContain('Date.now()');
+  expect(inspectorHandlerSource).not.toContain('Math.random()');
+
+  [
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    'updateFixedPrivateLessonScheduleScope',
+    'writeBatch',
+    'runTransaction',
+    'setDoc',
+    'addDoc',
+    'updateDoc',
+    'deleteDoc',
+  ].forEach((token) => {
+    expect(inspectorHandlerSource).not.toContain(token);
+    expect(privateSlotsSectionSource).not.toContain(token);
+  });
+
+  const functionsDiff = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', 'functions/index.js'],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  ).trim();
+  expect(functionsDiff).toBe('');
+  expect(functionsSource).toContain('exports.inspectFixedPrivateLessonRescheduleScope = onCall(');
+
+  const protectedPaths = [
+    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',
