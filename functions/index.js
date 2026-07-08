@@ -2099,8 +2099,8 @@ function summarizeFixedPrivateRescheduleLinkedDoc(row) {
   return {
     id: normalizeId(row && row.id),
     academyId: normalizeId(row && row.academyId),
-    date: normalizeId(row && (row.date || row.lessonDate || row.scheduleDate)),
-    time: normalizeId(row && (row.time || row.startTime || row.scheduleTime)),
+    date: getFixedPrivateRescheduleLinkedRowDate(row),
+    time: getFixedPrivateRescheduleLinkedRowTime(row),
     studentId: getPrivateRowStudentId(row),
     teacherName: normalizeId(row && (row.teacherName || row.teacher)),
     teacherKey: normalizeTeacherKey(row && row.teacherKey),
@@ -2109,6 +2109,12 @@ function summarizeFixedPrivateRescheduleLinkedDoc(row) {
     status: normalizeId(row && row.status),
     lessonId: normalizeId(row && row.lessonId),
     fixedLessonId: normalizeId(row && row.fixedLessonId),
+    privateLessonId: normalizeId(row && row.privateLessonId),
+    linkedLessonId: normalizeId(row && row.linkedLessonId),
+    reservationId: normalizeId(row && row.reservationId),
+    privateLessonReservationId:
+      normalizeId(row && row.privateLessonReservationId),
+    linkedReservationId: normalizeId(row && row.linkedReservationId),
     packageId: normalizeId(row && (row.packageId || row.deductionPackageId)),
     templateId: normalizeId(row && (
       row.availabilityTemplateId ||
@@ -2140,6 +2146,362 @@ function fixedPrivateRescheduleTeacherMatches(a, b) {
   const left = getPrivateTeacherScopeKeys(a);
   const right = getPrivateTeacherScopeKeys(b);
   return left.length > 0 && left.some((key) => right.includes(key));
+}
+
+function normalizeFixedPrivateRescheduleTimeValue(value) {
+  const raw = normalizeId(value);
+  const match = raw.match(/^(\d{1,2}):([0-5]\d)/);
+  if (!match) return raw;
+  const hour = Number(match[1]);
+  if (!Number.isFinite(hour) || hour < 0 || hour > 23) return raw;
+  return `${padTwo(hour)}:${match[2]}`;
+}
+
+function formatSeoulTimeStringFromMillis(millis) {
+  if (!Number.isFinite(millis)) return "";
+  const date = new Date(millis + 9 * HOUR_MS);
+  return `${padTwo(date.getUTCHours())}:${padTwo(date.getUTCMinutes())}`;
+}
+
+function getFixedPrivateRescheduleLinkedRowDate(row) {
+  const direct = normalizeId(row && (
+    row.date ||
+    row.lessonDate ||
+    row.scheduleDate ||
+    row.startDate
+  ));
+  if (direct) return direct;
+  const startsAtMillis = getTimestampMillis(row && (
+    row.startAt ||
+    row.startsAt
+  ));
+  return startsAtMillis === null ?
+    "" :
+    formatSeoulDateStringFromMillis(startsAtMillis);
+}
+
+function getFixedPrivateRescheduleLinkedRowTime(row) {
+  const direct = normalizeFixedPrivateRescheduleTimeValue(row && (
+    row.time ||
+    row.startTime ||
+    row.lessonTime ||
+    row.scheduleTime
+  ));
+  if (direct) return direct;
+  const startsAtMillis = getTimestampMillis(row && (
+    row.startAt ||
+    row.startsAt
+  ));
+  return startsAtMillis === null ?
+    "" :
+    formatSeoulTimeStringFromMillis(startsAtMillis);
+}
+
+function getFixedPrivateRescheduleLinkedLessonIds(row) {
+  return normalizeIdList([
+    row && row.lessonId,
+    row && row.fixedLessonId,
+    row && row.privateLessonId,
+    row && row.linkedLessonId,
+  ]);
+}
+
+function getFixedPrivateRescheduleLinkedReservationIds(row) {
+  return normalizeIdList([
+    row && row.reservationId,
+    row && row.privateLessonReservationId,
+    row && row.linkedReservationId,
+  ]);
+}
+
+function getFixedPrivateRescheduleLinkedSlotIds(row) {
+  return normalizeIdList([
+    row && row.slotId,
+    row && row.privateLessonSlotId,
+    row && row.linkedSlotId,
+  ]);
+}
+
+function getFixedPrivateRescheduleSlotStatus(row) {
+  return normalizeId(row && row.status).toLowerCase();
+}
+
+function isFixedPrivateRescheduleReservedSlotStatus(status) {
+  return [
+    "reserved",
+    "assigned",
+    "fixed_reserved",
+    "fixed-assigned",
+    "fixed_assignment_reserved",
+  ].includes(normalizeId(status).toLowerCase());
+}
+
+function pushFailedFixedPrivateRescheduleField({
+  failedFields,
+  field,
+  passed,
+}) {
+  if (!passed) failedFields.push(field);
+}
+
+function buildFixedPrivateRescheduleLinkedSlotPrecondition({
+  row,
+  slot,
+  slotId,
+}) {
+  const current = slot || null;
+  const expectedReservationIds = normalizeIdList([
+    row && row.reservationId,
+    ...((row && row.linkedReservationIds) || []),
+  ]);
+  const expected = {
+    slotId: normalizeId(slotId || (row && row.slotId)),
+    lessonId: normalizeId(row && row.id),
+    studentId: normalizeId(row && row.studentId),
+    date: normalizeId(row && row.date),
+    time: normalizeFixedPrivateRescheduleTimeValue(row && row.time),
+    durationMinutes: Number(row && row.durationMinutes) || null,
+    status: "reserved",
+    reservationIds: expectedReservationIds,
+  };
+  const currentLessonIds = current ?
+    getFixedPrivateRescheduleLinkedLessonIds(current) :
+    [];
+  const currentReservationIds = current ?
+    getFixedPrivateRescheduleLinkedReservationIds(current) :
+    [];
+  const currentSummary = current ? {
+    slotId: normalizeId(current.id || slotId),
+    academyId: normalizeId(current.academyId),
+    lessonId: normalizeId(current.lessonId),
+    fixedLessonId: normalizeId(current.fixedLessonId),
+    privateLessonId: normalizeId(current.privateLessonId),
+    linkedLessonId: normalizeId(current.linkedLessonId),
+    studentId: normalizeId(current.studentId || current.studentID ||
+      current.studentUid),
+    reservedStudentId: normalizeId(current.reservedStudentId),
+    reservedStudentUid: normalizeId(current.reservedStudentUid),
+    fixedStudentId: normalizeId(current.fixedStudentId),
+    fixedStudentUid: normalizeId(current.fixedStudentUid),
+    assignedStudentId: normalizeId(current.assignedStudentId),
+    assignedStudentUid: normalizeId(current.assignedStudentUid),
+    date: getFixedPrivateRescheduleLinkedRowDate(current),
+    time: normalizeFixedPrivateRescheduleTimeValue(current.time),
+    startTime: normalizeFixedPrivateRescheduleTimeValue(current.startTime),
+    lessonTime: normalizeFixedPrivateRescheduleTimeValue(current.lessonTime),
+    durationMinutes: getPrivateScheduleDurationMinutes(current),
+    status: getFixedPrivateRescheduleSlotStatus(current),
+    reservationId: normalizeId(current.reservationId),
+    privateLessonReservationId:
+      normalizeId(current.privateLessonReservationId),
+    linkedReservationId: normalizeId(current.linkedReservationId),
+  } : {
+    slotId: normalizeId(slotId),
+  };
+  const failedFields = [];
+  pushFailedFixedPrivateRescheduleField({
+    failedFields,
+    field: "exists",
+    passed: Boolean(current),
+  });
+  if (current) {
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "academyId",
+      passed: normalizeId(current.academyId) === normalizeId(row.academyId),
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "lessonId",
+      passed: currentLessonIds.length === 0 ||
+        currentLessonIds.includes(expected.lessonId),
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "studentId",
+      passed: getPrivateRowStudentId(current) === expected.studentId,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "date",
+      passed: getFixedPrivateRescheduleLinkedRowDate(current) ===
+        expected.date,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "time",
+      passed: getFixedPrivateRescheduleLinkedRowTime(current) ===
+        expected.time,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "durationMinutes",
+      passed: getPrivateScheduleDurationMinutes(current) ===
+        expected.durationMinutes,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "status",
+      passed: isFixedPrivateRescheduleReservedSlotStatus(
+          getFixedPrivateRescheduleSlotStatus(current),
+      ),
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "reservationId",
+      passed: currentReservationIds.length === 0 ||
+        expectedReservationIds.length === 0 ||
+        currentReservationIds.some((id) => expectedReservationIds.includes(id)),
+    });
+  }
+  return {
+    ok: failedFields.length === 0,
+    reason: failedFields.length === 0 ?
+      "" :
+      "linked_slot_changed_before_commit",
+    code: failedFields.length === 0 ?
+      "" :
+      "linked_slot_precondition_mismatch",
+    slotId: expected.slotId || normalizeId(slotId),
+    failedFields,
+    expected,
+    current: currentSummary,
+  };
+}
+
+function getFixedPrivateRescheduleReservationStatus(row) {
+  return normalizeId(row && row.status).toLowerCase();
+}
+
+function isFixedPrivateRescheduleActiveReservationStatus(status) {
+  return [
+    "active",
+    "reserved",
+    "assigned",
+    "fixed_reserved",
+    "fixed-assigned",
+    "fixed_assignment_reserved",
+  ].includes(normalizeId(status).toLowerCase());
+}
+
+function buildFixedPrivateRescheduleLinkedReservationPrecondition({
+  row,
+  reservation,
+  reservationId,
+}) {
+  const current = reservation || null;
+  const expectedSlotIds = normalizeIdList([
+    row && row.slotId,
+    ...((row && row.linkedSlotIds) || []),
+  ]);
+  const expected = {
+    reservationId: normalizeId(reservationId || (row && row.reservationId)),
+    lessonId: normalizeId(row && row.id),
+    studentId: normalizeId(row && row.studentId),
+    date: normalizeId(row && row.date),
+    time: normalizeFixedPrivateRescheduleTimeValue(row && row.time),
+    durationMinutes: Number(row && row.durationMinutes) || null,
+    status: "active",
+    slotIds: expectedSlotIds,
+  };
+  const currentLessonIds = current ?
+    getFixedPrivateRescheduleLinkedLessonIds(current) :
+    [];
+  const currentSlotIds = current ?
+    getFixedPrivateRescheduleLinkedSlotIds(current) :
+    [];
+  const currentSummary = current ? {
+    reservationId: normalizeId(current.id || reservationId),
+    academyId: normalizeId(current.academyId),
+    lessonId: normalizeId(current.lessonId),
+    fixedLessonId: normalizeId(current.fixedLessonId),
+    privateLessonId: normalizeId(current.privateLessonId),
+    linkedLessonId: normalizeId(current.linkedLessonId),
+    slotId: normalizeId(current.slotId),
+    privateLessonSlotId: normalizeId(current.privateLessonSlotId),
+    linkedSlotId: normalizeId(current.linkedSlotId),
+    studentId: normalizeId(current.studentId || current.studentID ||
+      current.studentUid),
+    reservedStudentId: normalizeId(current.reservedStudentId),
+    fixedStudentId: normalizeId(current.fixedStudentId),
+    date: getFixedPrivateRescheduleLinkedRowDate(current),
+    time: normalizeFixedPrivateRescheduleTimeValue(current.time),
+    startTime: normalizeFixedPrivateRescheduleTimeValue(current.startTime),
+    lessonTime: normalizeFixedPrivateRescheduleTimeValue(current.lessonTime),
+    durationMinutes: getPrivateScheduleDurationMinutes(current),
+    status: getFixedPrivateRescheduleReservationStatus(current),
+  } : {
+    reservationId: normalizeId(reservationId),
+  };
+  const failedFields = [];
+  pushFailedFixedPrivateRescheduleField({
+    failedFields,
+    field: "exists",
+    passed: Boolean(current),
+  });
+  if (current) {
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "academyId",
+      passed: normalizeId(current.academyId) === normalizeId(row.academyId),
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "lessonId",
+      passed: currentLessonIds.length === 0 ||
+        currentLessonIds.includes(expected.lessonId),
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "slotId",
+      passed: currentSlotIds.length === 0 ||
+        expectedSlotIds.length === 0 ||
+        currentSlotIds.some((id) => expectedSlotIds.includes(id)),
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "studentId",
+      passed: getPrivateRowStudentId(current) === expected.studentId,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "date",
+      passed: getFixedPrivateRescheduleLinkedRowDate(current) ===
+        expected.date,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "time",
+      passed: getFixedPrivateRescheduleLinkedRowTime(current) ===
+        expected.time,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "durationMinutes",
+      passed: getPrivateScheduleDurationMinutes(current) ===
+        expected.durationMinutes,
+    });
+    pushFailedFixedPrivateRescheduleField({
+      failedFields,
+      field: "status",
+      passed: isFixedPrivateRescheduleActiveReservationStatus(
+          getFixedPrivateRescheduleReservationStatus(current),
+      ),
+    });
+  }
+  return {
+    ok: failedFields.length === 0,
+    reason: failedFields.length === 0 ?
+      "" :
+      "linked_reservation_changed_before_commit",
+    code: failedFields.length === 0 ?
+      "" :
+      "linked_reservation_precondition_mismatch",
+    reservationId: expected.reservationId || normalizeId(reservationId),
+    failedFields,
+    expected,
+    current: currentSummary,
+  };
 }
 
 function fixedPrivateRescheduleSamePattern(a, b) {
@@ -2353,16 +2715,13 @@ function fixedPrivateRescheduleRowsMatchFallback({
       normalizeId(lesson && lesson.academyId)) {
     return false;
   }
-  const rowDate = normalizeId(row && (row.date || row.lessonDate));
-  const rowTime = normalizeId(row && (row.time || row.startTime));
+  const rowDate = getFixedPrivateRescheduleLinkedRowDate(row);
+  const rowTime = getFixedPrivateRescheduleLinkedRowTime(row);
   if (rowDate !== getFixedPrivateRescheduleDate(lesson) ||
       rowTime !== getFixedPrivateRescheduleTime(lesson)) {
     return false;
   }
-  const rowStudentId = normalizeId(row && (row.studentId ||
-    row.studentID ||
-    row.fixedStudentId ||
-    row.reservedStudentId));
+  const rowStudentId = getPrivateRowStudentId(row);
   if (rowStudentId !== getFixedPrivateRescheduleStudentId(lesson)) {
     return false;
   }
@@ -2999,11 +3358,24 @@ async function getFixedPrivateRescheduleLiveLessonSummary(db, validation) {
 }
 
 async function getFixedPrivateRescheduleInspectorLinkedDocs(db, preview) {
-  const slotIds = normalizeIdList((preview.includedLessons || []).flatMap(
+  const includedLessons = Array.isArray(preview.includedLessons) ?
+    preview.includedLessons :
+    [];
+  const expectedSlotRowsById = new Map();
+  const expectedReservationRowsById = new Map();
+  includedLessons.forEach((row) => {
+    (row.linkedSlotIds || []).forEach((slotId) => {
+      expectedSlotRowsById.set(slotId, row);
+    });
+    (row.linkedReservationIds || []).forEach((reservationId) => {
+      expectedReservationRowsById.set(reservationId, row);
+    });
+  });
+  const slotIds = normalizeIdList(includedLessons.flatMap(
       (row) => row.linkedSlotIds || [],
   ));
   const reservationIds = normalizeIdList(
-      (preview.includedLessons || []).flatMap(
+      includedLessons.flatMap(
           (row) => row.linkedReservationIds || [],
       ),
   );
@@ -3016,24 +3388,71 @@ async function getFixedPrivateRescheduleInspectorLinkedDocs(db, preview) {
     )),
   ]);
   const privateLessonSlots = slotSnaps.map((snap) => {
-    return snap.exists ?
-      {exists: true, ...summarizeFixedPrivateRescheduleLinkedDoc({
+    const expectedRow = expectedSlotRowsById.get(snap.id) || null;
+    if (!snap.exists) {
+      return {
+        exists: false,
         id: snap.id,
-        ...snap.data(),
-      })} :
-      {exists: false, id: snap.id};
+        precondition: buildFixedPrivateRescheduleLinkedSlotPrecondition({
+          row: expectedRow,
+          slot: null,
+          slotId: snap.id,
+        }),
+      };
+    }
+    const slot = {
+      id: snap.id,
+      ...snap.data(),
+    };
+    return {
+      exists: true,
+      ...summarizeFixedPrivateRescheduleLinkedDoc(slot),
+      precondition: buildFixedPrivateRescheduleLinkedSlotPrecondition({
+        row: expectedRow,
+        slot,
+        slotId: snap.id,
+      }),
+    };
   });
   const privateLessonReservations = reservationSnaps.map((snap) => {
-    return snap.exists ?
-      {exists: true, ...summarizeFixedPrivateRescheduleLinkedDoc({
+    const expectedRow = expectedReservationRowsById.get(snap.id) || null;
+    if (!snap.exists) {
+      return {
+        exists: false,
         id: snap.id,
-        ...snap.data(),
-      })} :
-      {exists: false, id: snap.id};
+        precondition:
+          buildFixedPrivateRescheduleLinkedReservationPrecondition({
+            row: expectedRow,
+            reservation: null,
+            reservationId: snap.id,
+          }),
+      };
+    }
+    const reservation = {
+      id: snap.id,
+      ...snap.data(),
+    };
+    return {
+      exists: true,
+      ...summarizeFixedPrivateRescheduleLinkedDoc(reservation),
+      precondition: buildFixedPrivateRescheduleLinkedReservationPrecondition({
+        row: expectedRow,
+        reservation,
+        reservationId: snap.id,
+      }),
+    };
   });
+  const linkedSlotPreconditionFailures = privateLessonSlots
+      .map((row) => row.precondition)
+      .filter((precondition) => precondition && precondition.ok !== true);
+  const linkedReservationPreconditionFailures = privateLessonReservations
+      .map((row) => row.precondition)
+      .filter((precondition) => precondition && precondition.ok !== true);
   return {
     privateLessonSlots,
     privateLessonReservations,
+    linkedSlotPreconditionFailures,
+    linkedReservationPreconditionFailures,
     counts: {
       privateLessonSlots: privateLessonSlots.length,
       privateLessonReservations: privateLessonReservations.length,
@@ -3041,6 +3460,9 @@ async function getFixedPrivateRescheduleInspectorLinkedDocs(db, preview) {
         privateLessonSlots.filter((row) => !row.exists).length,
       missingPrivateLessonReservations:
         privateLessonReservations.filter((row) => !row.exists).length,
+      linkedSlotPreconditionFailures: linkedSlotPreconditionFailures.length,
+      linkedReservationPreconditionFailures:
+        linkedReservationPreconditionFailures.length,
     },
   };
 }
@@ -3156,6 +3578,9 @@ function buildFixedPrivateRescheduleInspectorConsistency({
   const missingLinkedDocs =
     linkedDocs.counts.missingPrivateLessonSlots +
     linkedDocs.counts.missingPrivateLessonReservations;
+  const linkedPreconditionFailures =
+    Number(linkedDocs.counts.linkedSlotPreconditionFailures || 0) +
+    Number(linkedDocs.counts.linkedReservationPreconditionFailures || 0);
   const checkpointBlocksBeforeCommit =
     inspectMode === "before_commit" && checkpoint.exists === true;
   const checkpointMissingAfterCommit =
@@ -3168,12 +3593,14 @@ function buildFixedPrivateRescheduleInspectorConsistency({
       linkedSlotCountMatches &&
       linkedReservationCountMatches &&
       missingLinkedDocs === 0 &&
+      linkedPreconditionFailures === 0 &&
       !checkpointBlocksBeforeCommit &&
       !checkpointMissingAfterCommit,
     canProceedToCommitCandidate: inspectMode !== "after_commit" &&
       preview.ok === true &&
       conflicts.length === 0 &&
       missingLinkedDocs === 0 &&
+      linkedPreconditionFailures === 0 &&
       checkpoint.exists !== true,
     dryRunOk: preview.ok === true,
     inspectMode,
@@ -3186,6 +3613,11 @@ function buildFixedPrivateRescheduleInspectorConsistency({
     linkedSlotCountMatches,
     linkedReservationCountMatches,
     missingLinkedDocs,
+    linkedPreconditionFailures,
+    linkedSlotPreconditionFailures:
+      Number(linkedDocs.counts.linkedSlotPreconditionFailures || 0),
+    linkedReservationPreconditionFailures:
+      Number(linkedDocs.counts.linkedReservationPreconditionFailures || 0),
     teacherTimeStatus,
     checkpointExists: checkpoint.exists === true,
     checkpointCode: normalizeId(checkpoint.code),
@@ -3236,6 +3668,27 @@ async function buildFixedPrivateRescheduleInspectorResult({
     checkpoint,
     inspectMode,
   });
+  const linkedPreconditionWarnings = [
+    ...(linkedDocs.linkedSlotPreconditionFailures || []).map((precondition) => {
+      return {
+        code: "linked_slot_precondition_mismatch",
+        reason: precondition.reason || "linked_slot_changed_before_commit",
+        message: "Linked private lesson slot changed before commit.",
+        diagnostics: precondition,
+      };
+    }),
+    ...(linkedDocs.linkedReservationPreconditionFailures || []).map(
+        (precondition) => {
+          return {
+            code: "linked_reservation_precondition_mismatch",
+            reason: precondition.reason ||
+              "linked_reservation_changed_before_commit",
+            message: "Linked private lesson reservation changed before commit.",
+            diagnostics: precondition,
+          };
+        },
+    ),
+  ];
   return {
     ok: true,
     readOnly: true,
@@ -3254,11 +3707,17 @@ async function buildFixedPrivateRescheduleInspectorResult({
       rows: linkedDocs.privateLessonSlots,
       count: linkedDocs.counts.privateLessonSlots,
       missingCount: linkedDocs.counts.missingPrivateLessonSlots,
+      preconditions: linkedDocs.privateLessonSlots.map((row) => {
+        return row.precondition;
+      }).filter(Boolean),
     },
     linkedReservation: {
       rows: linkedDocs.privateLessonReservations,
       count: linkedDocs.counts.privateLessonReservations,
       missingCount: linkedDocs.counts.missingPrivateLessonReservations,
+      preconditions: linkedDocs.privateLessonReservations.map((row) => {
+        return row.precondition;
+      }).filter(Boolean),
     },
     linkedDocs,
     targetTemplate,
@@ -3270,6 +3729,10 @@ async function buildFixedPrivateRescheduleInspectorResult({
     sameBatchLessons: lessonSnapshots.sameBatchLessons,
     samePackageLessons: lessonSnapshots.samePackageLessons,
     dryRunPreview: preview,
+    warnings: [
+      ...((preview && preview.warnings) || []),
+      ...linkedPreconditionWarnings,
+    ],
     consistency,
     canProceedToCommitCandidate: consistency.canProceedToCommitCandidate,
     nextStep:
@@ -3489,23 +3952,34 @@ function assertFixedPrivateRescheduleCurrentLesson({
 
 function assertFixedPrivateRescheduleLinkedSlot({row, slotSnap}) {
   if (!slotSnap || !slotSnap.exists) {
+    const diagnostics = buildFixedPrivateRescheduleLinkedSlotPrecondition({
+      row,
+      slot: null,
+      slotId: slotSnap && slotSnap.id,
+    });
     throw new HttpsError(
         "failed-precondition",
         "linked private lesson slot is required before commit",
+        {
+          reason: diagnostics.reason,
+          linkedSlotPrecondition: diagnostics,
+        },
     );
   }
   const slot = {id: slotSnap.id, ...slotSnap.data()};
-  const slotLessonId = normalizeId(slot.lessonId || slot.fixedLessonId);
-  if (normalizeId(slot.academyId) !== row.academyId ||
-      (slotLessonId && slotLessonId !== row.id) ||
-      getPrivateRowStudentId(slot) !== row.studentId ||
-      normalizeId(slot.date) !== row.date ||
-      normalizeId(slot.time || slot.startTime) !== row.time ||
-      getPrivateScheduleDurationMinutes(slot) !== row.durationMinutes ||
-      normalizeId(slot.status).toLowerCase() !== "reserved") {
+  const diagnostics = buildFixedPrivateRescheduleLinkedSlotPrecondition({
+    row,
+    slot,
+    slotId: slotSnap.id,
+  });
+  if (diagnostics.ok !== true) {
     throw new HttpsError(
         "failed-precondition",
         "Linked private lesson slot changed before commit.",
+        {
+          reason: "linked_slot_changed_before_commit",
+          linkedSlotPrecondition: diagnostics,
+        },
     );
   }
   return slot;
@@ -3513,25 +3987,36 @@ function assertFixedPrivateRescheduleLinkedSlot({row, slotSnap}) {
 
 function assertFixedPrivateRescheduleLinkedReservation({row, reservationSnap}) {
   if (!reservationSnap || !reservationSnap.exists) {
+    const diagnostics =
+      buildFixedPrivateRescheduleLinkedReservationPrecondition({
+        row,
+        reservation: null,
+        reservationId: reservationSnap && reservationSnap.id,
+      });
     throw new HttpsError(
         "failed-precondition",
         "linked private lesson reservation is required before commit",
+        {
+          reason: diagnostics.reason,
+          linkedReservationPrecondition: diagnostics,
+        },
     );
   }
   const reservation = {id: reservationSnap.id, ...reservationSnap.data()};
-  const reservationLessonId = normalizeId(
-      reservation.lessonId || reservation.fixedLessonId,
-  );
-  if (normalizeId(reservation.academyId) !== row.academyId ||
-      (reservationLessonId && reservationLessonId !== row.id) ||
-      getPrivateRowStudentId(reservation) !== row.studentId ||
-      normalizeId(reservation.date) !== row.date ||
-      normalizeId(reservation.time || reservation.startTime) !== row.time ||
-      getPrivateScheduleDurationMinutes(reservation) !== row.durationMinutes ||
-      normalizeId(reservation.status).toLowerCase() !== "active") {
+  const diagnostics =
+    buildFixedPrivateRescheduleLinkedReservationPrecondition({
+      row,
+      reservation,
+      reservationId: reservationSnap.id,
+    });
+  if (diagnostics.ok !== true) {
     throw new HttpsError(
         "failed-precondition",
         "Linked private lesson reservation changed before commit.",
+        {
+          reason: "linked_reservation_changed_before_commit",
+          linkedReservationPrecondition: diagnostics,
+        },
     );
   }
   return reservation;
@@ -7152,6 +7637,8 @@ function getPrivateScheduleDurationMinutes(row) {
       row && (
         row.durationMinutes ||
         row.duration ||
+        row.minutes ||
+        row.lengthMinutes ||
         row.lessonDurationMinutes ||
         row.classDurationMinutes
       ),
@@ -7762,7 +8249,18 @@ function getPrivateRowTeacherKeys(row) {
 
 function getPrivateRowStudentId(row) {
   return normalizeId(
-      row && (row.studentId || row.studentID || row.studentUid),
+      row && (
+        row.studentId ||
+        row.studentID ||
+        row.studentUid ||
+        row.studentUID ||
+        row.reservedStudentId ||
+        row.reservedStudentUid ||
+        row.fixedStudentId ||
+        row.fixedStudentUid ||
+        row.assignedStudentId ||
+        row.assignedStudentUid
+      ),
   );
 }
 
