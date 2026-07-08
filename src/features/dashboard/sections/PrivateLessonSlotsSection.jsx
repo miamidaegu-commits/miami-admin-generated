@@ -805,6 +805,23 @@ export default function PrivateLessonSlotsSection({
     onClearFixedRescheduleInspectorState?.()
   }
 
+  function handleViewUpdatedFixedRescheduleLessons() {
+    if (fixedRescheduleCommitBusy) return
+    setShowFixedRescheduleCommitConfirmModal(false)
+    setShowFixedRescheduleScopePreview(false)
+    const scrollToUpdatedLessons = () => {
+      fixedPrivateLessonsSectionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    }
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(scrollToUpdatedLessons)
+      return
+    }
+    setTimeout(scrollToUpdatedLessons, 0)
+  }
+
   function resetFixedRescheduleTargetDraft(lesson) {
     setFixedRescheduleTargetDraft(buildFixedRescheduleTargetDraft(lesson))
   }
@@ -1286,6 +1303,24 @@ export default function PrivateLessonSlotsSection({
   )
     ? fixedRescheduleCommitUpdated.privateLessonReservations
     : []
+  const fixedRescheduleUpdatedLessonIds = Array.isArray(fixedRescheduleCommitUpdated.lessons)
+    ? fixedRescheduleCommitUpdated.lessons
+    : []
+  const updatedRescheduleLessonIds = useMemo(
+    () =>
+      new Set(
+        fixedRescheduleUpdatedLessonIds
+          .map((lesson) =>
+            typeof lesson === 'string'
+              ? lesson
+              : lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || ''
+          )
+          .map((lessonId) => String(lessonId || '').trim())
+          .filter(Boolean)
+      ),
+    [fixedRescheduleUpdatedLessonIds]
+  )
+  const updatedRescheduleLessonCount = updatedRescheduleLessonIds.size
   const fixedRescheduleTargetTeacherOption = useMemo(() => {
     const draftKeys = getFixedRescheduleTeacherKeys({
       teacherId: fixedRescheduleTargetDraft.targetTeacherId,
@@ -4275,6 +4310,44 @@ export default function PrivateLessonSlotsSection({
                 <span>생성된 행에는 “방금 생성됨” 표시가 붙습니다.</span>
               </div>
             ) : null}
+            {fixedRescheduleCommitResult && updatedRescheduleLessonCount > 0 ? (
+              <div
+                data-testid="private-fixed-reschedule-success-card"
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  padding: '12px 14px',
+                  border: '1px solid #1f6f43',
+                  borderRadius: 8,
+                  background: '#0f2419',
+                  color: '#c7f9d4',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong data-testid="private-fixed-reschedule-success-card-updated-count">
+                  방금 수정된 고정 수업 {updatedRescheduleLessonCount}건
+                </strong>
+                <span>
+                  수정된 row는 “방금 수정됨”으로 표시됩니다. 기존 고정 1:1 수업 일정에서
+                  확인할 수 있습니다.
+                </span>
+                <span>
+                  updated lessons {fixedRescheduleCommitUpdatedLessons.length}건 · privateLessonSlots{' '}
+                  {fixedRescheduleCommitUpdatedSlots.length}건 · privateLessonReservations{' '}
+                  {fixedRescheduleCommitUpdatedReservations.length}건
+                </span>
+                <span data-testid="private-fixed-reschedule-success-card-template-action">
+                  teacherTemplateAction {fixedRescheduleCommitUpdated.teacherTemplateAction || '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-success-card-batch-id">
+                  batchId{' '}
+                  {fixedRescheduleCommitResult.batchId ||
+                    fixedRescheduleCommitPayload?.requestId ||
+                    '-'}
+                </span>
+              </div>
+            ) : null}
             <div
               style={{
                 display: 'grid',
@@ -4336,6 +4409,9 @@ export default function PrivateLessonSlotsSection({
                   const isCreatedRenewalLesson = createdRenewalLessonIds.has(
                     String(lesson.id || lesson.lessonId || '').trim()
                   )
+                  const isUpdatedRescheduleLesson = updatedRescheduleLessonIds.has(
+                    String(lesson.id || lesson.lessonId || '').trim()
+                  )
                   const matchingReservation = privateLessonReservations.find(
                     (reservation) =>
                       String(reservation.status || '').trim() === 'active' &&
@@ -4349,14 +4425,24 @@ export default function PrivateLessonSlotsSection({
                       data-testid="private-fixed-lesson-row"
                       data-lesson-id={lesson.id}
                       data-created-from-renewal={isCreatedRenewalLesson ? 'true' : undefined}
+                      data-updated-from-reschedule={isUpdatedRescheduleLesson ? 'true' : undefined}
                       data-created-row-testid={
                         isCreatedRenewalLesson ? 'private-fixed-renewal-created-lesson-row' : ''
                       }
                       style={{
                         gridTemplateColumns: '0.9fr 0.65fr 0.9fr 0.9fr 1fr 0.8fr minmax(160px, auto)',
-                        border: isCreatedRenewalLesson ? '1px solid #1f6f43' : undefined,
-                        background: isCreatedRenewalLesson ? '#10251a' : undefined,
-                        boxShadow: isCreatedRenewalLesson ? '0 0 0 1px rgba(34, 197, 94, 0.18)' : undefined,
+                        border:
+                          isCreatedRenewalLesson || isUpdatedRescheduleLesson
+                            ? '1px solid #1f6f43'
+                            : undefined,
+                        background:
+                          isCreatedRenewalLesson || isUpdatedRescheduleLesson
+                            ? '#10251a'
+                            : undefined,
+                        boxShadow:
+                          isCreatedRenewalLesson || isUpdatedRescheduleLesson
+                            ? '0 0 0 1px rgba(34, 197, 94, 0.18)'
+                            : undefined,
                       }}
                     >
                       <span>{lesson.date || '-'}</span>
@@ -4390,6 +4476,25 @@ export default function PrivateLessonSlotsSection({
                               }}
                             >
                               방금 생성됨
+                            </span>
+                          </span>
+                        ) : null}
+                        {isUpdatedRescheduleLesson ? (
+                          <span style={{ display: 'block', marginTop: 4 }}>
+                            <span
+                              data-testid="private-fixed-reschedule-updated-badge"
+                              style={{
+                                display: 'inline-block',
+                                padding: '2px 6px',
+                                borderRadius: 999,
+                                border: '1px solid #1f6f43',
+                                background: '#0f2419',
+                                color: '#c7f9d4',
+                                fontSize: 12,
+                                fontWeight: 700,
+                              }}
+                            >
+                              방금 수정됨
                             </span>
                           </span>
                         ) : null}
@@ -6016,6 +6121,27 @@ export default function PrivateLessonSlotsSection({
                 </span>
                 <span>nextStep: {fixedRescheduleCommitResult.nextStep || '-'}</span>
                 <span>requestId: {fixedRescheduleCommitPayload?.requestId || '-'}</span>
+                {updatedRescheduleLessonCount > 0 ? (
+                  <button
+                    type="button"
+                    data-testid="private-fixed-reschedule-view-updated-lessons"
+                    onClick={handleViewUpdatedFixedRescheduleLessons}
+                    disabled={fixedRescheduleCommitBusy}
+                    style={{
+                      justifySelf: 'start',
+                      marginTop: 6,
+                      padding: '7px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #1f6f43',
+                      background: '#166534',
+                      color: '#dcfce7',
+                      fontWeight: 700,
+                      cursor: fixedRescheduleCommitBusy ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    수정된 일정 보기
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
