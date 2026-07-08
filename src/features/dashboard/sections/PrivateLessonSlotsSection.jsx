@@ -626,6 +626,8 @@ export default function PrivateLessonSlotsSection({
   onClearFixedRescheduleCommitState,
   onInspectFixedRescheduleStateOnServer,
   onClearFixedRescheduleInspectorState,
+  externalFixedRescheduleRequest,
+  onConsumeExternalFixedRescheduleRequest,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -836,6 +838,14 @@ export default function PrivateLessonSlotsSection({
     setFixedRescheduleRangeEnd(date)
     setShowFixedRescheduleScopePreview(true)
   }
+
+  useEffect(() => {
+    const lesson = externalFixedRescheduleRequest?.lesson
+    const requestKey = String(externalFixedRescheduleRequest?.requestKey || '').trim()
+    if (!lesson || !requestKey) return
+    openFixedRescheduleScopePreview(lesson)
+    onConsumeExternalFixedRescheduleRequest?.(requestKey)
+  }, [externalFixedRescheduleRequest])
 
   function closeFixedRescheduleScopePreview() {
     clearFixedRescheduleServerPreview()
@@ -5257,7 +5267,7 @@ export default function PrivateLessonSlotsSection({
                 />
                 이 수업만 수정
               </label>
-              <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 13 }}>
                 <input
                   type="radio"
                   name="fixed-reschedule-scope-mode"
@@ -5265,8 +5275,14 @@ export default function PrivateLessonSlotsSection({
                   checked={fixedRescheduleScopeMode === 'future_series'}
                   onChange={() => changeFixedRescheduleScopeMode('future_series')}
                   data-testid="private-fixed-reschedule-scope-mode-future-series"
+                  style={{ marginTop: 2 }}
                 />
-                이 날짜부터 이후 고정 수업에 적용
+                <span style={{ display: 'grid', gap: 2 }}>
+                  <span>이 수업부터 이후 고정 수업에 적용</span>
+                  <span style={{ fontSize: 12, opacity: 0.72 }}>
+                    선택한 수업을 포함해 같은 고정 패턴의 이후 예정 수업을 함께 변경합니다.
+                  </span>
+                </span>
               </label>
               <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
                 <input
@@ -5484,7 +5500,7 @@ export default function PrivateLessonSlotsSection({
                 {fixedRescheduleScopeMode === 'single'
                   ? '이 수업만 수정'
                   : fixedRescheduleScopeMode === 'future_series'
-                    ? '이 날짜부터 이후 고정 수업에 적용'
+                    ? '이 수업부터 이후 고정 수업에 적용'
                     : fixedRescheduleScopeMode === 'package_remaining'
                       ? '이 수강권 안의 남은 고정 수업에 적용'
                       : '직접 날짜 범위 선택'}

@@ -381,6 +381,83 @@ function isFixedPrivateLesson(lesson) {
   )
 }
 
+function canOpenCalendarFixedPrivateRescheduleScopePreview({
+  lesson,
+  isAdmin,
+  isGroupRow,
+  isPrivateReservationRow,
+}) {
+  if (!isAdmin || !lesson || isGroupRow || isPrivateReservationRow) return false
+  const rowKind = String(lesson?._calendarRowKind || '').trim()
+  const packageType = String(lesson?.packageType || '').trim()
+  const sourceType = String(lesson?.sourceType || '').trim()
+  const status = String(lesson?.status || '').trim().toLowerCase()
+  const statusKey = status.replace(/-/g, '_')
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const outcomeStatus = String(
+    lesson?.outcomeStatus || lesson?.attendanceStatus || lesson?.lessonStatus || ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+
+  const isPrivateLessonRow = rowKind === 'private' || (!isGroupRow && !isPrivateReservationRow)
+  const hasPrivatePackage = packageType === 'private' || isPrivateLessonRow
+  const hasFixedPrivateSource =
+    sourceType === 'fixed-private-slot-assignment' ||
+    Boolean(String(lesson?.fixedPrivateAssignmentBatchId || '').trim())
+  const hasStudent =
+    Boolean(String(lesson?.studentId || lesson?.studentName || '').trim()) ||
+    Boolean(String(getStudentName(lesson) || '').trim())
+  const hasTeacher = Boolean(
+    String(
+      lesson?.teacherId ||
+        lesson?.teacherUid ||
+        lesson?.teacherKey ||
+        lesson?.teacherName ||
+        lesson?.teacher ||
+        getTeacherName(lesson) ||
+        ''
+    ).trim()
+  )
+  const hasSchedule =
+    Boolean(String(getLessonStorageDateString(lesson) || '').trim()) &&
+    Boolean(String(lesson?.time || '').trim())
+  const blockedStatus = new Set([
+    'cancelled',
+    'canceled',
+    'completed',
+    'no_show',
+    'no-show',
+    'deleted',
+    'archived',
+    'seat_released',
+  ])
+  const isBlocked =
+    blockedStatus.has(status) ||
+    blockedStatus.has(statusKey) ||
+    blockedStatus.has(outcomeStatus) ||
+    lesson?.completed === true ||
+    lesson?.deleted === true ||
+    lesson?.archived === true ||
+    lesson?.isSeatReleased === true ||
+    lesson?.releasedForPrivateBooking === true ||
+    cancellationType === 'seat_released'
+  const isActiveReservationState =
+    status === '' || ['active', 'reserved', 'assigned', 'scheduled'].includes(status)
+
+  return (
+    isPrivateLessonRow &&
+    hasPrivatePackage &&
+    hasFixedPrivateSource &&
+    hasStudent &&
+    hasTeacher &&
+    hasSchedule &&
+    isActiveReservationState &&
+    !isBlocked
+  )
+}
+
 function isFuturePrivateLesson(lesson) {
   const date = getLessonStorageDateString(lesson)
   const time = String(lesson?.time || '').trim()
@@ -872,6 +949,7 @@ export default function CalendarSection(props) {
     onOpenGroupLessonNoDeductionCancel,
     openStudentPackageEditModal,
     canEditStudentPackageCountsForPackage = () => false,
+    onOpenFixedRescheduleScopePreview,
   } = props
   const [privateLessonDetail, setPrivateLessonDetail] = useState(null)
   const [fixedPrivateLessonAction, setFixedPrivateLessonAction] = useState(null)
@@ -1263,6 +1341,14 @@ export default function CalendarSection(props) {
               isAdmin &&
               isFutureFixedPrivateLessonRow &&
               !fixedPrivateCancellationLabel
+            const canOpenFixedPrivateRescheduleScopePreview =
+              activeSection === 'calendar' &&
+              canOpenCalendarFixedPrivateRescheduleScopePreview({
+                lesson,
+                isAdmin,
+                isGroupRow,
+                isPrivateReservationRow,
+              })
             const isDeductedPrivateLesson =
               !isGroupRow &&
               !isPrivateReservationRow &&
@@ -1639,6 +1725,40 @@ export default function CalendarSection(props) {
                       }}
                     >
                       횟수 수정
+                    </button>
+                  ) : null}
+                  {activeSection === 'calendar' &&
+                  canOpenFixedPrivateRescheduleScopePreview ? (
+                    <button
+                      type="button"
+                      data-testid="calendar-fixed-private-reschedule-preview-button"
+                      data-source-type={String(lesson.sourceType || '').trim() || undefined}
+                      data-fixed-private-source={
+                        String(lesson.sourceType || '').trim() === 'fixed-private-slot-assignment'
+                          ? 'fixed-private-slot-assignment'
+                          : undefined
+                      }
+                      data-calendar-row-kind={String(lesson._calendarRowKind || '').trim() || undefined}
+                      data-is-seat-released={lesson.isSeatReleased === true ? 'true' : undefined}
+                      data-released-for-private-booking={
+                        lesson.releasedForPrivateBooking === true ? 'true' : undefined
+                      }
+                      data-excluded-statuses="seat_released completed no_show"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onOpenFixedRescheduleScopePreview?.(lesson)
+                      }}
+                      disabled={rowLessonActionBusy}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #3c7a5f',
+                        background: '#1e3a2d',
+                        color: 'white',
+                        cursor: rowLessonActionBusy ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      수정 범위 미리보기
                     </button>
                   ) : null}
                   {activeSection === 'calendar' &&
