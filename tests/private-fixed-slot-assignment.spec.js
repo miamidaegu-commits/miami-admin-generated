@@ -1419,6 +1419,25 @@ test('fixed private reschedule commit callable uses guarded transaction write mo
     'assertFixedPrivateRescheduleCheckpointMatches',
     'buildFixedPrivateRescheduleResultFromCheckpoint',
     'buildFixedPrivateRescheduleTemplatePayload',
+    'buildFixedPrivateRescheduleLinkedSlotPrecondition',
+    'buildFixedPrivateRescheduleLinkedReservationPrecondition',
+    'linked_slot_precondition_mismatch',
+    'linked_slot_changed_before_commit',
+    'linkedSlotPrecondition',
+    'linkedReservationPrecondition',
+    'reservedStudentId',
+    'fixedStudentId',
+    'reservedStudentUid',
+    'fixedStudentUid',
+    'fixedLessonId',
+    'privateLessonId',
+    'linkedLessonId',
+    'privateLessonReservationId',
+    'linkedReservationId',
+    'failedFields',
+    'expected',
+    'current',
+    'Linked private lesson slot changed before commit',
     'privateLessonSlots',
     'privateLessonReservations',
     'teacherTemplateAction',
@@ -1432,6 +1451,32 @@ test('fixed private reschedule commit callable uses guarded transaction write mo
   expect(writeSkeletonSource).toContain('target.targetPackageId');
   expect(writeSkeletonSource).toContain('targetDate && targetDate !== row.date');
   expect(writeSkeletonSource).toContain('db.runTransaction');
+
+  const linkedSlotGuardStart = functionsSource.indexOf(
+    'function assertFixedPrivateRescheduleLinkedSlot'
+  );
+  const linkedSlotGuardEnd = functionsSource.indexOf(
+    'function assertFixedPrivateRescheduleLinkedReservation',
+    linkedSlotGuardStart
+  );
+  const linkedReservationGuardEnd = functionsSource.indexOf(
+    'async function loadFixedPrivateRescheduleConflictRowsInTransaction',
+    linkedSlotGuardEnd
+  );
+  expect(linkedSlotGuardStart).toBeGreaterThanOrEqual(0);
+  expect(linkedSlotGuardEnd).toBeGreaterThan(linkedSlotGuardStart);
+  expect(linkedReservationGuardEnd).toBeGreaterThan(linkedSlotGuardEnd);
+  const linkedGuardSource = functionsSource.slice(
+    linkedSlotGuardStart,
+    linkedReservationGuardEnd
+  );
+  expect(linkedGuardSource).toContain('buildFixedPrivateRescheduleLinkedSlotPrecondition');
+  expect(linkedGuardSource).toContain('buildFixedPrivateRescheduleLinkedReservationPrecondition');
+  expect(linkedGuardSource).toContain('new HttpsError(');
+  expect(linkedGuardSource).toContain('linkedSlotPrecondition');
+  expect(linkedGuardSource).toContain('linkedReservationPrecondition');
+  expect(linkedGuardSource).toContain('reason: "linked_slot_changed_before_commit"');
+  expect(linkedGuardSource).toContain('Linked private lesson slot changed before commit.');
 
   [
     'writeBatch',
@@ -1453,6 +1498,8 @@ test('fixed private reschedule commit callable uses guarded transaction write mo
   expect(previewCallableBlock).not.toContain('previewOnly: false');
 
   const protectedPaths = [
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -1501,6 +1548,28 @@ test('fixed private reschedule inspector callable is bounded and read-only', () 
     'getFixedPrivateRescheduleInspectorLinkedDocs',
     'getFixedPrivateRescheduleInspectorCheckpoint',
     'buildFixedPrivateRescheduleInspectorConsistency',
+    'buildFixedPrivateRescheduleLinkedSlotPrecondition',
+    'buildFixedPrivateRescheduleLinkedReservationPrecondition',
+    'linked_slot_precondition_mismatch',
+    'linked_slot_changed_before_commit',
+    'linked_reservation_precondition_mismatch',
+    'linkedSlotPreconditionFailures',
+    'linkedReservationPreconditionFailures',
+    'linkedPreconditionFailures',
+    'preconditions',
+    'diagnostics',
+    'failedFields',
+    'expected',
+    'current',
+    'reservedStudentId',
+    'fixedStudentId',
+    'reservedStudentUid',
+    'fixedStudentUid',
+    'fixedLessonId',
+    'privateLessonId',
+    'linkedLessonId',
+    'privateLessonReservationId',
+    'linkedReservationId',
     'privateLessonSlots',
     'privateLessonReservations',
     'targetConflictInspection',
@@ -1542,6 +1611,41 @@ test('fixed private reschedule inspector callable is bounded and read-only', () 
     expect(inspectorSkeletonSource).toContain(token);
   });
 
+  const inspectorLinkedDocsStart = functionsSource.indexOf(
+    'async function getFixedPrivateRescheduleInspectorLinkedDocs'
+  );
+  const inspectorLinkedDocsEnd = functionsSource.indexOf(
+    'async function getFixedPrivateRescheduleInspectorCheckpoint',
+    inspectorLinkedDocsStart
+  );
+  const inspectorConsistencyStart = functionsSource.indexOf(
+    'function buildFixedPrivateRescheduleInspectorConsistency'
+  );
+  const inspectorConsistencyEnd = functionsSource.indexOf(
+    'async function buildFixedPrivateRescheduleInspectorResult',
+    inspectorConsistencyStart
+  );
+  expect(inspectorLinkedDocsStart).toBeGreaterThanOrEqual(0);
+  expect(inspectorLinkedDocsEnd).toBeGreaterThan(inspectorLinkedDocsStart);
+  expect(inspectorConsistencyStart).toBeGreaterThanOrEqual(0);
+  expect(inspectorConsistencyEnd).toBeGreaterThan(inspectorConsistencyStart);
+  const inspectorLinkedDocsSource = functionsSource.slice(
+    inspectorLinkedDocsStart,
+    inspectorLinkedDocsEnd
+  );
+  const inspectorConsistencySource = functionsSource.slice(
+    inspectorConsistencyStart,
+    inspectorConsistencyEnd
+  );
+  expect(inspectorLinkedDocsSource).toContain(
+    'buildFixedPrivateRescheduleLinkedSlotPrecondition'
+  );
+  expect(inspectorLinkedDocsSource).toContain(
+    'buildFixedPrivateRescheduleLinkedReservationPrecondition'
+  );
+  expect(inspectorConsistencySource).toContain('linkedPreconditionFailures === 0');
+  expect(inspectorConsistencySource).toContain('canProceedToCommitCandidate');
+
   [
     'writeBatch',
     'runTransaction',
@@ -1564,6 +1668,8 @@ test('fixed private reschedule inspector callable is bounded and read-only', () 
   expect(inspectorCallableBlock).not.toContain('previewOnly: false');
 
   const protectedPaths = [
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -2054,16 +2160,11 @@ test('fixed private reschedule frontend connects read-only inspector gate', () =
     expect(privateSlotsSectionSource).not.toContain(token);
   });
 
-  const functionsDiff = execFileSync(
-    'git',
-    ['diff', '--name-only', '--', 'functions/index.js'],
-    { cwd: process.cwd(), encoding: 'utf8' }
-  ).trim();
-  expect(functionsDiff).toBe('');
   expect(functionsSource).toContain('exports.inspectFixedPrivateLessonRescheduleScope = onCall(');
 
   const protectedPaths = [
-    'functions/index.js',
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',
