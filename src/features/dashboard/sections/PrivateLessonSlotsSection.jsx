@@ -616,10 +616,16 @@ export default function PrivateLessonSlotsSection({
   fixedRescheduleCommitError = '',
   fixedRescheduleCommitResult = null,
   fixedRescheduleCommitPayload = null,
+  fixedRescheduleInspectorResult = null,
+  fixedRescheduleInspectorBusy = false,
+  fixedRescheduleInspectorError = '',
+  fixedRescheduleInspectorPayload = null,
   onPreviewFixedRescheduleScopeOnServer,
   onClearFixedRescheduleServerPreview,
   onCommitFixedReschedule,
   onClearFixedRescheduleCommitState,
+  onInspectFixedRescheduleStateOnServer,
+  onClearFixedRescheduleInspectorState,
   createPrivateSlot,
   updatePrivateSlotEligibility,
   isPrivateSlotSubmitting,
@@ -795,6 +801,7 @@ export default function PrivateLessonSlotsSection({
   function closeFixedRescheduleCommitConfirmModal() {
     setShowFixedRescheduleCommitConfirmModal(false)
     onClearFixedRescheduleCommitState?.()
+    onClearFixedRescheduleInspectorState?.()
   }
 
   function resetFixedRescheduleTargetDraft(lesson) {
@@ -1228,9 +1235,35 @@ export default function PrivateLessonSlotsSection({
       !fixedRescheduleCommitBusy &&
       !fixedRescheduleCommitResult
   )
+  const fixedRescheduleInspectorTargetConflicts = Array.isArray(
+    fixedRescheduleInspectorResult?.targetConflicts?.conflicts
+  )
+    ? fixedRescheduleInspectorResult.targetConflicts.conflicts
+    : []
+  const fixedRescheduleInspectorWarnings = Array.isArray(
+    fixedRescheduleInspectorResult?.dryRunPreview?.warnings
+  )
+    ? fixedRescheduleInspectorResult.dryRunPreview.warnings
+    : []
+  const fixedRescheduleInspectorCanProceed =
+    fixedRescheduleInspectorResult?.readOnly === true &&
+    fixedRescheduleInspectorResult?.consistency?.canProceedToCommitCandidate === true &&
+    fixedRescheduleInspectorPayload?.requestId === fixedRescheduleServerPreviewPayload?.requestId &&
+    fixedRescheduleInspectorTargetConflicts.length === 0
+  const canInspectFixedRescheduleState = Boolean(
+    canOpenFixedRescheduleCommitConfirmModal &&
+      typeof onInspectFixedRescheduleStateOnServer === 'function' &&
+      fixedRescheduleServerPreviewPayload &&
+      fixedRescheduleServerPreview?.ok === true &&
+      !fixedRescheduleInspectorBusy &&
+      !fixedRescheduleCommitBusy &&
+      !fixedRescheduleCommitResult
+  )
   const canCommitFixedReschedule = Boolean(
     canOpenFixedRescheduleCommitConfirmModal &&
       typeof onCommitFixedReschedule === 'function' &&
+      fixedRescheduleInspectorResult &&
+      fixedRescheduleInspectorCanProceed &&
       !fixedRescheduleCommitBusy &&
       !fixedRescheduleCommitResult
   )
@@ -5961,6 +5994,172 @@ export default function PrivateLessonSlotsSection({
             ) : null}
 
             <div
+              data-testid="private-fixed-reschedule-inspector-no-write-note"
+              style={{
+                display: 'grid',
+                gap: 8,
+                marginTop: 14,
+                padding: 12,
+                border: '1px solid #1d4ed8',
+                borderRadius: 8,
+                background: '#0f172a',
+                color: '#dbeafe',
+                fontSize: 13,
+                lineHeight: 1.6,
+              }}
+            >
+              <strong>DB 원장 확인</strong>
+              <span>실제 수정 전 DB 원장 확인을 먼저 실행하세요.</span>
+              <span>이 확인은 read-only이며 수업, 슬롯, 예약 문서를 수정하지 않습니다.</span>
+              <span>원장 확인이 통과하면 실제 수정 버튼이 활성화됩니다.</span>
+              <button
+                type="button"
+                data-testid="private-fixed-reschedule-inspector-button"
+                onClick={onInspectFixedRescheduleStateOnServer}
+                disabled={!canInspectFixedRescheduleState}
+                style={{
+                  justifySelf: 'start',
+                  padding: '8px 12px',
+                  borderRadius: 8,
+                  border: '1px solid #60a5fa',
+                  background: canInspectFixedRescheduleState ? '#1d4ed8' : '#1f2937',
+                  color: canInspectFixedRescheduleState ? 'white' : '#9ca3af',
+                  cursor: canInspectFixedRescheduleState ? 'pointer' : 'not-allowed',
+                  fontWeight: 700,
+                }}
+              >
+                {fixedRescheduleInspectorBusy ? (
+                  <span data-testid="private-fixed-reschedule-inspector-loading">
+                    DB 원장 확인 중...
+                  </span>
+                ) : (
+                  'DB 원장 확인'
+                )}
+              </button>
+            </div>
+
+            {fixedRescheduleInspectorError ? (
+              <div
+                data-testid="private-fixed-reschedule-inspector-error"
+                style={{
+                  display: 'grid',
+                  gap: 4,
+                  marginTop: 14,
+                  padding: 12,
+                  border: '1px solid #7f1d1d',
+                  borderRadius: 8,
+                  background: '#2f1111',
+                  color: '#fecaca',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong>DB 원장 확인 중 오류가 발생했습니다.</strong>
+                <span>{fixedRescheduleInspectorError}</span>
+                <span>서버 기준 범위 검증을 다시 실행한 뒤 확인하세요.</span>
+              </div>
+            ) : null}
+
+            {fixedRescheduleInspectorResult ? (
+              <div
+                data-testid="private-fixed-reschedule-inspector-result"
+                style={{
+                  display: 'grid',
+                  gap: 6,
+                  marginTop: 14,
+                  padding: 12,
+                  border: '1px solid #14532d',
+                  borderRadius: 8,
+                  background: '#0f2217',
+                  color: '#dcfce7',
+                  fontSize: 13,
+                  lineHeight: 1.6,
+                }}
+              >
+                <strong>DB 원장 확인 결과</strong>
+                <span data-testid="private-fixed-reschedule-inspector-readonly">
+                  readOnly: {fixedRescheduleInspectorResult.readOnly ? 'true' : 'false'} · mode{' '}
+                  {fixedRescheduleInspectorResult.inspectMode ||
+                    fixedRescheduleInspectorPayload?.mode ||
+                    '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-inspector-selected-lesson">
+                  selectedLesson:{' '}
+                  {fixedRescheduleInspectorResult.selectedLesson?.exists ? 'exists' : 'missing'} ·
+                  status {fixedRescheduleInspectorResult.selectedLesson?.status || '-'} ·{' '}
+                  {fixedRescheduleInspectorResult.selectedLesson?.date || '-'}{' '}
+                  {fixedRescheduleInspectorResult.selectedLesson?.time || '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-inspector-linked-slot">
+                  linkedSlot:{' '}
+                  {fixedRescheduleInspectorResult.linkedSlot?.rows?.[0]?.exists
+                    ? 'exists'
+                    : fixedRescheduleInspectorResult.linkedSlot?.count > 0
+                      ? '확인 필요'
+                      : 'missing'}{' '}
+                  · status {fixedRescheduleInspectorResult.linkedSlot?.rows?.[0]?.status || '-'} ·{' '}
+                  {fixedRescheduleInspectorResult.linkedSlot?.rows?.[0]?.date || '-'}{' '}
+                  {fixedRescheduleInspectorResult.linkedSlot?.rows?.[0]?.time || '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-inspector-linked-reservation">
+                  linkedReservation:{' '}
+                  {fixedRescheduleInspectorResult.linkedReservation?.rows?.[0]?.exists
+                    ? 'exists'
+                    : fixedRescheduleInspectorResult.linkedReservation?.count > 0
+                      ? '확인 필요'
+                      : 'missing'}{' '}
+                  · status{' '}
+                  {fixedRescheduleInspectorResult.linkedReservation?.rows?.[0]?.status || '-'} ·{' '}
+                  {fixedRescheduleInspectorResult.linkedReservation?.rows?.[0]?.date || '-'}{' '}
+                  {fixedRescheduleInspectorResult.linkedReservation?.rows?.[0]?.time || '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-inspector-target-template">
+                  targetTemplate: status {fixedRescheduleInspectorResult.targetTemplate?.status || '-'} ·
+                  actionCandidate{' '}
+                  {fixedRescheduleInspectorResult.targetTemplate?.actionCandidate ||
+                    fixedRescheduleInspectorResult.targetTemplate?.action ||
+                    '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-inspector-conflict">
+                  targetConflicts: {fixedRescheduleInspectorTargetConflicts.length}건
+                </span>
+                <span data-testid="private-fixed-reschedule-inspector-batch">
+                  fixedPrivateRescheduleBatch:{' '}
+                  {fixedRescheduleInspectorResult.fixedPrivateRescheduleBatch?.exists
+                    ? 'exists'
+                    : 'missing'}{' '}
+                  · status {fixedRescheduleInspectorResult.fixedPrivateRescheduleBatch?.status || '-'}
+                </span>
+                <span data-testid="private-fixed-reschedule-inspector-consistency">
+                  canProceedToCommitCandidate:{' '}
+                  {fixedRescheduleInspectorResult.consistency?.canProceedToCommitCandidate
+                    ? 'true'
+                    : 'false'}
+                </span>
+                {fixedRescheduleInspectorWarnings.length > 0 ? (
+                  fixedRescheduleInspectorWarnings.map((warning, index) => (
+                    <span
+                      key={`fixed-reschedule-inspector-warning-${index}`}
+                      data-testid="private-fixed-reschedule-inspector-warning"
+                      style={{ color: '#f5c17a' }}
+                    >
+                      {typeof warning === 'string'
+                        ? warning
+                        : warning.message || warning.code || JSON.stringify(warning)}
+                    </span>
+                  ))
+                ) : (
+                  <span data-testid="private-fixed-reschedule-inspector-warning">
+                    warning 없음
+                  </span>
+                )}
+                <span data-testid="private-fixed-reschedule-inspector-next-step">
+                  nextStep: {fixedRescheduleInspectorResult.nextStep || '-'}
+                </span>
+              </div>
+            ) : null}
+
+            <div
               data-testid="private-fixed-reschedule-commit-warning-note"
               style={{
                 display: 'grid',
@@ -5978,6 +6177,11 @@ export default function PrivateLessonSlotsSection({
               <span>이 버튼을 누르면 고정 수업, 슬롯, 예약 문서가 실제 수정됩니다.</span>
               <span>처리 중에는 중복 클릭을 막기 위해 버튼이 잠깁니다.</span>
               <span>수정 후에는 기존 고정 1:1 수업 일정에서 확인할 수 있습니다.</span>
+              {!fixedRescheduleInspectorCanProceed ? (
+                <span data-testid="private-fixed-reschedule-commit-gated-note">
+                  DB 원장 확인이 통과해야 실제 수정 버튼이 활성화됩니다.
+                </span>
+              ) : null}
             </div>
 
             <div

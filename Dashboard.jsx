@@ -1463,6 +1463,10 @@ export default function Dashboard() {
   const [fixedRescheduleCommitError, setFixedRescheduleCommitError] = useState('')
   const [fixedRescheduleCommitResult, setFixedRescheduleCommitResult] = useState(null)
   const [fixedRescheduleCommitPayload, setFixedRescheduleCommitPayload] = useState(null)
+  const [fixedRescheduleInspectorResult, setFixedRescheduleInspectorResult] = useState(null)
+  const [fixedRescheduleInspectorBusy, setFixedRescheduleInspectorBusy] = useState(false)
+  const [fixedRescheduleInspectorError, setFixedRescheduleInspectorError] = useState('')
+  const [fixedRescheduleInspectorPayload, setFixedRescheduleInspectorPayload] = useState(null)
   const [fixedPrivateRenewalCommitBusy, setFixedPrivateRenewalCommitBusy] = useState(false)
   const [fixedPrivateRenewalCommitError, setFixedPrivateRenewalCommitError] = useState('')
   const [fixedPrivateRenewalCommitResult, setFixedPrivateRenewalCommitResult] = useState(null)
@@ -7432,11 +7436,19 @@ export default function Dashboard() {
     }
   }
 
+  function clearFixedRescheduleInspectorState() {
+    setFixedRescheduleInspectorBusy(false)
+    setFixedRescheduleInspectorError('')
+    setFixedRescheduleInspectorResult(null)
+    setFixedRescheduleInspectorPayload(null)
+  }
+
   function clearFixedRescheduleCommitState() {
     setFixedRescheduleCommitBusy(false)
     setFixedRescheduleCommitError('')
     setFixedRescheduleCommitResult(null)
     setFixedRescheduleCommitPayload(null)
+    clearFixedRescheduleInspectorState()
   }
 
   function clearFixedRescheduleServerPreview() {
@@ -7507,6 +7519,7 @@ export default function Dashboard() {
       setFixedRescheduleServerPreviewBusy(true)
       setFixedRescheduleServerPreviewError('')
       setFixedRescheduleServerPreview(null)
+      clearFixedRescheduleInspectorState()
       const callable = httpsCallable(firebaseFunctions, 'previewFixedPrivateLessonRescheduleScope')
       const result = await callable(payload)
       const previewData = result?.data || null
@@ -7522,6 +7535,47 @@ export default function Dashboard() {
       )
     } finally {
       setFixedRescheduleServerPreviewBusy(false)
+    }
+  }
+
+  async function inspectFixedRescheduleStateOnServer() {
+    if (fixedRescheduleInspectorBusy || fixedRescheduleCommitBusy || fixedRescheduleCommitResult) {
+      return
+    }
+
+    try {
+      if (!fixedRescheduleServerPreviewPayload) {
+        throw new Error('DB 원장 확인에 사용할 서버 검증 payload가 없습니다.')
+      }
+      if (fixedRescheduleServerPreview?.ok !== true) {
+        throw new Error('서버 기준 범위 검증을 먼저 통과해야 DB 원장을 확인할 수 있습니다.')
+      }
+
+      const payload = {
+        ...fixedRescheduleServerPreviewPayload,
+        mode: 'before_commit',
+        inspectMode: 'before_commit',
+      }
+
+      setFixedRescheduleInspectorBusy(true)
+      setFixedRescheduleInspectorError('')
+      setFixedRescheduleInspectorResult(null)
+      setFixedRescheduleInspectorPayload(payload)
+      const callable = httpsCallable(
+        firebaseFunctions,
+        'inspectFixedPrivateLessonRescheduleScope'
+      )
+      const result = await callable(payload)
+      const inspectorData = result?.data || null
+      setFixedRescheduleInspectorResult(inspectorData)
+      setFixedRescheduleInspectorPayload(payload)
+    } catch (error) {
+      console.error('고정 1:1 수정 DB 원장 확인 실패:', error)
+      setFixedRescheduleInspectorResult(null)
+      setFixedRescheduleInspectorPayload(null)
+      setFixedRescheduleInspectorError(error?.message || 'DB 원장 확인에 실패했습니다.')
+    } finally {
+      setFixedRescheduleInspectorBusy(false)
     }
   }
 
@@ -7553,6 +7607,16 @@ export default function Dashboard() {
       }
       if (['conflict', 'missing_info'].includes(teacherTimePreparationStatus)) {
         throw new Error('선생님 시간 준비 상태를 먼저 해결해 주세요.')
+      }
+      if (
+        fixedRescheduleInspectorResult?.readOnly !== true ||
+        fixedRescheduleInspectorResult?.consistency?.canProceedToCommitCandidate !== true
+      ) {
+        throw new Error('실제 수정 전 DB 원장 확인을 먼저 실행해 주세요.')
+      }
+      const inspectorConflicts = fixedRescheduleInspectorResult?.targetConflicts?.conflicts
+      if (Array.isArray(inspectorConflicts) && inspectorConflicts.length > 0) {
+        throw new Error('DB 원장 확인에서 충돌이 발견되어 실제 수정할 수 없습니다.')
       }
 
       const payload = {
@@ -7665,10 +7729,16 @@ export default function Dashboard() {
     fixedRescheduleCommitError,
     fixedRescheduleCommitResult,
     fixedRescheduleCommitPayload,
+    fixedRescheduleInspectorResult,
+    fixedRescheduleInspectorBusy,
+    fixedRescheduleInspectorError,
+    fixedRescheduleInspectorPayload,
     onPreviewFixedRescheduleScopeOnServer: previewFixedRescheduleScopeOnServer,
     onClearFixedRescheduleServerPreview: clearFixedRescheduleServerPreview,
     onCommitFixedReschedule: handleCommitFixedPrivateReschedule,
     onClearFixedRescheduleCommitState: clearFixedRescheduleCommitState,
+    onInspectFixedRescheduleStateOnServer: inspectFixedRescheduleStateOnServer,
+    onClearFixedRescheduleInspectorState: clearFixedRescheduleInspectorState,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',
