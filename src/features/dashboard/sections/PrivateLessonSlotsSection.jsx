@@ -799,6 +799,7 @@ export default function PrivateLessonSlotsSection({
   }
 
   function closeFixedRescheduleCommitConfirmModal() {
+    if (fixedRescheduleCommitBusy) return
     setShowFixedRescheduleCommitConfirmModal(false)
     onClearFixedRescheduleCommitState?.()
     onClearFixedRescheduleInspectorState?.()
@@ -1250,6 +1251,9 @@ export default function PrivateLessonSlotsSection({
     fixedRescheduleInspectorResult?.consistency?.canProceedToCommitCandidate === true &&
     fixedRescheduleInspectorPayload?.requestId === fixedRescheduleServerPreviewPayload?.requestId &&
     fixedRescheduleInspectorTargetConflicts.length === 0
+  const hasFixedRescheduleCommitFeedback = Boolean(
+    fixedRescheduleCommitBusy || fixedRescheduleCommitResult || fixedRescheduleCommitError
+  )
   const canInspectFixedRescheduleState = Boolean(
     canOpenFixedRescheduleCommitConfirmModal &&
       typeof onInspectFixedRescheduleStateOnServer === 'function' &&
@@ -1265,7 +1269,8 @@ export default function PrivateLessonSlotsSection({
       fixedRescheduleInspectorResult &&
       fixedRescheduleInspectorCanProceed &&
       !fixedRescheduleCommitBusy &&
-      !fixedRescheduleCommitResult
+      !fixedRescheduleCommitResult &&
+      !fixedRescheduleCommitError
   )
   const fixedRescheduleCommitUpdated = fixedRescheduleCommitResult?.updated || {}
   const fixedRescheduleCommitUpdatedLessons = Array.isArray(fixedRescheduleCommitUpdated.lessons)
@@ -1299,10 +1304,24 @@ export default function PrivateLessonSlotsSection({
     fixedRescheduleServerPreview?.includedLessons?.[0]?.target || {}
 
   useEffect(() => {
-    if (!canOpenFixedRescheduleCommitConfirmModal && !fixedRescheduleCommitResult) {
+    if (
+      showFixedRescheduleCommitConfirmModal &&
+      !canOpenFixedRescheduleCommitConfirmModal &&
+      !hasFixedRescheduleCommitFeedback &&
+      !fixedRescheduleCommitBusy &&
+      !fixedRescheduleCommitResult &&
+      !fixedRescheduleCommitError
+    ) {
       setShowFixedRescheduleCommitConfirmModal(false)
     }
-  }, [canOpenFixedRescheduleCommitConfirmModal, fixedRescheduleCommitResult])
+  }, [
+    canOpenFixedRescheduleCommitConfirmModal,
+    fixedRescheduleCommitBusy,
+    fixedRescheduleCommitError,
+    fixedRescheduleCommitResult,
+    hasFixedRescheduleCommitFeedback,
+    showFixedRescheduleCommitConfirmModal,
+  ])
 
   const selectedPrivateBoardTeacherOption = useMemo(() => {
     if (teacherSelectOptions.length === 0) return null
@@ -5699,6 +5718,7 @@ export default function PrivateLessonSlotsSection({
           aria-modal="true"
           aria-labelledby="private-fixed-reschedule-commit-confirm-title"
           data-testid="private-fixed-reschedule-commit-confirm-modal"
+          data-commit-feedback-state={hasFixedRescheduleCommitFeedback ? 'present' : 'none'}
           style={{
             position: 'fixed',
             inset: 0,
@@ -5946,9 +5966,12 @@ export default function PrivateLessonSlotsSection({
                 }}
               >
                 <strong>수정 실행 중 오류가 발생했습니다.</strong>
+                <span data-testid="private-fixed-reschedule-commit-error-persisted">
+                  고정 수업 수정 실행 중 오류가 발생했습니다.
+                </span>
                 <span>{fixedRescheduleCommitError}</span>
-                <span>변경 범위를 다시 서버 검증한 뒤 시도하세요.</span>
-                <span>같은 요청을 반복하지 말고 상태를 확인하세요.</span>
+                <span>상태를 확인한 뒤 서버 기준 범위 검증과 DB 원장 확인을 다시 실행하세요.</span>
+                <span>같은 요청을 반복해서 누르지 마세요.</span>
               </div>
             ) : null}
 
@@ -5969,6 +5992,9 @@ export default function PrivateLessonSlotsSection({
                 }}
               >
                 <strong>고정 수업 수정이 완료되었습니다</strong>
+                <span data-testid="private-fixed-reschedule-commit-result-persisted">
+                  고정 수업 수정이 완료되었습니다
+                </span>
                 <span data-testid="private-fixed-reschedule-commit-result-batch-id">
                   batchId: {fixedRescheduleCommitResult.batchId || '-'}
                 </span>
@@ -6181,6 +6207,14 @@ export default function PrivateLessonSlotsSection({
                 <span data-testid="private-fixed-reschedule-commit-gated-note">
                   DB 원장 확인이 통과해야 실제 수정 버튼이 활성화됩니다.
                 </span>
+              ) : null}
+              {fixedRescheduleCommitBusy ? (
+                <span data-testid="private-fixed-reschedule-commit-busy-keep-open-note">
+                  처리 중에는 이 창을 닫지 말고 결과를 기다려주세요.
+                </span>
+              ) : null}
+              {fixedRescheduleCommitError ? (
+                <span>오류 후에는 서버 기준 범위 검증과 DB 원장 확인을 다시 실행하세요.</span>
               ) : null}
             </div>
 

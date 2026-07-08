@@ -1789,6 +1789,7 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
     'fixedRescheduleCommitError',
     'fixedRescheduleCommitResult',
     'fixedRescheduleCommitPayload',
+    'hasFixedRescheduleCommitFeedback',
     'onCommitFixedReschedule',
     'onClearFixedRescheduleCommitState',
     '수정 내용 최종 확인',
@@ -1798,6 +1799,9 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
     '고정 수업 수정이 완료되었습니다',
     '이 버튼을 누르면 고정 수업, 슬롯, 예약 문서가 실제 수정됩니다',
     '처리 중에는 중복 클릭을 막기 위해 버튼이 잠깁니다',
+    '처리 중에는 이 창을 닫지 말고 결과를 기다려주세요',
+    '같은 요청을 반복해서 누르지 마세요',
+    '서버 기준 범위 검증과 DB 원장 확인을 다시 실행하세요',
     'private-fixed-reschedule-commit-confirm-open',
     'private-fixed-reschedule-commit-confirm-modal',
     'private-fixed-reschedule-commit-selected-lesson',
@@ -1814,12 +1818,15 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
     'private-fixed-reschedule-commit-loading',
     'private-fixed-reschedule-commit-warning-note',
     'private-fixed-reschedule-commit-result',
+    'private-fixed-reschedule-commit-result-persisted',
     'private-fixed-reschedule-commit-result-batch-id',
     'private-fixed-reschedule-commit-result-idempotent-replay',
     'private-fixed-reschedule-commit-result-updated',
     'private-fixed-reschedule-commit-result-teacher-template',
     'private-fixed-reschedule-commit-result-normalized-plan',
     'private-fixed-reschedule-commit-error',
+    'private-fixed-reschedule-commit-error-persisted',
+    'private-fixed-reschedule-commit-busy-keep-open-note',
     'private-fixed-reschedule-commit-close',
   ].forEach((token) => {
     expect(privateSlotsSectionSource).toContain(token);
@@ -1877,6 +1884,14 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
   const modalSource = privateSlotsSectionSource.slice(modalStart, modalEnd);
   const commitButtonLabelMatches = modalSource.match(/위 내용으로 고정 수업 수정/g) || [];
   expect(commitButtonLabelMatches.length).toBe(1);
+  expect(modalSource).toMatch(
+    /type="button"[\s\S]*data-testid="private-fixed-reschedule-commit-button"[\s\S]*onClick=\{onCommitFixedReschedule\}/
+  );
+  expect(modalSource).toContain('disabled={!canCommitFixedReschedule}');
+  expect(modalSource).toContain('disabled={fixedRescheduleCommitBusy}');
+  expect(modalSource).toContain('private-fixed-reschedule-commit-busy-keep-open-note');
+  expect(modalSource).toContain('private-fixed-reschedule-commit-error-persisted');
+  expect(modalSource).toContain('private-fixed-reschedule-commit-result-persisted');
   [
     '수정 저장',
     '이 범위로 수정',
@@ -1893,6 +1908,34 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
   expect(testSource).not.toContain(`${commitButtonTestId}.${clickToken}`);
   expect(testSource).not.toContain(`getByTestId('${commitButtonTestId}').${clickToken}`);
   expect(testSource).not.toContain(`getByTestId("${commitButtonTestId}").${clickToken}`);
+
+  const modalPersistenceStart = privateSlotsSectionSource.indexOf(
+    'const hasFixedRescheduleCommitFeedback'
+  );
+  const modalPersistenceEnd = privateSlotsSectionSource.indexOf(
+    'const selectedPrivateBoardTeacherOption',
+    modalPersistenceStart
+  );
+  expect(modalPersistenceStart).toBeGreaterThanOrEqual(0);
+  expect(modalPersistenceEnd).toBeGreaterThan(modalPersistenceStart);
+  const modalPersistenceSource = privateSlotsSectionSource.slice(
+    modalPersistenceStart,
+    modalPersistenceEnd
+  );
+  [
+    'fixedRescheduleCommitBusy',
+    'fixedRescheduleCommitResult',
+    'fixedRescheduleCommitError',
+    'showFixedRescheduleCommitConfirmModal',
+    'canOpenFixedRescheduleCommitConfirmModal',
+    '!hasFixedRescheduleCommitFeedback',
+    'setShowFixedRescheduleCommitConfirmModal(false)',
+  ].forEach((token) => {
+    expect(modalPersistenceSource).toContain(token);
+  });
+  expect(modalPersistenceSource).not.toContain(
+    '!canOpenFixedRescheduleCommitConfirmModal && !fixedRescheduleCommitResult'
+  );
 
   const protectedPaths = [
     'firestore.rules',
