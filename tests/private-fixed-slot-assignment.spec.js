@@ -1499,7 +1499,6 @@ test('fixed private reschedule commit callable uses guarded transaction write mo
 
   const protectedPaths = [
     'Dashboard.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -1669,7 +1668,6 @@ test('fixed private reschedule inspector callable is bounded and read-only', () 
 
   const protectedPaths = [
     'Dashboard.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -1844,6 +1842,7 @@ test('fixed private reschedule frontend calls dry-run preview only', () => {
   });
 
   const protectedPaths = [
+    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -2044,6 +2043,150 @@ test('fixed private reschedule frontend connects guarded commit confirmation UI'
   );
 
   const protectedPaths = [
+    'functions/index.js',
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  expect(changedProtectedFiles).toEqual([]);
+});
+
+test('fixed private reschedule success UX highlights updated lessons without writes', () => {
+  const privateSlotsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+
+  [
+    'fixedRescheduleUpdatedLessonIds',
+    'updatedRescheduleLessonIds',
+    'handleViewUpdatedFixedRescheduleLessons',
+    'fixedPrivateLessonsSectionRef',
+    'scrollIntoView',
+    'requestAnimationFrame',
+    'private-fixed-reschedule-view-updated-lessons',
+    '수정된 일정 보기',
+    'private-fixed-reschedule-success-card',
+    'private-fixed-reschedule-success-card-updated-count',
+    'private-fixed-reschedule-success-card-batch-id',
+    'private-fixed-reschedule-success-card-template-action',
+    '방금 수정된 고정 수업',
+    '방금 수정됨',
+    'private-fixed-reschedule-updated-badge',
+    'data-updated-from-reschedule',
+  ].forEach((token) => {
+    expect(privateSlotsSectionSource).toContain(token);
+  });
+
+  const successUxStart = privateSlotsSectionSource.indexOf('fixedRescheduleUpdatedLessonIds');
+  const successUxEnd = privateSlotsSectionSource.indexOf(
+    'const fixedRescheduleTargetTeacherOption',
+    successUxStart
+  );
+  expect(successUxStart).toBeGreaterThanOrEqual(0);
+  expect(successUxEnd).toBeGreaterThan(successUxStart);
+  const successUxSource = privateSlotsSectionSource.slice(successUxStart, successUxEnd);
+  expect(successUxSource).toContain('new Set(');
+  expect(successUxSource).toContain("typeof lesson === 'string'");
+  expect(successUxSource).toContain('lesson?.id || lesson?.lessonId || lesson?.fixedLessonId');
+
+  const viewUpdatedStart = privateSlotsSectionSource.indexOf(
+    'function handleViewUpdatedFixedRescheduleLessons'
+  );
+  const viewUpdatedEnd = privateSlotsSectionSource.indexOf(
+    'function resetFixedRescheduleTargetDraft',
+    viewUpdatedStart
+  );
+  expect(viewUpdatedStart).toBeGreaterThanOrEqual(0);
+  expect(viewUpdatedEnd).toBeGreaterThan(viewUpdatedStart);
+  const viewUpdatedSource = privateSlotsSectionSource.slice(viewUpdatedStart, viewUpdatedEnd);
+  expect(viewUpdatedSource).toContain('setShowFixedRescheduleCommitConfirmModal(false)');
+  expect(viewUpdatedSource).toContain('setShowFixedRescheduleScopePreview(false)');
+  expect(viewUpdatedSource).toContain('fixedPrivateLessonsSectionRef.current?.scrollIntoView');
+  expect(viewUpdatedSource).not.toContain('onClearFixedRescheduleCommitState');
+  expect(viewUpdatedSource).not.toContain('onClearFixedRescheduleInspectorState');
+
+  const successCardStart = privateSlotsSectionSource.indexOf(
+    'fixedRescheduleCommitResult && updatedRescheduleLessonCount > 0'
+  );
+  const successCardEnd = privateSlotsSectionSource.indexOf(
+    'private-fixed-lesson-history-toggle',
+    successCardStart
+  );
+  expect(successCardStart).toBeGreaterThanOrEqual(0);
+  expect(successCardEnd).toBeGreaterThan(successCardStart);
+  const successCardSource = privateSlotsSectionSource.slice(successCardStart, successCardEnd);
+  expect(successCardSource).toContain('fixedRescheduleCommitResult');
+  expect(successCardSource).toContain('updatedRescheduleLessonCount > 0');
+  expect(successCardSource).toContain('fixedRescheduleCommitUpdatedLessons.length');
+  expect(successCardSource).toContain('fixedRescheduleCommitUpdatedSlots.length');
+  expect(successCardSource).toContain('fixedRescheduleCommitUpdatedReservations.length');
+  expect(successCardSource).toContain('fixedRescheduleCommitUpdated.teacherTemplateAction');
+  expect(successCardSource).toContain('fixedRescheduleCommitResult.batchId');
+  expect(successCardSource).toContain('fixedRescheduleCommitPayload?.requestId');
+
+  const rowStart = privateSlotsSectionSource.indexOf('isUpdatedRescheduleLesson');
+  const rowEnd = privateSlotsSectionSource.indexOf(
+    'data-testid="private-fixed-reschedule-scope-preview-open"',
+    rowStart
+  );
+  expect(rowStart).toBeGreaterThanOrEqual(0);
+  expect(rowEnd).toBeGreaterThan(rowStart);
+  const rowSource = privateSlotsSectionSource.slice(rowStart, rowEnd);
+  expect(rowSource).toContain('updatedRescheduleLessonIds.has');
+  expect(rowSource).toContain('data-testid="private-fixed-lesson-row"');
+  expect(rowSource).toContain('data-lesson-id={lesson.id}');
+  expect(rowSource).toContain('data-updated-from-reschedule');
+  expect(rowSource).toContain('private-fixed-reschedule-updated-badge');
+  expect(rowSource).toContain('방금 수정됨');
+
+  const commitResultStart = privateSlotsSectionSource.indexOf(
+    'private-fixed-reschedule-commit-result'
+  );
+  const commitResultEnd = privateSlotsSectionSource.indexOf(
+    'private-fixed-reschedule-inspector-no-write-note',
+    commitResultStart
+  );
+  expect(commitResultStart).toBeGreaterThanOrEqual(0);
+  expect(commitResultEnd).toBeGreaterThan(commitResultStart);
+  const commitResultSource = privateSlotsSectionSource.slice(commitResultStart, commitResultEnd);
+  expect(commitResultSource).toContain('private-fixed-reschedule-view-updated-lessons');
+  expect(commitResultSource).toContain('handleViewUpdatedFixedRescheduleLessons');
+  expect(commitResultSource).toContain('updatedRescheduleLessonCount > 0');
+
+  [
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    'updateFixedPrivateLessonScheduleScope',
+    'inspectFixedPrivateLessonRescheduleScope',
+    'previewFixedPrivateLessonRescheduleScope',
+    'httpsCallable',
+    'after_commit',
+    'writeBatch',
+    'runTransaction',
+    'setDoc',
+    'addDoc',
+    'updateDoc',
+    'deleteDoc',
+  ].forEach((token) => {
+    expect(privateSlotsSectionSource).not.toContain(token);
+  });
+
+  const protectedPaths = [
+    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',
@@ -2164,7 +2307,7 @@ test('fixed private reschedule frontend connects read-only inspector gate', () =
 
   const protectedPaths = [
     'Dashboard.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',
