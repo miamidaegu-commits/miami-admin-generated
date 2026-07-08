@@ -1148,7 +1148,8 @@ test('fixed private renewal save callable uses guarded transaction write mode', 
     '수정 범위 미리보기',
     '고정 수업 수정 범위 미리보기',
     '이 수업만 수정',
-    '이 날짜부터 이후 고정 수업에 적용',
+    '이 수업부터 이후 고정 수업에 적용',
+    '선택한 수업을 포함해 같은 고정 패턴의 이후 예정 수업을 함께 변경합니다',
     '이 수강권 안의 남은 고정 수업에 적용',
     '직접 날짜 범위 선택',
     '아직 저장하지 않습니다',
@@ -2206,6 +2207,202 @@ test('fixed private reschedule success UX highlights updated lessons without wri
   expect(changedProtectedFiles).toEqual([]);
 });
 
+test('calendar fixed private reschedule entry reuses existing preview without writes', () => {
+  const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
+  const calendarSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/CalendarSection.jsx'),
+    'utf8'
+  );
+  const privateSlotsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'),
+    'utf8'
+  );
+
+  [
+    'calendar-fixed-private-reschedule-preview-button',
+    'onOpenFixedRescheduleScopePreview',
+    '수정 범위 미리보기',
+    'fixed-private-slot-assignment',
+    'sourceType',
+    '_calendarRowKind',
+    'isSeatReleased',
+    'releasedForPrivateBooking',
+    'seat_released',
+    'completed',
+    'no_show',
+  ].forEach((token) => {
+    expect(calendarSectionSource).toContain(token);
+  });
+
+  [
+    'calendarFixedRescheduleRequest',
+    'openCalendarFixedRescheduleScopePreview',
+    'onOpenFixedRescheduleScopePreview',
+    'externalFixedRescheduleRequest',
+    'onConsumeExternalFixedRescheduleRequest',
+    'requestKey',
+    "setActiveSection('privateSlots')",
+  ].forEach((token) => {
+    expect(dashboardSource).toContain(token);
+  });
+
+  [
+    'externalFixedRescheduleRequest',
+    'onConsumeExternalFixedRescheduleRequest',
+    'requestKey',
+    'openFixedRescheduleScopePreview',
+    'buildFixedRescheduleTargetDraft',
+    "setFixedRescheduleScopeMode('single')",
+    '이 수업부터 이후 고정 수업에 적용',
+    '선택한 수업을 포함해 같은 고정 패턴의 이후 예정 수업을 함께 변경합니다',
+  ].forEach((token) => {
+    expect(privateSlotsSectionSource).toContain(token);
+  });
+
+  const calendarGuardStart = calendarSectionSource.indexOf(
+    'function canOpenCalendarFixedPrivateRescheduleScopePreview'
+  );
+  const calendarGuardEnd = calendarSectionSource.indexOf(
+    'function isFuturePrivateLesson',
+    calendarGuardStart
+  );
+  expect(calendarGuardStart).toBeGreaterThanOrEqual(0);
+  expect(calendarGuardEnd).toBeGreaterThan(calendarGuardStart);
+  const calendarGuardSource = calendarSectionSource.slice(calendarGuardStart, calendarGuardEnd);
+  [
+    'isAdmin',
+    'isGroupRow',
+    'isPrivateReservationRow',
+    "rowKind === 'private'",
+    "packageType === 'private'",
+    "sourceType === 'fixed-private-slot-assignment'",
+    'fixedPrivateAssignmentBatchId',
+    'studentId',
+    'studentName',
+    'getStudentName',
+    'teacherId',
+    'teacherUid',
+    'teacherKey',
+    'teacherName',
+    'getTeacherName',
+    'getLessonStorageDateString',
+    'lesson?.time',
+    "'active'",
+    "'reserved'",
+    "'assigned'",
+    "'scheduled'",
+    "'cancelled'",
+    "'canceled'",
+    "'completed'",
+    "'no_show'",
+    "'no-show'",
+    "'deleted'",
+    "'archived'",
+    "'seat_released'",
+    'isSeatReleased',
+    'releasedForPrivateBooking',
+  ].forEach((token) => {
+    expect(calendarGuardSource).toContain(token);
+  });
+
+  const calendarButtonStart = calendarSectionSource.indexOf(
+    'calendar-fixed-private-reschedule-preview-button'
+  );
+  const calendarButtonEnd = calendarSectionSource.indexOf(
+    'data-testid="calendar-fixed-private-action-button"',
+    calendarButtonStart
+  );
+  expect(calendarButtonStart).toBeGreaterThanOrEqual(0);
+  expect(calendarButtonEnd).toBeGreaterThan(calendarButtonStart);
+  const calendarButtonSource = calendarSectionSource.slice(calendarButtonStart, calendarButtonEnd);
+  expect(calendarButtonSource).toContain('type="button"');
+  expect(calendarButtonSource).toContain('event.stopPropagation()');
+  expect(calendarButtonSource).toContain('onOpenFixedRescheduleScopePreview?.(lesson)');
+  expect(calendarButtonSource).toContain('수정 범위 미리보기');
+
+  const dashboardBridgeStart = dashboardSource.indexOf(
+    'function openCalendarFixedRescheduleScopePreview'
+  );
+  const dashboardBridgeEnd = dashboardSource.indexOf(
+    'function consumeCalendarFixedRescheduleScopePreviewRequest',
+    dashboardBridgeStart
+  );
+  expect(dashboardBridgeStart).toBeGreaterThanOrEqual(0);
+  expect(dashboardBridgeEnd).toBeGreaterThan(dashboardBridgeStart);
+  const dashboardBridgeSource = dashboardSource.slice(dashboardBridgeStart, dashboardBridgeEnd);
+  expect(dashboardBridgeSource).toContain('setCalendarFixedRescheduleRequest');
+  expect(dashboardBridgeSource).toContain('lesson');
+  expect(dashboardBridgeSource).toContain('requestKey');
+  expect(dashboardBridgeSource).toContain('Date.now()');
+  expect(dashboardBridgeSource).toContain("setActiveSection('privateSlots')");
+
+  const privateExternalStart = privateSlotsSectionSource.indexOf(
+    'function openFixedRescheduleScopePreview'
+  );
+  const privateExternalEnd = privateSlotsSectionSource.indexOf(
+    'function closeFixedRescheduleScopePreview',
+    privateExternalStart
+  );
+  expect(privateExternalStart).toBeGreaterThanOrEqual(0);
+  expect(privateExternalEnd).toBeGreaterThan(privateExternalStart);
+  const privateExternalSource = privateSlotsSectionSource.slice(
+    privateExternalStart,
+    privateExternalEnd
+  );
+  expect(privateExternalSource).toContain('clearFixedRescheduleServerPreview()');
+  expect(privateExternalSource).toContain('resetFixedRescheduleTargetDraft(lesson)');
+  expect(privateExternalSource).toContain('setSelectedFixedRescheduleLesson(lesson)');
+  expect(privateExternalSource).toContain("setFixedRescheduleScopeMode('single')");
+  expect(privateExternalSource).toContain('setShowFixedRescheduleScopePreview(true)');
+  expect(privateExternalSource).toContain('externalFixedRescheduleRequest?.lesson');
+  expect(privateExternalSource).toContain('externalFixedRescheduleRequest?.requestKey');
+  expect(privateExternalSource).toContain('openFixedRescheduleScopePreview(lesson)');
+  expect(privateExternalSource).toContain('onConsumeExternalFixedRescheduleRequest?.(requestKey)');
+
+  const forbiddenTokens = [
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    'updateFixedPrivateLessonScheduleScope',
+    'inspectFixedPrivateLessonRescheduleScope',
+    'previewFixedPrivateLessonRescheduleScope',
+    'httpsCallable',
+    'setDoc',
+    'addDoc',
+    'updateDoc',
+    'deleteDoc',
+    'writeBatch',
+    'runTransaction',
+  ];
+  [calendarGuardSource, calendarButtonSource, dashboardBridgeSource, privateExternalSource].forEach(
+    (boundedSource) => {
+      forbiddenTokens.forEach((token) => {
+        expect(boundedSource).not.toContain(token);
+      });
+    }
+  );
+
+  [
+    'functions/index.js',
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ].forEach((protectedPath) => {
+    const changed = execFileSync('git', ['diff', '--name-only', '--', protectedPath], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+    })
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    expect(changed).toEqual([]);
+  });
+});
+
 test('fixed private reschedule frontend connects read-only inspector gate', () => {
   const dashboardSource = fs.readFileSync(path.join(process.cwd(), 'Dashboard.jsx'), 'utf8');
   const privateSlotsSectionSource = fs.readFileSync(
@@ -2306,7 +2503,6 @@ test('fixed private reschedule frontend connects read-only inspector gate', () =
   expect(functionsSource).toContain('exports.inspectFixedPrivateLessonRescheduleScope = onCall(');
 
   const protectedPaths = [
-    'Dashboard.jsx',
     'functions/index.js',
     'firestore.rules',
     'package.json',

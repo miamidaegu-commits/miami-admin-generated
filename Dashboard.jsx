@@ -1343,6 +1343,8 @@ export default function Dashboard() {
   const [busyDeletingStudentId, setBusyDeletingStudentId] = useState(null)
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [showOnlySelectedDate, setShowOnlySelectedDate] = useState(true)
+  const [calendarFixedRescheduleRequest, setCalendarFixedRescheduleRequest] = useState(null)
+  // Calendar bridge requests carry a requestKey from onOpenFixedRescheduleScopePreview.
   const [calendarMonth, setCalendarMonth] = useState(
   () => new Date(new Date().getFullYear(), new Date().getMonth(), 1)
 )
@@ -3886,6 +3888,19 @@ export default function Dashboard() {
   function goToFixedPrivateAssignmentFromPostPrivateLessonScheduleModal() {
     closePostPrivateLessonScheduleModal()
     setActiveSection('privateSlots')
+  }
+
+  function openCalendarFixedRescheduleScopePreview(lesson) {
+    const lessonId = String(lesson?.id || lesson?.lessonId || lesson?.fixedLessonId || '').trim()
+    setCalendarFixedRescheduleRequest({
+      lesson,
+      requestKey: `${lessonId || 'fixed-private'}_${Date.now()}`,
+    })
+    setActiveSection('privateSlots')
+  }
+
+  function consumeCalendarFixedRescheduleScopePreviewRequest() {
+    setCalendarFixedRescheduleRequest(null)
   }
 
   const {
@@ -6517,6 +6532,7 @@ export default function Dashboard() {
       onOpenGroupLessonNoDeductionCancel: openGroupLessonNoDeductionCancelModal,
       openStudentPackageEditModal,
       canEditStudentPackageCountsForPackage,
+      onOpenFixedRescheduleScopePreview: openCalendarFixedRescheduleScopePreview,
     },
   }
 
@@ -7739,6 +7755,8 @@ export default function Dashboard() {
     onClearFixedRescheduleCommitState: clearFixedRescheduleCommitState,
     onInspectFixedRescheduleStateOnServer: inspectFixedRescheduleStateOnServer,
     onClearFixedRescheduleInspectorState: clearFixedRescheduleInspectorState,
+    externalFixedRescheduleRequest: calendarFixedRescheduleRequest,
+    onConsumeExternalFixedRescheduleRequest: consumeCalendarFixedRescheduleScopePreviewRequest,
     createPrivateSlot,
     updatePrivateSlotEligibility,
     isPrivateSlotSubmitting: busyPrivateSlotActionId === '__add__',
