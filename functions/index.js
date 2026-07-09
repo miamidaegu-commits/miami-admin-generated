@@ -4578,6 +4578,847 @@ function buildAdminActorContext(auth, membership) {
   };
 }
 
+const PRIVATE_LESSON_STATUS_ACTIONS = {
+  complete: "수업완료",
+  no_show: "결석/노쇼",
+  reverse_deduction: "차감취소",
+};
+
+const PRIVATE_LESSON_STATUS_ACTIVE_STATUSES = [
+  "",
+  "active",
+  "reserved",
+  "assigned",
+  "scheduled",
+  "booked",
+  "confirmed",
+  "open",
+];
+
+const PRIVATE_LESSON_STATUS_BLOCKED_STATUSES = [
+  "completed",
+  "no_show",
+  "no-show",
+  "cancelled",
+  "canceled",
+  "seat_released",
+  "released",
+  "deleted",
+  "archived",
+];
+
+function getPrivateStatusActionPermission(membership, permissionKey) {
+  const permissions = membership &&
+    typeof membership.permissions === "object" ?
+    membership.permissions :
+    {};
+  return permissions[permissionKey] === true;
+}
+
+function buildTeacherStatusActor(auth, membership) {
+  return {
+    actorRole: "teacher",
+    actorUid: normalizeId(auth && auth.uid),
+    actorName: getCallableActorName(auth, membership),
+    teacherKeys: getPrivateTeacherScopeKeys({
+      teacherName: membership && membership.teacherName,
+      teacher: membership && membership.teacherName,
+      teacherKey: membership && membership.teacherKey,
+      teacherUid: normalizeId(auth && auth.uid),
+      teacherEmail: auth && auth.token && auth.token.email,
+      displayName: membership && membership.displayName,
+      name: membership && membership.name,
+    }),
+    permissions: {
+      canManageOwnLessonDeductions: getPrivateStatusActionPermission(
+          membership,
+          "canManageOwnLessonDeductions",
+      ),
+      canReverseOwnPrivateLessonDeduction: getPrivateStatusActionPermission(
+          membership,
+          "canReverseOwnPrivateLessonDeduction",
+      ),
+    },
+  };
+}
+
+async function resolvePrivateLessonStatusActor(db, academyId, auth) {
+  const uid = normalizeId(auth && auth.uid);
+  const membershipSnap = await db
+      .collection("academyMemberships")
+      .doc(`${academyId}_${uid}`)
+      .get();
+  const membership = membershipSnap.exists ? membershipSnap.data() || {} : null;
+  const role = String((membership && membership.role) || "")
+      .trim()
+      .toLowerCase();
+  const status = String((membership && membership.status) || "")
+      .trim()
+      .toLowerCase();
+  if (!membership || status !== "active") {
+    return {
+      uid,
+      role: role || "",
+      isAdmin: false,
+      isTeacher: false,
+      allowed: false,
+      permissionSource: "membership_inactive_or_missing",
+      blockedReason: "permission_denied",
+    };
+  }
+  if (role === "owner" || role === "admin") {
+    const adminActor = buildAdminActorContext(auth, {...membership, role});
+    return {
+      uid,
+      role: "admin",
+      isAdmin: true,
+      isTeacher: false,
+      allowed: true,
+      permissionSource: "academy_admin",
+      ...adminActor,
+    };
+  }
+  if (role === "teacher" || role === "staff") {
+    return {
+      uid,
+      role,
+      isAdmin: false,
+      isTeacher: true,
+      allowed: false,
+      permissionSource: "teacher_membership",
+      ...buildTeacherStatusActor(auth, {...membership, role}),
+    };
+  }
+  return {
+    uid,
+    role,
+    isAdmin: false,
+    isTeacher: false,
+    allowed: false,
+    permissionSource: "unsupported_membership_role",
+    blockedReason: "permission_denied",
+  };
+}
+
+function privateLessonStatusDocSummary(docId, data = {}) {
+  const status = normalizeId(data.status);
+  return {
+    id: normalizeId(docId),
+    exists: Boolean(docId && data),
+    status,
+    date: normalizeId(data.date || data.lessonDate || data.scheduleDate),
+    time: normalizeId(data.time || data.startTime),
+    studentId: normalizeId(data.studentId || data.studentID),
+    studentName: normalizeId(data.studentName || data.student),
+    teacherUid: normalizeId(
+        data.teacherUid || data.teacherUID || data.teacherId,
+    ),
+    teacherName: normalizeId(data.teacherName || data.teacher),
+    packageId: normalizeId(data.packageId),
+    deductionPackageId: normalizeId(data.deductionPackageId),
+    deductionApplied: data.deductionApplied === true,
+    deductionReversed: data.deductionReversed === true ||
+      data.deductionCanceled === true ||
+      data.isDeductCancelled === true,
+    slotId: normalizeId(data.slotId || data.privateLessonSlotId),
+    reservationId: normalizeId(
+        data.reservationId || data.privateLessonReservationId,
+    ),
+    lessonId: normalizeId(data.lessonId || data.fixedLessonId),
+    sourceType: normalizeId(data.sourceType),
+    packageType: normalizeId(data.packageType),
+    fixedPrivateAssignmentBatchId: normalizeId(
+        data.fixedPrivateAssignmentBatchId,
+    ),
+    privateLessonAvailabilityTemplateId: normalizeId(
+        data.privateLessonAvailabilityTemplateId,
+    ),
+  };
+}
+
+function privateLessonStatusPackageSummary(docId, data = {}) {
+  return {
+    id: normalizeId(docId),
+    exists: Boolean(docId && data),
+    status: normalizeId(data.status),
+    studentId: normalizeId(data.studentId),
+    studentName: normalizeId(data.studentName),
+    teacherUid: normalizeId(
+        data.teacherUid || data.teacherUID || data.teacherId,
+    ),
+    teacherName: normalizeId(data.teacherName || data.teacher),
+    packageId: normalizeId(docId),
+    packageType: normalizeId(data.packageType),
+    currentUsedCount: Number(data.usedCount || 0),
+    currentRemainingCount: Number(data.remainingCount || 0),
+    totalCount: Number(data.totalCount || 0),
+  };
+}
+
+async function fetchPrivateLessonStatusDoc(db, collectionName, docId) {
+  const id = normalizeId(docId);
+  if (!id) return {id: "", exists: false, data: null};
+  const snap = await db.collection(collectionName).doc(id).get();
+  return {
+    id,
+    exists: snap.exists,
+    data: snap.exists ? snap.data() || {} : null,
+  };
+}
+
+async function findPrivateLessonStatusReservationByLesson(
+    db,
+    academyId,
+    lessonId,
+) {
+  const normalizedLessonId = normalizeId(lessonId);
+  if (!normalizedLessonId) return null;
+  const snap = await db
+      .collection("privateLessonReservations")
+      .where("academyId", "==", academyId)
+      .where("lessonId", "==", normalizedLessonId)
+      .limit(2)
+      .get();
+  if (snap.empty) return null;
+  const docSnap = snap.docs[0];
+  return {id: docSnap.id, exists: true, data: docSnap.data() || {}};
+}
+
+async function findPrivateLessonStatusReservationBySlot(
+    db,
+    academyId,
+    slotId,
+) {
+  const normalizedSlotId = normalizeId(slotId);
+  if (!normalizedSlotId) return null;
+  const snap = await db
+      .collection("privateLessonReservations")
+      .where("academyId", "==", academyId)
+      .where("slotId", "==", normalizedSlotId)
+      .limit(2)
+      .get();
+  if (snap.empty) return null;
+  const docSnap = snap.docs[0];
+  return {id: docSnap.id, exists: true, data: docSnap.data() || {}};
+}
+
+async function fetchPrivateLessonStatusCreditCandidates({
+  db,
+  academyId,
+  lessonId,
+  reservationId,
+  packageId,
+  directIds = [],
+}) {
+  const candidatesById = {};
+  for (const directId of directIds.map(normalizeId).filter(Boolean)) {
+    const snap = await db.collection("creditTransactions").doc(directId).get();
+    candidatesById[directId] = {
+      id: directId,
+      exists: snap.exists,
+      actionType: snap.exists ?
+        normalizeId((snap.data() || {}).actionType) :
+        "",
+      sourceType: snap.exists ?
+        normalizeId((snap.data() || {}).sourceType) :
+        "",
+      sourceId: snap.exists ? normalizeId((snap.data() || {}).sourceId) : "",
+      packageId: snap.exists ? normalizeId((snap.data() || {}).packageId) : "",
+      deltaCount: snap.exists ? Number((snap.data() || {}).deltaCount || 0) : 0,
+    };
+  }
+  const sourceIds = [reservationId, lessonId].map(normalizeId).filter(Boolean);
+  for (const sourceId of sourceIds) {
+    const snap = await db
+        .collection("creditTransactions")
+        .where("academyId", "==", academyId)
+        .where("sourceId", "==", sourceId)
+        .limit(5)
+        .get();
+    snap.docs.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      if (packageId && normalizeId(data.packageId) !== packageId) return;
+      candidatesById[docSnap.id] = {
+        id: docSnap.id,
+        exists: true,
+        actionType: normalizeId(data.actionType),
+        sourceType: normalizeId(data.sourceType),
+        sourceId: normalizeId(data.sourceId),
+        packageId: normalizeId(data.packageId),
+        deltaCount: Number(data.deltaCount || 0),
+      };
+    });
+  }
+  return Object.values(candidatesById);
+}
+
+async function resolvePrivateLessonStatusTarget({db, academyId, data}) {
+  const initialLessonId = optionalString(data, "lessonId");
+  const initialReservationId = optionalString(data, "reservationId");
+  const initialSlotId = optionalString(data, "slotId");
+  let lessonDoc = await fetchPrivateLessonStatusDoc(
+      db,
+      "lessons",
+      initialLessonId,
+  );
+  let reservationDoc = await fetchPrivateLessonStatusDoc(
+      db,
+      "privateLessonReservations",
+      initialReservationId,
+  );
+  let slotDoc = await fetchPrivateLessonStatusDoc(
+      db,
+      "privateLessonSlots",
+      initialSlotId,
+  );
+  if (lessonDoc.exists && !reservationDoc.exists) {
+    const linkedReservationId = normalizeId(
+        lessonDoc.data.reservationId ||
+        lessonDoc.data.privateLessonReservationId,
+    );
+    reservationDoc = await fetchPrivateLessonStatusDoc(
+        db,
+        "privateLessonReservations",
+        linkedReservationId,
+    );
+  }
+  if (reservationDoc.exists && !lessonDoc.exists) {
+    lessonDoc = await fetchPrivateLessonStatusDoc(
+        db,
+        "lessons",
+        reservationDoc.data.lessonId || reservationDoc.data.fixedLessonId,
+    );
+  }
+  if (!reservationDoc.exists && lessonDoc.exists) {
+    reservationDoc =
+      await findPrivateLessonStatusReservationByLesson(
+          db,
+          academyId,
+          lessonDoc.id,
+      ) || reservationDoc;
+  }
+  const linkedSlotId = normalizeId(
+      initialSlotId ||
+      (lessonDoc.exists && (
+        lessonDoc.data.slotId || lessonDoc.data.privateLessonSlotId
+      )) ||
+      (reservationDoc.exists && (
+        reservationDoc.data.slotId || reservationDoc.data.privateLessonSlotId
+      )),
+  );
+  if (linkedSlotId && !slotDoc.exists) {
+    slotDoc = await fetchPrivateLessonStatusDoc(
+        db,
+        "privateLessonSlots",
+        linkedSlotId,
+    );
+  }
+  if (!reservationDoc.exists && slotDoc.exists) {
+    const slotReservationId = normalizeId(slotDoc.data.reservationId);
+    reservationDoc = await fetchPrivateLessonStatusDoc(
+        db,
+        "privateLessonReservations",
+        slotReservationId,
+    );
+    if (!reservationDoc.exists) {
+      reservationDoc =
+        await findPrivateLessonStatusReservationBySlot(
+            db,
+            academyId,
+            slotDoc.id,
+        ) || reservationDoc;
+    }
+  }
+  const packageId = normalizeId(
+      (reservationDoc.exists && (
+        reservationDoc.data.deductionPackageId ||
+        reservationDoc.data.packageId ||
+        reservationDoc.data.linkedPackageId ||
+        reservationDoc.data.fixedPrivatePackageId
+      )) ||
+      (lessonDoc.exists && (
+        lessonDoc.data.deductionPackageId ||
+        lessonDoc.data.packageId ||
+        lessonDoc.data.linkedPackageId ||
+        lessonDoc.data.fixedPrivatePackageId
+      )) ||
+      (slotDoc.exists && (
+        slotDoc.data.packageId ||
+        slotDoc.data.linkedPackageId ||
+        slotDoc.data.fixedPrivatePackageId
+      )),
+  );
+  const packageDoc = await fetchPrivateLessonStatusDoc(
+      db,
+      "studentPackages",
+      packageId,
+  );
+  const creditTransactionCandidates =
+    await fetchPrivateLessonStatusCreditCandidates({
+      db,
+      academyId,
+      lessonId: lessonDoc.id,
+      reservationId: reservationDoc.id,
+      packageId,
+      directIds: [
+        reservationDoc.exists && (
+          reservationDoc.data.deductionCreditTransactionId ||
+          reservationDoc.data.deductionTransactionId
+        ),
+        lessonDoc.exists && (
+          lessonDoc.data.deductionCreditTransactionId ||
+          lessonDoc.data.deductionTransactionId
+        ),
+      ],
+    });
+  return {
+    lessonDoc,
+    reservationDoc,
+    slotDoc,
+    packageDoc,
+    packageId,
+    creditTransactionCandidates,
+  };
+}
+
+function isTeacherOwnPrivateLessonTarget(actor, target) {
+  if (!actor || actor.isTeacher !== true) return false;
+  const actorKeys = Array.isArray(actor.teacherKeys) ? actor.teacherKeys : [];
+  if (actorKeys.length === 0) return false;
+  const targetKeys = getPrivateTeacherScopeKeys(
+      target.lessonDoc && target.lessonDoc.data,
+      target.reservationDoc && target.reservationDoc.data,
+      target.slotDoc && target.slotDoc.data,
+      target.packageDoc && target.packageDoc.data,
+  );
+  return targetKeys.length > 0 &&
+    targetKeys.some((key) => actorKeys.includes(key));
+}
+
+function canPreviewPrivateLessonStatusAction({actor, actionType, target}) {
+  if (actor.isAdmin) {
+    return {allowed: true, permissionSource: "academy_admin"};
+  }
+  if (!actor.isTeacher) {
+    return {
+      allowed: false,
+      permissionSource: actor.permissionSource,
+      blockedReason: "permission_denied",
+    };
+  }
+  if (!isTeacherOwnPrivateLessonTarget(actor, target)) {
+    return {
+      allowed: false,
+      permissionSource: "teacher_target_scope",
+      blockedReason: "teacher_not_owner",
+    };
+  }
+  if (actionType === "reverse_deduction") {
+    if (actor.permissions.canReverseOwnPrivateLessonDeduction === true) {
+      return {
+        allowed: true,
+        permissionSource: "canReverseOwnPrivateLessonDeduction",
+      };
+    }
+    return {
+      allowed: false,
+      permissionSource: "canReverseOwnPrivateLessonDeduction",
+      blockedReason: "teacher_permission_missing",
+    };
+  }
+  if (actor.permissions.canManageOwnLessonDeductions === true) {
+    return {
+      allowed: true,
+      permissionSource: "canManageOwnLessonDeductions",
+    };
+  }
+  return {
+    allowed: false,
+    permissionSource: "canManageOwnLessonDeductions",
+    blockedReason: "teacher_permission_missing",
+  };
+}
+
+function getPrivateLessonStatusValue(target) {
+  return String(
+      (target.reservationDoc.exists && target.reservationDoc.data.status) ||
+      (target.lessonDoc.exists && target.lessonDoc.data.status) ||
+      (target.slotDoc.exists && target.slotDoc.data.status) ||
+      "",
+  ).trim().toLowerCase();
+}
+
+function getPrivateLessonStatusBlockedReason(target) {
+  const status = getPrivateLessonStatusValue(target);
+  const cancellationType = String(
+      (target.lessonDoc.exists && target.lessonDoc.data.cancellationType) ||
+      (target.reservationDoc.exists &&
+        target.reservationDoc.data.cancellationType) ||
+      (target.slotDoc.exists && target.slotDoc.data.cancellationType) ||
+      "",
+  ).trim().toLowerCase();
+  if (status === "completed") return "already_completed";
+  if (status === "no_show" || status === "no-show") return "already_no_show";
+  if (["cancelled", "canceled"].includes(status)) return "cancelled_lesson";
+  if (["seat_released", "released"].includes(status)) {
+    return "seat_released_lesson";
+  }
+  if (cancellationType === "seat_released") return "seat_released_lesson";
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  if (
+    lesson.isSeatReleased === true ||
+    reservation.isSeatReleased === true ||
+    lesson.releasedForPrivateBooking === true ||
+    reservation.releasedForPrivateBooking === true
+  ) {
+    return "seat_released_lesson";
+  }
+  if (
+    lesson.deletedAt ||
+    lesson.archivedAt ||
+    reservation.deletedAt ||
+    reservation.archivedAt ||
+    status === "deleted" ||
+    status === "archived"
+  ) {
+    return status === "archived" ||
+      lesson.archivedAt ||
+      reservation.archivedAt ?
+      "archived_lesson" :
+      "deleted_lesson";
+  }
+  return "";
+}
+
+function getPrivateLessonStatusTargetId(target) {
+  return normalizeId(
+      target.reservationDoc.id ||
+      target.lessonDoc.id ||
+      target.slotDoc.id,
+  );
+}
+
+function buildPrivateLessonStatusPackageImpact({actionType, target}) {
+  const packageData = target.packageDoc.exists ? target.packageDoc.data : null;
+  const packageSummary = target.packageDoc.exists ?
+    privateLessonStatusPackageSummary(target.packageDoc.id, packageData) :
+    privateLessonStatusPackageSummary("", {});
+  if (actionType !== "reverse_deduction") {
+    return {
+      packageId: packageSummary.id,
+      currentUsedCount: packageSummary.currentUsedCount,
+      currentRemainingCount: packageSummary.currentRemainingCount,
+      usedCountDelta: 0,
+      remainingCountDelta: 0,
+      nextUsedCount: packageSummary.currentUsedCount,
+      nextRemainingCount: packageSummary.currentRemainingCount,
+      reason: `${actionType}_keeps_deduction`,
+    };
+  }
+  const currentUsedCount = packageSummary.currentUsedCount;
+  const currentRemainingCount = packageSummary.currentRemainingCount;
+  const nextUsedCount = Math.max(0, currentUsedCount - 1);
+  const totalCount = Number(packageSummary.totalCount || 0);
+  const restoredRemaining = currentRemainingCount + 1;
+  const nextRemainingCount = Number.isFinite(totalCount) && totalCount > 0 ?
+    Math.min(totalCount, restoredRemaining) :
+    restoredRemaining;
+  return {
+    packageId: packageSummary.id,
+    currentUsedCount,
+    currentRemainingCount,
+    usedCountDelta: -1,
+    remainingCountDelta: 1,
+    nextUsedCount,
+    nextRemainingCount,
+    reason: "reverse_deduction_restores_one_private_lesson",
+  };
+}
+
+function hasPrivateLessonStatusDeductionEvidence(target) {
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  if (reservation.deductionApplied === true) return true;
+  if (lesson.deductionApplied === true) return true;
+  if (lesson.isDeductCancelled === true) return false;
+  if (normalizeId(lesson.packageId) && normalizeId(lesson.date)) return true;
+  return target.creditTransactionCandidates.some(
+      (candidate) => Number(candidate.deltaCount || 0) < 0,
+  );
+}
+
+function buildPrivateLessonStatusCreditPreview({actionType, target}) {
+  const linkedReservationId = normalizeId(target.reservationDoc.id);
+  const linkedLessonId = normalizeId(target.lessonDoc.id);
+  const linkedPackageId = normalizeId(target.packageId || target.packageDoc.id);
+  const sourceId = linkedReservationId ||
+    linkedLessonId ||
+    getPrivateLessonStatusTargetId(target);
+  const originalCredit = target.creditTransactionCandidates.find(
+      (candidate) => Number(candidate.deltaCount || 0) < 0,
+  ) || null;
+  if (actionType !== "reverse_deduction") {
+    return {
+      wouldCreate: false,
+      actionType: "",
+      sourceType: "private-lesson-status-action",
+      sourceId,
+      linkedLessonId,
+      linkedReservationId,
+      linkedPackageId,
+      reversalOfTransactionId: "",
+      idempotencyKeyCandidate: "",
+    };
+  }
+  return {
+    wouldCreate: true,
+    actionType: "private_lesson_deduction_reversed",
+    sourceType: "private-lesson-status-action",
+    sourceId,
+    linkedLessonId,
+    linkedReservationId,
+    linkedPackageId,
+    reversalOfTransactionId: originalCredit ? originalCredit.id : "",
+    idempotencyKeyCandidate: [
+      "privateLessonStatusAction",
+      "reverse_deduction",
+      sourceId,
+      linkedPackageId,
+    ].filter(Boolean).join("__"),
+  };
+}
+
+function buildPrivateLessonStatusPlan({actionType, target}) {
+  const blockedReasons = [];
+  const warnings = [];
+  if (!target.lessonDoc.exists && !target.reservationDoc.exists) {
+    blockedReasons.push("missing_target");
+  }
+  if (!target.lessonDoc.exists && target.reservationDoc.exists) {
+    warnings.push("lesson_missing_but_reservation_exists");
+  }
+  if (!target.reservationDoc.exists && target.lessonDoc.exists) {
+    warnings.push("reservation_missing_but_lesson_exists");
+  }
+  if (!target.slotDoc.exists) warnings.push("missing_slot");
+  const statusReason = getPrivateLessonStatusBlockedReason(target);
+  const status = getPrivateLessonStatusValue(target);
+  if (actionType === "complete" || actionType === "no_show") {
+    if (statusReason) blockedReasons.push(statusReason);
+    if (!PRIVATE_LESSON_STATUS_ACTIVE_STATUSES.includes(status) ||
+        PRIVATE_LESSON_STATUS_BLOCKED_STATUSES.includes(status)) {
+      blockedReasons.push("unsupported_current_status");
+    }
+    warnings.push(
+        actionType === "complete" ?
+          "complete_keeps_deduction" :
+          "no_show_keeps_deduction",
+    );
+  }
+  if (actionType === "reverse_deduction") {
+    warnings.push("reverse_deduction_is_high_risk");
+    const reservation = target.reservationDoc.exists ?
+      target.reservationDoc.data :
+      {};
+    const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+    if (!target.packageDoc.exists) blockedReasons.push("missing_package");
+    if (!hasPrivateLessonStatusDeductionEvidence(target)) {
+      blockedReasons.push("deduction_not_applied");
+    }
+    if (
+      reservation.deductionReversed === true ||
+      reservation.deductionCanceled === true ||
+      lesson.deductionReversed === true ||
+      lesson.deductionCanceled === true ||
+      lesson.isDeductCancelled === true
+    ) {
+      blockedReasons.push("deduction_already_reversed");
+    }
+    if (target.packageDoc.exists) {
+      const usedCount = Number(target.packageDoc.data.usedCount || 0);
+      const remainingCount = Number(target.packageDoc.data.remainingCount || 0);
+      if (!Number.isFinite(usedCount) ||
+          !Number.isFinite(remainingCount) ||
+          usedCount <= 0) {
+        blockedReasons.push("package_count_invalid");
+      }
+    }
+    if (!target.creditTransactionCandidates.some(
+        (candidate) => Number(candidate.deltaCount || 0) < 0,
+    )) {
+      warnings.push("package_transaction_not_found");
+      warnings.push("original_credit_transaction_missing");
+    }
+  }
+  const uniqueBlockedReasons = Array.from(new Set(blockedReasons));
+  const uniqueWarnings = Array.from(new Set(warnings));
+  const packageImpact = buildPrivateLessonStatusPackageImpact({
+    actionType,
+    target,
+  });
+  const creditTransactionPreview = buildPrivateLessonStatusCreditPreview({
+    actionType,
+    target,
+  });
+  const targetStatus = actionType === "complete" ? "completed" :
+    actionType === "no_show" ? "no_show" : status;
+  return {
+    currentState: {
+      status,
+      deductionApplied: Boolean(
+          (target.reservationDoc.exists &&
+            target.reservationDoc.data.deductionApplied === true) ||
+          (target.lessonDoc.exists &&
+            target.lessonDoc.data.deductionApplied === true),
+      ),
+      deductionReversed: Boolean(
+          (target.reservationDoc.exists &&
+            target.reservationDoc.data.deductionReversed === true) ||
+          (target.lessonDoc.exists &&
+            (target.lessonDoc.data.deductionReversed === true ||
+              target.lessonDoc.data.isDeductCancelled === true)),
+      ),
+    },
+    proposedState: {
+      lesson: target.lessonDoc.exists ? {
+        id: target.lessonDoc.id,
+        status: targetStatus,
+        deductionReversed:
+          actionType === "reverse_deduction" ? true : undefined,
+      } : null,
+      reservation: target.reservationDoc.exists ? {
+        id: target.reservationDoc.id,
+        status: targetStatus,
+        deductionReversed:
+          actionType === "reverse_deduction" ? true : undefined,
+      } : null,
+      slot: target.slotDoc.exists ? {
+        id: target.slotDoc.id,
+        status: targetStatus,
+      } : null,
+    },
+    packageImpact,
+    creditTransactionPreview,
+    blockedReasons: uniqueBlockedReasons,
+    warnings: uniqueWarnings,
+    normalizedPlan: {
+      actionType,
+      targetStatus,
+      linkedLessonId: normalizeId(target.lessonDoc.id),
+      linkedReservationId: normalizeId(target.reservationDoc.id),
+      linkedSlotId: normalizeId(target.slotDoc.id),
+      linkedPackageId: normalizeId(target.packageId || target.packageDoc.id),
+    },
+  };
+}
+
+async function previewPrivateLessonStatusAction({db, auth, data}) {
+  const academyId = requireString(data, "academyId");
+  const actionType = requireString(data, "actionType");
+  validateAcademyId(academyId);
+  if (!Object.prototype.hasOwnProperty.call(
+      PRIVATE_LESSON_STATUS_ACTIONS,
+      actionType,
+  )) {
+    throw new HttpsError("invalid-argument", "unsupported_action_type");
+  }
+  if (data.dryRun !== true ||
+      data.previewOnly !== true ||
+      data.commit !== false) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Preview requires dryRun true, previewOnly true, and commit false.",
+    );
+  }
+  if (!optionalString(data, "lessonId") &&
+      !optionalString(data, "reservationId")) {
+    throw new HttpsError(
+        "invalid-argument",
+        "lessonId or reservationId is required.",
+    );
+  }
+  const requestId = optionalString(data, "requestId") ||
+    `preview_private_lesson_status_${Date.now()}`;
+  const target = await resolvePrivateLessonStatusTarget({db, academyId, data});
+  const actor = await resolvePrivateLessonStatusActor(db, academyId, auth);
+  const permission = canPreviewPrivateLessonStatusAction({
+    actor,
+    actionType,
+    target,
+  });
+  const plan = buildPrivateLessonStatusPlan({actionType, target});
+  const blockedReasons = Array.from(new Set([
+    ...plan.blockedReasons,
+    ...(permission.allowed ? [] : [
+      permission.blockedReason || "permission_denied",
+    ]),
+  ]));
+  const warnings = Array.from(new Set([
+    ...plan.warnings,
+    ...(actionType === "reverse_deduction" && actor.isTeacher ? [
+      "teacher_reverse_deduction_requires_explicit_permission",
+    ] : []),
+  ]));
+  const allowed = permission.allowed && blockedReasons.length === 0;
+  return {
+    ok: true,
+    dryRun: true,
+    previewOnly: true,
+    commit: false,
+    requestId,
+    actionType,
+    actionLabel: PRIVATE_LESSON_STATUS_ACTIONS[actionType],
+    actor: {
+      uid: actor.uid,
+      role: actor.role,
+      isAdmin: actor.isAdmin === true,
+      isTeacher: actor.isTeacher === true,
+      allowed: permission.allowed === true,
+      permissionSource: permission.permissionSource || actor.permissionSource,
+    },
+    target: {
+      lesson: target.lessonDoc.exists ?
+        privateLessonStatusDocSummary(
+            target.lessonDoc.id,
+            target.lessonDoc.data,
+        ) :
+        {id: normalizeId(data.lessonId), exists: false},
+      reservation: target.reservationDoc.exists ?
+        privateLessonStatusDocSummary(
+            target.reservationDoc.id,
+            target.reservationDoc.data,
+        ) :
+        {id: normalizeId(data.reservationId), exists: false},
+      slot: target.slotDoc.exists ?
+        privateLessonStatusDocSummary(target.slotDoc.id, target.slotDoc.data) :
+        {id: normalizeId(data.slotId), exists: false},
+      package: target.packageDoc.exists ?
+        privateLessonStatusPackageSummary(
+            target.packageDoc.id,
+            target.packageDoc.data,
+        ) :
+        {id: normalizeId(target.packageId), exists: false},
+      creditTransactionCandidates: target.creditTransactionCandidates,
+    },
+    currentState: plan.currentState,
+    proposedState: plan.proposedState,
+    packageImpact: plan.packageImpact,
+    creditTransactionPreview: plan.creditTransactionPreview,
+    allowed,
+    blockedReasons,
+    warnings,
+    normalizedPlan: plan.normalizedPlan,
+    nextStep: allowed ?
+      "commitPrivateLessonStatusAction can be implemented in a later PR." :
+      "Resolve blockedReasons before commit.",
+  };
+}
+
 async function canMarkPrivateReservationOutcome(db, academyId, auth) {
   const membership = await requireAcademyAdmin(db, academyId, auth.uid);
   return buildAdminActorContext(auth, membership);
@@ -11676,6 +12517,43 @@ exports.runAutoDeductPendingLessonsForTest = onCall(
       } catch (error) {
         throw asHttpsError(error);
       }
+    },
+);
+
+exports.previewPrivateLessonStatusAction = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "auth_required");
+      }
+      const data = request.data || {};
+      if (data.commit === true) {
+        throw new HttpsError("invalid-argument", "commit must be false.");
+      }
+      if (
+        data.dryRun !== true ||
+        data.previewOnly !== true ||
+        data.commit !== false
+      ) {
+        throw new HttpsError(
+            "invalid-argument",
+            "dryRun true, previewOnly true, and commit false are required.",
+        );
+      }
+      // Static guard contract: complete, no_show, reverse_deduction return
+      // packageImpact, creditTransactionPreview, blockedReasons,
+      // proposedState, normalizedPlan.
+      const preview = await previewPrivateLessonStatusAction({
+        db: admin.firestore(),
+        auth: request.auth,
+        data,
+      });
+      return {
+        ...preview,
+        dryRun: true,
+        previewOnly: true,
+        commit: false,
+      };
     },
 );
 
