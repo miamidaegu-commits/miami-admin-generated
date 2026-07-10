@@ -107,6 +107,99 @@ test('private lesson status action preview callable stays read-only', () => {
   expect(combinedSource).toContain('private-lesson-status-action');
 });
 
+test('private lesson status action commit callable is exported and guarded', () => {
+  const functionsSource = readSource('functions/index.js');
+  const callableBlock = boundedSource(
+    functionsSource,
+    'exports.commitPrivateLessonStatusAction = onCall(',
+    'exports.reversePrivateReservationOutcome = onCall('
+  );
+  const helperBlock = boundedSource(
+    functionsSource,
+    'const PRIVATE_LESSON_STATUS_COMMIT_ACTIONS',
+    'function requireActiveStudentMembership'
+  );
+  const combinedSource = `${helperBlock}\n${callableBlock}`;
+
+  [
+    'commitPrivateLessonStatusAction',
+    'privateLessonStatusActionBatches',
+    'payloadHash',
+    'idempotentReplay',
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    'complete',
+    'no_show',
+    'reverse_deduction commit is not enabled in this release',
+    'Package or credit deduction write is not enabled for this status commit',
+    'runTransaction',
+    'transaction.get',
+    'transaction.set',
+    'transaction.update',
+    'statusActionBatchId',
+    'statusActionRequestId',
+    'attendanceStatus',
+    'statusUpdatedAt',
+    'statusUpdatedBy',
+    'completedAt',
+    'noShowAt',
+    'updated',
+    'normalizedPlan',
+    'blockedReasons',
+    'permission-denied',
+    'already-exists',
+    'failed-precondition',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  expect(callableBlock).toContain('if (!request.auth)');
+  expect(callableBlock).toContain('data.actionType === "reverse_deduction"');
+  expect(callableBlock).toContain('data.commit !== true');
+  expect(callableBlock).toContain('data.dryRun !== false');
+  expect(callableBlock).toContain('data.previewOnly !== false');
+  expect(helperBlock).toContain(
+    'PRIVATE_LESSON_STATUS_COMMIT_ACTIONS = ["complete", "no_show"]'
+  );
+  expect(helperBlock).toContain('checkpoint.status === "completed"');
+  expect(helperBlock).toContain('checkpoint.payloadHash === payloadHash');
+});
+
+test('private lesson status action commit writes checkpoint and reservation only', () => {
+  const functionsSource = readSource('functions/index.js');
+  const helperBlock = boundedSource(
+    functionsSource,
+    'const PRIVATE_LESSON_STATUS_COMMIT_ACTIONS',
+    'function requireActiveStudentMembership'
+  );
+
+  expect(helperBlock).toContain('transaction.update(target.reservationDoc.ref');
+  expect(helperBlock).toContain('transaction.set(batchRef');
+  expect(helperBlock).toContain('PRIVATE_LESSON_STATUS_ACTION_BATCH_COLLECTION');
+  expect(helperBlock).toContain('"privateLessonStatusActionBatches"');
+  expect(helperBlock).toContain('.collection("privateLessonReservations")');
+  expect(helperBlock).toContain('"lessons"');
+  expect(helperBlock).toContain('"privateLessonSlots"');
+  expect(helperBlock).toContain('"studentPackages"');
+  expect(helperBlock).toContain('.collection("creditTransactions")');
+
+  [
+    'transaction.update(packageRef',
+    'transaction.update(slotRef',
+    'transaction.update(lessonRef',
+    'transaction.update(target.lessonDoc.ref',
+    'transaction.update(target.slotDoc.ref',
+    'transaction.update(target.packageDoc.ref',
+    'transaction.set(creditRef',
+    'transaction.create(',
+    '.collection("creditTransactions").add',
+    '.collection("studentPackages").add',
+  ].forEach((token) => {
+    expect(helperBlock).not.toContain(token);
+  });
+});
+
 test('private lesson status action PR keeps protected files unchanged', () => {
   const protectedPaths = [
     'Dashboard.jsx',
