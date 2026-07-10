@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { getStudentName, getTeacherName } from '../dashboardViewUtils.js'
 
 const ACTION_LABELS = {
@@ -75,9 +76,14 @@ export default function PrivateLessonStatusActionModal({
   previewBusy,
   previewError,
   previewPayload,
+  commitBusy,
+  commitError,
+  commitResult,
   onPreview,
+  onCommit,
   onClose,
 }) {
+  const [commitConfirmed, setCommitConfirmed] = useState(false)
   if (!target) return null
   const blockedReasons = Array.isArray(preview?.blockedReasons) ? preview.blockedReasons : []
   const warnings = Array.isArray(preview?.warnings) ? preview.warnings : []
@@ -88,6 +94,14 @@ export default function PrivateLessonStatusActionModal({
     preview?.proposedState?.lesson?.status ||
     preview?.normalizedPlan?.targetStatus ||
     '-'
+  const previewPassed = preview?.ok === true && preview?.allowed === true && blockedReasons.length === 0
+  const commitDisabled =
+    !previewPassed ||
+    !previewPayload ||
+    !commitConfirmed ||
+    previewBusy ||
+    commitBusy ||
+    Boolean(commitResult)
 
   return (
     <div
@@ -96,7 +110,7 @@ export default function PrivateLessonStatusActionModal({
       aria-labelledby="private-lesson-status-action-modal-title"
       data-testid="private-lesson-status-action-modal"
       onClick={(event) => {
-        if (event.target === event.currentTarget && !previewBusy) onClose?.()
+        if (event.target === event.currentTarget && !previewBusy && !commitBusy) onClose?.()
       }}
       style={{
         position: 'fixed',
@@ -135,7 +149,7 @@ export default function PrivateLessonStatusActionModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={previewBusy}
+            disabled={previewBusy || commitBusy}
             aria-label="닫기"
             style={{
               height: 34,
@@ -143,7 +157,7 @@ export default function PrivateLessonStatusActionModal({
               border: '1px solid #3b4254',
               background: '#222938',
               color: 'white',
-              cursor: previewBusy ? 'not-allowed' : 'pointer',
+              cursor: previewBusy || commitBusy ? 'not-allowed' : 'pointer',
             }}
           >
             닫기
@@ -180,8 +194,11 @@ export default function PrivateLessonStatusActionModal({
               name="privateLessonStatusActionType"
               value="complete"
               checked={actionType === 'complete'}
-              onChange={() => setActionType?.('complete')}
-              disabled={previewBusy}
+              onChange={() => {
+                setCommitConfirmed(false)
+                setActionType?.('complete')
+              }}
+              disabled={previewBusy || commitBusy || Boolean(commitResult)}
               data-testid="private-lesson-status-action-type-complete"
             />
             수업완료
@@ -192,8 +209,11 @@ export default function PrivateLessonStatusActionModal({
               name="privateLessonStatusActionType"
               value="no_show"
               checked={actionType === 'no_show'}
-              onChange={() => setActionType?.('no_show')}
-              disabled={previewBusy}
+              onChange={() => {
+                setCommitConfirmed(false)
+                setActionType?.('no_show')
+              }}
+              disabled={previewBusy || commitBusy || Boolean(commitResult)}
               data-testid="private-lesson-status-action-type-no-show"
             />
             노쇼
@@ -203,8 +223,11 @@ export default function PrivateLessonStatusActionModal({
         <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button
             type="button"
-            onClick={onPreview}
-            disabled={previewBusy || !actionType}
+            onClick={() => {
+              setCommitConfirmed(false)
+              onPreview?.()
+            }}
+            disabled={previewBusy || commitBusy || Boolean(commitResult) || !actionType}
             data-testid="private-lesson-status-action-preview-submit"
             style={{
               padding: '9px 14px',
@@ -213,13 +236,14 @@ export default function PrivateLessonStatusActionModal({
               background: '#1e3a2d',
               color: 'white',
               fontWeight: 700,
-              cursor: previewBusy || !actionType ? 'not-allowed' : 'pointer',
+              cursor:
+                previewBusy || commitBusy || commitResult || !actionType ? 'not-allowed' : 'pointer',
             }}
           >
             {previewBusy ? '미리보기 중...' : '서버 기준 미리보기'}
           </button>
           <span style={{ alignSelf: 'center', opacity: 0.75, fontSize: 13 }}>
-            {'이번 단계에서는 실제 처리하지 않습니다. 수업/예약/수강권/차감 기록은 수정되지 않습니다.'}
+            먼저 서버 기준 미리보기를 실행한 뒤, 통과한 결과만 실제 처리할 수 있습니다.
           </span>
         </div>
 
@@ -289,6 +313,120 @@ export default function PrivateLessonStatusActionModal({
             </div>
 
             <FieldBlock label="nextStep" value={preview.nextStep} />
+
+            <section
+              data-testid="private-lesson-status-action-final-confirmation"
+              style={{
+                border: previewPassed ? '1px solid #3c7a5f' : '1px solid #665044',
+                borderRadius: 12,
+                background: previewPassed ? '#12251a' : '#252016',
+                padding: 14,
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: 15 }}>실제 처리 전 최종 확인</h3>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13, lineHeight: 1.5 }}>
+                실제 처리 버튼을 누르면 예약 상태가 {ACTION_LABELS[actionType] || actionType}로
+                저장됩니다. 차감취소/차감복구/완료취소는 이번 단계에 포함하지 않습니다.
+              </p>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
+                {'같은 요청을 반복해서 누르지 마세요. 변경이 필요하면 서버 기준 미리보기를 다시 실행하세요.'}
+              </p>
+              {!previewPassed ? (
+                <p style={{ margin: '8px 0 0 0', color: '#ffd2a8', fontSize: 13 }}>
+                  서버 미리보기를 통과하고 처리 차단 사유가 없어야 실제 처리를 실행할 수
+                  있습니다.
+                </p>
+              ) : null}
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 8,
+                  marginTop: 12,
+                  fontSize: 13,
+                  lineHeight: 1.45,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={commitConfirmed}
+                  onChange={(event) => setCommitConfirmed(event.target.checked)}
+                  disabled={!previewPassed || commitBusy || Boolean(commitResult)}
+                  data-testid="private-lesson-status-action-commit-confirm"
+                />
+                이 미리보기 결과로 실제 수업 상태를 처리합니다.
+              </label>
+              <button
+                type="button"
+                onClick={onCommit}
+                disabled={commitDisabled}
+                data-testid="private-lesson-status-action-commit-button"
+                style={{
+                  marginTop: 12,
+                  padding: '9px 14px',
+                  borderRadius: 10,
+                  border: '1px solid #7a513c',
+                  background: '#3a241d',
+                  color: 'white',
+                  fontWeight: 700,
+                  cursor: commitDisabled ? 'not-allowed' : 'pointer',
+                  opacity: commitDisabled ? 0.68 : 1,
+                }}
+              >
+                {commitBusy ? '실제 처리 중...' : '위 내용으로 수업 처리'}
+              </button>
+            </section>
+          </section>
+        ) : null}
+
+        {commitError ? (
+          <section
+            data-testid="private-lesson-status-action-commit-error"
+            style={{
+              marginTop: 14,
+              border: '1px solid #734141',
+              borderRadius: 12,
+              background: '#2a1719',
+              padding: 14,
+              color: '#ffc9c9',
+            }}
+          >
+            <strong>실제 처리 실패</strong>
+            <p style={{ margin: '8px 0 0 0' }}>{commitError}</p>
+          </section>
+        ) : null}
+
+        {commitResult ? (
+          <section
+            data-testid="private-lesson-status-action-commit-result"
+            style={{
+              marginTop: 14,
+              border: '1px solid #375c45',
+              borderRadius: 12,
+              background: '#14251c',
+              padding: 14,
+            }}
+          >
+            <strong>실제 처리가 완료되었습니다</strong>
+            <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+              actionType: {ACTION_LABELS[commitResult.actionType] || commitResult.actionType || actionType}
+              {' · '}requestId: {commitResult.requestId || previewPayload?.requestId || '-'}
+              {' · '}committed: {commitResult.committed === true ? 'true' : 'false'}
+              {' · '}batchId: {commitResult.batchId || '-'}
+              {' · '}idempotentReplay: {commitResult.idempotentReplay === true ? 'true' : 'false'}
+            </p>
+            <div
+              style={{
+                marginTop: 12,
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 10,
+              }}
+            >
+              <FieldBlock label="updated" value={commitResult.updated} />
+              <FieldBlock label="normalizedPlan" value={commitResult.normalizedPlan} />
+              <FieldBlock label="nextStep" value={commitResult.nextStep} />
+            </div>
           </section>
         ) : null}
       </section>
