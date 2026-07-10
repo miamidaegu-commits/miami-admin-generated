@@ -5424,6 +5424,770 @@ async function canMarkPrivateReservationOutcome(db, academyId, auth) {
   return buildAdminActorContext(auth, membership);
 }
 
+const PRIVATE_LESSON_STATUS_COMMIT_ACTIONS = ["complete", "no_show"];
+const PRIVATE_LESSON_STATUS_ACTION_BATCH_COLLECTION =
+  "privateLessonStatusActionBatches";
+const PRIVATE_LESSON_STATUS_PACKAGE_CREDIT_BLOCK_MESSAGE =
+  "Package or credit deduction write is not enabled for this status commit.";
+
+function buildPrivateLessonStatusActionBatchId({academyId, requestId}) {
+  return [
+    "privateLessonStatusAction",
+    normalizeId(academyId),
+    normalizeId(requestId),
+  ].join("_");
+}
+
+function hashPrivateLessonStatusActionPayload(payload) {
+  return crypto
+      .createHash("sha256")
+      .update(stableStringify(payload))
+      .digest("hex");
+}
+
+function buildPrivateLessonStatusActionPayloadHash({auth, data}) {
+  return hashPrivateLessonStatusActionPayload({
+    uid: normalizeId(auth && auth.uid),
+    academyId: normalizeId(data && data.academyId),
+    requestId: normalizeId(data && data.requestId),
+    actionType: normalizeId(data && data.actionType),
+    lessonId: normalizeId(data && data.lessonId),
+    reservationId: normalizeId(data && data.reservationId),
+    slotId: normalizeId(data && data.slotId),
+    commit: data && data.commit === true,
+    dryRun: data && data.dryRun === false,
+    previewOnly: data && data.previewOnly === false,
+  });
+}
+
+function validatePrivateLessonStatusCommitPayload(data) {
+  const academyId = requireString(data, "academyId");
+  const requestId = requireString(data, "requestId");
+  const actionType = requireString(data, "actionType");
+  validateAcademyId(academyId);
+  if (actionType === "reverse_deduction") {
+    throw new HttpsError(
+        "invalid-argument",
+        "reverse_deduction commit is not enabled in this release.",
+    );
+  }
+  if (!PRIVATE_LESSON_STATUS_COMMIT_ACTIONS.includes(actionType)) {
+    throw new HttpsError("invalid-argument", "unsupported_action_type");
+  }
+  if (data.commit !== true ||
+      data.dryRun !== false ||
+      data.previewOnly !== false) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Commit requires commit true, dryRun false, and previewOnly false.",
+    );
+  }
+  if (!optionalString(data, "lessonId") &&
+      !optionalString(data, "reservationId")) {
+    throw new HttpsError(
+        "invalid-argument",
+        "lessonId or reservationId is required.",
+    );
+  }
+  return {
+    academyId,
+    requestId,
+    actionType,
+    lessonId: optionalString(data, "lessonId"),
+    reservationId: optionalString(data, "reservationId"),
+    slotId: optionalString(data, "slotId"),
+  };
+}
+
+function buildPrivateLessonStatusActorFromMembership({auth, membership}) {
+  const role = String((membership && membership.role) || "")
+      .trim()
+      .toLowerCase();
+  const status = String((membership && membership.status) || "")
+      .trim()
+      .toLowerCase();
+  const uid = normalizeId(auth && auth.uid);
+  if (!membership || status !== "active") {
+    return {
+      uid,
+      role: role || "",
+      isAdmin: false,
+      isTeacher: false,
+      allowed: false,
+      permissionSource: "membership_inactive_or_missing",
+      blockedReason: "permission_denied",
+    };
+  }
+  if (role === "owner" || role === "admin") {
+    return {
+      uid,
+      role: "admin",
+      isAdmin: true,
+      isTeacher: false,
+      allowed: true,
+      permissionSource: "academy_admin",
+      ...buildAdminActorContext(auth, {...membership, role}),
+    };
+  }
+  if (role === "teacher" || role === "staff") {
+    return {
+      uid,
+      role,
+      isAdmin: false,
+      isTeacher: true,
+      allowed: false,
+      permissionSource: "teacher_membership",
+      ...buildTeacherStatusActor(auth, {...membership, role}),
+    };
+  }
+  return {
+    uid,
+    role,
+    isAdmin: false,
+    isTeacher: false,
+    allowed: false,
+    permissionSource: "unsupported_membership_role",
+    blockedReason: "permission_denied",
+  };
+}
+
+function privateLessonStatusEmptyDoc(id = "") {
+  return {id: normalizeId(id), exists: false, data: null};
+}
+
+async function transactionGetPrivateLessonStatusDoc(
+    transaction,
+    db,
+    collectionName,
+    docId,
+) {
+  const id = normalizeId(docId);
+  if (!id) return privateLessonStatusEmptyDoc("");
+  const ref = db.collection(collectionName).doc(id);
+  const snap = await transaction.get(ref);
+  return {
+    id,
+    ref,
+    exists: snap.exists,
+    data: snap.exists ? snap.data() || {} : null,
+  };
+}
+
+async function transactionFindPrivateLessonStatusReservationByLesson({
+  transaction,
+  db,
+  academyId,
+  lessonId,
+}) {
+  const normalizedLessonId = normalizeId(lessonId);
+  if (!normalizedLessonId) return privateLessonStatusEmptyDoc("");
+  const snap = await transaction.get(
+      db
+          .collection("privateLessonReservations")
+          .where("academyId", "==", academyId)
+          .where("lessonId", "==", normalizedLessonId)
+          .limit(2),
+  );
+  if (snap.empty) return privateLessonStatusEmptyDoc("");
+  const docSnap = snap.docs[0];
+  return {
+    id: docSnap.id,
+    ref: docSnap.ref,
+    exists: true,
+    data: docSnap.data() || {},
+  };
+}
+
+async function transactionFindPrivateLessonStatusReservationBySlot({
+  transaction,
+  db,
+  academyId,
+  slotId,
+}) {
+  const normalizedSlotId = normalizeId(slotId);
+  if (!normalizedSlotId) return privateLessonStatusEmptyDoc("");
+  const snap = await transaction.get(
+      db
+          .collection("privateLessonReservations")
+          .where("academyId", "==", academyId)
+          .where("slotId", "==", normalizedSlotId)
+          .limit(2),
+  );
+  if (snap.empty) return privateLessonStatusEmptyDoc("");
+  const docSnap = snap.docs[0];
+  return {
+    id: docSnap.id,
+    ref: docSnap.ref,
+    exists: true,
+    data: docSnap.data() || {},
+  };
+}
+
+async function transactionFetchPrivateLessonStatusCreditCandidates({
+  transaction,
+  db,
+  academyId,
+  lessonId,
+  reservationId,
+  packageId,
+  directIds = [],
+}) {
+  const candidatesById = {};
+  for (const directId of directIds.map(normalizeId).filter(Boolean)) {
+    const snap = await transaction.get(
+        db.collection("creditTransactions").doc(directId),
+    );
+    candidatesById[directId] = {
+      id: directId,
+      exists: snap.exists,
+      actionType: snap.exists ?
+        normalizeId((snap.data() || {}).actionType) :
+        "",
+      sourceType: snap.exists ?
+        normalizeId((snap.data() || {}).sourceType) :
+        "",
+      sourceId: snap.exists ? normalizeId((snap.data() || {}).sourceId) : "",
+      packageId: snap.exists ? normalizeId((snap.data() || {}).packageId) : "",
+      deltaCount: snap.exists ? Number((snap.data() || {}).deltaCount || 0) : 0,
+    };
+  }
+  const sourceIds = [reservationId, lessonId].map(normalizeId).filter(Boolean);
+  for (const sourceId of sourceIds) {
+    const snap = await transaction.get(
+        db
+            .collection("creditTransactions")
+            .where("academyId", "==", academyId)
+            .where("sourceId", "==", sourceId)
+            .limit(5),
+    );
+    snap.docs.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      if (packageId && normalizeId(data.packageId) !== packageId) return;
+      candidatesById[docSnap.id] = {
+        id: docSnap.id,
+        exists: true,
+        actionType: normalizeId(data.actionType),
+        sourceType: normalizeId(data.sourceType),
+        sourceId: normalizeId(data.sourceId),
+        packageId: normalizeId(data.packageId),
+        deltaCount: Number(data.deltaCount || 0),
+      };
+    });
+  }
+  return Object.values(candidatesById);
+}
+
+async function resolvePrivateLessonStatusTargetInTransaction({
+  transaction,
+  db,
+  academyId,
+  data,
+}) {
+  const initialLessonId = optionalString(data, "lessonId");
+  const initialReservationId = optionalString(data, "reservationId");
+  const initialSlotId = optionalString(data, "slotId");
+  let reservationDoc = await transactionGetPrivateLessonStatusDoc(
+      transaction,
+      db,
+      "privateLessonReservations",
+      initialReservationId,
+  );
+  let lessonDoc = await transactionGetPrivateLessonStatusDoc(
+      transaction,
+      db,
+      "lessons",
+      initialLessonId ||
+        (reservationDoc.exists && (
+          reservationDoc.data.lessonId || reservationDoc.data.fixedLessonId
+        )),
+  );
+  if (!reservationDoc.exists && lessonDoc.exists) {
+    const linkedReservationId = normalizeId(
+        lessonDoc.data.reservationId ||
+        lessonDoc.data.privateLessonReservationId,
+    );
+    reservationDoc = await transactionGetPrivateLessonStatusDoc(
+        transaction,
+        db,
+        "privateLessonReservations",
+        linkedReservationId,
+    );
+    if (!reservationDoc.exists) {
+      reservationDoc =
+        await transactionFindPrivateLessonStatusReservationByLesson({
+          transaction,
+          db,
+          academyId,
+          lessonId: lessonDoc.id,
+        });
+    }
+  }
+  const linkedSlotId = normalizeId(
+      initialSlotId ||
+      (reservationDoc.exists && (
+        reservationDoc.data.slotId || reservationDoc.data.privateLessonSlotId
+      )) ||
+      (lessonDoc.exists && (
+        lessonDoc.data.slotId || lessonDoc.data.privateLessonSlotId
+      )),
+  );
+  let slotDoc = await transactionGetPrivateLessonStatusDoc(
+      transaction,
+      db,
+      "privateLessonSlots",
+      linkedSlotId,
+  );
+  if (!reservationDoc.exists && slotDoc.exists) {
+    const slotReservationId = normalizeId(slotDoc.data.reservationId);
+    reservationDoc = await transactionGetPrivateLessonStatusDoc(
+        transaction,
+        db,
+        "privateLessonReservations",
+        slotReservationId,
+    );
+    if (!reservationDoc.exists) {
+      reservationDoc =
+        await transactionFindPrivateLessonStatusReservationBySlot({
+          transaction,
+          db,
+          academyId,
+          slotId: slotDoc.id,
+        });
+    }
+  }
+  if (!lessonDoc.exists && reservationDoc.exists) {
+    lessonDoc = await transactionGetPrivateLessonStatusDoc(
+        transaction,
+        db,
+        "lessons",
+        reservationDoc.data.lessonId || reservationDoc.data.fixedLessonId,
+    );
+  }
+  if (!slotDoc.exists && reservationDoc.exists) {
+    slotDoc = await transactionGetPrivateLessonStatusDoc(
+        transaction,
+        db,
+        "privateLessonSlots",
+        reservationDoc.data.slotId || reservationDoc.data.privateLessonSlotId,
+    );
+  }
+  const packageId = normalizeId(
+      (reservationDoc.exists && (
+        reservationDoc.data.deductionPackageId ||
+        reservationDoc.data.packageId ||
+        reservationDoc.data.linkedPackageId ||
+        reservationDoc.data.fixedPrivatePackageId
+      )) ||
+      (lessonDoc.exists && (
+        lessonDoc.data.deductionPackageId ||
+        lessonDoc.data.packageId ||
+        lessonDoc.data.linkedPackageId ||
+        lessonDoc.data.fixedPrivatePackageId
+      )) ||
+      (slotDoc.exists && (
+        slotDoc.data.packageId ||
+        slotDoc.data.linkedPackageId ||
+        slotDoc.data.fixedPrivatePackageId
+      )),
+  );
+  const packageDoc = await transactionGetPrivateLessonStatusDoc(
+      transaction,
+      db,
+      "studentPackages",
+      packageId,
+  );
+  const creditTransactionCandidates =
+    await transactionFetchPrivateLessonStatusCreditCandidates({
+      transaction,
+      db,
+      academyId,
+      lessonId: lessonDoc.id,
+      reservationId: reservationDoc.id,
+      packageId,
+      directIds: [
+        reservationDoc.exists && (
+          reservationDoc.data.deductionCreditTransactionId ||
+          reservationDoc.data.deductionTransactionId
+        ),
+        lessonDoc.exists && (
+          lessonDoc.data.deductionCreditTransactionId ||
+          lessonDoc.data.deductionTransactionId
+        ),
+      ],
+    });
+  return {
+    lessonDoc,
+    reservationDoc,
+    slotDoc,
+    packageDoc,
+    packageId,
+    creditTransactionCandidates,
+  };
+}
+
+function buildPrivateLessonStatusCommitErrorDetails({
+  requestId,
+  actionType,
+  plan,
+  blockedReasons,
+  warnings,
+}) {
+  return {
+    blockedReasons: Array.from(new Set(blockedReasons || [])),
+    warnings: Array.from(new Set(warnings || [])),
+    currentState: plan && plan.currentState ? plan.currentState : {},
+    normalizedPlan: plan && plan.normalizedPlan ? plan.normalizedPlan : {},
+    requestId,
+    actionType,
+  };
+}
+
+function firstPrivateLessonStatusValue(row, fields) {
+  if (!row) return "";
+  for (const field of fields) {
+    const value = normalizeId(row[field]);
+    if (value) return value;
+  }
+  return "";
+}
+
+function privateLessonStatusValuesConflict(first, second, fields) {
+  const firstValue = firstPrivateLessonStatusValue(first, fields);
+  const secondValue = firstPrivateLessonStatusValue(second, fields);
+  return Boolean(firstValue && secondValue && firstValue !== secondValue);
+}
+
+function assertPrivateLessonStatusCommitAllowed({
+  validation,
+  target,
+  permission,
+  plan,
+}) {
+  const blockedReasons = [
+    ...plan.blockedReasons,
+    ...(permission.allowed ? [] : [
+      permission.blockedReason || "permission_denied",
+    ]),
+  ];
+  const warnings = [...plan.warnings];
+  if (!target.reservationDoc.exists) {
+    blockedReasons.push("missing_reservation");
+  }
+  if (target.reservationDoc.exists &&
+      normalizeId(target.reservationDoc.data.academyId) !==
+        validation.academyId) {
+    blockedReasons.push("academy_mismatch");
+  }
+  if (target.lessonDoc.exists &&
+      normalizeId(target.lessonDoc.data.academyId) !== validation.academyId) {
+    blockedReasons.push("academy_mismatch");
+  }
+  if (target.slotDoc.exists &&
+      normalizeId(target.slotDoc.data.academyId) !== validation.academyId) {
+    blockedReasons.push("academy_mismatch");
+  }
+  if (target.packageDoc.exists &&
+      normalizeId(target.packageDoc.data.academyId) !== validation.academyId) {
+    blockedReasons.push("academy_mismatch");
+  }
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const slot = target.slotDoc.exists ? target.slotDoc.data : {};
+  const packageData = target.packageDoc.exists ? target.packageDoc.data : {};
+  const reservationLessonId = normalizeId(
+      reservation.lessonId || reservation.fixedLessonId,
+  );
+  const reservationSlotId = normalizeId(
+      reservation.slotId || reservation.privateLessonSlotId,
+  );
+  if (validation.lessonId &&
+      reservationLessonId &&
+      reservationLessonId !== validation.lessonId) {
+    blockedReasons.push("lesson_mismatch");
+  }
+  if (validation.slotId &&
+      reservationSlotId &&
+      reservationSlotId !== validation.slotId) {
+    blockedReasons.push("slot_mismatch");
+  }
+  const lessonReservationId = normalizeId(
+      lesson.reservationId || lesson.privateLessonReservationId,
+  );
+  if (lessonReservationId &&
+      target.reservationDoc.id &&
+      lessonReservationId !== target.reservationDoc.id) {
+    blockedReasons.push("reservation_mismatch");
+  }
+  const slotReservationId = normalizeId(slot.reservationId);
+  if (slotReservationId &&
+      target.reservationDoc.id &&
+      slotReservationId !== target.reservationDoc.id) {
+    blockedReasons.push("slot_reservation_mismatch");
+  }
+  [
+    ["student_mismatch", ["studentId", "studentID"]],
+    ["date_mismatch", ["date", "lessonDate", "scheduleDate"]],
+    ["time_mismatch", ["time", "startTime"]],
+  ].forEach(([reason, fields]) => {
+    if (privateLessonStatusValuesConflict(reservation, lesson, fields) ||
+        privateLessonStatusValuesConflict(reservation, slot, fields)) {
+      blockedReasons.push(reason);
+    }
+  });
+  [
+    reservation.packageType,
+    lesson.packageType,
+    slot.packageType,
+    packageData.packageType,
+  ].map((value) => normalizeId(value).toLowerCase())
+      .filter(Boolean)
+      .forEach((packageType) => {
+        if (packageType !== "private") {
+          blockedReasons.push("package_type_mismatch");
+        }
+      });
+  if (target.packageDoc.exists && target.reservationDoc.exists &&
+      !isPrivatePackageForReservation(packageData, reservation, slot)) {
+    blockedReasons.push("package_mismatch");
+  }
+  if (target.slotDoc.exists && !target.reservationDoc.exists) {
+    const slotStatus = String(target.slotDoc.data.status || "")
+        .trim()
+        .toLowerCase();
+    if (slotStatus === "open" || slotStatus === "available") {
+      blockedReasons.push("open_unreserved_slot");
+    }
+  }
+  const packageImpact = plan.packageImpact || {};
+  const creditPreview = plan.creditTransactionPreview || {};
+  if (
+    Number(packageImpact.usedCountDelta || 0) !== 0 ||
+    Number(packageImpact.remainingCountDelta || 0) !== 0 ||
+    creditPreview.wouldCreate === true ||
+    !hasPrivateLessonStatusDeductionEvidence(target)
+  ) {
+    blockedReasons.push("package_or_credit_write_required");
+    warnings.push(
+        PRIVATE_LESSON_STATUS_PACKAGE_CREDIT_BLOCK_MESSAGE,
+    );
+  }
+  return {
+    blockedReasons: Array.from(new Set(blockedReasons)),
+    warnings: Array.from(new Set(warnings)),
+  };
+}
+
+function buildPrivateLessonStatusCommitReplay(checkpoint) {
+  const data = checkpoint || {};
+  return {
+    ok: true,
+    committed: true,
+    dryRun: false,
+    previewOnly: false,
+    requestId: normalizeId(data.requestId),
+    batchId: normalizeId(data.batchId || data.id),
+    idempotentReplay: true,
+    actionType: normalizeId(data.actionType),
+    updated: data.updated || {
+      reservations: [],
+      lessons: [],
+      privateLessonSlots: [],
+      studentPackages: [],
+      creditTransactions: [],
+    },
+    normalizedPlan: data.normalizedPlan || {},
+    nextStep: "Private lesson status action committed.",
+  };
+}
+
+async function commitPrivateLessonStatusAction({db, auth, data}) {
+  const validation = validatePrivateLessonStatusCommitPayload(data || {});
+  const payloadHash = buildPrivateLessonStatusActionPayloadHash({auth, data});
+  const batchId = buildPrivateLessonStatusActionBatchId(validation);
+  const batchRef = db
+      .collection(PRIVATE_LESSON_STATUS_ACTION_BATCH_COLLECTION)
+      .doc(batchId);
+  return await db.runTransaction(async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (batchSnap.exists) {
+      const checkpoint = batchSnap.data() || {};
+      if (
+        checkpoint.status === "completed" &&
+        checkpoint.payloadHash === payloadHash
+      ) {
+        return buildPrivateLessonStatusCommitReplay({
+          id: batchSnap.id,
+          ...checkpoint,
+        });
+      }
+      if (checkpoint.payloadHash !== payloadHash) {
+        throw new HttpsError(
+            "already-exists",
+            "private lesson status action requestId already exists.",
+            {
+              requestId: validation.requestId,
+              actionType: validation.actionType,
+              blockedReasons: ["request_id_conflict"],
+            },
+        );
+      }
+      throw new HttpsError(
+          "failed-precondition",
+          "private lesson status action checkpoint is not completed.",
+          {
+            requestId: validation.requestId,
+            actionType: validation.actionType,
+            blockedReasons: ["checkpoint_not_completed"],
+          },
+      );
+    }
+    const membershipRef = db
+        .collection("academyMemberships")
+        .doc(`${validation.academyId}_${normalizeId(auth && auth.uid)}`);
+    const membershipSnap = await transaction.get(membershipRef);
+    const membership = membershipSnap.exists ?
+      membershipSnap.data() || {} :
+      null;
+    const actor = buildPrivateLessonStatusActorFromMembership({
+      auth,
+      membership,
+    });
+    const target = await resolvePrivateLessonStatusTargetInTransaction({
+      transaction,
+      db,
+      academyId: validation.academyId,
+      data: validation,
+    });
+    const permission = canPreviewPrivateLessonStatusAction({
+      actor,
+      actionType: validation.actionType,
+      target,
+    });
+    const plan = buildPrivateLessonStatusPlan({
+      actionType: validation.actionType,
+      target,
+    });
+    const {blockedReasons, warnings} = assertPrivateLessonStatusCommitAllowed({
+      validation,
+      target,
+      permission,
+      plan,
+    });
+    if (!permission.allowed) {
+      throw new HttpsError(
+          "permission-denied",
+          "Private lesson status action permission denied.",
+          buildPrivateLessonStatusCommitErrorDetails({
+            requestId: validation.requestId,
+            actionType: validation.actionType,
+            plan,
+            blockedReasons,
+            warnings,
+          }),
+      );
+    }
+    if (blockedReasons.length > 0) {
+      throw new HttpsError(
+          "failed-precondition",
+          blockedReasons.includes("package_or_credit_write_required") ?
+            PRIVATE_LESSON_STATUS_PACKAGE_CREDIT_BLOCK_MESSAGE :
+            "Private lesson status action is blocked.",
+          buildPrivateLessonStatusCommitErrorDetails({
+            requestId: validation.requestId,
+            actionType: validation.actionType,
+            plan,
+            blockedReasons,
+            warnings,
+          }),
+      );
+    }
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const reservationId = target.reservationDoc.id;
+    const targetStatus = validation.actionType === "complete" ?
+      "completed" :
+      "no_show";
+    const actorSummary = {
+      uid: actor.uid,
+      role: actor.role,
+      isAdmin: actor.isAdmin === true,
+      isTeacher: actor.isTeacher === true,
+      permissionSource: permission.permissionSource || actor.permissionSource,
+    };
+    const reservationPatch = {
+      status: targetStatus,
+      attendanceStatus: targetStatus,
+      statusActionType: validation.actionType,
+      statusActionBatchId: batchId,
+      statusActionRequestId: validation.requestId,
+      statusUpdatedAt: now,
+      statusUpdatedBy: actor.uid,
+      statusUpdatedByRole: actor.role,
+      statusUpdatedByName: actor.actorName || "",
+      updatedAt: now,
+    };
+    if (targetStatus === "completed") {
+      reservationPatch.completedAt = now;
+      reservationPatch.completedBy = actor.uid;
+      reservationPatch.noShowAt = null;
+      reservationPatch.noShowBy = null;
+    } else {
+      reservationPatch.noShowAt = now;
+      reservationPatch.noShowBy = actor.uid;
+      reservationPatch.completedAt = null;
+      reservationPatch.completedBy = null;
+    }
+    const updated = {
+      reservations: [reservationId],
+      lessons: [],
+      privateLessonSlots: [],
+      studentPackages: [],
+      creditTransactions: [],
+    };
+    const normalizedPlan = {
+      ...plan.normalizedPlan,
+      actionType: validation.actionType,
+      targetStatus,
+      linkedReservationId: reservationId,
+    };
+    const checkpoint = {
+      batchId,
+      academyId: validation.academyId,
+      requestId: validation.requestId,
+      payloadHash,
+      actionType: validation.actionType,
+      lessonId: normalizeId(target.lessonDoc.id || validation.lessonId),
+      reservationId,
+      slotId: normalizeId(target.slotDoc.id || validation.slotId),
+      packageId: normalizeId(target.packageId || target.packageDoc.id),
+      actor: actorSummary,
+      status: "completed",
+      updated,
+      warnings,
+      normalizedPlan,
+      sourceType: "private-lesson-status-action",
+      createdAt: now,
+      completedAt: now,
+    };
+    transaction.update(target.reservationDoc.ref, reservationPatch);
+    transaction.set(batchRef, checkpoint);
+    return {
+      ok: true,
+      committed: true,
+      dryRun: false,
+      previewOnly: false,
+      requestId: validation.requestId,
+      batchId,
+      idempotentReplay: false,
+      actionType: validation.actionType,
+      updated,
+      normalizedPlan,
+      nextStep: "Private lesson status action committed.",
+    };
+  });
+}
+
 function requireActiveStudentMembership(membershipSnap) {
   const membership = membershipSnap.exists ? membershipSnap.data() || {} : null;
   const role = String((membership && membership.role) || "")
@@ -12903,6 +13667,41 @@ exports.updateTeacherStudentPackageCounts = onCall(
         }
 
         return {ok: true, totalCount, remainingCount};
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.commitPrivateLessonStatusAction = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "auth_required");
+        }
+        const data = request.data || {};
+        if (data.actionType === "reverse_deduction") {
+          throw new HttpsError(
+              "invalid-argument",
+              "reverse_deduction commit is not enabled in this release.",
+          );
+        }
+        if (
+          data.commit !== true ||
+          data.dryRun !== false ||
+          data.previewOnly !== false
+        ) {
+          throw new HttpsError(
+              "invalid-argument",
+              "commit: true, dryRun: false, previewOnly: false are required.",
+          );
+        }
+        return await commitPrivateLessonStatusAction({
+          db: admin.firestore(),
+          auth: request.auth,
+          data,
+        });
       } catch (error) {
         throw asHttpsError(error);
       }
