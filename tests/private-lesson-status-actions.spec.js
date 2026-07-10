@@ -49,6 +49,8 @@ test('private lesson status action preview callable is exported and guarded', ()
     'deduction_already_reversed',
     'packageImpact',
     'creditTransactionPreview',
+    'statusOnlyPolicy',
+    'deductionEvidence',
     'blockedReasons',
     'proposedState',
     'normalizedPlan',
@@ -146,6 +148,10 @@ test('private lesson status action commit callable is exported and guarded', () 
     'noShowAt',
     'updated',
     'normalizedPlan',
+    'statusOnlyPolicy',
+    'deductionEvidence',
+    'packageImpact',
+    'creditTransactionPreview',
     'blockedReasons',
     'permission-denied',
     'already-exists',
@@ -164,6 +170,86 @@ test('private lesson status action commit callable is exported and guarded', () 
   );
   expect(helperBlock).toContain('checkpoint.status === "completed"');
   expect(helperBlock).toContain('checkpoint.payloadHash === payloadHash');
+});
+
+test('private lesson status action preview and commit share package credit policy', () => {
+  const functionsSource = readSource('functions/index.js');
+  const policyBlock = boundedSource(
+    functionsSource,
+    'function buildPrivateLessonStatusPackageCreditPolicy({',
+    'function buildPrivateLessonStatusPlan({actionType, target})'
+  );
+  const planBlock = boundedSource(
+    functionsSource,
+    'function buildPrivateLessonStatusPlan({actionType, target})',
+    'async function previewPrivateLessonStatusAction'
+  );
+  const previewBlock = boundedSource(
+    functionsSource,
+    'async function previewPrivateLessonStatusAction',
+    'async function canMarkPrivateReservationOutcome'
+  );
+  const commitGuardBlock = boundedSource(
+    functionsSource,
+    'function assertPrivateLessonStatusCommitAllowed({',
+    'function buildPrivateLessonStatusCommitReplay'
+  );
+  const commitBlock = boundedSource(
+    functionsSource,
+    'async function commitPrivateLessonStatusAction({db, auth, data})',
+    'function requireActiveStudentMembership'
+  );
+  const errorDetailsBlock = boundedSource(
+    functionsSource,
+    'function buildPrivateLessonStatusCommitErrorDetails({',
+    'function firstPrivateLessonStatusValue'
+  );
+  const commitConstantsBlock = boundedSource(
+    functionsSource,
+    'const PRIVATE_LESSON_STATUS_COMMIT_ACTIONS',
+    'function buildPrivateLessonStatusActionBatchId'
+  );
+  const combinedSource = [
+    commitConstantsBlock,
+    policyBlock,
+    planBlock,
+    previewBlock,
+    commitGuardBlock,
+    commitBlock,
+    errorDetailsBlock,
+  ].join('\n');
+
+  [
+    'buildPrivateLessonStatusPackageCreditPolicy',
+    'package_or_credit_write_required',
+    'Package or credit deduction write is not enabled for this status commit',
+    'hasPrivateLessonStatusDeductionEvidence',
+    'allowedStatusOnly',
+    'statusOnlyPolicy',
+    'deductionEvidence',
+    'packageImpact',
+    'creditTransactionPreview',
+    'previewPrivateLessonStatusAction',
+    'commitPrivateLessonStatusAction',
+    'actual status-only commit requires deduction evidence',
+    'preview and commit share package credit policy',
+    '실제 처리는 최종 확인 후 진행할 수 있습니다',
+    '차단 사유를 확인한 뒤 기존 차감 포함 처리 또는 별도 기능을 사용하세요',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  expect(planBlock).toContain('buildPrivateLessonStatusPackageCreditPolicy({');
+  expect(planBlock).toContain('blockedReasons.push(...statusOnlyPolicy.blockedReasons)');
+  expect(previewBlock).toContain('const plan = buildPrivateLessonStatusPlan({actionType, target})');
+  expect(commitBlock).toContain('const plan = buildPrivateLessonStatusPlan({');
+  expect(commitGuardBlock).toContain('const statusOnlyPolicy = plan.statusOnlyPolicy || {}');
+  expect(commitGuardBlock).not.toContain('!hasPrivateLessonStatusDeductionEvidence(target)');
+  expect(commitGuardBlock).not.toContain('Number(packageImpact.usedCountDelta || 0) !== 0');
+  expect(errorDetailsBlock).toContain('packageImpact');
+  expect(errorDetailsBlock).toContain('creditTransactionPreview');
+  expect(errorDetailsBlock).toContain('statusOnlyPolicy');
+  expect(errorDetailsBlock).toContain('deductionEvidence');
 });
 
 test('private lesson status action commit writes checkpoint and reservation only', () => {
@@ -359,7 +445,10 @@ test('private lesson status action admin commit UI is guarded and confirmation g
 
 test('private lesson status action PR keeps protected files unchanged', () => {
   const protectedPaths = [
-    'functions/index.js',
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/CalendarSection.jsx',
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
     'package-lock.json',

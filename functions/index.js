@@ -5193,6 +5193,79 @@ function buildPrivateLessonStatusCreditPreview({actionType, target}) {
   };
 }
 
+function buildPrivateLessonStatusDeductionEvidence(target, currentState) {
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const negativeCreditTransaction = target.creditTransactionCandidates.some(
+      (candidate) => Number(candidate.deltaCount || 0) < 0,
+  );
+  const lessonPackageDateEvidence = Boolean(
+      normalizeId(lesson.packageId) && normalizeId(lesson.date),
+  );
+  const hasEvidence = hasPrivateLessonStatusDeductionEvidence(target);
+  return {
+    hasEvidence,
+    currentStateDeductionApplied: Boolean(
+        currentState && currentState.deductionApplied === true,
+    ),
+    reservationDeductionApplied: reservation.deductionApplied === true,
+    lessonDeductionApplied: lesson.deductionApplied === true,
+    lessonDeductionCancelled: lesson.isDeductCancelled === true,
+    lessonPackageDateEvidence,
+    negativeCreditTransaction,
+  };
+}
+
+function buildPrivateLessonStatusPackageCreditPolicy({
+  actionType,
+  target,
+  packageImpact,
+  creditTransactionPreview,
+  currentState,
+}) {
+  const deductionEvidence =
+    buildPrivateLessonStatusDeductionEvidence(target, currentState);
+  const statusOnlyAction = actionType === "complete" ||
+    actionType === "no_show";
+  const usedCountDelta = Number(packageImpact &&
+    packageImpact.usedCountDelta || 0);
+  const remainingCountDelta = Number(packageImpact &&
+    packageImpact.remainingCountDelta || 0);
+  const creditWouldCreate =
+    creditTransactionPreview && creditTransactionPreview.wouldCreate === true;
+  const allowedStatusOnly = Boolean(
+      statusOnlyAction &&
+      usedCountDelta === 0 &&
+      remainingCountDelta === 0 &&
+      creditWouldCreate !== true &&
+      deductionEvidence.hasEvidence === true,
+  );
+  const blockedReasons = [];
+  const warnings = [];
+  let reason = statusOnlyAction ?
+    "status_only_requires_existing_deduction_evidence" :
+    "status_only_policy_not_applicable";
+  if (statusOnlyAction && allowedStatusOnly) {
+    reason = "status_only_keeps_existing_deduction";
+  } else if (statusOnlyAction) {
+    blockedReasons.push("package_or_credit_write_required");
+    warnings.push(PRIVATE_LESSON_STATUS_PACKAGE_CREDIT_BLOCK_MESSAGE);
+  }
+  // actual status-only commit requires deduction evidence.
+  // preview and commit share package credit policy through this helper.
+  return {
+    allowedStatusOnly,
+    blockedReasons,
+    warnings,
+    packageImpact,
+    creditTransactionPreview,
+    deductionEvidence,
+    reason,
+  };
+}
+
 function buildPrivateLessonStatusPlan({actionType, target}) {
   const blockedReasons = [];
   const warnings = [];
@@ -5255,8 +5328,6 @@ function buildPrivateLessonStatusPlan({actionType, target}) {
       warnings.push("original_credit_transaction_missing");
     }
   }
-  const uniqueBlockedReasons = Array.from(new Set(blockedReasons));
-  const uniqueWarnings = Array.from(new Set(warnings));
   const packageImpact = buildPrivateLessonStatusPackageImpact({
     actionType,
     target,
@@ -5267,23 +5338,37 @@ function buildPrivateLessonStatusPlan({actionType, target}) {
   });
   const targetStatus = actionType === "complete" ? "completed" :
     actionType === "no_show" ? "no_show" : status;
+  const currentState = {
+    status,
+    deductionApplied: Boolean(
+        (target.reservationDoc.exists &&
+          target.reservationDoc.data.deductionApplied === true) ||
+        (target.lessonDoc.exists &&
+          target.lessonDoc.data.deductionApplied === true),
+    ),
+    deductionReversed: Boolean(
+        (target.reservationDoc.exists &&
+          target.reservationDoc.data.deductionReversed === true) ||
+        (target.lessonDoc.exists &&
+          (target.lessonDoc.data.deductionReversed === true ||
+            target.lessonDoc.data.isDeductCancelled === true)),
+    ),
+  };
+  const statusOnlyPolicy = buildPrivateLessonStatusPackageCreditPolicy({
+    actionType,
+    target,
+    packageImpact,
+    creditTransactionPreview,
+    currentState,
+  });
+  if (actionType === "complete" || actionType === "no_show") {
+    blockedReasons.push(...statusOnlyPolicy.blockedReasons);
+    warnings.push(...statusOnlyPolicy.warnings);
+  }
+  const uniqueBlockedReasons = Array.from(new Set(blockedReasons));
+  const uniqueWarnings = Array.from(new Set(warnings));
   return {
-    currentState: {
-      status,
-      deductionApplied: Boolean(
-          (target.reservationDoc.exists &&
-            target.reservationDoc.data.deductionApplied === true) ||
-          (target.lessonDoc.exists &&
-            target.lessonDoc.data.deductionApplied === true),
-      ),
-      deductionReversed: Boolean(
-          (target.reservationDoc.exists &&
-            target.reservationDoc.data.deductionReversed === true) ||
-          (target.lessonDoc.exists &&
-            (target.lessonDoc.data.deductionReversed === true ||
-              target.lessonDoc.data.isDeductCancelled === true)),
-      ),
-    },
+    currentState,
     proposedState: {
       lesson: target.lessonDoc.exists ? {
         id: target.lessonDoc.id,
@@ -5304,6 +5389,7 @@ function buildPrivateLessonStatusPlan({actionType, target}) {
     },
     packageImpact,
     creditTransactionPreview,
+    statusOnlyPolicy,
     blockedReasons: uniqueBlockedReasons,
     warnings: uniqueWarnings,
     normalizedPlan: {
@@ -5409,13 +5495,16 @@ async function previewPrivateLessonStatusAction({db, auth, data}) {
     proposedState: plan.proposedState,
     packageImpact: plan.packageImpact,
     creditTransactionPreview: plan.creditTransactionPreview,
+    statusOnlyPolicy: plan.statusOnlyPolicy,
+    deductionEvidence: plan.statusOnlyPolicy &&
+      plan.statusOnlyPolicy.deductionEvidence,
     allowed,
     blockedReasons,
     warnings,
     normalizedPlan: plan.normalizedPlan,
     nextStep: allowed ?
-      "commitPrivateLessonStatusAction can be implemented in a later PR." :
-      "Resolve blockedReasons before commit.",
+      "실제 처리는 최종 확인 후 진행할 수 있습니다." :
+      "차단 사유를 확인한 뒤 기존 차감 포함 처리 또는 별도 기능을 사용하세요.",
   };
 }
 
@@ -5836,6 +5925,17 @@ function buildPrivateLessonStatusCommitErrorDetails({
     blockedReasons: Array.from(new Set(blockedReasons || [])),
     warnings: Array.from(new Set(warnings || [])),
     currentState: plan && plan.currentState ? plan.currentState : {},
+    packageImpact: plan && plan.packageImpact ? plan.packageImpact : {},
+    creditTransactionPreview: plan && plan.creditTransactionPreview ?
+      plan.creditTransactionPreview :
+      {},
+    statusOnlyPolicy: plan && plan.statusOnlyPolicy ?
+      plan.statusOnlyPolicy :
+      {},
+    deductionEvidence:
+      plan && plan.statusOnlyPolicy && plan.statusOnlyPolicy.deductionEvidence ?
+        plan.statusOnlyPolicy.deductionEvidence :
+        {},
     normalizedPlan: plan && plan.normalizedPlan ? plan.normalizedPlan : {},
     requestId,
     actionType,
@@ -5960,18 +6060,17 @@ function assertPrivateLessonStatusCommitAllowed({
       blockedReasons.push("open_unreserved_slot");
     }
   }
-  const packageImpact = plan.packageImpact || {};
-  const creditPreview = plan.creditTransactionPreview || {};
-  if (
-    Number(packageImpact.usedCountDelta || 0) !== 0 ||
-    Number(packageImpact.remainingCountDelta || 0) !== 0 ||
-    creditPreview.wouldCreate === true ||
-    !hasPrivateLessonStatusDeductionEvidence(target)
-  ) {
-    blockedReasons.push("package_or_credit_write_required");
-    warnings.push(
-        PRIVATE_LESSON_STATUS_PACKAGE_CREDIT_BLOCK_MESSAGE,
+  const statusOnlyPolicy = plan.statusOnlyPolicy || {};
+  if (PRIVATE_LESSON_STATUS_COMMIT_ACTIONS.includes(validation.actionType) &&
+      statusOnlyPolicy.allowedStatusOnly !== true) {
+    blockedReasons.push(
+        ...(statusOnlyPolicy.blockedReasons || [
+          "package_or_credit_write_required",
+        ]),
     );
+    warnings.push(...(statusOnlyPolicy.warnings || [
+      PRIVATE_LESSON_STATUS_PACKAGE_CREDIT_BLOCK_MESSAGE,
+    ]));
   }
   return {
     blockedReasons: Array.from(new Set(blockedReasons)),
