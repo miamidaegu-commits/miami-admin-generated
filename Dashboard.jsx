@@ -74,6 +74,7 @@ import { resolveGroupLessonSubject } from './src/features/dashboard/groupClassRo
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
 import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedulePanel.jsx'
 import LessonCountStatsPanel from './src/features/dashboard/components/LessonCountStatsPanel.jsx'
+import PrivateLessonStatusActionModal from './src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
 import GroupsSection from './src/features/dashboard/sections/GroupsSection.jsx'
 import PrivateLessonSlotsSection from './src/features/dashboard/sections/PrivateLessonSlotsSection.jsx'
 import LessonRequestsSection from './src/features/dashboard/sections/LessonRequestsSection.jsx'
@@ -1387,6 +1388,15 @@ export default function Dashboard() {
   const [privateLessonReservations, setPrivateLessonReservations] = useState([])
   const [privateLessonReservationsLoading, setPrivateLessonReservationsLoading] = useState(false)
   const [busyPrivateReservationOutcomeId, setBusyPrivateReservationOutcomeId] = useState('')
+  const [privateLessonStatusActionTarget, setPrivateLessonStatusActionTarget] = useState(null)
+  const [privateLessonStatusActionMode, setPrivateLessonStatusActionMode] = useState('complete')
+  const [privateLessonStatusActionPreview, setPrivateLessonStatusActionPreview] = useState(null)
+  const [privateLessonStatusActionPreviewBusy, setPrivateLessonStatusActionPreviewBusy] =
+    useState(false)
+  const [privateLessonStatusActionPreviewError, setPrivateLessonStatusActionPreviewError] =
+    useState('')
+  const [privateLessonStatusActionPreviewPayload, setPrivateLessonStatusActionPreviewPayload] =
+    useState(null)
   const [reservationNotificationEvents, setReservationNotificationEvents] = useState([])
   const [reservationNotificationEventsLoading, setReservationNotificationEventsLoading] =
     useState(false)
@@ -3961,6 +3971,15 @@ export default function Dashboard() {
     [selectedDate]
   )
 
+  useEffect(() => {
+    setPrivateLessonStatusActionTarget(null)
+    setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonStatusActionPreview(null)
+    setPrivateLessonStatusActionPreviewError('')
+    setPrivateLessonStatusActionPreviewPayload(null)
+    setPrivateLessonStatusActionPreviewBusy(false)
+  }, [selectedDateString, calendarMonth])
+
   const {
     groupModal,
     groupForm,
@@ -6526,6 +6545,7 @@ export default function Dashboard() {
       onCancelFixedPrivateLesson: cancelFixedPrivateLessonOccurrence,
       onMarkPrivateReservationOutcome: markPrivateReservationOutcome,
       onReversePrivateReservationOutcome: reversePrivateReservationOutcome,
+      onOpenPrivateLessonStatusActionPreview: openPrivateLessonStatusActionPreview,
       canEditLesson,
       canDeleteLesson,
       onOpenCalendarGroupLessonAttendance: openCalendarGroupLessonAttendance,
@@ -6534,6 +6554,109 @@ export default function Dashboard() {
       canEditStudentPackageCountsForPackage,
       onOpenFixedRescheduleScopePreview: openCalendarFixedRescheduleScopePreview,
     },
+  }
+
+  const privateLessonStatusActionModalProps = {
+    target: privateLessonStatusActionTarget,
+    actionType: privateLessonStatusActionMode,
+    setActionType: selectPrivateLessonStatusActionMode,
+    preview: privateLessonStatusActionPreview,
+    previewBusy: privateLessonStatusActionPreviewBusy,
+    previewError: privateLessonStatusActionPreviewError,
+    previewPayload: privateLessonStatusActionPreviewPayload,
+    onPreview: previewPrivateLessonStatusActionOnServer,
+    onClose: closePrivateLessonStatusActionPreview,
+  }
+
+  function clearPrivateLessonStatusActionPreview() {
+    setPrivateLessonStatusActionPreview(null)
+    setPrivateLessonStatusActionPreviewError('')
+    setPrivateLessonStatusActionPreviewPayload(null)
+  }
+
+  function openPrivateLessonStatusActionPreview(target) {
+    if (!isAdmin || !target) return
+    setPrivateLessonStatusActionTarget(target)
+    setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonStatusActionPreview(null)
+    setPrivateLessonStatusActionPreviewError('')
+    setPrivateLessonStatusActionPreviewPayload(null)
+  }
+
+  function closePrivateLessonStatusActionPreview() {
+    if (privateLessonStatusActionPreviewBusy) return
+    setPrivateLessonStatusActionTarget(null)
+    setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonStatusActionPreview(null)
+    setPrivateLessonStatusActionPreviewError('')
+    setPrivateLessonStatusActionPreviewPayload(null)
+  }
+
+  function selectPrivateLessonStatusActionMode(actionType) {
+    const safeActionType = actionType === 'no_show' ? 'no_show' : 'complete'
+    setPrivateLessonStatusActionMode(safeActionType)
+    clearPrivateLessonStatusActionPreview()
+  }
+
+  async function previewPrivateLessonStatusActionOnServer() {
+    if (privateLessonStatusActionPreviewBusy) return
+
+    const target = privateLessonStatusActionTarget || {}
+    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    setPrivateLessonStatusActionPreview(null)
+    setPrivateLessonStatusActionPreviewError('')
+    setPrivateLessonStatusActionPreviewPayload(null)
+
+    try {
+      if (!isAdmin) {
+        throw new Error('개인 수업 처리 미리보기 권한이 없습니다.')
+      }
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(target, scopedAcademyId, '1:1 예약')
+
+      const reservationId = String(
+        target.reservationId || target.privateReservationId || target.id || ''
+      ).trim()
+      const lessonId = String(
+        target.lessonId || target.privateLessonId || target.fixedLessonId || target.sourceLessonId || ''
+      ).trim()
+      const slotId = String(target.slotId || target.privateLessonSlotId || target.privateSlotId || '').trim()
+      if (!reservationId) {
+        throw new Error('서버 미리보기에 사용할 예약 ID가 없습니다.')
+      }
+
+      const targetIdForRequest = reservationId || lessonId || slotId || 'target'
+      const requestId = `privateLessonStatusPreview_${scopedAcademyId}_${targetIdForRequest}_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`
+      const payload = {
+        academyId: scopedAcademyId,
+        requestId,
+        actionType,
+        reservationId,
+        dryRun: true,
+        previewOnly: true,
+        commit: false,
+      }
+      if (lessonId) payload.lessonId = lessonId
+      if (slotId) payload.slotId = slotId
+
+      setPrivateLessonStatusActionPreviewBusy(true)
+      const callable = httpsCallable(firebaseFunctions, 'previewPrivateLessonStatusAction')
+      const result = await callable(payload)
+      const previewData = result?.data || null
+      setPrivateLessonStatusActionPreview(previewData)
+      setPrivateLessonStatusActionPreviewPayload(payload)
+    } catch (error) {
+      console.error('개인 수업 처리 미리보기 실패:', error)
+      setPrivateLessonStatusActionPreview(null)
+      setPrivateLessonStatusActionPreviewPayload(null)
+      setPrivateLessonStatusActionPreviewError(
+        error?.message || '개인 수업 처리 미리보기에 실패했습니다.'
+      )
+    } finally {
+      setPrivateLessonStatusActionPreviewBusy(false)
+    }
   }
 
   const studentsSectionProps = {
@@ -8171,6 +8294,10 @@ export default function Dashboard() {
 	        ) : null}
 
       </main>
+
+      {isAdmin && privateLessonStatusActionTarget ? (
+        <PrivateLessonStatusActionModal {...privateLessonStatusActionModalProps} />
+      ) : null}
 
       {activeSection === 'students' && isAdmin && studentModal ? (
         <StudentModal {...studentModalProps} />
