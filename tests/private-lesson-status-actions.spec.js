@@ -241,8 +241,8 @@ test('private lesson status action admin preview UI is wired as preview-only', (
     'proposedState',
     'currentState',
     'normalizedPlan',
-    '이번 단계에서는 실제 처리하지 않습니다',
-    '수업/예약/수강권/차감 기록은 수정되지 않습니다',
+    '먼저 서버 기준 미리보기를 실행한 뒤',
+    '통과한 결과만 실제 처리할 수 있습니다',
   ].forEach((token) => {
     expect(combinedSource).toContain(token);
   });
@@ -294,6 +294,66 @@ test('private lesson status action admin preview UI has no write or commit path'
 
   ['setDoc', 'addDoc', 'updateDoc', 'deleteDoc', 'writeBatch', 'runTransaction'].forEach((token) => {
     expect(uiPreviewOnlySource).not.toContain(token);
+  });
+});
+
+test('private lesson status action admin commit UI is guarded and confirmation gated', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const commitHandlerBlock = boundedSource(
+    dashboardSource,
+    'async function commitPrivateLessonStatusActionOnServer()',
+    'const privateLessonStatusActionModalProps = {'
+  );
+  const combinedSource = `${dashboardSource}\n${modalSource}`;
+
+  [
+    'privateLessonStatusActionCommitBusy',
+    'privateLessonStatusActionCommitError',
+    'privateLessonStatusActionCommitResult',
+    'commitPrivateLessonStatusActionOnServer',
+    'commitPrivateLessonStatusAction',
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    'private-lesson-status-action-final-confirmation',
+    'private-lesson-status-action-commit-confirm',
+    'private-lesson-status-action-commit-button',
+    'private-lesson-status-action-commit-result',
+    'private-lesson-status-action-commit-error',
+    '실제 처리 전 최종 확인',
+    '위 내용으로 수업 처리',
+    '실제 처리가 완료되었습니다',
+    '같은 요청을 반복해서 누르지 마세요',
+    '서버 기준 미리보기를 다시 실행하세요',
+    'committed',
+    'batchId',
+    'idempotentReplay',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  [
+    'privateLessonStatusActionPreviewPayload',
+    'privateLessonStatusActionCommitBusy',
+    'privateLessonStatusActionCommitResult',
+    'previewData.ok !== true',
+    'previewData.allowed !== true',
+    'blockedReasons.length > 0',
+    '...privateLessonStatusActionPreviewPayload',
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    "httpsCallable(firebaseFunctions, 'commitPrivateLessonStatusAction')",
+  ].forEach((token) => {
+    expect(commitHandlerBlock).toContain(token);
+  });
+
+  ['setDoc', 'addDoc', 'updateDoc', 'deleteDoc', 'writeBatch', 'runTransaction'].forEach((token) => {
+    expect(commitHandlerBlock).not.toContain(token);
+    expect(modalSource).not.toContain(token);
   });
 });
 

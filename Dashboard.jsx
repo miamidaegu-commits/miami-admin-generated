@@ -1397,6 +1397,12 @@ export default function Dashboard() {
     useState('')
   const [privateLessonStatusActionPreviewPayload, setPrivateLessonStatusActionPreviewPayload] =
     useState(null)
+  const [privateLessonStatusActionCommitBusy, setPrivateLessonStatusActionCommitBusy] =
+    useState(false)
+  const [privateLessonStatusActionCommitError, setPrivateLessonStatusActionCommitError] =
+    useState('')
+  const [privateLessonStatusActionCommitResult, setPrivateLessonStatusActionCommitResult] =
+    useState(null)
   const [reservationNotificationEvents, setReservationNotificationEvents] = useState([])
   const [reservationNotificationEventsLoading, setReservationNotificationEventsLoading] =
     useState(false)
@@ -3978,6 +3984,9 @@ export default function Dashboard() {
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
     setPrivateLessonStatusActionPreviewBusy(false)
+    setPrivateLessonStatusActionCommitBusy(false)
+    setPrivateLessonStatusActionCommitError('')
+    setPrivateLessonStatusActionCommitResult(null)
   }, [selectedDateString, calendarMonth])
 
   const {
@@ -6556,22 +6565,17 @@ export default function Dashboard() {
     },
   }
 
-  const privateLessonStatusActionModalProps = {
-    target: privateLessonStatusActionTarget,
-    actionType: privateLessonStatusActionMode,
-    setActionType: selectPrivateLessonStatusActionMode,
-    preview: privateLessonStatusActionPreview,
-    previewBusy: privateLessonStatusActionPreviewBusy,
-    previewError: privateLessonStatusActionPreviewError,
-    previewPayload: privateLessonStatusActionPreviewPayload,
-    onPreview: previewPrivateLessonStatusActionOnServer,
-    onClose: closePrivateLessonStatusActionPreview,
+  function clearPrivateLessonStatusActionCommitState() {
+    setPrivateLessonStatusActionCommitBusy(false)
+    setPrivateLessonStatusActionCommitError('')
+    setPrivateLessonStatusActionCommitResult(null)
   }
 
   function clearPrivateLessonStatusActionPreview() {
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
+    clearPrivateLessonStatusActionCommitState()
   }
 
   function openPrivateLessonStatusActionPreview(target) {
@@ -6581,15 +6585,17 @@ export default function Dashboard() {
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
+    clearPrivateLessonStatusActionCommitState()
   }
 
   function closePrivateLessonStatusActionPreview() {
-    if (privateLessonStatusActionPreviewBusy) return
+    if (privateLessonStatusActionPreviewBusy || privateLessonStatusActionCommitBusy) return
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
+    clearPrivateLessonStatusActionCommitState()
   }
 
   function selectPrivateLessonStatusActionMode(actionType) {
@@ -6599,13 +6605,14 @@ export default function Dashboard() {
   }
 
   async function previewPrivateLessonStatusActionOnServer() {
-    if (privateLessonStatusActionPreviewBusy) return
+    if (privateLessonStatusActionPreviewBusy || privateLessonStatusActionCommitBusy) return
 
     const target = privateLessonStatusActionTarget || {}
     const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
+    clearPrivateLessonStatusActionCommitState()
 
     try {
       if (!isAdmin) {
@@ -8135,6 +8142,86 @@ export default function Dashboard() {
       privateLessonSlotsLoading ||
       privateStudentsLoading ||
       studentPrivateBookingStatsLoading,
+  }
+
+  async function commitPrivateLessonStatusActionOnServer() {
+    if (privateLessonStatusActionCommitBusy || privateLessonStatusActionCommitResult) return
+
+    try {
+      if (!isAdmin) {
+        throw new Error('개인 수업 실제 처리 권한이 없습니다.')
+      }
+      const previewData = privateLessonStatusActionPreview || {}
+      const blockedReasons = Array.isArray(previewData.blockedReasons)
+        ? previewData.blockedReasons
+        : []
+      if (!privateLessonStatusActionPreviewPayload) {
+        throw new Error('실제 처리에 사용할 서버 미리보기 payload가 없습니다.')
+      }
+      const requestId = String(privateLessonStatusActionPreviewPayload.requestId || '').trim()
+      if (!requestId) {
+        throw new Error('실제 처리에 사용할 미리보기 requestId가 없습니다.')
+      }
+      if (previewData.ok !== true || previewData.allowed !== true) {
+        throw new Error('서버 미리보기를 통과한 결과만 실제 처리할 수 있습니다.')
+      }
+      if (blockedReasons.length > 0) {
+        throw new Error('처리 차단 사유가 있는 수업은 실제 처리할 수 없습니다.')
+      }
+      const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+      if (privateLessonStatusActionPreviewPayload.actionType !== actionType) {
+        throw new Error('선택한 처리 유형이 미리보기 payload와 일치하지 않습니다.')
+      }
+
+      const payload = {
+        ...privateLessonStatusActionPreviewPayload,
+        requestId,
+        actionType,
+        commit: true,
+        dryRun: false,
+        previewOnly: false,
+      }
+
+      setPrivateLessonStatusActionCommitBusy(true)
+      setPrivateLessonStatusActionCommitError('')
+      setPrivateLessonStatusActionCommitResult(null)
+      const callable = httpsCallable(firebaseFunctions, 'commitPrivateLessonStatusAction')
+      const result = await callable(payload)
+      const commitData = result?.data || null
+      if (
+        commitData?.ok !== true ||
+        commitData?.committed !== true ||
+        commitData?.dryRun !== false ||
+        commitData?.previewOnly !== false
+      ) {
+        throw new Error('서버 실제 처리 결과가 유효하지 않습니다.')
+      }
+      setPrivateLessonStatusActionCommitResult(commitData)
+    } catch (error) {
+      console.error('개인 수업 실제 처리 실패:', error)
+      setPrivateLessonStatusActionCommitResult(null)
+      setPrivateLessonStatusActionCommitError(
+        error?.message || '개인 수업 실제 처리에 실패했습니다.'
+      )
+    } finally {
+      setPrivateLessonStatusActionCommitBusy(false)
+    }
+  }
+
+  const privateLessonStatusActionModalProps = {
+    target: privateLessonStatusActionTarget,
+    actionType: privateLessonStatusActionMode,
+    setActionType: selectPrivateLessonStatusActionMode,
+    preview: privateLessonStatusActionPreview,
+    previewBusy: privateLessonStatusActionPreviewBusy,
+    previewError: privateLessonStatusActionPreviewError,
+    previewPayload: privateLessonStatusActionPreviewPayload,
+    commitBusy: privateLessonStatusActionCommitBusy,
+    commitError: privateLessonStatusActionCommitError,
+    commitResult: privateLessonStatusActionCommitResult,
+    onPreview: previewPrivateLessonStatusActionOnServer,
+    onCommit: commitPrivateLessonStatusActionOnServer,
+    onClose: closePrivateLessonStatusActionPreview,
   }
 
   return (
