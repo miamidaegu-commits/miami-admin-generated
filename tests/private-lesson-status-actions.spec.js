@@ -200,11 +200,106 @@ test('private lesson status action commit writes checkpoint and reservation only
   });
 });
 
+test('private lesson status action admin preview UI is wired as preview-only', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const calendarSource = readSource('src/features/dashboard/sections/CalendarSection.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const combinedSource = `${dashboardSource}\n${calendarSource}\n${modalSource}`;
+  const previewHandlerBlock = boundedSource(
+    dashboardSource,
+    'async function previewPrivateLessonStatusActionOnServer()',
+    'const studentsSectionProps = {'
+  );
+  const calendarPreviewBlock = boundedSource(
+    calendarSource,
+    'const PRIVATE_LESSON_STATUS_ACTION_ACTIVE_STATUSES = new Set(',
+    "{activeSection === 'calendar' &&"
+  );
+
+  [
+    'private-lesson-status-action-preview-button',
+    'private-lesson-status-action-modal',
+    '개인 수업 처리 미리보기',
+    '수업 처리',
+    '수업완료',
+    '노쇼',
+    'private-lesson-status-action-type-complete',
+    'private-lesson-status-action-type-no-show',
+    '서버 기준 미리보기',
+    'private-lesson-status-action-preview-submit',
+    'previewPrivateLessonStatusAction',
+    'dryRun: true',
+    'previewOnly: true',
+    'commit: false',
+    'private-lesson-status-action-preview-result',
+    'private-lesson-status-action-preview-error',
+    'blockedReasons',
+    'packageImpact',
+    'creditTransactionPreview',
+    'proposedState',
+    'currentState',
+    'normalizedPlan',
+    '이번 단계에서는 실제 처리하지 않습니다',
+    '수업/예약/수강권/차감 기록은 수정되지 않습니다',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  [
+    'reservationId',
+    'lessonId',
+    'slotId',
+    'dryRun: true',
+    'previewOnly: true',
+    'commit: false',
+  ].forEach((token) => {
+    expect(previewHandlerBlock).toContain(token);
+  });
+  expect(calendarPreviewBlock).toContain('isAdmin');
+  expect(calendarPreviewBlock).toContain('isPrivateReservationRow');
+  expect(calendarPreviewBlock).toContain('PRIVATE_LESSON_STATUS_ACTION_ACTIVE_STATUSES');
+  expect(calendarPreviewBlock).toContain('PRIVATE_LESSON_STATUS_ACTION_FINAL_STATUSES');
+  expect(calendarPreviewBlock).toContain('releasedForPrivateBooking');
+});
+
+test('private lesson status action admin preview UI has no write or commit path', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const calendarSource = readSource('src/features/dashboard/sections/CalendarSection.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const previewHandlerBlock = boundedSource(
+    dashboardSource,
+    'async function previewPrivateLessonStatusActionOnServer()',
+    'const studentsSectionProps = {'
+  );
+  const calendarPreviewBlock = boundedSource(
+    calendarSource,
+    'const PRIVATE_LESSON_STATUS_ACTION_ACTIVE_STATUSES = new Set(',
+    "{activeSection === 'calendar' &&"
+  );
+  const uiPreviewOnlySource = `${calendarPreviewBlock}\n${modalSource}`;
+
+  [
+    'commitPrivateLessonStatusAction',
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+  ].forEach((token) => {
+    expect(previewHandlerBlock).not.toContain(token);
+    expect(uiPreviewOnlySource).not.toContain(token);
+  });
+
+  ['setDoc', 'addDoc', 'updateDoc', 'deleteDoc', 'writeBatch', 'runTransaction'].forEach((token) => {
+    expect(uiPreviewOnlySource).not.toContain(token);
+  });
+});
+
 test('private lesson status action PR keeps protected files unchanged', () => {
   const protectedPaths = [
-    'Dashboard.jsx',
-    'src/features/dashboard/sections/CalendarSection.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'functions/index.js',
     'firestore.rules',
     'package.json',
     'package-lock.json',

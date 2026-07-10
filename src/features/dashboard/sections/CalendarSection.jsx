@@ -77,6 +77,23 @@ const PRIVATE_RESERVATION_HISTORY_STATUSES = new Set([
   'canceled',
 ])
 
+const PRIVATE_LESSON_STATUS_ACTION_ACTIVE_STATUSES = new Set([
+  'active',
+  'reserved',
+  'confirmed',
+  'booked',
+])
+
+const PRIVATE_LESSON_STATUS_ACTION_FINAL_STATUSES = new Set([
+  'completed',
+  'no_show',
+  'cancelled',
+  'canceled',
+  'deleted',
+  'archived',
+  'seat_released',
+])
+
 function isTeacherUnavailablePrivateReason(value) {
   return [
     'teacher_absent',
@@ -950,6 +967,7 @@ export default function CalendarSection(props) {
     openStudentPackageEditModal,
     canEditStudentPackageCountsForPackage = () => false,
     onOpenFixedRescheduleScopePreview,
+    onOpenPrivateLessonStatusActionPreview,
   } = props
   const [privateLessonDetail, setPrivateLessonDetail] = useState(null)
   const [fixedPrivateLessonAction, setFixedPrivateLessonAction] = useState(null)
@@ -1444,6 +1462,20 @@ export default function CalendarSection(props) {
               busyPrivateReservationOutcomeId === `${lesson.id}:reverse`
             const reservationOutcomeBusy =
               reservationCompleteBusy || reservationNoShowBusy || reservationReverseBusy
+            const privateReservationActionStatus = privateReservationStatus.toLowerCase()
+            const privateReservationId = String(
+              lesson.reservationId || lesson.privateReservationId || lesson.id || ''
+            ).trim()
+            const canOpenPrivateLessonStatusActionPreview =
+              activeSection === 'calendar' &&
+              isAdmin &&
+              isPrivateReservationRow &&
+              Boolean(privateReservationId) &&
+              PRIVATE_LESSON_STATUS_ACTION_ACTIVE_STATUSES.has(privateReservationActionStatus) &&
+              !PRIVATE_LESSON_STATUS_ACTION_FINAL_STATUSES.has(privateReservationActionStatus) &&
+              lesson.deleted !== true &&
+              lesson.archived !== true &&
+              lesson.releasedForPrivateBooking !== true
             const rowLessonActionBusy =
               busyLessonId === lesson.id ||
               rowPrivateCrudBusy ||
@@ -1856,6 +1888,23 @@ export default function CalendarSection(props) {
                   ) : null}
                   {isPrivateReservationRow ? (
                     <span style={{ fontSize: 12, opacity: 0.65 }}>읽기 전용</span>
+                  ) : null}
+                  {canOpenPrivateLessonStatusActionPreview ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenPrivateLessonStatusActionPreview?.(lesson)}
+                      data-testid="private-lesson-status-action-preview-button"
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #3c7a5f',
+                        background: '#1e3a2d',
+                        color: 'white',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      수업 처리
+                    </button>
                   ) : null}
                   {activeSection === 'calendar' &&
                   isAdmin &&
