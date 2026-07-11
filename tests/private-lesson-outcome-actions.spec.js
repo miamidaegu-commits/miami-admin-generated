@@ -172,7 +172,7 @@ test('outcome preview lookup is read-only and transaction-capable', () => {
     expect(previewBlock).not.toContain(token);
   });
 
-  expect(functionsSource).not.toContain(
+  expect(functionsSource).toContain(
     'exports.commitPrivateLessonOutcomeAction'
   );
 });

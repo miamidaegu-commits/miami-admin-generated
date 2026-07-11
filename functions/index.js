@@ -13420,6 +13420,388 @@ exports.previewPrivateLessonStatusAction = onCall(
     },
 );
 
+const PRIVATE_LESSON_OUTCOME_COMMIT_ACTIONS = ["complete", "no_show"];
+const PRIVATE_LESSON_OUTCOME_ACTION_BATCH_COLLECTION =
+  "privateLessonOutcomeActionBatches";
+
+function buildPrivateLessonOutcomeActionBatchId({academyId, requestId}) {
+  return [
+    "privateLessonOutcomeAction",
+    normalizeId(academyId),
+    normalizeId(requestId),
+  ].join("_");
+}
+
+function validatePrivateLessonOutcomeCommitPayload(data) {
+  const academyId = requireString(data, "academyId");
+  const reservationId = requireString(data, "reservationId");
+  const requestId = requireString(data, "requestId");
+  const actionType = requireString(data, "actionType");
+  const planHash = requireString(data, "planHash").toLowerCase();
+  validateAcademyId(academyId);
+  if (!PRIVATE_LESSON_OUTCOME_COMMIT_ACTIONS.includes(actionType)) {
+    throw new HttpsError("invalid-argument", "unsupported_action_type");
+  }
+  if (!/^[a-f0-9]{64}$/.test(planHash)) {
+    throw new HttpsError("invalid-argument", "invalid_plan_hash");
+  }
+  if (data.commit !== true ||
+      data.dryRun !== false ||
+      data.previewOnly !== false) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Commit requires commit true, dryRun false, and previewOnly false.",
+    );
+  }
+  return {
+    academyId,
+    reservationId,
+    requestId,
+    actionType,
+    planHash,
+  };
+}
+
+function buildPrivateLessonOutcomeActionPayloadHash({auth, validation}) {
+  return hashPrivateReservationOutcomeActionValue({
+    version: 1,
+    actorUid: normalizeId(auth && auth.uid),
+    academyId: validation.academyId,
+    reservationId: validation.reservationId,
+    requestId: validation.requestId,
+    actionType: validation.actionType,
+    planHash: validation.planHash,
+    commit: true,
+    dryRun: false,
+    previewOnly: false,
+  });
+}
+
+function buildPrivateLessonOutcomeActorFromMembership({
+  auth,
+  membership,
+}) {
+  const role = String((membership && membership.role) || "").toLowerCase();
+  if (
+    !membership ||
+    membership.status !== "active" ||
+    !(role === "owner" || role === "admin")
+  ) {
+    throw new HttpsError(
+        "permission-denied",
+        "Active academy owner/admin membership required.",
+    );
+  }
+  return buildAdminActorContext(auth, {...membership, role});
+}
+
+function buildPrivateLessonOutcomeUpdated({
+  reservationId,
+  packageId,
+  creditTransactionId,
+}) {
+  return {
+    reservations: [normalizeId(reservationId)].filter(Boolean),
+    lessons: [],
+    privateLessonSlots: [],
+    studentPackages: [normalizeId(packageId)].filter(Boolean),
+    creditTransactions: [normalizeId(creditTransactionId)].filter(Boolean),
+  };
+}
+
+function buildPrivateLessonOutcomeCommitResult({
+  validation,
+  batchId,
+  outcome,
+  packageId,
+  creditTransactionId,
+  updated,
+  normalizedPlan,
+  idempotentReplay,
+}) {
+  return {
+    ok: true,
+    committed: true,
+    dryRun: false,
+    previewOnly: false,
+    requestId: validation.requestId,
+    batchId,
+    idempotentReplay,
+    actionType: validation.actionType,
+    outcome: normalizeId(outcome),
+    normalizedOutcome: normalizeId(outcome),
+    packageId: normalizeId(packageId),
+    creditTransactionId: normalizeId(creditTransactionId),
+    updated,
+    normalizedPlan,
+    nextStep: "Private lesson outcome action committed.",
+  };
+}
+
+function buildPrivateLessonOutcomeCommitReplay({
+  validation,
+  batchId,
+  checkpoint,
+}) {
+  const helperResult = checkpoint.helperResult || {};
+  return buildPrivateLessonOutcomeCommitResult({
+    validation,
+    batchId,
+    outcome: checkpoint.outcome || helperResult.outcome,
+    packageId: checkpoint.packageId || helperResult.packageId,
+    creditTransactionId: checkpoint.creditTransactionId ||
+      helperResult.creditTransactionId,
+    updated: checkpoint.updated || buildPrivateLessonOutcomeUpdated({
+      reservationId: checkpoint.reservationId,
+      packageId: checkpoint.packageId || helperResult.packageId,
+      creditTransactionId: checkpoint.creditTransactionId ||
+        helperResult.creditTransactionId,
+    }),
+    normalizedPlan: checkpoint.normalizedPlan || {},
+    idempotentReplay: true,
+  });
+}
+
+function assertPrivateLessonOutcomeCheckpointMatches({
+  validation,
+  checkpoint,
+  payloadHash,
+}) {
+  if (checkpoint.payloadHash !== payloadHash) {
+    throw new HttpsError(
+        "already-exists",
+        "private lesson outcome action requestId already exists.",
+        {
+          requestId: validation.requestId,
+          actionType: validation.actionType,
+          blockedReasons: ["request_id_conflict"],
+        },
+    );
+  }
+  if (checkpoint.status !== "completed") {
+    throw new HttpsError(
+        "failed-precondition",
+        "private lesson outcome action checkpoint is not completed.",
+        {
+          requestId: validation.requestId,
+          actionType: validation.actionType,
+          blockedReasons: ["checkpoint_not_completed"],
+        },
+    );
+  }
+}
+
+function buildPrivateLessonOutcomeCommitErrorDetails({
+  validation,
+  plan,
+  actualPlanHash = "",
+  blockedReasons,
+}) {
+  return {
+    requestId: validation.requestId,
+    actionType: validation.actionType,
+    planHash: validation.planHash,
+    actualPlanHash,
+    blockedReasons: Array.from(new Set(blockedReasons || [])),
+    warnings: plan && plan.warnings ? plan.warnings : [],
+    currentState: plan && plan.currentState ? plan.currentState : {},
+    proposedState: plan && plan.proposedState ? plan.proposedState : {},
+    packageImpact: plan && plan.packageImpact ? plan.packageImpact : {},
+    creditTransactionPreview:
+      plan && plan.creditTransactionPreview ?
+        plan.creditTransactionPreview :
+        {},
+    normalizedPlan: plan && plan.normalizedPlan ? plan.normalizedPlan : {},
+  };
+}
+
+function assertPrivateLessonOutcomeHelperMatchesPlan({
+  validation,
+  plan,
+  helperResult,
+}) {
+  const normalizedPlan = plan.normalizedPlan || {};
+  const mismatches = [];
+  if (normalizeId(helperResult.outcome) !==
+      normalizeId(normalizedPlan.normalizedOutcome)) {
+    mismatches.push("outcome");
+  }
+  if (normalizeId(helperResult.packageId) !==
+      normalizeId(normalizedPlan.packageId)) {
+    mismatches.push("packageId");
+  }
+  if (normalizeId(helperResult.creditTransactionId) !==
+      normalizeId(normalizedPlan.creditTransactionId)) {
+    mismatches.push("creditTransactionId");
+  }
+  if (mismatches.length > 0) {
+    throw new HttpsError(
+        "internal",
+        "Private lesson outcome helper result did not match preview plan.",
+        {
+          requestId: validation.requestId,
+          blockedReasons: ["helper_plan_mismatch"],
+          mismatches,
+        },
+    );
+  }
+}
+
+async function commitPrivateLessonOutcomeAction({db, auth, data}) {
+  const validation = validatePrivateLessonOutcomeCommitPayload(data || {});
+  const payloadHash = buildPrivateLessonOutcomeActionPayloadHash({
+    auth,
+    validation,
+  });
+  const batchId = buildPrivateLessonOutcomeActionBatchId(validation);
+  const batchRef = db
+      .collection(PRIVATE_LESSON_OUTCOME_ACTION_BATCH_COLLECTION)
+      .doc(batchId);
+  return await db.runTransaction(async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (batchSnap.exists) {
+      const checkpoint = batchSnap.data() || {};
+      assertPrivateLessonOutcomeCheckpointMatches({
+        validation,
+        checkpoint,
+        payloadHash,
+      });
+      return buildPrivateLessonOutcomeCommitReplay({
+        validation,
+        batchId,
+        checkpoint,
+      });
+    }
+
+    const actorUid = normalizeId(auth && auth.uid);
+    const membershipRef = db
+        .collection("academyMemberships")
+        .doc(`${validation.academyId}_${actorUid}`);
+    const membershipSnap = await transaction.get(membershipRef);
+    const membership = membershipSnap.exists ?
+      membershipSnap.data() || {} :
+      null;
+    const actor = buildPrivateLessonOutcomeActorFromMembership({
+      auth,
+      membership,
+    });
+    const target = await resolvePrivateReservationOutcomePreviewTarget({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      reservationId: validation.reservationId,
+    });
+    const plan = buildPrivateReservationOutcomePlan({
+      academyId: validation.academyId,
+      reservationId: validation.reservationId,
+      actionType: validation.actionType,
+      reservation: target.reservation,
+      slot: target.slot,
+      packageDoc: target.packageDoc,
+      packageIdCandidate: target.packageId,
+      packageLookupReason: target.packageLookupReason,
+      creditTransactionExists: target.creditTransactionExists,
+      creditTransactionId: target.creditTransactionId,
+      actor,
+      nowMillis: Date.now(),
+    });
+    const actualPlanHash = buildPrivateReservationOutcomePlanHash({
+      actorUid: actor.actorUid,
+      academyId: validation.academyId,
+      reservationId: validation.reservationId,
+      requestId: validation.requestId,
+      actionType: validation.actionType,
+      target,
+      plan,
+    });
+    if (actualPlanHash !== validation.planHash) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Private lesson outcome preview is stale.",
+          buildPrivateLessonOutcomeCommitErrorDetails({
+            validation,
+            plan,
+            actualPlanHash,
+            blockedReasons: ["preview_stale"],
+          }),
+      );
+    }
+    if (!plan.ok) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Private lesson outcome action is blocked.",
+          buildPrivateLessonOutcomeCommitErrorDetails({
+            validation,
+            plan,
+            actualPlanHash,
+            blockedReasons: plan.blockedReasons,
+          }),
+      );
+    }
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const helperResult =
+      await applyPrivateReservationOutcomeWithDeductionInTransaction(
+          transaction,
+          {
+            db,
+            academyId: validation.academyId,
+            reservationId: validation.reservationId,
+            outcome: plan.normalizedPlan.normalizedOutcome,
+            actor,
+            actorUid,
+            now,
+          },
+      );
+    assertPrivateLessonOutcomeHelperMatchesPlan({
+      validation,
+      plan,
+      helperResult,
+    });
+    const updated = buildPrivateLessonOutcomeUpdated({
+      reservationId: validation.reservationId,
+      packageId: helperResult.packageId,
+      creditTransactionId: helperResult.creditTransactionId,
+    });
+    const checkpoint = {
+      batchId,
+      academyId: validation.academyId,
+      reservationId: validation.reservationId,
+      requestId: validation.requestId,
+      payloadHash,
+      planHash: validation.planHash,
+      actionType: validation.actionType,
+      outcome: helperResult.outcome,
+      packageId: helperResult.packageId,
+      creditTransactionId: helperResult.creditTransactionId,
+      actor: {
+        uid: actor.actorUid,
+        role: actor.actorRole,
+        name: actor.actorName,
+      },
+      helperResult,
+      status: "completed",
+      updated,
+      warnings: plan.warnings,
+      normalizedPlan: plan.normalizedPlan,
+      sourceType: "private-lesson-outcome-action",
+      createdAt: now,
+      completedAt: now,
+    };
+    transaction.create(batchRef, checkpoint);
+    return buildPrivateLessonOutcomeCommitResult({
+      validation,
+      batchId,
+      outcome: helperResult.outcome,
+      packageId: helperResult.packageId,
+      creditTransactionId: helperResult.creditTransactionId,
+      updated,
+      normalizedPlan: plan.normalizedPlan,
+      idempotentReplay: false,
+    });
+  });
+}
+
 function normalizePrivateReservationOutcomeHashNumber(value) {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : null;
@@ -14507,6 +14889,41 @@ exports.commitPrivateLessonStatusAction = onCall(
           );
         }
         return await commitPrivateLessonStatusAction({
+          db: admin.firestore(),
+          auth: request.auth,
+          data,
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.commitPrivateLessonOutcomeAction = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "auth_required");
+        }
+        const data = request.data || {};
+        if (!PRIVATE_LESSON_OUTCOME_COMMIT_ACTIONS.includes(data.actionType)) {
+          throw new HttpsError(
+              "invalid-argument",
+              "unsupported_action_type",
+          );
+        }
+        if (
+          data.commit !== true ||
+          data.dryRun !== false ||
+          data.previewOnly !== false
+        ) {
+          throw new HttpsError(
+              "invalid-argument",
+              "commit: true, dryRun: false, previewOnly: false are required.",
+          );
+        }
+        return await commitPrivateLessonOutcomeAction({
           db: admin.firestore(),
           auth: request.auth,
           data,
