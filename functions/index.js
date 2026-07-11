@@ -13420,6 +13420,260 @@ exports.previewPrivateLessonStatusAction = onCall(
     },
 );
 
+async function applyPrivateReservationOutcomeWithDeductionInTransaction(
+    transaction,
+    {
+      db,
+      academyId,
+      reservationId,
+      outcome,
+      actor,
+      actorUid,
+      now,
+    },
+) {
+  const outcomeActor = actor || {};
+  const uid = actorUid;
+  const reservationRef = db
+      .collection("privateLessonReservations")
+      .doc(reservationId);
+  const reservationSnap = await transaction.get(reservationRef);
+  if (!reservationSnap.exists) {
+    throw new HttpsError(
+        "not-found",
+        "Private reservation not found.",
+    );
+  }
+
+  const reservation = reservationSnap.data() || {};
+  if (normalizeId(reservation.academyId) !== academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Private reservation academy mismatch.",
+    );
+  }
+  if (!isActivePrivateReservation(reservation)) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Only active private reservations can be completed.",
+    );
+  }
+  if (reservation.deductionApplied === true) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation deduction was already applied.",
+    );
+  }
+
+  const studentId = normalizeId(reservation.studentId);
+  const slotId = normalizeId(reservation.slotId);
+  if (!studentId || !slotId) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation is missing student or slot linkage.",
+    );
+  }
+
+  const slotRef = db.collection("privateLessonSlots").doc(slotId);
+  const studentRef = db.collection("privateStudents").doc(studentId);
+  const [slotSnap, studentSnap] = await Promise.all([
+    transaction.get(slotRef),
+    transaction.get(studentRef),
+  ]);
+  const slot = slotSnap.exists ? slotSnap.data() || {} : null;
+  const student = studentSnap.exists ? studentSnap.data() || {} : null;
+  if (slot && normalizeId(slot.academyId) !== academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Private lesson slot academy mismatch.",
+    );
+  }
+  if (student && normalizeId(student.academyId) !== academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Student academy mismatch.",
+    );
+  }
+  const endMillis = getPrivateReservationEndMillis(reservation, slot);
+  if (endMillis === null) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation schedule is missing.",
+    );
+  }
+  if (Date.now() < endMillis) {
+    throw new HttpsError(
+        "failed-precondition",
+        "수업 종료 후에만 완료/노쇼 처리를 할 수 있습니다.",
+    );
+  }
+
+  const explicitPackageId = normalizeId(reservation.packageId);
+  let packageRef = null;
+  let packageData = null;
+  if (explicitPackageId) {
+    const explicitPackageRef = db
+        .collection("studentPackages")
+        .doc(explicitPackageId);
+    const explicitPackageSnap =
+      await transaction.get(explicitPackageRef);
+    if (!explicitPackageSnap.exists) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Linked private package not found.",
+      );
+    }
+    const explicitPackage = explicitPackageSnap.data() || {};
+    if (!isPrivatePackageForReservation(
+        explicitPackage,
+        reservation,
+        slot,
+    )) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Linked private package does not match reservation.",
+      );
+    }
+    packageRef = explicitPackageRef;
+    packageData = explicitPackage;
+  } else {
+    const packageSnap = await transaction.get(
+        db
+            .collection("studentPackages")
+            .where("academyId", "==", academyId)
+            .where("studentId", "==", studentId),
+    );
+    const candidates = packageSnap.docs
+        .map((docSnap) => ({
+          ref: docSnap.ref,
+          data: docSnap.data() || {},
+        }))
+        .filter((candidate) =>
+          isPrivatePackageForReservation(
+              candidate.data,
+              reservation,
+              slot,
+          ) && Number(candidate.data.remainingCount || 0) > 0,
+        )
+        .sort(sortPrivatePackageCandidates);
+    if (candidates.length === 0) {
+      throw new HttpsError(
+          "failed-precondition",
+          "No remaining matching private package found.",
+      );
+    }
+    packageRef = candidates[0].ref;
+    packageData = candidates[0].data;
+  }
+
+  const remainingBefore = Number(packageData.remainingCount || 0);
+  const usedBefore = Number(packageData.usedCount || 0);
+  if (
+    !Number.isFinite(remainingBefore) ||
+    remainingBefore <= 0 ||
+    !Number.isFinite(usedBefore)
+  ) {
+    throw new HttpsError(
+        "failed-precondition",
+        "No remaining matching private package found.",
+    );
+  }
+
+  const writeTime = now || admin.firestore.FieldValue.serverTimestamp();
+  const remainingAfter = Math.max(0, remainingBefore - 1);
+  const usedAfter = usedBefore + 1;
+  const nextPackageStatus = getNextStudentPackageStatus(
+      packageData.status,
+      remainingAfter,
+  );
+  const deductionAttemptNumber =
+    normalizePositiveAttempt(reservation.deductionAttemptNumber) + 1;
+  const creditTransactionId = buildDeductionKey({
+    academyId,
+    lessonId: reservationId,
+    studentId,
+    packageId: packageRef.id,
+  });
+  const creditRef = db
+      .collection("creditTransactions")
+      .doc(creditTransactionId);
+  const creditSnap = await transaction.get(creditRef);
+  if (creditSnap.exists) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation deduction was already applied.",
+    );
+  }
+  const datePart = [
+    normalizeId(reservation.date || (slot && slot.date)),
+    normalizeId(reservation.time || (slot && slot.time)),
+    normalizeId(reservation.subject || (slot && slot.subject)),
+  ].filter(Boolean).join(" ");
+  const teacher = getReservationTeacherKey(reservation, slot);
+  const studentName =
+    getOptionalStudentName({student, membership: null, reservation}) ||
+    studentId;
+  const actionType = outcome === "completed" ?
+    "private_reservation_completed_deduct" :
+    "private_reservation_no_show_deduct";
+
+  transaction.update(packageRef, {
+    usedCount: usedAfter,
+    remainingCount: remainingAfter,
+    status: nextPackageStatus,
+    updatedAt: writeTime,
+  });
+  transaction.update(reservationRef, {
+    status: outcome,
+    completedAt: outcome === "completed" ? writeTime : null,
+    noShowAt: outcome === "no_show" ? writeTime : null,
+    deductionApplied: true,
+    deductionAppliedAt: writeTime,
+    deductionPackageId: packageRef.id,
+    deductionCreditTransactionId: creditTransactionId,
+    deductionTransactionId: creditTransactionId,
+    deductionSource: "manual",
+    deductionStatus: "deducted",
+    deductionAttemptNumber,
+    outcomeByUid: uid,
+    outcomeActorRole: outcomeActor.actorRole,
+    outcomeActorName: outcomeActor.actorName,
+    updatedAt: writeTime,
+  });
+  transaction.set(creditRef, {
+    academyId,
+    studentId,
+    studentName,
+    teacher,
+    packageId: packageRef.id,
+    packageType: "private",
+    packageTitle: String(packageData.packageTitle || ""),
+    groupClassName: "",
+    sourceType: "privateReservation",
+    sourceId: reservationId,
+    actionType,
+    deltaCount: -1,
+    memo: datePart ?
+      `유연 1:1 예약 ${datePart}` :
+      "유연 1:1 예약 차감",
+    actorUid: uid,
+    actorRole: outcomeActor.actorRole,
+    actorName: outcomeActor.actorName,
+    reason: outcome,
+    createdAt: writeTime,
+  }, {merge: false});
+
+  // no behavior change: preserve the legacy public response shape.
+  return {
+    ok: true,
+    academyId,
+    reservationId,
+    outcome,
+    packageId: packageRef.id,
+    creditTransactionId,
+  };
+}
+
 exports.markPrivateReservationOutcome = onCall(
     {region: REGION, cors: true},
     async (request) => {
@@ -13442,245 +13696,18 @@ exports.markPrivateReservationOutcome = onCall(
         const outcomeActor =
           await canMarkPrivateReservationOutcome(db, academyId, request.auth);
 
-        const reservationRef = db
-            .collection("privateLessonReservations")
-            .doc(reservationId);
-
         return await db.runTransaction(async (transaction) => {
-          const reservationSnap = await transaction.get(reservationRef);
-          if (!reservationSnap.exists) {
-            throw new HttpsError(
-                "not-found",
-                "Private reservation not found.",
-            );
-          }
-
-          const reservation = reservationSnap.data() || {};
-          if (normalizeId(reservation.academyId) !== academyId) {
-            throw new HttpsError(
-                "permission-denied",
-                "Private reservation academy mismatch.",
-            );
-          }
-          if (!isActivePrivateReservation(reservation)) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Only active private reservations can be completed.",
-            );
-          }
-          if (reservation.deductionApplied === true) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Private reservation deduction was already applied.",
-            );
-          }
-
-          const studentId = normalizeId(reservation.studentId);
-          const slotId = normalizeId(reservation.slotId);
-          if (!studentId || !slotId) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Private reservation is missing student or slot linkage.",
-            );
-          }
-
-          const slotRef = db.collection("privateLessonSlots").doc(slotId);
-          const studentRef = db.collection("privateStudents").doc(studentId);
-          const [slotSnap, studentSnap] = await Promise.all([
-            transaction.get(slotRef),
-            transaction.get(studentRef),
-          ]);
-          const slot = slotSnap.exists ? slotSnap.data() || {} : null;
-          const student = studentSnap.exists ? studentSnap.data() || {} : null;
-          if (slot && normalizeId(slot.academyId) !== academyId) {
-            throw new HttpsError(
-                "permission-denied",
-                "Private lesson slot academy mismatch.",
-            );
-          }
-          if (student && normalizeId(student.academyId) !== academyId) {
-            throw new HttpsError(
-                "permission-denied",
-                "Student academy mismatch.",
-            );
-          }
-          const endMillis = getPrivateReservationEndMillis(reservation, slot);
-          if (endMillis === null) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Private reservation schedule is missing.",
-            );
-          }
-          if (Date.now() < endMillis) {
-            throw new HttpsError(
-                "failed-precondition",
-                "수업 종료 후에만 완료/노쇼 처리를 할 수 있습니다.",
-            );
-          }
-
-          const explicitPackageId = normalizeId(reservation.packageId);
-          let packageRef = null;
-          let packageData = null;
-          if (explicitPackageId) {
-            const explicitPackageRef = db
-                .collection("studentPackages")
-                .doc(explicitPackageId);
-            const explicitPackageSnap =
-              await transaction.get(explicitPackageRef);
-            if (!explicitPackageSnap.exists) {
-              throw new HttpsError(
-                  "failed-precondition",
-                  "Linked private package not found.",
-              );
-            }
-            const explicitPackage = explicitPackageSnap.data() || {};
-            if (!isPrivatePackageForReservation(
-                explicitPackage,
-                reservation,
-                slot,
-            )) {
-              throw new HttpsError(
-                  "failed-precondition",
-                  "Linked private package does not match reservation.",
-              );
-            }
-            packageRef = explicitPackageRef;
-            packageData = explicitPackage;
-          } else {
-            const packageSnap = await transaction.get(
-                db
-                    .collection("studentPackages")
-                    .where("academyId", "==", academyId)
-                    .where("studentId", "==", studentId),
-            );
-            const candidates = packageSnap.docs
-                .map((docSnap) => ({
-                  ref: docSnap.ref,
-                  data: docSnap.data() || {},
-                }))
-                .filter((candidate) =>
-                  isPrivatePackageForReservation(
-                      candidate.data,
-                      reservation,
-                      slot,
-                  ) && Number(candidate.data.remainingCount || 0) > 0,
-                )
-                .sort(sortPrivatePackageCandidates);
-            if (candidates.length === 0) {
-              throw new HttpsError(
-                  "failed-precondition",
-                  "No remaining matching private package found.",
-              );
-            }
-            packageRef = candidates[0].ref;
-            packageData = candidates[0].data;
-          }
-
-          const remainingBefore = Number(packageData.remainingCount || 0);
-          const usedBefore = Number(packageData.usedCount || 0);
-          if (
-            !Number.isFinite(remainingBefore) ||
-            remainingBefore <= 0 ||
-            !Number.isFinite(usedBefore)
-          ) {
-            throw new HttpsError(
-                "failed-precondition",
-                "No remaining matching private package found.",
-            );
-          }
-
-          const now = admin.firestore.FieldValue.serverTimestamp();
-          const remainingAfter = Math.max(0, remainingBefore - 1);
-          const usedAfter = usedBefore + 1;
-          const nextPackageStatus = getNextStudentPackageStatus(
-              packageData.status,
-              remainingAfter,
+          return await applyPrivateReservationOutcomeWithDeductionInTransaction(
+              transaction,
+              {
+                db,
+                academyId,
+                reservationId,
+                outcome,
+                actor: outcomeActor,
+                actorUid: uid,
+              },
           );
-          const deductionAttemptNumber =
-            normalizePositiveAttempt(reservation.deductionAttemptNumber) + 1;
-          const creditTransactionId = buildDeductionKey({
-            academyId,
-            lessonId: reservationId,
-            studentId,
-            packageId: packageRef.id,
-          });
-          const creditRef = db
-              .collection("creditTransactions")
-              .doc(creditTransactionId);
-          const creditSnap = await transaction.get(creditRef);
-          if (creditSnap.exists) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Private reservation deduction was already applied.",
-            );
-          }
-          const datePart = [
-            normalizeId(reservation.date || (slot && slot.date)),
-            normalizeId(reservation.time || (slot && slot.time)),
-            normalizeId(reservation.subject || (slot && slot.subject)),
-          ].filter(Boolean).join(" ");
-          const teacher = getReservationTeacherKey(reservation, slot);
-          const studentName =
-            getOptionalStudentName({student, membership: null, reservation}) ||
-            studentId;
-          const actionType = outcome === "completed" ?
-            "private_reservation_completed_deduct" :
-            "private_reservation_no_show_deduct";
-
-          transaction.update(packageRef, {
-            usedCount: usedAfter,
-            remainingCount: remainingAfter,
-            status: nextPackageStatus,
-            updatedAt: now,
-          });
-          transaction.update(reservationRef, {
-            status: outcome,
-            completedAt: outcome === "completed" ? now : null,
-            noShowAt: outcome === "no_show" ? now : null,
-            deductionApplied: true,
-            deductionAppliedAt: now,
-            deductionPackageId: packageRef.id,
-            deductionCreditTransactionId: creditTransactionId,
-            deductionTransactionId: creditTransactionId,
-            deductionSource: "manual",
-            deductionStatus: "deducted",
-            deductionAttemptNumber,
-            outcomeByUid: uid,
-            outcomeActorRole: outcomeActor.actorRole,
-            outcomeActorName: outcomeActor.actorName,
-            updatedAt: now,
-          });
-          transaction.set(creditRef, {
-            academyId,
-            studentId,
-            studentName,
-            teacher,
-            packageId: packageRef.id,
-            packageType: "private",
-            packageTitle: String(packageData.packageTitle || ""),
-            groupClassName: "",
-            sourceType: "privateReservation",
-            sourceId: reservationId,
-            actionType,
-            deltaCount: -1,
-            memo: datePart ?
-              `유연 1:1 예약 ${datePart}` :
-              "유연 1:1 예약 차감",
-            actorUid: uid,
-            actorRole: outcomeActor.actorRole,
-            actorName: outcomeActor.actorName,
-            reason: outcome,
-            createdAt: now,
-          }, {merge: false});
-
-          return {
-            ok: true,
-            academyId,
-            reservationId,
-            outcome,
-            packageId: packageRef.id,
-            creditTransactionId,
-          };
         });
       } catch (error) {
         throw asHttpsError(error);
