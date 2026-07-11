@@ -1,0 +1,248 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { test, expect } from '@playwright/test';
+
+function readSource(relativePath) {
+  return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+}
+
+function boundedSource(source, startNeedle, endNeedle) {
+  const start = source.indexOf(startNeedle);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(endNeedle, start + startNeedle.length);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
+
+test('deduction-aware private lesson outcome preview is exported and guarded', () => {
+  const functionsSource = readSource('functions/index.js');
+  const callableBlock = boundedSource(
+    functionsSource,
+    'exports.previewPrivateLessonOutcomeAction = onCall(',
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction('
+  );
+
+  [
+    'previewPrivateLessonOutcomeAction',
+    'if (!request.auth)',
+    'const academyId = requireString(data, "academyId")',
+    'const reservationId = requireString(data, "reservationId")',
+    'const requestId = requireString(data, "requestId")',
+    'const actionType = requireString(data, "actionType")',
+    '["complete", "no_show"].includes(actionType)',
+    'data.dryRun !== true',
+    'data.previewOnly !== true',
+    'data.commit !== false',
+    'canMarkPrivateReservationOutcome',
+    'normalizedOutcome',
+    'dryRun: true',
+    'previewOnly: true',
+    'commit: false',
+    'isAdmin: actor.actorRole === "admin"',
+  ].forEach((token) => {
+    expect(callableBlock).toContain(token);
+  });
+
+  expect(callableBlock).toContain(
+    'resolvePrivateReservationOutcomePreviewTarget'
+  );
+  expect(callableBlock).toContain('buildPrivateReservationOutcomePlan');
+});
+
+test('pure outcome plan describes package, credit, and reservation changes', () => {
+  const functionsSource = readSource('functions/index.js');
+  const planBlock = boundedSource(
+    functionsSource,
+    'function mapPrivateReservationOutcomePackageBlockedReason(',
+    'async function resolvePrivateReservationOutcomePreviewTarget('
+  );
+  const callableBlock = boundedSource(
+    functionsSource,
+    'exports.previewPrivateLessonOutcomeAction = onCall(',
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction('
+  );
+  const combinedSource = `${planBlock}\n${callableBlock}`;
+
+  [
+    'buildPrivateReservationOutcomePlan',
+    'actionType === "complete"',
+    '"completed"',
+    'actionType === "no_show"',
+    '"no_show"',
+    'currentUsedCount',
+    'currentRemainingCount',
+    'usedCountDelta: 1',
+    'remainingCountDelta: -1',
+    'nextUsedCount',
+    'nextRemainingCount',
+    'currentStatus: currentPackageStatus',
+    'nextStatus: nextPackageStatus',
+    'const wouldCreate = Boolean(',
+    'uniqueBlockedReasons.length === 0',
+    'wouldCreate,',
+    'sourceType: "privateReservation"',
+    'sourceId: reservationId',
+    'deltaCount: -1',
+    'private_reservation_completed_deduct',
+    'private_reservation_no_show_deduct',
+    'duplicateExists',
+    'currentState',
+    'proposedState',
+    'deductionApplied: true',
+    'deductionPackageId',
+    'deductionCreditTransactionId',
+    'normalizedPlan',
+    'blockedReasons',
+    'warnings',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  [
+    'reservation_missing',
+    'academy_mismatch',
+    'reservation_not_active',
+    'already_completed',
+    'already_no_show',
+    'reservation_cancelled',
+    'deduction_already_applied',
+    'package_missing',
+    'package_academy_mismatch',
+    'package_student_mismatch',
+    'package_not_active',
+    'package_remaining_insufficient',
+    'credit_transaction_already_exists',
+    'invalid_action',
+  ].forEach((token) => {
+    expect(planBlock).toContain(token);
+  });
+
+  expect(callableBlock).toContain(
+    '차감 및 수업 상태 변경 내용을 확인한 뒤 '
+  );
+  expect(callableBlock).toContain(
+    '차단 사유를 확인한 뒤 수강권 또는 예약 상태를 먼저 확인하세요.'
+  );
+});
+
+test('outcome preview lookup is read-only and uses legacy deterministic rules', () => {
+  const functionsSource = readSource('functions/index.js');
+  const previewBlock = boundedSource(
+    functionsSource,
+    'function mapPrivateReservationOutcomePackageBlockedReason(',
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction('
+  );
+
+  [
+    '.collection("privateLessonReservations")',
+    '.collection("privateLessonSlots")',
+    '.collection("studentPackages")',
+    '.collection("creditTransactions")',
+    'isPrivatePackageForReservation',
+    'sortPrivatePackageCandidates',
+    'buildDeductionKey',
+    'getNextStudentPackageStatus',
+  ].forEach((token) => {
+    expect(previewBlock).toContain(token);
+  });
+
+  [
+    'runTransaction',
+    'writeBatch',
+    'transaction.set',
+    'transaction.update',
+    'transaction.create',
+    'transaction.delete',
+    '.set(',
+    '.update(',
+    '.create(',
+    '.delete(',
+    'setDoc',
+    'addDoc',
+    'updateDoc',
+    'deleteDoc',
+    'applyPrivateReservationOutcomeWithDeductionInTransaction',
+  ].forEach((token) => {
+    expect(previewBlock).not.toContain(token);
+  });
+
+  expect(functionsSource).not.toContain(
+    'exports.commitPrivateLessonOutcomeAction'
+  );
+});
+
+test('legacy outcome write and reverse flows remain intact', () => {
+  const functionsSource = readSource('functions/index.js');
+  const writeHelperBlock = boundedSource(
+    functionsSource,
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction(',
+    'exports.markPrivateReservationOutcome = onCall('
+  );
+  const markBlock = boundedSource(
+    functionsSource,
+    'exports.markPrivateReservationOutcome = onCall(',
+    'exports.updateTeacherStudentPackageCounts = onCall('
+  );
+  const reverseBlock = boundedSource(
+    functionsSource,
+    'exports.reversePrivateReservationOutcome = onCall(',
+    'exports.bootstrapAdmin = onCall('
+  );
+
+  [
+    'transaction.update(packageRef',
+    'transaction.update(reservationRef',
+    'transaction.set(creditRef',
+    'sourceType: "privateReservation"',
+    'deltaCount: -1',
+    'deductionApplied: true',
+    'deductionPackageId',
+    'deductionCreditTransactionId',
+    'no behavior change',
+    'response shape',
+  ].forEach((token) => {
+    expect(writeHelperBlock).toContain(token);
+  });
+  [
+    'const outcome = requireString(data, "outcome")',
+    '["completed", "no_show"].includes(outcome)',
+    'canMarkPrivateReservationOutcome',
+    'db.runTransaction',
+    'applyPrivateReservationOutcomeWithDeductionInTransaction',
+  ].forEach((token) => {
+    expect(markBlock).toContain(token);
+  });
+  expect(reverseBlock).not.toContain(
+    'previewPrivateLessonOutcomeAction'
+  );
+  expect(reverseBlock).not.toContain(
+    'buildPrivateReservationOutcomePlan'
+  );
+});
+
+test('outcome preview PR keeps protected files unchanged', () => {
+  const protectedPaths = [
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/CalendarSection.jsx',
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  expect(changedProtectedFiles).toEqual([]);
+});

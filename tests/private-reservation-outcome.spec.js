@@ -298,7 +298,7 @@ test('private reservation outcome helper extraction preserves legacy behavior sh
   expect(helperBlock).toContain('private_reservation_completed_deduct');
   expect(helperBlock).toContain('private_reservation_no_show_deduct');
 
-  expect(functionsSource).not.toContain('exports.previewPrivateLessonOutcomeAction');
+  expect(functionsSource).toContain('exports.previewPrivateLessonOutcomeAction');
   expect(functionsSource).not.toContain('exports.commitPrivateLessonOutcomeAction');
   expect(reverseBlock).not.toContain('applyPrivateReservationOutcomeWithDeductionInTransaction');
 });
