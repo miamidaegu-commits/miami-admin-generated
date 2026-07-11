@@ -13420,6 +13420,560 @@ exports.previewPrivateLessonStatusAction = onCall(
     },
 );
 
+function mapPrivateReservationOutcomePackageBlockedReason(reason) {
+  const reasonMap = {
+    package_missing: "package_missing",
+    academy_mismatch: "package_academy_mismatch",
+    student_mismatch: "package_student_mismatch",
+    package_not_active: "package_not_active",
+    no_remaining_count: "package_remaining_insufficient",
+    package_type_mismatch: "package_type_mismatch",
+    missing_slot_teacher: "reservation_teacher_missing",
+    missing_package_teacher: "package_teacher_missing",
+    teacher_mismatch: "package_teacher_mismatch",
+    package_date_out_of_range: "package_date_out_of_range",
+  };
+  return reasonMap[reason] || "package_mismatch";
+}
+
+function buildPrivateReservationOutcomePlan({
+  academyId,
+  reservationId,
+  actionType,
+  reservation,
+  slot,
+  packageDoc,
+  packageIdCandidate = "",
+  packageLookupReason = "",
+  creditTransactionExists = false,
+  creditTransactionId = "",
+  actor = {},
+  nowMillis,
+}) {
+  const blockedReasons = [];
+  const warnings = [];
+  const reservationData = reservation || null;
+  const packageData = packageDoc && packageDoc.data ?
+    packageDoc.data :
+    null;
+  const packageId = normalizeId(packageDoc && packageDoc.id) ||
+    normalizeId(packageIdCandidate);
+  const normalizedOutcome = actionType === "complete" ?
+    "completed" :
+    actionType === "no_show" ? "no_show" : "";
+
+  if (!normalizedOutcome) blockedReasons.push("invalid_action");
+  if (!reservationData) {
+    blockedReasons.push("reservation_missing");
+  }
+
+  const currentReservationStatus = normalizeId(
+      reservationData && reservationData.status,
+  ).toLowerCase();
+  const reservationAcademyMatches = Boolean(
+      reservationData &&
+      normalizeId(reservationData.academyId) === academyId,
+  );
+  if (reservationData) {
+    if (!reservationAcademyMatches) {
+      blockedReasons.push("academy_mismatch");
+    } else {
+      if (currentReservationStatus === "completed") {
+        blockedReasons.push("already_completed");
+      } else if (
+        currentReservationStatus === "no_show" ||
+        currentReservationStatus === "no-show"
+      ) {
+        blockedReasons.push("already_no_show");
+      } else if (
+        currentReservationStatus === "cancelled" ||
+        currentReservationStatus === "canceled"
+      ) {
+        blockedReasons.push("reservation_cancelled");
+      }
+      if (!isActivePrivateReservation(reservationData)) {
+        blockedReasons.push("reservation_not_active");
+      }
+      if (reservationData.deductionApplied === true) {
+        blockedReasons.push("deduction_already_applied");
+      }
+      if (!normalizeId(reservationData.studentId) ||
+          !normalizeId(reservationData.slotId)) {
+        blockedReasons.push("reservation_linkage_missing");
+      }
+      if (slot && normalizeId(slot.academyId) !== academyId) {
+        blockedReasons.push("slot_academy_mismatch");
+      }
+      const endMillis = getPrivateReservationEndMillis(reservationData, slot);
+      if (endMillis === null) {
+        blockedReasons.push("reservation_schedule_missing");
+      } else if (!Number.isFinite(nowMillis) || nowMillis < endMillis) {
+        blockedReasons.push("reservation_not_ended");
+      }
+      if (!slot && endMillis !== null) {
+        warnings.push("slot_missing_using_reservation_schedule");
+      }
+    }
+  }
+
+  if (reservationAcademyMatches) {
+    if (packageLookupReason) blockedReasons.push(packageLookupReason);
+    if (!packageData) {
+      blockedReasons.push("package_missing");
+    } else {
+      const packageRejectReason = getPrivatePackageRejectReason({
+        pkg: packageData,
+        academyId,
+        studentId: normalizeId(reservationData.studentId),
+        teacherKey: getReservationTeacherKey(reservationData, slot),
+        teacherKeys: getReservationTeacherKeys(reservationData, slot),
+        lessonDate: normalizeId(
+            reservationData.date || (slot && slot.date),
+        ),
+      });
+      if (packageRejectReason) {
+        blockedReasons.push(
+            mapPrivateReservationOutcomePackageBlockedReason(
+                packageRejectReason,
+            ),
+        );
+      }
+    }
+  }
+
+  const usedValue = packageData ?
+    Number(packageData.usedCount || 0) :
+    NaN;
+  const remainingValue = packageData ?
+    Number(packageData.remainingCount || 0) :
+    NaN;
+  const currentUsedCount = Number.isFinite(usedValue) ? usedValue : null;
+  const currentRemainingCount =
+    Number.isFinite(remainingValue) ? remainingValue : null;
+  if (packageData && currentUsedCount === null) {
+    blockedReasons.push("package_count_invalid");
+  }
+  if (
+    packageData &&
+    (currentRemainingCount === null || currentRemainingCount <= 0)
+  ) {
+    blockedReasons.push("package_remaining_insufficient");
+  }
+
+  const nextUsedCount = currentUsedCount === null ?
+    null :
+    currentUsedCount + 1;
+  const nextRemainingCount = currentRemainingCount === null ?
+    null :
+    Math.max(0, currentRemainingCount - 1);
+  const currentPackageStatus = packageData ?
+    normalizeId(packageData.status || "active").toLowerCase() :
+    "";
+  const nextPackageStatus = packageData && nextRemainingCount !== null ?
+    getNextStudentPackageStatus(
+        packageData.status,
+        nextRemainingCount,
+    ) :
+    "";
+  const creditActionType = normalizedOutcome === "completed" ?
+    "private_reservation_completed_deduct" :
+    normalizedOutcome === "no_show" ?
+      "private_reservation_no_show_deduct" :
+      "";
+
+  if (creditTransactionExists) {
+    blockedReasons.push("credit_transaction_already_exists");
+  }
+  if (!packageLookupReason &&
+      !normalizeId(reservationData && reservationData.packageId) &&
+      packageId) {
+    warnings.push("matching_package_selected_by_legacy_rules");
+  }
+
+  const uniqueBlockedReasons = Array.from(new Set(blockedReasons));
+  if (uniqueBlockedReasons.length === 0) {
+    warnings.push("package_deduction_will_be_applied");
+    warnings.push("credit_transaction_will_be_created");
+  }
+  const uniqueWarnings = Array.from(new Set(warnings));
+  const wouldCreate = Boolean(
+      normalizedOutcome &&
+      reservationData &&
+      packageData &&
+      creditTransactionId &&
+      !creditTransactionExists &&
+      uniqueBlockedReasons.length === 0,
+  );
+
+  const packageImpact = {
+    packageId,
+    currentUsedCount,
+    currentRemainingCount,
+    usedCountDelta: 1,
+    remainingCountDelta: -1,
+    nextUsedCount,
+    nextRemainingCount,
+    currentStatus: currentPackageStatus,
+    nextStatus: nextPackageStatus,
+  };
+  const creditTransactionPreview = {
+    wouldCreate,
+    creditTransactionId,
+    sourceType: "privateReservation",
+    sourceId: reservationId,
+    deltaCount: -1,
+    actionType: creditActionType,
+    packageId,
+    duplicateExists: creditTransactionExists === true,
+  };
+  const currentState = {
+    reservation: reservationData ? {
+      id: reservationId,
+      status: currentReservationStatus,
+      deductionApplied: reservationData.deductionApplied === true,
+      deductionPackageId: normalizeId(
+          reservationData.deductionPackageId,
+      ),
+      deductionCreditTransactionId: normalizeId(
+          reservationData.deductionCreditTransactionId,
+      ),
+    } : null,
+    package: packageData ? {
+      id: packageId,
+      status: currentPackageStatus,
+      usedCount: currentUsedCount,
+      remainingCount: currentRemainingCount,
+    } : null,
+    creditTransaction: {
+      id: creditTransactionId,
+      exists: creditTransactionExists === true,
+    },
+  };
+  const proposedState = {
+    reservation: reservationData ? {
+      id: reservationId,
+      currentStatus: currentReservationStatus,
+      nextStatus: normalizedOutcome,
+      deductionApplied: true,
+      deductionPackageId: packageId,
+      deductionCreditTransactionId: creditTransactionId,
+    } : null,
+  };
+  const normalizedPlan = {
+    academyId,
+    reservationId,
+    actionType,
+    normalizedOutcome,
+    packageId,
+    creditTransactionId,
+    packageUsedCount: nextUsedCount,
+    packageRemainingCount: nextRemainingCount,
+    packageStatus: nextPackageStatus,
+    reservationStatus: normalizedOutcome,
+    creditActionType,
+    actorUid: normalizeId(actor.actorUid),
+    actorRole: normalizeId(actor.actorRole),
+  };
+  return {
+    ok: uniqueBlockedReasons.length === 0,
+    blockedReasons: uniqueBlockedReasons,
+    warnings: uniqueWarnings,
+    currentState,
+    proposedState,
+    packageImpact,
+    creditTransactionPreview,
+    normalizedPlan,
+  };
+}
+
+async function resolvePrivateReservationOutcomePreviewTarget({
+  db,
+  academyId,
+  reservationId,
+}) {
+  const reservationRef = db
+      .collection("privateLessonReservations")
+      .doc(reservationId);
+  const reservationSnap = await reservationRef.get();
+  if (!reservationSnap.exists) {
+    return {
+      reservation: null,
+      slot: null,
+      packageDoc: null,
+      packageId: "",
+      packageLookupReason: "",
+      creditTransactionId: "",
+      creditTransactionExists: false,
+    };
+  }
+
+  const reservation = reservationSnap.data() || {};
+  if (normalizeId(reservation.academyId) !== academyId) {
+    return {
+      reservation: {
+        academyId: normalizeId(reservation.academyId),
+      },
+      slot: null,
+      packageDoc: null,
+      packageId: "",
+      packageLookupReason: "",
+      creditTransactionId: "",
+      creditTransactionExists: false,
+    };
+  }
+
+  const slotId = normalizeId(reservation.slotId);
+  const slotSnap = slotId ?
+    await db.collection("privateLessonSlots").doc(slotId).get() :
+    null;
+  const slot = slotSnap && slotSnap.exists ? slotSnap.data() || {} : null;
+  const explicitPackageId = normalizeId(reservation.packageId);
+  let packageDoc = null;
+  let packageLookupReason = "";
+
+  if (explicitPackageId) {
+    const packageSnap = await db
+        .collection("studentPackages")
+        .doc(explicitPackageId)
+        .get();
+    if (packageSnap.exists) {
+      packageDoc = {
+        id: packageSnap.id,
+        data: packageSnap.data() || {},
+      };
+    } else {
+      packageLookupReason = "package_missing";
+    }
+  } else {
+    const studentId = normalizeId(reservation.studentId);
+    if (studentId) {
+      const packageSnap = await db
+          .collection("studentPackages")
+          .where("academyId", "==", academyId)
+          .where("studentId", "==", studentId)
+          .get();
+      const candidates = packageSnap.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ref: docSnap.ref,
+        data: docSnap.data() || {},
+      }));
+      const matchingCandidates = candidates
+          .filter((candidate) =>
+            isPrivatePackageForReservation(
+                candidate.data,
+                reservation,
+                slot,
+            ) && Number(candidate.data.remainingCount || 0) > 0,
+          )
+          .sort(sortPrivatePackageCandidates);
+      if (matchingCandidates.length > 0) {
+        packageDoc = {
+          id: matchingCandidates[0].id,
+          data: matchingCandidates[0].data,
+        };
+      } else {
+        const rejectedCandidates = candidates.map((candidate) => ({
+          candidate,
+          reason: getPrivatePackageRejectReason({
+            pkg: candidate.data,
+            academyId,
+            studentId,
+            teacherKey: getReservationTeacherKey(reservation, slot),
+            teacherKeys: getReservationTeacherKeys(reservation, slot),
+            lessonDate: normalizeId(
+                reservation.date || (slot && slot.date),
+            ),
+          }),
+        }));
+        const preferredReason = [
+          "no_remaining_count",
+          "package_not_active",
+          "package_type_mismatch",
+          "teacher_mismatch",
+          "package_date_out_of_range",
+        ].find((reason) =>
+          rejectedCandidates.some((entry) => entry.reason === reason),
+        );
+        const diagnosticCandidate = rejectedCandidates.find(
+            (entry) => entry.reason === preferredReason,
+        );
+        if (diagnosticCandidate) {
+          packageDoc = {
+            id: diagnosticCandidate.candidate.id,
+            data: diagnosticCandidate.candidate.data,
+          };
+          packageLookupReason =
+            mapPrivateReservationOutcomePackageBlockedReason(
+                preferredReason,
+            );
+        } else {
+          packageLookupReason = "package_missing";
+        }
+      }
+    } else {
+      packageLookupReason = "package_missing";
+    }
+  }
+
+  let creditTransactionId = "";
+  let creditTransactionExists = false;
+  if (packageDoc) {
+    const packageRejectReason = getPrivatePackageRejectReason({
+      pkg: packageDoc.data,
+      academyId,
+      studentId: normalizeId(reservation.studentId),
+      teacherKey: getReservationTeacherKey(reservation, slot),
+      teacherKeys: getReservationTeacherKeys(reservation, slot),
+      lessonDate: normalizeId(
+          reservation.date || (slot && slot.date),
+      ),
+    });
+    const remainingCount = Number(packageDoc.data.remainingCount || 0);
+    const usedCount = Number(packageDoc.data.usedCount || 0);
+    if (!packageRejectReason &&
+        Number.isFinite(remainingCount) &&
+        remainingCount > 0 &&
+        Number.isFinite(usedCount)) {
+      creditTransactionId = buildDeductionKey({
+        academyId,
+        lessonId: reservationId,
+        studentId: normalizeId(reservation.studentId),
+        packageId: packageDoc.id,
+      });
+      const creditSnap = await db
+          .collection("creditTransactions")
+          .doc(creditTransactionId)
+          .get();
+      creditTransactionExists = creditSnap.exists;
+    }
+  }
+
+  return {
+    reservation,
+    slot,
+    packageDoc,
+    packageId: packageDoc ? packageDoc.id : explicitPackageId,
+    packageLookupReason,
+    creditTransactionId,
+    creditTransactionExists,
+  };
+}
+
+function buildPrivateReservationOutcomePreviewTarget({
+  reservationId,
+  target,
+}) {
+  const packageData = target.packageDoc ? target.packageDoc.data : null;
+  return {
+    reservation: {
+      id: reservationId,
+      exists: Boolean(target.reservation),
+      status: normalizeId(target.reservation && target.reservation.status),
+      studentId: normalizeId(
+          target.reservation && target.reservation.studentId,
+      ),
+      slotId: normalizeId(target.reservation && target.reservation.slotId),
+    },
+    slot: {
+      id: normalizeId(target.reservation && target.reservation.slotId),
+      exists: Boolean(target.slot),
+      status: normalizeId(target.slot && target.slot.status),
+    },
+    package: {
+      id: normalizeId(target.packageId),
+      exists: Boolean(packageData),
+      status: normalizeId(packageData && packageData.status),
+    },
+    creditTransaction: {
+      id: target.creditTransactionId,
+      exists: target.creditTransactionExists === true,
+    },
+  };
+}
+
+exports.previewPrivateLessonOutcomeAction = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      if (!request.auth) {
+        throw new HttpsError("unauthenticated", "Login required.");
+      }
+      const data = request.data || {};
+      const academyId = requireString(data, "academyId");
+      const reservationId = requireString(data, "reservationId");
+      const requestId = requireString(data, "requestId");
+      const actionType = requireString(data, "actionType");
+      validateAcademyId(academyId);
+      if (!["complete", "no_show"].includes(actionType)) {
+        throw new HttpsError("invalid-argument", "invalid_action");
+      }
+      if (data.dryRun !== true ||
+          data.previewOnly !== true ||
+          data.commit !== false) {
+        throw new HttpsError(
+            "invalid-argument",
+            "Preview requires dryRun true, previewOnly true, and commit false.",
+        );
+      }
+
+      const db = admin.firestore();
+      const actor = await canMarkPrivateReservationOutcome(
+          db,
+          academyId,
+          request.auth,
+      );
+      const target = await resolvePrivateReservationOutcomePreviewTarget({
+        db,
+        academyId,
+        reservationId,
+      });
+      const plan = buildPrivateReservationOutcomePlan({
+        academyId,
+        reservationId,
+        actionType,
+        reservation: target.reservation,
+        slot: target.slot,
+        packageDoc: target.packageDoc,
+        packageIdCandidate: target.packageId,
+        packageLookupReason: target.packageLookupReason,
+        creditTransactionExists: target.creditTransactionExists,
+        creditTransactionId: target.creditTransactionId,
+        actor,
+        nowMillis: Date.now(),
+      });
+      return {
+        ok: plan.ok,
+        allowed: plan.ok,
+        dryRun: true,
+        previewOnly: true,
+        commit: false,
+        requestId,
+        actionType,
+        normalizedOutcome: plan.normalizedPlan.normalizedOutcome,
+        actor: {
+          uid: actor.actorUid,
+          role: actor.actorRole,
+          name: actor.actorName,
+          isAdmin: actor.actorRole === "admin",
+        },
+        target: buildPrivateReservationOutcomePreviewTarget({
+          reservationId,
+          target,
+        }),
+        currentState: plan.currentState,
+        proposedState: plan.proposedState,
+        packageImpact: plan.packageImpact,
+        creditTransactionPreview: plan.creditTransactionPreview,
+        blockedReasons: plan.blockedReasons,
+        warnings: plan.warnings,
+        normalizedPlan: plan.normalizedPlan,
+        nextStep: plan.ok ?
+          "차감 및 수업 상태 변경 내용을 확인한 뒤 " +
+            "최종 확인 단계로 진행할 수 있습니다." :
+          "차단 사유를 확인한 뒤 수강권 또는 예약 상태를 먼저 확인하세요.",
+      };
+    },
+);
+
 async function applyPrivateReservationOutcomeWithDeductionInTransaction(
     transaction,
     {
