@@ -13420,6 +13420,124 @@ exports.previewPrivateLessonStatusAction = onCall(
     },
 );
 
+function normalizePrivateReservationOutcomeHashNumber(value) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function buildPrivateReservationOutcomePlanHashCurrentState(target) {
+  const reservation = target && target.reservation ?
+    target.reservation :
+    null;
+  const slot = target && target.slot ? target.slot : null;
+  const packageDoc = target && target.packageDoc ? target.packageDoc : null;
+  const packageData = packageDoc && packageDoc.data ?
+    packageDoc.data :
+    null;
+  const packageDateBounds = packageData ?
+    getPrivatePackageDateBounds(packageData) :
+    {startDate: "", endDate: ""};
+  return {
+    reservation: reservation ? {
+      academyId: normalizeId(reservation.academyId),
+      status: normalizeId(reservation.status).toLowerCase(),
+      studentId: normalizeId(reservation.studentId),
+      slotId: normalizeId(reservation.slotId),
+      packageId: normalizeId(reservation.packageId),
+      deductionApplied: reservation.deductionApplied === true,
+      deductionPackageId: normalizeId(reservation.deductionPackageId),
+      deductionCreditTransactionId: normalizeId(
+          reservation.deductionCreditTransactionId,
+      ),
+      deductionTransactionId: normalizeId(
+          reservation.deductionTransactionId,
+      ),
+      deductionAttemptNumber: normalizePositiveAttempt(
+          reservation.deductionAttemptNumber,
+      ),
+      date: normalizeId(reservation.date),
+      time: normalizeId(reservation.time),
+      subject: normalizeId(reservation.subject),
+      teacherKeys: getReservationTeacherKeys(reservation, slot),
+      startMillis: getPrivateReservationStartMillis(reservation, slot),
+      durationMinutes: getPrivateReservationDurationMinutes(
+          reservation,
+          slot,
+      ),
+      endMillis: getPrivateReservationEndMillis(reservation, slot),
+    } : null,
+    slot: slot ? {
+      academyId: normalizeId(slot.academyId),
+      status: normalizeId(slot.status).toLowerCase(),
+      date: normalizeId(slot.date),
+      time: normalizeId(slot.time),
+      subject: normalizeId(slot.subject),
+      teacherKeys: getPrivateTeacherScopeKeys(slot),
+      startMillis: getTimestampMillis(slot.startAt),
+      durationMinutes: normalizePrivateReservationOutcomeHashNumber(
+          slot.durationMinutes,
+      ),
+    } : null,
+    package: packageData ? {
+      id: normalizeId(packageDoc.id),
+      academyId: normalizeId(packageData.academyId),
+      studentId: normalizeId(packageData.studentId),
+      packageType: normalizeId(packageData.packageType).toLowerCase(),
+      packageTitle: String(packageData.packageTitle || ""),
+      status: normalizeId(packageData.status || "active").toLowerCase(),
+      totalCount: normalizePrivateReservationOutcomeHashNumber(
+          packageData.totalCount,
+      ),
+      usedCount: normalizePrivateReservationOutcomeHashNumber(
+          packageData.usedCount || 0,
+      ),
+      remainingCount: normalizePrivateReservationOutcomeHashNumber(
+          packageData.remainingCount || 0,
+      ),
+      teacherKeys: getPrivatePackageTeacherKeys(packageData),
+      startDate: packageDateBounds.startDate,
+      endDate: packageDateBounds.endDate,
+      createdAtMillis: getTimestampMillis(packageData.createdAt),
+    } : null,
+    creditTransaction: {
+      id: normalizeId(target && target.creditTransactionId),
+      exists: Boolean(target && target.creditTransactionExists),
+    },
+  };
+}
+
+function hashPrivateReservationOutcomeActionValue(value) {
+  return crypto
+      .createHash("sha256")
+      .update(stableStringify(value))
+      .digest("hex");
+}
+
+function buildPrivateReservationOutcomePlanHash({
+  actorUid,
+  academyId,
+  reservationId,
+  requestId,
+  actionType,
+  target,
+  plan,
+}) {
+  return hashPrivateReservationOutcomeActionValue({
+    version: 1,
+    actorUid: normalizeId(actorUid),
+    academyId: normalizeId(academyId),
+    reservationId: normalizeId(reservationId),
+    requestId: normalizeId(requestId),
+    actionType: normalizeId(actionType),
+    currentState: buildPrivateReservationOutcomePlanHashCurrentState(target),
+    allowed: plan && plan.ok === true,
+    blockedReasons: Array.from(
+        new Set((plan && plan.blockedReasons) || []),
+    ).sort(),
+    normalizedPlan: plan && plan.normalizedPlan ? plan.normalizedPlan : {},
+  });
+}
+
 function mapPrivateReservationOutcomePackageBlockedReason(reason) {
   const reasonMap = {
     package_missing: "package_missing",
@@ -13688,13 +13806,17 @@ function buildPrivateReservationOutcomePlan({
 
 async function resolvePrivateReservationOutcomePreviewTarget({
   db,
+  transaction = null,
   academyId,
   reservationId,
 }) {
+  const read = async (refOrQuery) => transaction ?
+    await transaction.get(refOrQuery) :
+    await refOrQuery.get();
   const reservationRef = db
       .collection("privateLessonReservations")
       .doc(reservationId);
-  const reservationSnap = await reservationRef.get();
+  const reservationSnap = await read(reservationRef);
   if (!reservationSnap.exists) {
     return {
       reservation: null,
@@ -13724,7 +13846,7 @@ async function resolvePrivateReservationOutcomePreviewTarget({
 
   const slotId = normalizeId(reservation.slotId);
   const slotSnap = slotId ?
-    await db.collection("privateLessonSlots").doc(slotId).get() :
+    await read(db.collection("privateLessonSlots").doc(slotId)) :
     null;
   const slot = slotSnap && slotSnap.exists ? slotSnap.data() || {} : null;
   const explicitPackageId = normalizeId(reservation.packageId);
@@ -13732,10 +13854,9 @@ async function resolvePrivateReservationOutcomePreviewTarget({
   let packageLookupReason = "";
 
   if (explicitPackageId) {
-    const packageSnap = await db
+    const packageSnap = await read(db
         .collection("studentPackages")
-        .doc(explicitPackageId)
-        .get();
+        .doc(explicitPackageId));
     if (packageSnap.exists) {
       packageDoc = {
         id: packageSnap.id,
@@ -13747,11 +13868,10 @@ async function resolvePrivateReservationOutcomePreviewTarget({
   } else {
     const studentId = normalizeId(reservation.studentId);
     if (studentId) {
-      const packageSnap = await db
+      const packageSnap = await read(db
           .collection("studentPackages")
           .where("academyId", "==", academyId)
-          .where("studentId", "==", studentId)
-          .get();
+          .where("studentId", "==", studentId));
       const candidates = packageSnap.docs.map((docSnap) => ({
         id: docSnap.id,
         ref: docSnap.ref,
@@ -13840,10 +13960,9 @@ async function resolvePrivateReservationOutcomePreviewTarget({
         studentId: normalizeId(reservation.studentId),
         packageId: packageDoc.id,
       });
-      const creditSnap = await db
+      const creditSnap = await read(db
           .collection("creditTransactions")
-          .doc(creditTransactionId)
-          .get();
+          .doc(creditTransactionId));
       creditTransactionExists = creditSnap.exists;
     }
   }
@@ -13940,6 +14059,15 @@ exports.previewPrivateLessonOutcomeAction = onCall(
         actor,
         nowMillis: Date.now(),
       });
+      const planHash = buildPrivateReservationOutcomePlanHash({
+        actorUid: actor.actorUid,
+        academyId,
+        reservationId,
+        requestId,
+        actionType,
+        target,
+        plan,
+      });
       return {
         ok: plan.ok,
         allowed: plan.ok,
@@ -13966,6 +14094,7 @@ exports.previewPrivateLessonOutcomeAction = onCall(
         blockedReasons: plan.blockedReasons,
         warnings: plan.warnings,
         normalizedPlan: plan.normalizedPlan,
+        planHash,
         nextStep: plan.ok ?
           "차감 및 수업 상태 변경 내용을 확인한 뒤 " +
             "최종 확인 단계로 진행할 수 있습니다." :

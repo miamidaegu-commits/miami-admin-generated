@@ -40,6 +40,7 @@ test('deduction-aware private lesson outcome preview is exported and guarded', (
     'previewOnly: true',
     'commit: false',
     'isAdmin: actor.actorRole === "admin"',
+    'planHash',
   ].forEach((token) => {
     expect(callableBlock).toContain(token);
   });
@@ -48,6 +49,7 @@ test('deduction-aware private lesson outcome preview is exported and guarded', (
     'resolvePrivateReservationOutcomePreviewTarget'
   );
   expect(callableBlock).toContain('buildPrivateReservationOutcomePlan');
+  expect(callableBlock).toContain('buildPrivateReservationOutcomePlanHash');
 });
 
 test('pure outcome plan describes package, credit, and reservation changes', () => {
@@ -126,7 +128,7 @@ test('pure outcome plan describes package, credit, and reservation changes', () 
   );
 });
 
-test('outcome preview lookup is read-only and uses legacy deterministic rules', () => {
+test('outcome preview lookup is read-only and transaction-capable', () => {
   const functionsSource = readSource('functions/index.js');
   const previewBlock = boundedSource(
     functionsSource,
@@ -143,6 +145,9 @@ test('outcome preview lookup is read-only and uses legacy deterministic rules', 
     'sortPrivatePackageCandidates',
     'buildDeductionKey',
     'getNextStudentPackageStatus',
+    'transaction = null',
+    'await transaction.get(refOrQuery)',
+    'await refOrQuery.get()',
   ].forEach((token) => {
     expect(previewBlock).toContain(token);
   });
@@ -170,6 +175,49 @@ test('outcome preview lookup is read-only and uses legacy deterministic rules', 
   expect(functionsSource).not.toContain(
     'exports.commitPrivateLessonOutcomeAction'
   );
+});
+
+test('outcome preview plan hash is canonical and excludes display-only data', () => {
+  const functionsSource = readSource('functions/index.js');
+  const hashBlock = boundedSource(
+    functionsSource,
+    'function buildPrivateReservationOutcomePlanHashCurrentState(',
+    'function mapPrivateReservationOutcomePackageBlockedReason('
+  );
+  const callableBlock = boundedSource(
+    functionsSource,
+    'exports.previewPrivateLessonOutcomeAction = onCall(',
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction('
+  );
+
+  [
+    'hashPrivateReservationOutcomeActionValue',
+    'stableStringify',
+    '.createHash("sha256")',
+    'version: 1',
+    'actorUid',
+    'academyId',
+    'reservationId',
+    'requestId',
+    'actionType',
+    'currentState',
+    'blockedReasons',
+    '.sort()',
+    'normalizedPlan',
+    'planHash',
+  ].forEach((token) => {
+    expect(`${hashBlock}\n${callableBlock}`).toContain(token);
+  });
+
+  [
+    'warnings:',
+    'nextStep:',
+    'actorName:',
+    'Date.now()',
+    'serverTimestamp()',
+  ].forEach((token) => {
+    expect(hashBlock).not.toContain(token);
+  });
 });
 
 test('legacy outcome write and reverse flows remain intact', () => {
