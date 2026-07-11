@@ -20,7 +20,7 @@ test('private lesson status action preview callable is exported and guarded', ()
   const callableBlock = boundedSource(
     functionsSource,
     'exports.previewPrivateLessonStatusAction = onCall(',
-    'exports.markPrivateReservationOutcome = onCall('
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction('
   );
   const helperBlock = boundedSource(
     functionsSource,
@@ -75,7 +75,7 @@ test('private lesson status action preview callable stays read-only', () => {
   const callableBlock = boundedSource(
     functionsSource,
     'exports.previewPrivateLessonStatusAction = onCall(',
-    'exports.markPrivateReservationOutcome = onCall('
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction('
   );
   const helperBlock = boundedSource(
     functionsSource,

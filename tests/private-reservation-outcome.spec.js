@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
+import { execFileSync } from 'node:child_process';
 import admin from 'firebase-admin';
 import { test, expect } from '@playwright/test';
 import { BASE_URL } from './e2e-helpers.js';
@@ -17,6 +18,18 @@ const require = createRequire(import.meta.url);
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
 const RUN_OUTCOME_E2E = process.env.RUN_PRIVATE_RESERVATION_OUTCOME_E2E === '1';
 const TEACHER_NAME = 'teacher';
+
+function readSource(relativePath) {
+  return fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8');
+}
+
+function boundedSource(source, startNeedle, endNeedle) {
+  const start = source.indexOf(startNeedle);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(endNeedle, start + startNeedle.length);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+}
 
 function hasServiceAccount() {
   return fs.existsSync(SERVICE_ACCOUNT_PATH);
@@ -213,6 +226,108 @@ async function expectPackageCounts(db, packageId, usedCount, remainingCount) {
     }, { timeout: 20000 })
     .toEqual({ usedCount, remainingCount });
 }
+
+test('private reservation outcome helper extraction preserves legacy behavior shape', () => {
+  const functionsSource = readSource('functions/index.js');
+  const helperBlock = boundedSource(
+    functionsSource,
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction(',
+    'exports.markPrivateReservationOutcome = onCall('
+  );
+  const callableBlock = boundedSource(
+    functionsSource,
+    'exports.markPrivateReservationOutcome = onCall(',
+    'exports.updateTeacherStudentPackageCounts = onCall('
+  );
+  const reverseBlock = boundedSource(
+    functionsSource,
+    'exports.reversePrivateReservationOutcome = onCall(',
+    'exports.bootstrapAdmin = onCall('
+  );
+  const combinedSource = `${helperBlock}\n${callableBlock}`;
+
+  [
+    'markPrivateReservationOutcome',
+    'applyPrivateReservationOutcomeWithDeductionInTransaction',
+    'db.runTransaction',
+    'studentPackages',
+    'creditTransactions',
+    'sourceType: "privateReservation"',
+    'deltaCount: -1',
+    'deductionApplied',
+    'deductionPackageId',
+    'deductionCreditTransactionId',
+    'completedAt',
+    'noShowAt',
+    'usedCount',
+    'remainingCount',
+    'response shape',
+    'no behavior change',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  [
+    'academyId',
+    'reservationId',
+    'outcome',
+    'packageId',
+    'creditTransactionId',
+  ].forEach((token) => {
+    expect(helperBlock).toContain(token);
+  });
+
+  expect(callableBlock).toContain('const academyId = requireString(data, "academyId")');
+  expect(callableBlock).toContain('const reservationId = requireString(data, "reservationId")');
+  expect(callableBlock).toContain('const outcome = requireString(data, "outcome")');
+  expect(callableBlock).toContain('["completed", "no_show"].includes(outcome)');
+  expect(callableBlock).toContain('canMarkPrivateReservationOutcome');
+  expect(callableBlock).toContain('db.runTransaction');
+  expect(callableBlock).toContain('applyPrivateReservationOutcomeWithDeductionInTransaction(');
+  expect(callableBlock).not.toContain('transaction.update(packageRef');
+  expect(callableBlock).not.toContain('transaction.set(creditRef');
+
+  expect(helperBlock).toContain('.collection("privateLessonReservations")');
+  expect(helperBlock).toContain('.collection("studentPackages")');
+  expect(helperBlock).toContain('.collection("creditTransactions")');
+  expect(helperBlock).toContain('transaction.update(packageRef');
+  expect(helperBlock).toContain('transaction.update(reservationRef');
+  expect(helperBlock).toContain('transaction.set(creditRef');
+  expect(helperBlock).toContain('deductionApplied === true');
+  expect(helperBlock).toContain('creditSnap.exists');
+  expect(helperBlock).toContain('private_reservation_completed_deduct');
+  expect(helperBlock).toContain('private_reservation_no_show_deduct');
+
+  expect(functionsSource).not.toContain('exports.previewPrivateLessonOutcomeAction');
+  expect(functionsSource).not.toContain('exports.commitPrivateLessonOutcomeAction');
+  expect(reverseBlock).not.toContain('applyPrivateReservationOutcomeWithDeductionInTransaction');
+});
+
+test('private reservation outcome helper extraction keeps protected files unchanged', () => {
+  const protectedPaths = [
+    'Dashboard.jsx',
+    'src/features/dashboard/sections/CalendarSection.jsx',
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'firestore.rules',
+    'package.json',
+    'package-lock.json',
+    'functions/package.json',
+    'functions/package-lock.json',
+    'StudentBookingPage.jsx',
+    'index.css',
+  ];
+  const changedProtectedFiles = execFileSync(
+    'git',
+    ['diff', '--name-only', '--', ...protectedPaths],
+    { cwd: process.cwd(), encoding: 'utf8' }
+  )
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  expect(changedProtectedFiles).toEqual([]);
+});
 
 test.describe('private reservation admin outcome deduction', () => {
   test.describe.configure({ mode: 'serial' });
