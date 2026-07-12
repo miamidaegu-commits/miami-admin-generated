@@ -68,6 +68,47 @@ function ListBlock({ title, items }) {
   )
 }
 
+function getOutcomeCommitErrorGuidance(error) {
+  const searchable = [
+    error?.code,
+    error?.message,
+    ...(Array.isArray(error?.blockedReasons) ? error.blockedReasons : []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  const guidanceByMarker = [
+    {
+      markers: ['preview_stale', 'stale preview', 'planhash'],
+      message:
+        'stale preview / planHash mismatch: 예약 또는 수강권 상태가 바뀌었습니다. 두 미리보기를 다시 실행하세요.',
+    },
+    {
+      markers: ['request_id_conflict', 'payloadhash', 'already-exists'],
+      message:
+        'payloadHash conflict: 같은 requestId에 다른 payload를 사용할 수 없습니다. 새 미리보기부터 시작하세요.',
+    },
+    {
+      markers: ['reservation', 'reservation changed'],
+      message: 'reservation changed: 예약 최신 상태를 다시 불러온 뒤 두 미리보기를 다시 실행하세요.',
+    },
+    {
+      markers: ['package', 'package changed'],
+      message: 'package changed: 수강권 최신 상태를 기준으로 차감 포함 미리보기를 다시 실행하세요.',
+    },
+    {
+      markers: ['credit_transaction', 'credit transaction already exists'],
+      message:
+        'credit transaction already exists / duplicate deduction: 기존 차감 기록을 확인하고 재실행하지 마세요.',
+    },
+  ]
+  return (
+    guidanceByMarker.find(({ markers }) => markers.some((marker) => searchable.includes(marker)))
+      ?.message ||
+    '서버가 현재 상태에서 처리를 거부했습니다. 오류 진단을 확인하고 두 미리보기를 다시 실행하세요.'
+  )
+}
+
 export default function PrivateLessonStatusActionModal({
   target,
   actionType,
@@ -82,11 +123,17 @@ export default function PrivateLessonStatusActionModal({
   outcomePreviewResult,
   outcomePreviewPayload,
   outcomePreviewPlanHash,
+  outcomeCommitBusy,
+  outcomeCommitError,
+  outcomeCommitResult,
+  outcomeCommitConfirmed,
+  setOutcomeCommitConfirmed,
   commitBusy,
   commitError,
   commitResult,
   onPreview,
   onOutcomePreview,
+  onOutcomeCommit,
   onCommit,
   onClose,
 }) {
@@ -118,7 +165,9 @@ export default function PrivateLessonStatusActionModal({
     ['complete', 'no_show'].includes(actionType) &&
     Boolean(reservationId) &&
     isAdmin === true &&
-    !outcomePreviewBusy
+    !outcomePreviewBusy &&
+    !outcomeCommitBusy &&
+    !outcomeCommitResult
   const outcomePackageImpact = outcomePreviewResult?.packageImpact || {}
   const outcomeCreditTransactionPreview = outcomePreviewResult?.creditTransactionPreview || {}
   const outcomePreviewBlocked =
@@ -126,13 +175,50 @@ export default function PrivateLessonStatusActionModal({
     (outcomePreviewResult.ok !== true ||
       outcomePreviewResult.allowed !== true ||
       outcomeBlockedReasons.length > 0)
+  const outcomePreviewRequestId = String(outcomePreviewPayload?.requestId || '').trim()
+  const outcomePreviewTargetReservationId = String(
+    outcomePreviewResult?.target?.reservation?.id ||
+      outcomePreviewResult?.normalizedPlan?.reservationId ||
+      ''
+  ).trim()
+  const outcomePreviewMatchesCurrentTargetAndAction =
+    Boolean(outcomePreviewRequestId) &&
+    outcomePreviewPayload?.reservationId === reservationId &&
+    outcomePreviewPayload?.actionType === actionType &&
+    outcomePreviewResult?.requestId === outcomePreviewRequestId &&
+    outcomePreviewResult?.actionType === actionType &&
+    String(outcomePreviewResult?.planHash || '').trim() ===
+      String(outcomePreviewPlanHash || '').trim() &&
+    (!outcomePreviewTargetReservationId || outcomePreviewTargetReservationId === reservationId)
+  const outcomePreviewPassed =
+    Boolean(outcomePreviewResult) &&
+    outcomePreviewResult.ok === true &&
+    outcomePreviewResult.allowed === true &&
+    outcomeBlockedReasons.length === 0 &&
+    outcomeCreditTransactionPreview.duplicateExists !== true &&
+    Boolean(outcomePackageImpact?.packageId) &&
+    Boolean(outcomePreviewPlanHash) &&
+    outcomePreviewMatchesCurrentTargetAndAction
+  const showOutcomeCommitConfirmation =
+    hasPackageOrCreditWriteRequirement && outcomePreviewPassed
+  const outcomeCommitDisabled =
+    !outcomePreviewPassed ||
+    !outcomeCommitConfirmed ||
+    previewBusy ||
+    outcomePreviewBusy ||
+    outcomeCommitBusy ||
+    commitBusy ||
+    Boolean(outcomeCommitResult)
   const commitDisabled =
     !previewPassed ||
     !previewPayload ||
     !commitConfirmed ||
     previewBusy ||
+    outcomePreviewBusy ||
+    outcomeCommitBusy ||
     commitBusy ||
-    Boolean(commitResult)
+    Boolean(commitResult) ||
+    Boolean(outcomeCommitResult)
 
   return (
     <div
@@ -145,6 +231,7 @@ export default function PrivateLessonStatusActionModal({
           event.target === event.currentTarget &&
           !previewBusy &&
           !outcomePreviewBusy &&
+          !outcomeCommitBusy &&
           !commitBusy
         ) {
           onClose?.()
@@ -180,14 +267,14 @@ export default function PrivateLessonStatusActionModal({
               개인 수업 처리 미리보기
             </h2>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 14 }}>
-              아직 저장하지 않습니다. 서버 기준으로 수업완료/노쇼 처리 가능 여부만
-              확인합니다. 실제 처리는 다음 단계에서 제공합니다.
+              먼저 서버 기준 처리 가능 여부를 확인합니다. 차감 포함 미리보기를 통과한 예약은
+              별도 최종 확인 후 실제 처리할 수 있습니다.
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            disabled={previewBusy || outcomePreviewBusy || commitBusy}
+            disabled={previewBusy || outcomePreviewBusy || outcomeCommitBusy || commitBusy}
             aria-label="닫기"
             style={{
               height: 34,
@@ -195,7 +282,10 @@ export default function PrivateLessonStatusActionModal({
               border: '1px solid #3b4254',
               background: '#222938',
               color: 'white',
-              cursor: previewBusy || outcomePreviewBusy || commitBusy ? 'not-allowed' : 'pointer',
+              cursor:
+                previewBusy || outcomePreviewBusy || outcomeCommitBusy || commitBusy
+                  ? 'not-allowed'
+                  : 'pointer',
             }}
           >
             닫기
@@ -237,7 +327,12 @@ export default function PrivateLessonStatusActionModal({
                 setActionType?.('complete')
               }}
               disabled={
-                previewBusy || outcomePreviewBusy || commitBusy || Boolean(commitResult)
+                previewBusy ||
+                outcomePreviewBusy ||
+                outcomeCommitBusy ||
+                commitBusy ||
+                Boolean(commitResult) ||
+                Boolean(outcomeCommitResult)
               }
               data-testid="private-lesson-status-action-type-complete"
             />
@@ -254,7 +349,12 @@ export default function PrivateLessonStatusActionModal({
                 setActionType?.('no_show')
               }}
               disabled={
-                previewBusy || outcomePreviewBusy || commitBusy || Boolean(commitResult)
+                previewBusy ||
+                outcomePreviewBusy ||
+                outcomeCommitBusy ||
+                commitBusy ||
+                Boolean(commitResult) ||
+                Boolean(outcomeCommitResult)
               }
               data-testid="private-lesson-status-action-type-no-show"
             />
@@ -272,8 +372,10 @@ export default function PrivateLessonStatusActionModal({
             disabled={
               previewBusy ||
               outcomePreviewBusy ||
+              outcomeCommitBusy ||
               commitBusy ||
               Boolean(commitResult) ||
+              Boolean(outcomeCommitResult) ||
               !actionType
             }
             data-testid="private-lesson-status-action-preview-submit"
@@ -285,7 +387,13 @@ export default function PrivateLessonStatusActionModal({
               color: 'white',
               fontWeight: 700,
               cursor:
-                previewBusy || outcomePreviewBusy || commitBusy || commitResult || !actionType
+                previewBusy ||
+                outcomePreviewBusy ||
+                outcomeCommitBusy ||
+                commitBusy ||
+                commitResult ||
+                outcomeCommitResult ||
+                !actionType
                   ? 'not-allowed'
                   : 'pointer',
             }}
@@ -332,7 +440,13 @@ export default function PrivateLessonStatusActionModal({
             <button
               type="button"
               onClick={onOutcomePreview}
-              disabled={outcomePreviewBusy}
+              disabled={
+                previewBusy ||
+                outcomePreviewBusy ||
+                outcomeCommitBusy ||
+                commitBusy ||
+                Boolean(outcomeCommitResult)
+              }
               data-testid="private-lesson-outcome-preview-button"
               style={{
                 marginTop: 12,
@@ -342,7 +456,14 @@ export default function PrivateLessonStatusActionModal({
                 background: '#4b3515',
                 color: 'white',
                 fontWeight: 700,
-                cursor: outcomePreviewBusy ? 'not-allowed' : 'pointer',
+                cursor:
+                  previewBusy ||
+                  outcomePreviewBusy ||
+                  outcomeCommitBusy ||
+                  commitBusy ||
+                  outcomeCommitResult
+                    ? 'not-allowed'
+                    : 'pointer',
               }}
             >
               차감 포함 미리보기
@@ -499,6 +620,66 @@ export default function PrivateLessonStatusActionModal({
           </section>
         ) : null}
 
+        {showOutcomeCommitConfirmation ? (
+          <section
+            data-testid="private-lesson-outcome-commit-confirm"
+            style={{
+              marginTop: 16,
+              border: '1px solid #9b7433',
+              borderRadius: 12,
+              background: '#2a2415',
+              padding: 14,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 15 }}>차감 포함 실제 처리 전 최종 확인</h3>
+            <p style={{ margin: '8px 0 0 0', color: '#ffe1a8', fontSize: 13, lineHeight: 1.55 }}>
+              실제 처리하면 예약 상태가 변경되고, 수강권 1회가 차감되며, 차감 기록이
+              생성됩니다.
+            </p>
+            <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+              같은 요청을 반복해서 누르지 마세요. 처리 결과가 나타날 때까지 창을 닫지 마세요.
+            </p>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                marginTop: 12,
+                fontSize: 13,
+                lineHeight: 1.45,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={outcomeCommitConfirmed === true}
+                onChange={(event) => setOutcomeCommitConfirmed?.(event.target.checked)}
+                disabled={outcomeCommitBusy || Boolean(outcomeCommitResult)}
+                data-testid="private-lesson-outcome-commit-checkbox"
+              />
+              위 변경 내용을 확인했습니다.
+            </label>
+            <button
+              type="button"
+              onClick={onOutcomeCommit}
+              disabled={outcomeCommitDisabled}
+              data-testid="private-lesson-outcome-commit-button"
+              style={{
+                marginTop: 12,
+                padding: '9px 14px',
+                borderRadius: 10,
+                border: '1px solid #a96d44',
+                background: '#57311d',
+                color: 'white',
+                fontWeight: 700,
+                cursor: outcomeCommitDisabled ? 'not-allowed' : 'pointer',
+                opacity: outcomeCommitDisabled ? 0.68 : 1,
+              }}
+            >
+              {outcomeCommitBusy ? '차감 포함 실제 처리 중...' : '차감 포함 수업 처리'}
+            </button>
+          </section>
+        ) : null}
+
         {preview ? (
           <section
             data-testid="private-lesson-status-action-preview-result"
@@ -549,68 +730,86 @@ export default function PrivateLessonStatusActionModal({
 
             <FieldBlock label="nextStep" value={preview.nextStep} />
 
-            <section
-              data-testid="private-lesson-status-action-final-confirmation"
-              style={{
-                border: previewPassed ? '1px solid #3c7a5f' : '1px solid #665044',
-                borderRadius: 12,
-                background: previewPassed ? '#12251a' : '#252016',
-                padding: 14,
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: 15 }}>실제 처리 전 최종 확인</h3>
-              <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13, lineHeight: 1.5 }}>
-                실제 처리 버튼을 누르면 예약 상태가 {ACTION_LABELS[actionType] || actionType}로
-                저장됩니다. 차감취소/차감복구/완료취소는 이번 단계에 포함하지 않습니다.
-              </p>
-              <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
-                {'같은 요청을 반복해서 누르지 마세요. 변경이 필요하면 서버 기준 미리보기를 다시 실행하세요.'}
-              </p>
-              {!previewPassed ? (
+            {hasPackageOrCreditWriteRequirement ? (
+              <section
+                data-testid="private-lesson-status-action-final-confirmation"
+                style={{
+                  border: '1px solid #665044',
+                  borderRadius: 12,
+                  background: '#252016',
+                  padding: 14,
+                }}
+              >
+                <h3 style={{ margin: 0, fontSize: 15 }}>상태만 처리 경로</h3>
                 <p style={{ margin: '8px 0 0 0', color: '#ffd2a8', fontSize: 13 }}>
-                  서버 미리보기를 통과하고 처리 차단 사유가 없어야 실제 처리를 실행할 수
-                  있습니다.
+                  수강권 차감이 필요하여 사용할 수 없습니다. 차감 포함 미리보기와 전용 최종
+                  확인을 사용하세요.
                 </p>
-              ) : null}
-              <label
+              </section>
+            ) : (
+              <section
+                data-testid="private-lesson-status-action-final-confirmation"
                 style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: 8,
-                  marginTop: 12,
-                  fontSize: 13,
-                  lineHeight: 1.45,
+                  border: previewPassed ? '1px solid #3c7a5f' : '1px solid #665044',
+                  borderRadius: 12,
+                  background: previewPassed ? '#12251a' : '#252016',
+                  padding: 14,
                 }}
               >
-                <input
-                  type="checkbox"
-                  checked={commitConfirmed}
-                  onChange={(event) => setCommitConfirmed(event.target.checked)}
-                  disabled={!previewPassed || commitBusy || Boolean(commitResult)}
-                  data-testid="private-lesson-status-action-commit-confirm"
-                />
-                이 미리보기 결과로 실제 수업 상태를 처리합니다.
-              </label>
-              <button
-                type="button"
-                onClick={onCommit}
-                disabled={commitDisabled}
-                data-testid="private-lesson-status-action-commit-button"
-                style={{
-                  marginTop: 12,
-                  padding: '9px 14px',
-                  borderRadius: 10,
-                  border: '1px solid #7a513c',
-                  background: '#3a241d',
-                  color: 'white',
-                  fontWeight: 700,
-                  cursor: commitDisabled ? 'not-allowed' : 'pointer',
-                  opacity: commitDisabled ? 0.68 : 1,
-                }}
-              >
-                {commitBusy ? '실제 처리 중...' : '위 내용으로 수업 처리'}
-              </button>
-            </section>
+                <h3 style={{ margin: 0, fontSize: 15 }}>실제 처리 전 최종 확인</h3>
+                <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13, lineHeight: 1.5 }}>
+                  실제 처리 버튼을 누르면 예약 상태가 {ACTION_LABELS[actionType] || actionType}로
+                  저장됩니다. 차감취소/차감복구/완료취소는 이번 단계에 포함하지 않습니다.
+                </p>
+                <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
+                  {'같은 요청을 반복해서 누르지 마세요. 변경이 필요하면 서버 기준 미리보기를 다시 실행하세요.'}
+                </p>
+                {!previewPassed ? (
+                  <p style={{ margin: '8px 0 0 0', color: '#ffd2a8', fontSize: 13 }}>
+                    서버 미리보기를 통과하고 처리 차단 사유가 없어야 실제 처리를 실행할 수
+                    있습니다.
+                  </p>
+                ) : null}
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    marginTop: 12,
+                    fontSize: 13,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={commitConfirmed}
+                    onChange={(event) => setCommitConfirmed(event.target.checked)}
+                    disabled={!previewPassed || commitBusy || Boolean(commitResult)}
+                    data-testid="private-lesson-status-action-commit-confirm"
+                  />
+                  이 미리보기 결과로 실제 수업 상태를 처리합니다.
+                </label>
+                <button
+                  type="button"
+                  onClick={onCommit}
+                  disabled={commitDisabled}
+                  data-testid="private-lesson-status-action-commit-button"
+                  style={{
+                    marginTop: 12,
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    border: '1px solid #7a513c',
+                    background: '#3a241d',
+                    color: 'white',
+                    fontWeight: 700,
+                    cursor: commitDisabled ? 'not-allowed' : 'pointer',
+                    opacity: commitDisabled ? 0.68 : 1,
+                  }}
+                >
+                  {commitBusy ? '실제 처리 중...' : '위 내용으로 수업 처리'}
+                </button>
+              </section>
+            )}
           </section>
         ) : null}
 
@@ -662,6 +861,132 @@ export default function PrivateLessonStatusActionModal({
               <FieldBlock label="normalizedPlan" value={commitResult.normalizedPlan} />
               <FieldBlock label="nextStep" value={commitResult.nextStep} />
             </div>
+          </section>
+        ) : null}
+
+        {outcomeCommitError ? (
+          <section
+            data-testid="private-lesson-outcome-commit-error"
+            style={{
+              marginTop: 14,
+              display: 'grid',
+              gap: 12,
+              border: '1px solid #8d4444',
+              borderRadius: 12,
+              background: '#2a1719',
+              padding: 14,
+              color: '#ffc9c9',
+            }}
+          >
+            <div>
+              <strong>차감 포함 실제 처리 실패</strong>
+              <p style={{ margin: '8px 0 0 0' }}>{outcomeCommitError.message}</p>
+              <p style={{ margin: '8px 0 0 0', fontSize: 13, lineHeight: 1.5 }}>
+                {getOutcomeCommitErrorGuidance(outcomeCommitError)}
+              </p>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13, lineHeight: 1.5 }}>
+                같은 요청을 다시 클릭하지 마세요. 서버 기준 미리보기와 차감 포함 미리보기를
+                다시 실행하세요.
+              </p>
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 10,
+              }}
+            >
+              <FieldBlock
+                label="message / code"
+                value={{ message: outcomeCommitError.message, code: outcomeCommitError.code }}
+              />
+              <FieldBlock
+                label="requestId / planHash"
+                value={{
+                  requestId: outcomeCommitError.requestId,
+                  planHash: outcomeCommitError.planHash,
+                  actualPlanHash: outcomeCommitError.actualPlanHash,
+                }}
+              />
+              <FieldBlock label="currentState" value={outcomeCommitError.currentState} />
+              <FieldBlock label="packageImpact" value={outcomeCommitError.packageImpact} />
+              <FieldBlock
+                label="creditTransactionPreview"
+                value={outcomeCommitError.creditTransactionPreview}
+              />
+              <FieldBlock label="normalizedPlan" value={outcomeCommitError.normalizedPlan} />
+              <FieldBlock
+                label="statusOnlyPolicy / diagnostics"
+                value={{
+                  statusOnlyPolicy: outcomeCommitError.statusOnlyPolicy,
+                  proposedState: outcomeCommitError.proposedState,
+                }}
+              />
+            </div>
+            <ListBlock
+              title="차감 포함 실제 처리 차단 사유"
+              items={outcomeCommitError.blockedReasons}
+            />
+          </section>
+        ) : null}
+
+        {outcomeCommitResult ? (
+          <section
+            data-testid="private-lesson-outcome-commit-result"
+            style={{
+              marginTop: 14,
+              display: 'grid',
+              gap: 12,
+              border: '1px solid #3c7a5f',
+              borderRadius: 12,
+              background: '#14251c',
+              padding: 14,
+            }}
+          >
+            <div>
+              <strong>차감 포함 실제 처리가 완료되었습니다</strong>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+                committed: {outcomeCommitResult.committed === true ? 'true' : 'false'}
+                {' · '}batchId: {outcomeCommitResult.batchId || '-'}
+                {' · '}idempotentReplay:{' '}
+                {outcomeCommitResult.idempotentReplay === true ? 'true' : 'false'}
+              </p>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+                actionType: {outcomeCommitResult.actionType || actionType}
+                {' · '}normalizedOutcome: {outcomeCommitResult.normalizedOutcome || '-'}
+                {' · '}reservationId: {outcomePreviewPayload?.reservationId || reservationId || '-'}
+              </p>
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 10,
+              }}
+            >
+              <FieldBlock label="packageId" value={outcomeCommitResult.packageId} />
+              <FieldBlock
+                label="creditTransactionId"
+                value={outcomeCommitResult.creditTransactionId}
+              />
+              <FieldBlock
+                label="usedCountDelta / remainingCountDelta"
+                value={{
+                  usedCountDelta: outcomePackageImpact.usedCountDelta,
+                  remainingCountDelta: outcomePackageImpact.remainingCountDelta,
+                }}
+              />
+              <FieldBlock
+                label="updated reservation/package/credit transaction"
+                value={outcomeCommitResult.updated}
+              />
+              <FieldBlock label="normalizedPlan" value={outcomeCommitResult.normalizedPlan} />
+              <FieldBlock label="nextStep" value={outcomeCommitResult.nextStep} />
+            </div>
+            <p style={{ margin: 0, opacity: 0.82, fontSize: 13, lineHeight: 1.5 }}>
+              이 요청은 잠겼습니다. 새 작업은 창을 닫은 뒤 시작하세요. 목록이 즉시 갱신되지
+              않으면 새로고침하세요.
+            </p>
           </section>
         ) : null}
       </section>
