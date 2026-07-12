@@ -1402,6 +1402,12 @@ export default function Dashboard() {
   const [privateLessonOutcomePreviewResult, setPrivateLessonOutcomePreviewResult] = useState(null)
   const [privateLessonOutcomePreviewPayload, setPrivateLessonOutcomePreviewPayload] = useState(null)
   const [privateLessonOutcomePreviewPlanHash, setPrivateLessonOutcomePreviewPlanHash] = useState('')
+  const [privateLessonOutcomeCommitBusy, setPrivateLessonOutcomeCommitBusy] = useState(false)
+  const [privateLessonOutcomeCommitError, setPrivateLessonOutcomeCommitError] = useState(null)
+  const [privateLessonOutcomeCommitResult, setPrivateLessonOutcomeCommitResult] = useState(null)
+  const [privateLessonOutcomeCommitConfirmed, setPrivateLessonOutcomeCommitConfirmed] =
+    useState(false)
+  const privateLessonOutcomeCommitBusyRef = useRef(false)
   const [privateLessonStatusActionCommitBusy, setPrivateLessonStatusActionCommitBusy] =
     useState(false)
   const [privateLessonStatusActionCommitError, setPrivateLessonStatusActionCommitError] =
@@ -3983,6 +3989,7 @@ export default function Dashboard() {
   )
 
   useEffect(() => {
+    if (privateLessonOutcomeCommitBusyRef.current) return
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
     setPrivateLessonStatusActionPreview(null)
@@ -3994,6 +4001,10 @@ export default function Dashboard() {
     setPrivateLessonOutcomePreviewResult(null)
     setPrivateLessonOutcomePreviewPayload(null)
     setPrivateLessonOutcomePreviewPlanHash('')
+    setPrivateLessonOutcomeCommitBusy(false)
+    setPrivateLessonOutcomeCommitError(null)
+    setPrivateLessonOutcomeCommitResult(null)
+    setPrivateLessonOutcomeCommitConfirmed(false)
     setPrivateLessonStatusActionCommitBusy(false)
     setPrivateLessonStatusActionCommitError('')
     setPrivateLessonStatusActionCommitResult(null)
@@ -6581,7 +6592,16 @@ export default function Dashboard() {
     setPrivateLessonStatusActionCommitResult(null)
   }
 
+  function clearPrivateLessonOutcomeCommitState() {
+    if (privateLessonOutcomeCommitBusyRef.current) return
+    setPrivateLessonOutcomeCommitBusy(false)
+    setPrivateLessonOutcomeCommitError(null)
+    setPrivateLessonOutcomeCommitResult(null)
+    setPrivateLessonOutcomeCommitConfirmed(false)
+  }
+
   function clearPrivateLessonOutcomePreview() {
+    clearPrivateLessonOutcomeCommitState()
     setPrivateLessonOutcomePreviewBusy(false)
     setPrivateLessonOutcomePreviewError('')
     setPrivateLessonOutcomePreviewResult(null)
@@ -6598,7 +6618,7 @@ export default function Dashboard() {
   }
 
   function openPrivateLessonStatusActionPreview(target) {
-    if (!isAdmin || !target) return
+    if (!isAdmin || !target || privateLessonOutcomeCommitBusyRef.current) return
     setPrivateLessonStatusActionTarget(target)
     setPrivateLessonStatusActionMode('complete')
     clearPrivateLessonStatusActionPreview()
@@ -6608,6 +6628,7 @@ export default function Dashboard() {
     if (
       privateLessonStatusActionPreviewBusy ||
       privateLessonOutcomePreviewBusy ||
+      privateLessonOutcomeCommitBusy ||
       privateLessonStatusActionCommitBusy
     ) {
       return
@@ -6618,6 +6639,7 @@ export default function Dashboard() {
   }
 
   function selectPrivateLessonStatusActionMode(actionType) {
+    if (privateLessonOutcomeCommitBusyRef.current || privateLessonOutcomeCommitResult) return
     const safeActionType = actionType === 'no_show' ? 'no_show' : 'complete'
     setPrivateLessonStatusActionMode(safeActionType)
     clearPrivateLessonStatusActionPreview()
@@ -6627,6 +6649,8 @@ export default function Dashboard() {
     if (
       privateLessonStatusActionPreviewBusy ||
       privateLessonOutcomePreviewBusy ||
+      privateLessonOutcomeCommitBusy ||
+      privateLessonOutcomeCommitResult ||
       privateLessonStatusActionCommitBusy
     ) {
       return
@@ -6696,6 +6720,8 @@ export default function Dashboard() {
     if (
       privateLessonOutcomePreviewBusy ||
       privateLessonStatusActionPreviewBusy ||
+      privateLessonOutcomeCommitBusy ||
+      privateLessonOutcomeCommitResult ||
       privateLessonStatusActionCommitBusy
     ) {
       return
@@ -8256,7 +8282,13 @@ export default function Dashboard() {
   }
 
   async function commitPrivateLessonStatusActionOnServer() {
-    if (privateLessonStatusActionCommitBusy || privateLessonStatusActionCommitResult) return
+    if (
+      privateLessonStatusActionCommitBusy ||
+      privateLessonStatusActionCommitResult ||
+      privateLessonOutcomeCommitBusy
+    ) {
+      return
+    }
 
     try {
       if (!isAdmin) {
@@ -8319,6 +8351,134 @@ export default function Dashboard() {
     }
   }
 
+  async function commitPrivateLessonOutcomeActionOnServer() {
+    if (privateLessonOutcomeCommitBusy || privateLessonOutcomeCommitResult) return
+
+    const previewData = privateLessonOutcomePreviewResult || {}
+    const previewPayload = privateLessonOutcomePreviewPayload || {}
+    const planHash = String(privateLessonOutcomePreviewPlanHash || '').trim()
+    const requestId = String(previewPayload.requestId || '').trim()
+    const previewBlockedReasons = Array.isArray(previewData.blockedReasons)
+      ? previewData.blockedReasons
+      : []
+    const creditTransactionPreview = previewData.creditTransactionPreview || {}
+    const packageImpact = previewData.packageImpact
+    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const target = privateLessonStatusActionTarget || {}
+    const reservationId = String(
+      target.reservationId || target.privateReservationId || target.id || ''
+    ).trim()
+
+    try {
+      if (!isAdmin) {
+        throw new Error('차감 포함 실제 처리 권한이 없습니다.')
+      }
+      if (!reservationId) {
+        throw new Error('차감 포함 실제 처리에 사용할 예약 ID가 없습니다.')
+      }
+      if (!['complete', 'no_show'].includes(actionType)) {
+        throw new Error('차감 포함 실제 처리 유형이 올바르지 않습니다.')
+      }
+      if (!privateLessonOutcomePreviewResult) {
+        throw new Error('차감 포함 실제 처리에 사용할 미리보기 결과가 없습니다.')
+      }
+      if (!privateLessonOutcomePreviewPayload) {
+        throw new Error('차감 포함 실제 처리에 사용할 미리보기 payload가 없습니다.')
+      }
+      if (!requestId) {
+        throw new Error('차감 포함 미리보기 requestId가 없습니다.')
+      }
+      if (!planHash) {
+        throw new Error('차감 포함 미리보기 planHash가 없습니다.')
+      }
+      if (previewData.ok !== true || previewData.allowed !== true) {
+        throw new Error('차감 포함 미리보기를 통과한 결과만 실제 처리할 수 있습니다.')
+      }
+      if (previewBlockedReasons.length > 0) {
+        throw new Error('차감 포함 처리 차단 사유가 있는 수업은 실제 처리할 수 없습니다.')
+      }
+      if (creditTransactionPreview.duplicateExists === true) {
+        throw new Error('이미 존재하는 차감 기록이 있어 실제 처리를 실행할 수 없습니다.')
+      }
+      if (!packageImpact || typeof packageImpact !== 'object' || !packageImpact.packageId) {
+        throw new Error('차감 포함 실제 처리에 사용할 수강권 변경 계획이 없습니다.')
+      }
+      if (!privateLessonOutcomeCommitConfirmed) {
+        throw new Error('차감 포함 실제 처리 전 최종 확인이 필요합니다.')
+      }
+      if (previewPayload.reservationId !== reservationId) {
+        throw new Error('현재 예약과 차감 포함 미리보기 대상이 일치하지 않습니다.')
+      }
+      if (previewPayload.actionType !== actionType || previewData.actionType !== actionType) {
+        throw new Error('현재 처리 유형과 차감 포함 미리보기 유형이 일치하지 않습니다.')
+      }
+      if (previewData.requestId !== requestId) {
+        throw new Error('차감 포함 미리보기 requestId가 payload와 일치하지 않습니다.')
+      }
+      if (String(previewData.planHash || '').trim() !== planHash) {
+        throw new Error('차감 포함 미리보기 planHash가 결과와 일치하지 않습니다.')
+      }
+      const previewTargetReservationId = String(
+        previewData.target?.reservation?.id || previewData.normalizedPlan?.reservationId || ''
+      ).trim()
+      if (previewTargetReservationId && previewTargetReservationId !== reservationId) {
+        throw new Error('차감 포함 미리보기 결과의 예약 대상이 현재 예약과 일치하지 않습니다.')
+      }
+
+      const payload = {
+        ...privateLessonOutcomePreviewPayload,
+        planHash: privateLessonOutcomePreviewPlanHash,
+        commit: true,
+        dryRun: false,
+        previewOnly: false,
+      }
+
+      privateLessonOutcomeCommitBusyRef.current = true
+      setPrivateLessonOutcomeCommitBusy(true)
+      setPrivateLessonOutcomeCommitError(null)
+      setPrivateLessonOutcomeCommitResult(null)
+      const callable = httpsCallable(firebaseFunctions, 'commitPrivateLessonOutcomeAction')
+      const result = await callable(payload)
+      const commitData = result?.data || null
+      if (
+        commitData?.ok !== true ||
+        commitData?.committed !== true ||
+        commitData?.dryRun !== false ||
+        commitData?.previewOnly !== false ||
+        commitData?.requestId !== requestId ||
+        commitData?.actionType !== actionType
+      ) {
+        throw new Error('서버 차감 포함 실제 처리 결과가 유효하지 않습니다.')
+      }
+      setPrivateLessonOutcomeCommitResult(commitData)
+    } catch (error) {
+      console.error('개인 수업 차감 포함 실제 처리 실패:', error)
+      const details =
+        error?.details && typeof error.details === 'object' && !Array.isArray(error.details)
+          ? error.details
+          : {}
+      setPrivateLessonOutcomeCommitResult(null)
+      setPrivateLessonOutcomeCommitError({
+        message: error?.message || '개인 수업 차감 포함 실제 처리에 실패했습니다.',
+        code: String(error?.code || ''),
+        blockedReasons: Array.isArray(details.blockedReasons) ? details.blockedReasons : [],
+        requestId: String(details.requestId || requestId),
+        planHash: String(details.planHash || planHash),
+        actualPlanHash: String(details.actualPlanHash || ''),
+        currentState: details.currentState || {},
+        proposedState: details.proposedState || {},
+        packageImpact: details.packageImpact || packageImpact || {},
+        creditTransactionPreview:
+          details.creditTransactionPreview || creditTransactionPreview || {},
+        normalizedPlan: details.normalizedPlan || previewData.normalizedPlan || {},
+        statusOnlyPolicy: details.statusOnlyPolicy || {},
+      })
+    } finally {
+      privateLessonOutcomeCommitBusyRef.current = false
+      setPrivateLessonOutcomeCommitBusy(false)
+    }
+  }
+
   const privateLessonStatusActionModalProps = {
     target: privateLessonStatusActionTarget,
     actionType: privateLessonStatusActionMode,
@@ -8333,11 +8493,17 @@ export default function Dashboard() {
     outcomePreviewResult: privateLessonOutcomePreviewResult,
     outcomePreviewPayload: privateLessonOutcomePreviewPayload,
     outcomePreviewPlanHash: privateLessonOutcomePreviewPlanHash,
+    outcomeCommitBusy: privateLessonOutcomeCommitBusy,
+    outcomeCommitError: privateLessonOutcomeCommitError,
+    outcomeCommitResult: privateLessonOutcomeCommitResult,
+    outcomeCommitConfirmed: privateLessonOutcomeCommitConfirmed,
+    setOutcomeCommitConfirmed: setPrivateLessonOutcomeCommitConfirmed,
     commitBusy: privateLessonStatusActionCommitBusy,
     commitError: privateLessonStatusActionCommitError,
     commitResult: privateLessonStatusActionCommitResult,
     onPreview: previewPrivateLessonStatusActionOnServer,
     onOutcomePreview: previewPrivateLessonOutcomeActionOnServer,
+    onOutcomeCommit: commitPrivateLessonOutcomeActionOnServer,
     onCommit: commitPrivateLessonStatusActionOnServer,
     onClose: closePrivateLessonStatusActionPreview,
   }

@@ -349,20 +349,20 @@ test('deduction-aware outcome preview UI is wired from the blocked status previe
   });
 });
 
-test('deduction-aware outcome preview UI has no write or outcome commit path', () => {
+test('outcome preview stays read-only and outcome commit uses only its callable', () => {
   const dashboardSource = readSource('Dashboard.jsx');
   const modalSource = readSource(
     'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
   );
-  const handlerBlock = boundedSource(
+  const previewHandlerBlock = boundedSource(
     dashboardSource,
     'async function previewPrivateLessonOutcomeActionOnServer()',
     'const studentsSectionProps = {'
   );
-  const modalOutcomeBlock = boundedSource(
-    modalSource,
-    'const showOutcomePreviewEntry =',
-    '{preview ? ('
+  const commitHandlerBlock = boundedSource(
+    dashboardSource,
+    'async function commitPrivateLessonOutcomeActionOnServer()',
+    'const privateLessonStatusActionModalProps = {'
   );
 
   [
@@ -381,13 +381,135 @@ test('deduction-aware outcome preview UI has no write or outcome commit path', (
     'dryRun: false',
     'previewOnly: false',
   ].forEach((token) => {
-    expect(handlerBlock).not.toContain(token);
-    expect(modalOutcomeBlock).not.toContain(token);
+    expect(previewHandlerBlock).not.toContain(token);
   });
 
-  expect(handlerBlock).toContain('previewPrivateLessonOutcomeAction');
-  expect(handlerBlock).toContain('commit: false');
-  expect(modalOutcomeBlock).not.toContain('private-lesson-outcome-commit-button');
+  expect(previewHandlerBlock).toContain('previewPrivateLessonOutcomeAction');
+  expect(previewHandlerBlock).toContain('commit: false');
+  [
+    'markPrivateReservationOutcome',
+    'writeBatch',
+    'runTransaction',
+    'setDoc',
+    'addDoc',
+    'updateDoc',
+    'deleteDoc',
+    'transaction.set',
+    'transaction.update',
+    'transaction.create',
+    'commitPrivateLessonStatusAction',
+    'previewPrivateLessonOutcomeAction',
+    'previewPrivateLessonStatusAction',
+  ].forEach((token) => {
+    expect(commitHandlerBlock).not.toContain(token);
+  });
+  expect(commitHandlerBlock).toContain(
+    "httpsCallable(firebaseFunctions, 'commitPrivateLessonOutcomeAction')"
+  );
+  expect((commitHandlerBlock.match(/httpsCallable\(/g) || []).length).toBe(1);
+});
+
+test('deduction-aware outcome commit reuses the exact preview identity and plan', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const commitHandlerBlock = boundedSource(
+    dashboardSource,
+    'async function commitPrivateLessonOutcomeActionOnServer()',
+    'const privateLessonStatusActionModalProps = {'
+  );
+
+  [
+    'privateLessonOutcomePreviewPayload',
+    'privateLessonOutcomePreviewPlanHash',
+    '...privateLessonOutcomePreviewPayload',
+    'planHash: privateLessonOutcomePreviewPlanHash',
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+    "['complete', 'no_show'].includes(actionType)",
+    'previewPayload.reservationId !== reservationId',
+    'previewPayload.actionType !== actionType',
+    'previewData.requestId !== requestId',
+    "String(previewData.planHash || '').trim() !== planHash",
+  ].forEach((token) => {
+    expect(commitHandlerBlock).toContain(token);
+  });
+
+  [
+    'Date.now()',
+    'Math.random()',
+    'privateLessonOutcomePreview_',
+    'requestId = `',
+  ].forEach((token) => {
+    expect(commitHandlerBlock).not.toContain(token);
+  });
+});
+
+test('deduction-aware outcome commit has frontend guards and dedicated confirmation UI', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const commitHandlerBlock = boundedSource(
+    dashboardSource,
+    'async function commitPrivateLessonOutcomeActionOnServer()',
+    'const privateLessonStatusActionModalProps = {'
+  );
+  const combinedSource = `${dashboardSource}\n${modalSource}`;
+
+  [
+    'commitPrivateLessonOutcomeActionOnServer',
+    'commitPrivateLessonOutcomeAction',
+    'privateLessonOutcomeCommitBusy',
+    'privateLessonOutcomeCommitError',
+    'privateLessonOutcomeCommitResult',
+    'private-lesson-outcome-commit-confirm',
+    'private-lesson-outcome-commit-checkbox',
+    'private-lesson-outcome-commit-button',
+    '차감 포함 실제 처리 전 최종 확인',
+    '차감 포함 수업 처리',
+    'private-lesson-outcome-commit-result',
+    'private-lesson-outcome-commit-error',
+    'planHash',
+    'idempotentReplay',
+    'batchId',
+    'creditTransactionId',
+    '같은 요청을 반복해서 누르지 마세요',
+    '차감 포함 미리보기를 다시 실행하세요',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  [
+    'if (!isAdmin)',
+    'if (!reservationId)',
+    "['complete', 'no_show'].includes(actionType)",
+    'if (!privateLessonOutcomePreviewResult)',
+    'if (!privateLessonOutcomePreviewPayload)',
+    'if (!requestId)',
+    'if (!planHash)',
+    'previewBlockedReasons.length > 0',
+    'creditTransactionPreview.duplicateExists === true',
+    "!packageImpact || typeof packageImpact !== 'object' || !packageImpact.packageId",
+    'if (!privateLessonOutcomeCommitConfirmed)',
+    'privateLessonOutcomeCommitBusy || privateLessonOutcomeCommitResult',
+  ].forEach((token) => {
+    expect(commitHandlerBlock).toContain(token);
+  });
+
+  [
+    'const outcomePreviewPassed =',
+    'outcomeBlockedReasons.length === 0',
+    'outcomeCreditTransactionPreview.duplicateExists !== true',
+    'Boolean(outcomePackageImpact?.packageId)',
+    'outcomePreviewMatchesCurrentTargetAndAction',
+    'outcomeCommitConfirmed',
+    'Boolean(outcomeCommitResult)',
+    '상태만 처리 경로',
+    '수강권 차감이 필요하여 사용할 수 없습니다',
+    'private-lesson-status-action-commit-button',
+  ].forEach((token) => {
+    expect(modalSource).toContain(token);
+  });
 });
 
 test('outcome preview state clears on every stale boundary and status commit remains guarded', () => {
@@ -400,9 +522,19 @@ test('outcome preview state clears on every stale boundary and status commit rem
     'function clearPrivateLessonOutcomePreview()',
     'async function previewPrivateLessonStatusActionOnServer()'
   );
+  const commitClearBlock = boundedSource(
+    dashboardSource,
+    'function clearPrivateLessonOutcomeCommitState()',
+    'function clearPrivateLessonOutcomePreview()'
+  );
+  const outcomePreviewHandlerBlock = boundedSource(
+    dashboardSource,
+    'async function previewPrivateLessonOutcomeActionOnServer()',
+    'const studentsSectionProps = {'
+  );
   const dateClearBlock = boundedSource(
     dashboardSource,
-    'useEffect(() => {\n    setPrivateLessonStatusActionTarget(null)',
+    'useEffect(() => {\n    if (privateLessonOutcomeCommitBusyRef.current) return',
     'const {\n    groupModal,'
   );
 
@@ -420,11 +552,28 @@ test('outcome preview state clears on every stale boundary and status commit rem
   });
 
   [
+    'privateLessonOutcomeCommitBusyRef.current',
+    'setPrivateLessonOutcomeCommitBusy(false)',
+    'setPrivateLessonOutcomeCommitError(null)',
+    'setPrivateLessonOutcomeCommitResult(null)',
+    'setPrivateLessonOutcomeCommitConfirmed(false)',
+  ].forEach((token) => {
+    expect(commitClearBlock).toContain(token);
+  });
+  expect(clearBlock).toContain('clearPrivateLessonOutcomeCommitState()');
+  expect(outcomePreviewHandlerBlock).toContain('clearPrivateLessonOutcomePreview()');
+
+  [
+    'if (privateLessonOutcomeCommitBusyRef.current) return',
     'setPrivateLessonOutcomePreviewBusy(false)',
     "setPrivateLessonOutcomePreviewError('')",
     'setPrivateLessonOutcomePreviewResult(null)',
     'setPrivateLessonOutcomePreviewPayload(null)',
     "setPrivateLessonOutcomePreviewPlanHash('')",
+    'setPrivateLessonOutcomeCommitBusy(false)',
+    'setPrivateLessonOutcomeCommitError(null)',
+    'setPrivateLessonOutcomeCommitResult(null)',
+    'setPrivateLessonOutcomeCommitConfirmed(false)',
     '[selectedDateString, calendarMonth]',
   ].forEach((token) => {
     expect(dateClearBlock).toContain(token);
@@ -434,6 +583,8 @@ test('outcome preview state clears on every stale boundary and status commit rem
   expect(modalSource).toContain('private-lesson-status-action-commit-button');
   expect(modalSource).toContain('const previewPassed =');
   expect(modalSource).toContain('blockedReasons.length === 0');
+  expect(modalSource).toContain('!outcomeCommitBusy');
+  expect(modalSource).toContain('Boolean(outcomeCommitResult)');
 });
 
 test('outcome preview UI changes stay inside the approved frontend and test scope', () => {
