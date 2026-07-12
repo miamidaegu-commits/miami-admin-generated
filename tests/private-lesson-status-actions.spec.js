@@ -443,11 +443,10 @@ test('private lesson status action admin commit UI is guarded and confirmation g
   });
 });
 
-test('private lesson status action PR keeps protected files unchanged', () => {
+test('private lesson status and outcome preview UI keeps backend protected files unchanged', () => {
   const protectedPaths = [
-    'Dashboard.jsx',
+    'functions/index.js',
     'src/features/dashboard/sections/CalendarSection.jsx',
-    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
     'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
