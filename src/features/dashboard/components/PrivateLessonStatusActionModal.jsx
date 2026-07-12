@@ -76,10 +76,17 @@ export default function PrivateLessonStatusActionModal({
   previewBusy,
   previewError,
   previewPayload,
+  isAdmin,
+  outcomePreviewBusy,
+  outcomePreviewError,
+  outcomePreviewResult,
+  outcomePreviewPayload,
+  outcomePreviewPlanHash,
   commitBusy,
   commitError,
   commitResult,
   onPreview,
+  onOutcomePreview,
   onCommit,
   onClose,
 }) {
@@ -87,7 +94,14 @@ export default function PrivateLessonStatusActionModal({
   if (!target) return null
   const blockedReasons = Array.isArray(preview?.blockedReasons) ? preview.blockedReasons : []
   const warnings = Array.isArray(preview?.warnings) ? preview.warnings : []
+  const outcomeBlockedReasons = Array.isArray(outcomePreviewResult?.blockedReasons)
+    ? outcomePreviewResult.blockedReasons
+    : []
+  const outcomeWarnings = Array.isArray(outcomePreviewResult?.warnings)
+    ? outcomePreviewResult.warnings
+    : []
   const row = target || {}
+  const reservationId = String(row.reservationId || row.privateReservationId || row.id || '').trim()
   const currentStatus = preview?.currentState?.status || row.status || '-'
   const proposedStatus =
     preview?.proposedState?.reservation?.status ||
@@ -95,6 +109,23 @@ export default function PrivateLessonStatusActionModal({
     preview?.normalizedPlan?.targetStatus ||
     '-'
   const previewPassed = preview?.ok === true && preview?.allowed === true && blockedReasons.length === 0
+  const hasPackageOrCreditWriteRequirement = blockedReasons.includes(
+    'package_or_credit_write_required'
+  )
+  const showOutcomePreviewEntry =
+    Boolean(preview) &&
+    hasPackageOrCreditWriteRequirement &&
+    ['complete', 'no_show'].includes(actionType) &&
+    Boolean(reservationId) &&
+    isAdmin === true &&
+    !outcomePreviewBusy
+  const outcomePackageImpact = outcomePreviewResult?.packageImpact || {}
+  const outcomeCreditTransactionPreview = outcomePreviewResult?.creditTransactionPreview || {}
+  const outcomePreviewBlocked =
+    Boolean(outcomePreviewResult) &&
+    (outcomePreviewResult.ok !== true ||
+      outcomePreviewResult.allowed !== true ||
+      outcomeBlockedReasons.length > 0)
   const commitDisabled =
     !previewPassed ||
     !previewPayload ||
@@ -110,7 +141,14 @@ export default function PrivateLessonStatusActionModal({
       aria-labelledby="private-lesson-status-action-modal-title"
       data-testid="private-lesson-status-action-modal"
       onClick={(event) => {
-        if (event.target === event.currentTarget && !previewBusy && !commitBusy) onClose?.()
+        if (
+          event.target === event.currentTarget &&
+          !previewBusy &&
+          !outcomePreviewBusy &&
+          !commitBusy
+        ) {
+          onClose?.()
+        }
       }}
       style={{
         position: 'fixed',
@@ -149,7 +187,7 @@ export default function PrivateLessonStatusActionModal({
           <button
             type="button"
             onClick={onClose}
-            disabled={previewBusy || commitBusy}
+            disabled={previewBusy || outcomePreviewBusy || commitBusy}
             aria-label="닫기"
             style={{
               height: 34,
@@ -157,7 +195,7 @@ export default function PrivateLessonStatusActionModal({
               border: '1px solid #3b4254',
               background: '#222938',
               color: 'white',
-              cursor: previewBusy || commitBusy ? 'not-allowed' : 'pointer',
+              cursor: previewBusy || outcomePreviewBusy || commitBusy ? 'not-allowed' : 'pointer',
             }}
           >
             닫기
@@ -198,7 +236,9 @@ export default function PrivateLessonStatusActionModal({
                 setCommitConfirmed(false)
                 setActionType?.('complete')
               }}
-              disabled={previewBusy || commitBusy || Boolean(commitResult)}
+              disabled={
+                previewBusy || outcomePreviewBusy || commitBusy || Boolean(commitResult)
+              }
               data-testid="private-lesson-status-action-type-complete"
             />
             수업완료
@@ -213,7 +253,9 @@ export default function PrivateLessonStatusActionModal({
                 setCommitConfirmed(false)
                 setActionType?.('no_show')
               }}
-              disabled={previewBusy || commitBusy || Boolean(commitResult)}
+              disabled={
+                previewBusy || outcomePreviewBusy || commitBusy || Boolean(commitResult)
+              }
               data-testid="private-lesson-status-action-type-no-show"
             />
             노쇼
@@ -227,7 +269,13 @@ export default function PrivateLessonStatusActionModal({
               setCommitConfirmed(false)
               onPreview?.()
             }}
-            disabled={previewBusy || commitBusy || Boolean(commitResult) || !actionType}
+            disabled={
+              previewBusy ||
+              outcomePreviewBusy ||
+              commitBusy ||
+              Boolean(commitResult) ||
+              !actionType
+            }
             data-testid="private-lesson-status-action-preview-submit"
             style={{
               padding: '9px 14px',
@@ -237,7 +285,9 @@ export default function PrivateLessonStatusActionModal({
               color: 'white',
               fontWeight: 700,
               cursor:
-                previewBusy || commitBusy || commitResult || !actionType ? 'not-allowed' : 'pointer',
+                previewBusy || outcomePreviewBusy || commitBusy || commitResult || !actionType
+                  ? 'not-allowed'
+                  : 'pointer',
             }}
           >
             {previewBusy ? '미리보기 중...' : '서버 기준 미리보기'}
@@ -261,6 +311,191 @@ export default function PrivateLessonStatusActionModal({
           >
             <strong>미리보기 실패</strong>
             <p style={{ margin: '8px 0 0 0' }}>{previewError}</p>
+          </section>
+        ) : null}
+
+        {showOutcomePreviewEntry ? (
+          <section
+            style={{
+              marginTop: 14,
+              border: '1px solid #7a6237',
+              borderRadius: 12,
+              background: '#2a2415',
+              padding: 14,
+            }}
+          >
+            <strong>수강권 차감이 필요한 수업입니다</strong>
+            <p style={{ margin: '8px 0 0 0', color: '#ffe1a8', fontSize: 13, lineHeight: 1.5 }}>
+              이 수업은 수강권 차감과 차감 기록 생성이 필요한 수업입니다. 차감 포함
+              미리보기에서 변경 내용을 먼저 확인하세요.
+            </p>
+            <button
+              type="button"
+              onClick={onOutcomePreview}
+              disabled={outcomePreviewBusy}
+              data-testid="private-lesson-outcome-preview-button"
+              style={{
+                marginTop: 12,
+                padding: '9px 14px',
+                borderRadius: 10,
+                border: '1px solid #9b7433',
+                background: '#4b3515',
+                color: 'white',
+                fontWeight: 700,
+                cursor: outcomePreviewBusy ? 'not-allowed' : 'pointer',
+              }}
+            >
+              차감 포함 미리보기
+            </button>
+          </section>
+        ) : null}
+
+        {outcomePreviewBusy ? (
+          <section
+            style={{
+              marginTop: 14,
+              border: '1px solid #3c5f7a',
+              borderRadius: 12,
+              background: '#142331',
+              padding: 14,
+            }}
+          >
+            차감 포함 미리보기 실행 중...
+          </section>
+        ) : null}
+
+        {outcomePreviewError ? (
+          <section
+            data-testid="private-lesson-outcome-preview-error"
+            style={{
+              marginTop: 14,
+              border: '1px solid #734141',
+              borderRadius: 12,
+              background: '#2a1719',
+              padding: 14,
+              color: '#ffc9c9',
+            }}
+          >
+            <strong>차감 포함 미리보기 실패</strong>
+            <p style={{ margin: '8px 0 0 0' }}>{outcomePreviewError}</p>
+            <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+              서버 기준 미리보기를 다시 실행한 뒤 차감 포함 미리보기를 재실행하세요.
+            </p>
+          </section>
+        ) : null}
+
+        {outcomePreviewResult ? (
+          <section
+            data-testid="private-lesson-outcome-preview-result"
+            style={{
+              marginTop: 16,
+              display: 'grid',
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                border: outcomePreviewBlocked ? '1px solid #765233' : '1px solid #375c45',
+                borderRadius: 12,
+                background: outcomePreviewBlocked ? '#2b2117' : '#14251c',
+                padding: 14,
+              }}
+            >
+              <strong>
+                {outcomePreviewBlocked
+                  ? '차감 포함 미리보기 처리 차단 사유가 있습니다'
+                  : '차감 포함 미리보기 통과'}
+              </strong>
+              <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13 }}>
+                actionType: {outcomePreviewResult.actionType || actionType}
+                {' · '}normalizedOutcome: {outcomePreviewResult.normalizedOutcome || '-'}
+                {' · '}requestId:{' '}
+                {outcomePreviewResult.requestId || outcomePreviewPayload?.requestId || '-'}
+              </p>
+              {outcomePreviewBlocked ? (
+                <p style={{ margin: '8px 0 0 0', color: '#ffd2a8', fontSize: 13 }}>
+                  실제 처리는 제공하지 않습니다. 차단 사유를 확인하고 서버 기준 미리보기부터
+                  다시 실행하세요.
+                </p>
+              ) : null}
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 10,
+              }}
+            >
+              <FieldBlock
+                label="current reservation status"
+                value={outcomePreviewResult.currentState?.reservation?.status}
+              />
+              <FieldBlock
+                label="proposed reservation status"
+                value={outcomePreviewResult.proposedState?.reservation?.nextStatus}
+              />
+              <FieldBlock label="package id" value={outcomePackageImpact.packageId} />
+              <FieldBlock
+                label="currentUsedCount → nextUsedCount"
+                value={{
+                  currentUsedCount: outcomePackageImpact.currentUsedCount,
+                  nextUsedCount: outcomePackageImpact.nextUsedCount,
+                }}
+              />
+              <FieldBlock
+                label="currentRemainingCount → nextRemainingCount"
+                value={{
+                  currentRemainingCount: outcomePackageImpact.currentRemainingCount,
+                  nextRemainingCount: outcomePackageImpact.nextRemainingCount,
+                }}
+              />
+              <FieldBlock
+                label="usedCountDelta / remainingCountDelta"
+                value={{
+                  usedCountDelta: outcomePackageImpact.usedCountDelta,
+                  remainingCountDelta: outcomePackageImpact.remainingCountDelta,
+                }}
+              />
+              <FieldBlock
+                label="current package status → next package status"
+                value={{
+                  currentStatus: outcomePackageImpact.currentStatus,
+                  nextStatus: outcomePackageImpact.nextStatus,
+                }}
+              />
+              <FieldBlock
+                label="creditTransactionPreview.wouldCreate"
+                value={outcomeCreditTransactionPreview.wouldCreate}
+              />
+              <FieldBlock
+                label="creditTransactionId"
+                value={outcomeCreditTransactionPreview.creditTransactionId}
+              />
+              <FieldBlock
+                label="sourceType / sourceId"
+                value={{
+                  sourceType: outcomeCreditTransactionPreview.sourceType,
+                  sourceId: outcomeCreditTransactionPreview.sourceId,
+                }}
+              />
+              <FieldBlock
+                label="deltaCount / duplicateExists"
+                value={{
+                  deltaCount: outcomeCreditTransactionPreview.deltaCount,
+                  duplicateExists: outcomeCreditTransactionPreview.duplicateExists,
+                }}
+              />
+            </div>
+
+            <ListBlock title="차감 포함 처리 차단 사유" items={outcomeBlockedReasons} />
+            <ListBlock title="차감 포함 주의/안내" items={outcomeWarnings} />
+            <FieldBlock label="normalizedPlan" value={outcomePreviewResult.normalizedPlan} />
+            <FieldBlock
+              label="planHash"
+              value={outcomePreviewPlanHash || outcomePreviewResult.planHash}
+            />
+            <FieldBlock label="nextStep" value={outcomePreviewResult.nextStep} />
           </section>
         ) : null}
 

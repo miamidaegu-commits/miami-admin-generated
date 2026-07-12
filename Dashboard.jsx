@@ -1397,6 +1397,11 @@ export default function Dashboard() {
     useState('')
   const [privateLessonStatusActionPreviewPayload, setPrivateLessonStatusActionPreviewPayload] =
     useState(null)
+  const [privateLessonOutcomePreviewBusy, setPrivateLessonOutcomePreviewBusy] = useState(false)
+  const [privateLessonOutcomePreviewError, setPrivateLessonOutcomePreviewError] = useState('')
+  const [privateLessonOutcomePreviewResult, setPrivateLessonOutcomePreviewResult] = useState(null)
+  const [privateLessonOutcomePreviewPayload, setPrivateLessonOutcomePreviewPayload] = useState(null)
+  const [privateLessonOutcomePreviewPlanHash, setPrivateLessonOutcomePreviewPlanHash] = useState('')
   const [privateLessonStatusActionCommitBusy, setPrivateLessonStatusActionCommitBusy] =
     useState(false)
   const [privateLessonStatusActionCommitError, setPrivateLessonStatusActionCommitError] =
@@ -3984,6 +3989,11 @@ export default function Dashboard() {
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
     setPrivateLessonStatusActionPreviewBusy(false)
+    setPrivateLessonOutcomePreviewBusy(false)
+    setPrivateLessonOutcomePreviewError('')
+    setPrivateLessonOutcomePreviewResult(null)
+    setPrivateLessonOutcomePreviewPayload(null)
+    setPrivateLessonOutcomePreviewPlanHash('')
     setPrivateLessonStatusActionCommitBusy(false)
     setPrivateLessonStatusActionCommitError('')
     setPrivateLessonStatusActionCommitResult(null)
@@ -6571,10 +6581,19 @@ export default function Dashboard() {
     setPrivateLessonStatusActionCommitResult(null)
   }
 
+  function clearPrivateLessonOutcomePreview() {
+    setPrivateLessonOutcomePreviewBusy(false)
+    setPrivateLessonOutcomePreviewError('')
+    setPrivateLessonOutcomePreviewResult(null)
+    setPrivateLessonOutcomePreviewPayload(null)
+    setPrivateLessonOutcomePreviewPlanHash('')
+  }
+
   function clearPrivateLessonStatusActionPreview() {
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
+    clearPrivateLessonOutcomePreview()
     clearPrivateLessonStatusActionCommitState()
   }
 
@@ -6582,20 +6601,20 @@ export default function Dashboard() {
     if (!isAdmin || !target) return
     setPrivateLessonStatusActionTarget(target)
     setPrivateLessonStatusActionMode('complete')
-    setPrivateLessonStatusActionPreview(null)
-    setPrivateLessonStatusActionPreviewError('')
-    setPrivateLessonStatusActionPreviewPayload(null)
-    clearPrivateLessonStatusActionCommitState()
+    clearPrivateLessonStatusActionPreview()
   }
 
   function closePrivateLessonStatusActionPreview() {
-    if (privateLessonStatusActionPreviewBusy || privateLessonStatusActionCommitBusy) return
+    if (
+      privateLessonStatusActionPreviewBusy ||
+      privateLessonOutcomePreviewBusy ||
+      privateLessonStatusActionCommitBusy
+    ) {
+      return
+    }
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
-    setPrivateLessonStatusActionPreview(null)
-    setPrivateLessonStatusActionPreviewError('')
-    setPrivateLessonStatusActionPreviewPayload(null)
-    clearPrivateLessonStatusActionCommitState()
+    clearPrivateLessonStatusActionPreview()
   }
 
   function selectPrivateLessonStatusActionMode(actionType) {
@@ -6605,10 +6624,17 @@ export default function Dashboard() {
   }
 
   async function previewPrivateLessonStatusActionOnServer() {
-    if (privateLessonStatusActionPreviewBusy || privateLessonStatusActionCommitBusy) return
+    if (
+      privateLessonStatusActionPreviewBusy ||
+      privateLessonOutcomePreviewBusy ||
+      privateLessonStatusActionCommitBusy
+    ) {
+      return
+    }
 
     const target = privateLessonStatusActionTarget || {}
     const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    clearPrivateLessonOutcomePreview()
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
@@ -6663,6 +6689,91 @@ export default function Dashboard() {
       )
     } finally {
       setPrivateLessonStatusActionPreviewBusy(false)
+    }
+  }
+
+  async function previewPrivateLessonOutcomeActionOnServer() {
+    if (
+      privateLessonOutcomePreviewBusy ||
+      privateLessonStatusActionPreviewBusy ||
+      privateLessonStatusActionCommitBusy
+    ) {
+      return
+    }
+
+    clearPrivateLessonOutcomePreview()
+
+    try {
+      if (!isAdmin) {
+        throw new Error('차감 포함 미리보기 권한이 없습니다.')
+      }
+
+      const statusPreview = privateLessonStatusActionPreview || {}
+      const statusBlockedReasons = Array.isArray(statusPreview.blockedReasons)
+        ? statusPreview.blockedReasons
+        : []
+      if (!statusBlockedReasons.includes('package_or_credit_write_required')) {
+        throw new Error('차감 포함 처리가 필요한 서버 미리보기 결과가 없습니다.')
+      }
+
+      const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+      if (!['complete', 'no_show'].includes(actionType)) {
+        throw new Error('차감 포함 미리보기에 사용할 처리 유형이 올바르지 않습니다.')
+      }
+
+      const target = privateLessonStatusActionTarget || {}
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(target, scopedAcademyId, '1:1 예약')
+      const reservationId = String(
+        target.reservationId || target.privateReservationId || target.id || ''
+      ).trim()
+      if (!reservationId) {
+        throw new Error('차감 포함 미리보기에 사용할 예약 ID가 없습니다.')
+      }
+
+      const requestId = `privateLessonOutcomePreview_${scopedAcademyId}_${reservationId}_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`
+      const payload = {
+        academyId: scopedAcademyId,
+        reservationId,
+        requestId,
+        actionType,
+        dryRun: true,
+        previewOnly: true,
+        commit: false,
+      }
+
+      setPrivateLessonOutcomePreviewBusy(true)
+      const callable = httpsCallable(firebaseFunctions, 'previewPrivateLessonOutcomeAction')
+      const result = await callable(payload)
+      const previewData = result?.data || null
+      const planHash = String(previewData?.planHash || '').trim()
+      if (
+        !previewData ||
+        previewData.dryRun !== true ||
+        previewData.previewOnly !== true ||
+        previewData.commit !== false ||
+        previewData.requestId !== requestId ||
+        previewData.actionType !== actionType ||
+        !planHash
+      ) {
+        throw new Error('서버 차감 포함 미리보기 결과가 유효하지 않습니다.')
+      }
+
+      setPrivateLessonOutcomePreviewResult(previewData)
+      setPrivateLessonOutcomePreviewPayload(payload)
+      setPrivateLessonOutcomePreviewPlanHash(planHash)
+    } catch (error) {
+      console.error('개인 수업 차감 포함 미리보기 실패:', error)
+      setPrivateLessonOutcomePreviewResult(null)
+      setPrivateLessonOutcomePreviewPayload(null)
+      setPrivateLessonOutcomePreviewPlanHash('')
+      setPrivateLessonOutcomePreviewError(
+        error?.message || '개인 수업 차감 포함 미리보기에 실패했습니다.'
+      )
+    } finally {
+      setPrivateLessonOutcomePreviewBusy(false)
     }
   }
 
@@ -8216,10 +8327,17 @@ export default function Dashboard() {
     previewBusy: privateLessonStatusActionPreviewBusy,
     previewError: privateLessonStatusActionPreviewError,
     previewPayload: privateLessonStatusActionPreviewPayload,
+    isAdmin,
+    outcomePreviewBusy: privateLessonOutcomePreviewBusy,
+    outcomePreviewError: privateLessonOutcomePreviewError,
+    outcomePreviewResult: privateLessonOutcomePreviewResult,
+    outcomePreviewPayload: privateLessonOutcomePreviewPayload,
+    outcomePreviewPlanHash: privateLessonOutcomePreviewPlanHash,
     commitBusy: privateLessonStatusActionCommitBusy,
     commitError: privateLessonStatusActionCommitError,
     commitResult: privateLessonStatusActionCommitResult,
     onPreview: previewPrivateLessonStatusActionOnServer,
+    onOutcomePreview: previewPrivateLessonOutcomeActionOnServer,
     onCommit: commitPrivateLessonStatusActionOnServer,
     onClose: closePrivateLessonStatusActionPreview,
   }

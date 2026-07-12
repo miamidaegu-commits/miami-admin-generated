@@ -269,11 +269,195 @@ test('legacy outcome write and reverse flows remain intact', () => {
   );
 });
 
-test('outcome preview PR keeps protected files unchanged', () => {
-  const protectedPaths = [
+test('deduction-aware outcome preview UI is wired from the blocked status preview', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const handlerBlock = boundedSource(
+    dashboardSource,
+    'async function previewPrivateLessonOutcomeActionOnServer()',
+    'const studentsSectionProps = {'
+  );
+  const modalOutcomeBlock = boundedSource(
+    modalSource,
+    'const showOutcomePreviewEntry =',
+    '{preview ? ('
+  );
+  const combinedSource = `${dashboardSource}\n${modalSource}`;
+
+  [
+    'previewPrivateLessonOutcomeActionOnServer',
+    'privateLessonOutcomePreviewBusy',
+    'privateLessonOutcomePreviewError',
+    'privateLessonOutcomePreviewResult',
+    'privateLessonOutcomePreviewPayload',
+    'privateLessonOutcomePreviewPlanHash',
+    'previewPrivateLessonOutcomeAction',
+    'private-lesson-outcome-preview-button',
+    '차감 포함 미리보기',
+    'private-lesson-outcome-preview-result',
+    'package_or_credit_write_required',
+    'planHash',
+    'currentUsedCount',
+    'nextUsedCount',
+    'currentRemainingCount',
+    'nextRemainingCount',
+    'usedCountDelta',
+    'remainingCountDelta',
+    'creditTransactionPreview',
+    'creditTransactionId',
+    'wouldCreate',
+    'duplicateExists',
+    'normalizedPlan',
+    'nextStep',
+  ].forEach((token) => {
+    expect(combinedSource).toContain(token);
+  });
+
+  [
+    'reservationId',
+    'requestId',
+    'actionType',
+    'dryRun: true',
+    'previewOnly: true',
+    'commit: false',
+    "httpsCallable(firebaseFunctions, 'previewPrivateLessonOutcomeAction')",
+    'setPrivateLessonOutcomePreviewResult(previewData)',
+    'setPrivateLessonOutcomePreviewPayload(payload)',
+    'setPrivateLessonOutcomePreviewPlanHash(planHash)',
+  ].forEach((token) => {
+    expect(handlerBlock).toContain(token);
+  });
+
+  [
+    'Boolean(preview)',
+    'hasPackageOrCreditWriteRequirement',
+    "['complete', 'no_show'].includes(actionType)",
+    'Boolean(reservationId)',
+    'isAdmin === true',
+    '!outcomePreviewBusy',
+    '이 수업은 수강권 차감과 차감 기록 생성이 필요한 수업입니다.',
+    'current reservation status',
+    'proposed reservation status',
+    'current package status → next package status',
+    'creditTransactionPreview.wouldCreate',
+    '처리 차단 사유가 있습니다',
+    '서버 기준 미리보기부터',
+  ].forEach((token) => {
+    expect(modalOutcomeBlock).toContain(token);
+  });
+});
+
+test('deduction-aware outcome preview UI has no write or outcome commit path', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const handlerBlock = boundedSource(
+    dashboardSource,
+    'async function previewPrivateLessonOutcomeActionOnServer()',
+    'const studentsSectionProps = {'
+  );
+  const modalOutcomeBlock = boundedSource(
+    modalSource,
+    'const showOutcomePreviewEntry =',
+    '{preview ? ('
+  );
+
+  [
+    'commitPrivateLessonOutcomeAction',
+    'markPrivateReservationOutcome',
+    'writeBatch',
+    'runTransaction',
+    'setDoc',
+    'addDoc',
+    'updateDoc',
+    'deleteDoc',
+    'transaction.set',
+    'transaction.update',
+    'transaction.create',
+    'commit: true',
+    'dryRun: false',
+    'previewOnly: false',
+  ].forEach((token) => {
+    expect(handlerBlock).not.toContain(token);
+    expect(modalOutcomeBlock).not.toContain(token);
+  });
+
+  expect(handlerBlock).toContain('previewPrivateLessonOutcomeAction');
+  expect(handlerBlock).toContain('commit: false');
+  expect(modalOutcomeBlock).not.toContain('private-lesson-outcome-commit-button');
+});
+
+test('outcome preview state clears on every stale boundary and status commit remains guarded', () => {
+  const dashboardSource = readSource('Dashboard.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const clearBlock = boundedSource(
+    dashboardSource,
+    'function clearPrivateLessonOutcomePreview()',
+    'async function previewPrivateLessonStatusActionOnServer()'
+  );
+  const dateClearBlock = boundedSource(
+    dashboardSource,
+    'useEffect(() => {\n    setPrivateLessonStatusActionTarget(null)',
+    'const {\n    groupModal,'
+  );
+
+  [
+    "setPrivateLessonOutcomePreviewError('')",
+    'setPrivateLessonOutcomePreviewResult(null)',
+    'setPrivateLessonOutcomePreviewPayload(null)',
+    "setPrivateLessonOutcomePreviewPlanHash('')",
+    'clearPrivateLessonOutcomePreview()',
+    'openPrivateLessonStatusActionPreview',
+    'closePrivateLessonStatusActionPreview',
+    'selectPrivateLessonStatusActionMode',
+  ].forEach((token) => {
+    expect(clearBlock).toContain(token);
+  });
+
+  [
+    'setPrivateLessonOutcomePreviewBusy(false)',
+    "setPrivateLessonOutcomePreviewError('')",
+    'setPrivateLessonOutcomePreviewResult(null)',
+    'setPrivateLessonOutcomePreviewPayload(null)',
+    "setPrivateLessonOutcomePreviewPlanHash('')",
+    '[selectedDateString, calendarMonth]',
+  ].forEach((token) => {
+    expect(dateClearBlock).toContain(token);
+  });
+
+  expect(dashboardSource).toContain('commitPrivateLessonStatusActionOnServer');
+  expect(modalSource).toContain('private-lesson-status-action-commit-button');
+  expect(modalSource).toContain('const previewPassed =');
+  expect(modalSource).toContain('blockedReasons.length === 0');
+});
+
+test('outcome preview UI changes stay inside the approved frontend and test scope', () => {
+  const allowedPaths = new Set([
     'Dashboard.jsx',
-    'src/features/dashboard/sections/CalendarSection.jsx',
     'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
+    'tests/private-lesson-outcome-actions.spec.js',
+    'tests/private-lesson-status-actions.spec.js',
+  ]);
+  const changedPaths = execFileSync('git', ['diff', '--name-only'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  expect(changedPaths.filter((changedPath) => !allowedPaths.has(changedPath))).toEqual([]);
+});
+
+test('outcome preview UI keeps backend and protected files unchanged', () => {
+  const protectedPaths = [
+    'functions/index.js',
+    'src/features/dashboard/sections/CalendarSection.jsx',
     'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
     'firestore.rules',
     'package.json',
