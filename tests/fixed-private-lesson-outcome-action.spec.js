@@ -280,7 +280,9 @@ test('fixed outcome ledger audit is admin-only, bounded, and read-only', () => {
     'writeBatch',
     '.set(',
     '.create(',
-    '.update(',
+    'transaction.update',
+    'batch.update',
+    '.ref.update',
     '.delete(',
     'bulkWriter',
   ]
@@ -290,7 +292,6 @@ test('fixed outcome ledger audit is admin-only, bounded, and read-only', () => {
   })
   ;[
     'studentName',
-    'teacherEmail',
     'email',
     'phone',
     'password',

@@ -21,6 +21,23 @@ process.env.GCLOUD_PROJECT = PROJECT_ID;
 process.env.FIREBASE_CONFIG = JSON.stringify({projectId: PROJECT_ID});
 process.env.PRIVATE_SLOT_BOOKING_ENABLED = "true";
 
+const {Transaction} = require(
+    "../functions/node_modules/@google-cloud/firestore",
+);
+const originalTransactionGet = Transaction.prototype.get;
+// Firestore emulator v1.20.4 can close a retried transaction while parallel
+// RunQuery reads are still in flight. Serialize reads inside each test-only
+// transaction without serializing the two concurrent callable invocations.
+Transaction.prototype.get = function serializedEmulatorTransactionGet(ref) {
+  const previous = this.__fixedOutcomeReadChain || Promise.resolve();
+  const current = previous.then(() => originalTransactionGet.call(this, ref));
+  this.__fixedOutcomeReadChain = current.then(
+      () => undefined,
+      () => undefined,
+  );
+  return current;
+};
+
 const functionsTest = require(
     "../functions/node_modules/firebase-functions-test",
 )({projectId: PROJECT_ID});
@@ -518,7 +535,23 @@ async function testConcurrencyAndTeacherPermission() {
       1,
   );
   const rejected = settled.find((entry) => entry.status === "rejected");
-  assert.equal(rejected.reason.code, "failed-precondition");
+  assert.equal(
+      rejected.reason.code,
+      "failed-precondition",
+      JSON.stringify({
+        code: rejected.reason.code,
+        message: rejected.reason.message,
+        cause: rejected.reason.cause ?
+          String(rejected.reason.cause.stack || rejected.reason.cause) :
+          "",
+        stack: rejected.reason.stack,
+        details: rejected.reason.details,
+        winnerRequestId: settled.find(
+            (entry) => entry.status === "fulfilled",
+        )?.value?.requestId,
+        loserRequestId: rejected.reason.details?.requestId,
+      }),
+  );
   assert.ok(rejected.reason.details.blockedReasons.includes("preview_stale"));
 
   const ownFixture = await seedFixture({name: "teacher-own"});
