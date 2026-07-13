@@ -192,10 +192,13 @@ test('outcome commit changes stay inside backend and targeted tests', () => {
     'src/features/dashboard/hooks/usePrivateLessonFlow.js',
     'src/features/dashboard/sections/CalendarSection.jsx',
     'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'scripts/run-fixed-private-outcome-ledger-audit.mjs',
     'tests/fixed-private-lesson-outcome-audit.emulator.cjs',
     'tests/fixed-private-lesson-outcome-action.emulator.cjs',
     'tests/fixed-private-lesson-outcome-action.spec.js',
     'tests/fixed-private-lesson-outcome-frontend.spec.js',
+    'tests/fixed-private-outcome-audit-runner.test.mjs',
+    'tests/fixed-private-outcome-audit-v2.spec.js',
     'tests/private-fixed-slot-assignment.spec.js',
     'tests/private-lesson-outcome-actions.spec.js',
     'tests/private-lesson-outcome-commit.spec.js',
@@ -205,7 +208,7 @@ test('outcome commit changes stay inside backend and targeted tests', () => {
   ]);
   const changedPaths = execFileSync(
     'git',
-    ['diff', '--name-only', 'product-version', '--'],
+    ['diff', '--name-only', 'origin/product-version', '--'],
     { cwd: process.cwd(), encoding: 'utf8' }
   )
     .split('\n')
