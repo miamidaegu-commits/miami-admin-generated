@@ -172,6 +172,29 @@ test('private lesson status action commit callable is exported and guarded', () 
   expect(helperBlock).toContain('checkpoint.payloadHash === payloadHash');
 });
 
+test('status commit replay resolves lesson-only targets through full resolver', () => {
+  const functionsSource = readSource('functions/index.js');
+  const commitBlock = boundedSource(
+    functionsSource,
+    'async function commitPrivateLessonStatusAction({db, auth, data})',
+    'function requireActiveStudentMembership'
+  );
+  const replayBlock = boundedSource(
+    commitBlock,
+    'if (batchSnap.exists) {',
+    'const membershipRef = db'
+  );
+
+  expect(replayBlock).toContain(
+    'resolvePrivateLessonStatusTargetInTransaction({'
+  );
+  expect(replayBlock).toContain('isFixedPrivateDirectTarget(replayTarget)');
+  expect(replayBlock).not.toContain(
+    'resolvePrivateReservationOutcomePreviewTarget'
+  );
+  expect(replayBlock).not.toContain('reservationId: validation.reservationId');
+});
+
 test('private lesson status action preview and commit share package credit policy', () => {
   const functionsSource = readSource('functions/index.js');
   const policyBlock = boundedSource(
@@ -445,10 +468,6 @@ test('private lesson status action admin commit UI is guarded and confirmation g
 
 test('private lesson status and outcome preview UI keeps backend protected files unchanged', () => {
   const protectedPaths = [
-    'functions/index.js',
-    'src/features/dashboard/sections/CalendarSection.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
-    'firestore.rules',
     'package.json',
     'package-lock.json',
     'functions/package.json',

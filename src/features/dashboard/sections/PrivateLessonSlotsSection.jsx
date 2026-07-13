@@ -674,6 +674,30 @@ export default function PrivateLessonSlotsSection({
   )
   const [showFixedRescheduleScopePreview, setShowFixedRescheduleScopePreview] = useState(false)
   const fixedPrivateLessonsSectionRef = useRef(null)
+  const cancelPrivateSlotOrReservationSafely = (slot, reservation, options = {}) => {
+    if (isFixedPrivateReservation(reservation, slot)) {
+      const lessonId = String(
+        reservation?.lessonId ||
+          reservation?.fixedLessonId ||
+          slot?.lessonId ||
+          slot?.fixedLessonId ||
+          ''
+      ).trim()
+      const fixedLesson =
+        privateFixedLessons.find(
+          (lesson) => String(lesson?.id || lesson?.lessonId || '').trim() === lessonId
+        ) || null
+      if (!fixedLesson) return
+      const closeAsTeacherUnavailable = options?.closeAsTeacherUnavailable === true
+      onCancelFixedPrivateLesson?.(
+        fixedLesson,
+        closeAsTeacherUnavailable ? 'lesson_cancelled' : 'seat_released',
+        closeAsTeacherUnavailable ? { reason: 'teacher_unavailable' } : {}
+      )
+      return
+    }
+    cancelPrivateSlotOrReservation(slot, reservation, options)
+  }
   const fixedPrivateRenewalConfirmationPlan =
     fixedPrivateRenewalServerPreview?.normalizedPlan || {}
   const fixedPrivateRenewalConfirmationWouldCreate =
@@ -1773,7 +1797,10 @@ export default function PrivateLessonSlotsSection({
                                       onCancelFixedPrivateLesson?.(row.fixedLesson, 'seat_released')
                                       return
                                     }
-                                    cancelPrivateSlotOrReservation(row.slot, row.reservation)
+                                    cancelPrivateSlotOrReservationSafely(
+                                      row.slot,
+                                      row.reservation
+                                    )
                                   }}
                                   style={{
                                     padding: '6px 10px',
@@ -1793,7 +1820,7 @@ export default function PrivateLessonSlotsSection({
                                 data-testid="private-teacher-weekly-board-close-button"
                                 onClick={() => {
                                   if (row.reservation) {
-                                    cancelPrivateSlotOrReservation(row.slot, row.reservation, {
+                                    cancelPrivateSlotOrReservationSafely(row.slot, row.reservation, {
                                       closeAsTeacherUnavailable: true,
                                     })
                                     return
@@ -3172,7 +3199,9 @@ export default function PrivateLessonSlotsSection({
                   {!closedByTeacher && slot.status !== 'cancelled' && slot.status !== 'blocked' ? (
                     <button
                       type="button"
-                      onClick={() => cancelPrivateSlotOrReservation(slot, activeReservation)}
+                      onClick={() =>
+                        cancelPrivateSlotOrReservationSafely(slot, activeReservation)
+                      }
                       disabled={busy}
                       data-testid="private-slot-cancel-button"
                       style={{
@@ -3191,7 +3220,7 @@ export default function PrivateLessonSlotsSection({
                     <button
                       type="button"
                       onClick={() =>
-                        cancelPrivateSlotOrReservation(slot, activeReservation, {
+                        cancelPrivateSlotOrReservationSafely(slot, activeReservation, {
                           closeAsTeacherUnavailable: true,
                         })
                       }
@@ -4748,7 +4777,10 @@ export default function PrivateLessonSlotsSection({
                                       onCancelFixedPrivateLesson?.(row.fixedLesson, 'seat_released')
                                       return
                                     }
-                                    cancelPrivateSlotOrReservation(row.slot, row.reservation)
+                                    cancelPrivateSlotOrReservationSafely(
+                                      row.slot,
+                                      row.reservation
+                                    )
                                   }}
                                   style={{
                                     padding: '6px 10px',
@@ -4768,7 +4800,7 @@ export default function PrivateLessonSlotsSection({
                                 data-testid="private-teacher-weekly-board-close-button"
                                 onClick={() => {
                                   if (row.reservation) {
-                                    cancelPrivateSlotOrReservation(row.slot, row.reservation, {
+                                    cancelPrivateSlotOrReservationSafely(row.slot, row.reservation, {
                                       closeAsTeacherUnavailable: true,
                                     })
                                     return

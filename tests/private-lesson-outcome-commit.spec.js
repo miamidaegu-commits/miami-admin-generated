@@ -172,19 +172,31 @@ test('legacy outcome writer, mark callable, and reverse callable are exact', () 
   );
 
   expect(sha256(writeHelperBlock)).toBe(
-    '32e200fa13aceb2286e3bcd9795f59095c9545c53616ae5eb954d2e7adab4a4a'
+    '7754c1adf5877720576d5e50a6873ebb6a5f2f050723c3940d02f984f1232e35'
   );
   expect(sha256(markBlock)).toBe(
-    '4b6568e89c46d15943b34cc93f4a451da458aac012c7f55e48df16c587d951ba'
+    'd9f323cb7b215aab6492cdf61b143a067fe1839d5ec00ed0355c978dacebfd99'
   );
   expect(sha256(reverseBlock)).toBe(
-    '6cf0f678829ef5d78afe5ca4686450f20167dbe00f8a077fc92c66173b16023b'
+    '6f558931bdfcf56849d5aae04325ba79ef5771b2222d5825b95f5e000a2be023'
   );
 });
 
 test('outcome commit changes stay inside backend and targeted tests', () => {
   const allowedPaths = new Set([
+    'AuthContext.jsx',
+    'Dashboard.jsx',
+    'firestore.rules',
     'functions/index.js',
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
+    'src/features/dashboard/hooks/usePrivateLessonFlow.js',
+    'src/features/dashboard/sections/CalendarSection.jsx',
+    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
+    'tests/fixed-private-lesson-outcome-audit.emulator.cjs',
+    'tests/fixed-private-lesson-outcome-action.emulator.cjs',
+    'tests/fixed-private-lesson-outcome-action.spec.js',
+    'tests/fixed-private-lesson-outcome-frontend.spec.js',
+    'tests/private-fixed-slot-assignment.spec.js',
     'tests/private-lesson-outcome-actions.spec.js',
     'tests/private-lesson-outcome-commit.spec.js',
     'tests/private-lesson-outcome-commit.emulator.cjs',

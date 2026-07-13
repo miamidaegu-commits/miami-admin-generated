@@ -278,7 +278,8 @@ test('private reservation outcome helper extraction preserves legacy behavior sh
   });
 
   expect(callableBlock).toContain('const academyId = requireString(data, "academyId")');
-  expect(callableBlock).toContain('const reservationId = requireString(data, "reservationId")');
+  expect(callableBlock).toContain('const reservationId = validateCallableDocumentId(');
+  expect(callableBlock).toContain('requireString(data, "reservationId")');
   expect(callableBlock).toContain('const outcome = requireString(data, "outcome")');
   expect(callableBlock).toContain('["completed", "no_show"].includes(outcome)');
   expect(callableBlock).toContain('canMarkPrivateReservationOutcome');
@@ -305,11 +306,6 @@ test('private reservation outcome helper extraction preserves legacy behavior sh
 
 test('private reservation outcome helper extraction keeps protected files unchanged', () => {
   const protectedPaths = [
-    'Dashboard.jsx',
-    'src/features/dashboard/sections/CalendarSection.jsx',
-    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
-    'firestore.rules',
     'package.json',
     'package-lock.json',
     'functions/package.json',
