@@ -1,4 +1,6 @@
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 export const AUDIT_VERSION = 2
@@ -55,6 +57,25 @@ export const AUDIT_CATEGORY_NAMES = [
   ...AUDIT_INVENTORY_CATEGORIES,
   ...AUDIT_BLOCKER_CATEGORIES,
 ]
+export const REDACTED_ARTIFACT_VERSION = 1
+export const REDACTED_PRIMARY_COHORTS = [
+  'financial_conflict_manual_only',
+  'student_or_package_manual_review',
+  'structural_missing_link',
+  'structural_link_mismatch',
+  'teacher_mapping_required',
+  'unclassifiable_manual_review',
+  'safe_convertible',
+  'safe_other',
+]
+export const REDACTED_REPAIRABILITY_VALUES = [
+  'safe_no_repair_required',
+  'financial_manual_review_only',
+  'manual_mapping_required',
+  'deterministic_repair_candidate',
+  'obsolete_orphan_candidate',
+  'insufficient_evidence_no_write',
+]
 export const AUDIT_CATEGORY_REASONS = {
   canonicalTotal: 'canonical_ledger',
   canonicalReady: 'canonical_ready',
@@ -95,6 +116,7 @@ const SAMPLE_LIMIT = 10
 const PAGE_LIMIT = 50
 const MAX_PAGES_PER_FAMILY = 10000
 const MAX_RECORDS_PER_RUN = 500000
+const MIN_REDACTION_KEY_LENGTH = 32
 const HEX_64 = /^[a-f0-9]{64}$/
 const OPAQUE_CURSOR = /^[A-Za-z0-9_-]+$/
 const OCCURRENCE_FAMILIES = new Set([
@@ -1073,7 +1095,56 @@ export function classifyLegacyPartitionState(occurrence, {
   return 'unsafe'
 }
 
-export function aggregateAuditPages(pagesByFamily) {
+function sortedBlockingCategories(categories) {
+  const order = new Map(AUDIT_BLOCKER_CATEGORIES.map((category, index) => [
+    category,
+    index,
+  ]))
+  return [...new Set(categories)].sort(
+    (left, right) => order.get(left) - order.get(right)
+  )
+}
+
+function occurrenceEvidenceFlags(occurrence, {
+  active,
+  terminal,
+  singleConsistentCredit,
+  teacherDiagnostic,
+}) {
+  const hasAllLinkedDocuments = ['lesson', 'reservation', 'slot'].every(
+    (family) => occurrence.exists?.[family] === true
+  )
+  const allFixedFamilies = ['lesson', 'reservation', 'slot'].every(
+    (family) => occurrence.fixedFamilies?.[family] === true
+  )
+  const packageReferencePresent =
+    normalizeString(occurrence.packageId) !== '' &&
+    occurrence.exists?.package === true
+  const linkageEvidenceComplete =
+    hasAllLinkedDocuments &&
+    allFixedFamilies &&
+    packageReferencePresent &&
+    normalizeString(occurrence.studentId) !== '' &&
+    occurrence.diagnostics?.linkMismatch !== true &&
+    occurrence.diagnostics?.missingLinkedDocument !== true &&
+    occurrence.diagnostics?.academyMismatch !== true &&
+    occurrence.diagnostics?.studentMismatch !== true &&
+    occurrence.diagnostics?.packageMismatch !== true &&
+    occurrence.diagnostics?.packageMissing !== true &&
+    (occurrence.diagnosticReasons?.rowFlags || []).length === 0
+  return {
+    activeLifecycle: active,
+    terminalLifecycle: terminal,
+    hasAllLinkedDocuments,
+    allFixedFamilies,
+    packageReferencePresent,
+    teacherMappingResolved: !teacherDiagnostic,
+    singleConsistentDeductionEvidence: singleConsistentCredit,
+    linkageEvidenceComplete,
+  }
+}
+
+function aggregateAuditPagesWithEvidence(pagesByFamily) {
   const counts = emptyCategoryMap(() => 0)
   const samples = emptyCategoryMap(() => [])
   const counted = new Set()
@@ -1085,6 +1156,8 @@ export function aggregateAuditPages(pagesByFamily) {
   const membershipMap = new Map()
   const creditRecords = []
   const ledgerRows = []
+  const occurrenceEvidence = []
+  const unmatchedEvidence = []
 
   for (const family of AUDIT_SCAN_FAMILIES) {
     const pages = pagesByFamily?.[family]
@@ -1277,6 +1350,19 @@ export function aggregateAuditPages(pagesByFamily) {
       add('legacyUnsafeToConvert', occurrence)
       blockers.add('legacyUnsafeToConvert')
     }
+    occurrenceEvidence.push({
+      occurrenceKey: occurrence.occurrenceKey,
+      blockingCategories: sortedBlockingCategories(blockers),
+      currentLedgerMode: occurrence.provenance.ledgerMode,
+      originMode: occurrence.provenance.originMode,
+      legacyPartitionState: partitionState || 'not_legacy_origin',
+      evidenceFlags: occurrenceEvidenceFlags(occurrence, {
+        active,
+        terminal,
+        singleConsistentCredit,
+        teacherDiagnostic,
+      }),
+    })
   }
 
   for (const credit of credits) {
@@ -1295,6 +1381,14 @@ export function aggregateAuditPages(pagesByFamily) {
     }
     add('unclassifiableOccurrence', syntheticOccurrence)
     add('conflictingDeductionEvidence', syntheticOccurrence)
+    unmatchedEvidence.push({
+      evidenceKey: syntheticOccurrence.occurrenceKey,
+      evidenceType: 'unmatched_fixed_deduction_credit',
+      blockingCategories: sortedBlockingCategories([
+        'conflictingDeductionEvidence',
+        'unclassifiableOccurrence',
+      ]),
+    })
   }
 
   for (const category of AUDIT_CATEGORY_NAMES) {
@@ -1324,7 +1418,7 @@ export function aggregateAuditPages(pagesByFamily) {
       activeTeacherMemberships: memberships.length,
     },
   }
-  return {
+  const summary = {
     auditVersion: AUDIT_VERSION,
     complete,
     truncated,
@@ -1337,6 +1431,481 @@ export function aggregateAuditPages(pagesByFamily) {
     totals: digestPayload.totals,
     datasetDigest: sha256(stableStringify(digestPayload.scanFamilies)),
     summaryDigest: sha256(stableStringify(digestPayload)),
+  }
+  return {
+    summary,
+    occurrenceEvidence: occurrenceEvidence.sort(
+      (left, right) => left.occurrenceKey.localeCompare(right.occurrenceKey)
+    ),
+    unmatchedEvidence: unmatchedEvidence.sort(
+      (left, right) => left.evidenceKey.localeCompare(right.evidenceKey)
+    ),
+    sourceReconciliation: {
+      totals: {
+        occurrences: occurrences.length,
+        deductionCredits: credits.filter(isDeductionCredit).length,
+        activeTeacherMemberships: memberships.length,
+      },
+      scanFamilies: Object.fromEntries(AUDIT_SCAN_FAMILIES.map((family) => [
+        family,
+        {
+          scannedCount: pagesByFamily[family].reduce(
+            (sum, page) => sum + page.page.scannedCount,
+            0
+          ),
+          recordCount: pagesByFamily[family].reduce(
+            (sum, page) => sum + page.records.length,
+            0
+          ),
+          datasetDigest: sha256(stableStringify(
+            pagesByFamily[family].flatMap((page) =>
+              page.records.map((record) =>
+                `${record.kind}:${record.auditFingerprint}`
+              )
+            ).sort()
+          )),
+        },
+      ])),
+    },
+  }
+}
+
+export function aggregateAuditPages(pagesByFamily) {
+  return aggregateAuditPagesWithEvidence(pagesByFamily).summary
+}
+
+const PRIMARY_COHORT_RULES = [
+  {
+    name: 'financial_conflict_manual_only',
+    categories: ['conflictingDeductionEvidence', 'duplicateDeductionCredit'],
+  },
+  {
+    name: 'student_or_package_manual_review',
+    categories: ['studentMismatch', 'packageMismatch', 'packageMissing', 'academyMismatch'],
+  },
+  {
+    name: 'structural_missing_link',
+    categories: ['missingLinkedDocument', 'orphanFixedReservation', 'orphanFixedSlot'],
+  },
+  {
+    name: 'structural_link_mismatch',
+    categories: ['linkMismatch', 'fixedProvenanceMismatch', 'outcomeStatusMismatch'],
+  },
+  {
+    name: 'teacher_mapping_required',
+    categories: [
+      'teacherOwnershipMissing',
+      'teacherOwnershipAmbiguous',
+      'teacherIdentityConflict',
+    ],
+  },
+  {
+    name: 'unclassifiable_manual_review',
+    categories: ['unclassifiableOccurrence', 'legacyUnsafeToConvert'],
+  },
+]
+
+function classifyPrimaryCohort(evidence) {
+  const blockers = new Set(evidence.blockingCategories)
+  for (const rule of PRIMARY_COHORT_RULES) {
+    if (rule.categories.some((category) => blockers.has(category))) return rule
+  }
+  if (blockers.size > 0) {
+    failProtocol('Occurrence has a blocking category without a primary cohort.')
+  }
+  if (evidence.legacyPartitionState === 'safely_convertible') {
+    return { name: 'safe_convertible', categories: [] }
+  }
+  return { name: 'safe_other', categories: [] }
+}
+
+function classifyRepairability(evidence, primaryCohort) {
+  if (primaryCohort === 'financial_conflict_manual_only') {
+    return 'financial_manual_review_only'
+  }
+  if ([
+    'student_or_package_manual_review',
+    'teacher_mapping_required',
+  ].includes(primaryCohort)) {
+    return 'manual_mapping_required'
+  }
+  if (primaryCohort === 'structural_missing_link') {
+    return evidence.blockingCategories.some((category) =>
+      ['orphanFixedReservation', 'orphanFixedSlot'].includes(category)
+    )
+      ? 'obsolete_orphan_candidate'
+      : 'insufficient_evidence_no_write'
+  }
+  if (primaryCohort === 'safe_convertible') {
+    return evidence.evidenceFlags.linkageEvidenceComplete === true &&
+      evidence.evidenceFlags.teacherMappingResolved === true
+      ? 'deterministic_repair_candidate'
+      : 'insufficient_evidence_no_write'
+  }
+  if (primaryCohort === 'safe_other') return 'safe_no_repair_required'
+  return 'insufficient_evidence_no_write'
+}
+
+export function redactedCohortKey({
+  redactionKey,
+  academyId,
+  occurrenceKey,
+}) {
+  if (
+    normalizeString(redactionKey).length < MIN_REDACTION_KEY_LENGTH ||
+    !normalizeString(academyId) ||
+    !normalizeString(occurrenceKey)
+  ) {
+    failProtocol('Redacted cohort key input is invalid.')
+  }
+  return crypto.createHmac('sha256', redactionKey)
+    .update(`${academyId}:${occurrenceKey}`)
+    .digest('hex')
+}
+
+function countEvidenceBy(evidenceRows, field, values) {
+  return Object.fromEntries(values.map((value) => [
+    value,
+    evidenceRows.filter((row) => row[field] === value).length,
+  ]))
+}
+
+function validateSourceReconciliation(summary, sourceReconciliation) {
+  assertPlainObject(sourceReconciliation, 'sourceReconciliation')
+  assertExactKeys(
+    sourceReconciliation,
+    ['scanFamilies', 'totals'],
+    'sourceReconciliation'
+  )
+  assertExactKeys(
+    sourceReconciliation.totals,
+    ['activeTeacherMemberships', 'deductionCredits', 'occurrences'],
+    'sourceReconciliation.totals'
+  )
+  for (const field of [
+    'activeTeacherMemberships',
+    'deductionCredits',
+    'occurrences',
+  ]) {
+    assertSafeInteger(
+      sourceReconciliation.totals[field],
+      `sourceReconciliation.totals.${field}`
+    )
+    if (sourceReconciliation.totals[field] !== summary.totals[field]) {
+      failProtocol('Redacted artifact source total parity failed.')
+    }
+  }
+  assertExactKeys(
+    sourceReconciliation.scanFamilies,
+    AUDIT_SCAN_FAMILIES,
+    'sourceReconciliation.scanFamilies'
+  )
+  for (const family of AUDIT_SCAN_FAMILIES) {
+    const value = sourceReconciliation.scanFamilies[family]
+    assertExactKeys(
+      value,
+      ['datasetDigest', 'recordCount', 'scannedCount'],
+      `sourceReconciliation.scanFamilies.${family}`
+    )
+    assertSafeInteger(
+      value.recordCount,
+      `sourceReconciliation.scanFamilies.${family}.recordCount`
+    )
+    assertSafeInteger(
+      value.scannedCount,
+      `sourceReconciliation.scanFamilies.${family}.scannedCount`
+    )
+    if (!HEX_64.test(value.datasetDigest)) {
+      failProtocol('Redacted artifact source dataset digest is invalid.')
+    }
+    if (
+      value.recordCount !== summary.scanFamilies[family].matchedCount ||
+      value.scannedCount !== summary.scanFamilies[family].scannedCount ||
+      value.datasetDigest !== summary.scanFamilies[family].datasetDigest
+    ) {
+      failProtocol('Redacted artifact scan-family record parity failed.')
+    }
+  }
+  return {
+    totals: { ...sourceReconciliation.totals },
+    scanFamilies: Object.fromEntries(AUDIT_SCAN_FAMILIES.map((family) => [
+      family,
+      { ...sourceReconciliation.scanFamilies[family] },
+    ])),
+  }
+}
+
+export function buildRedactedCohortArtifact({
+  summary,
+  occurrenceEvidence,
+  unmatchedEvidence,
+  sourceReconciliation,
+  academyId,
+  redactionKey,
+}) {
+  if (!Array.isArray(occurrenceEvidence) || !Array.isArray(unmatchedEvidence)) {
+    failProtocol('Record evidence is unavailable for redacted artifact.')
+  }
+  const occurrenceKeys = occurrenceEvidence.map((row) =>
+    normalizeString(row.occurrenceKey)
+  )
+  if (
+    occurrenceKeys.some((key) => !key) ||
+    new Set(occurrenceKeys).size !== occurrenceEvidence.length
+  ) {
+    failProtocol('Redacted artifact occurrence keys are not unique.')
+  }
+  if (occurrenceEvidence.length !== summary.totals.occurrences) {
+    failProtocol('Redacted artifact occurrence total mismatch.')
+  }
+  const unmatchedKeys = unmatchedEvidence.map((row) =>
+    normalizeString(row.evidenceKey)
+  )
+  if (
+    unmatchedKeys.some((key) => !key) ||
+    new Set(unmatchedKeys).size !== unmatchedEvidence.length ||
+    new Set([...occurrenceKeys, ...unmatchedKeys]).size !==
+      occurrenceKeys.length + unmatchedKeys.length
+  ) {
+    failProtocol('Redacted artifact non-occurrence evidence keys are invalid.')
+  }
+  const sourceCounts = validateSourceReconciliation(
+    summary,
+    sourceReconciliation
+  )
+
+  const categoryCounts = categoryMapFor(AUDIT_BLOCKER_CATEGORIES)
+  const primaryCohortCounts = categoryMapFor(REDACTED_PRIMARY_COHORTS)
+  const currentLedgerCounts = countEvidenceBy(
+    occurrenceEvidence,
+    'currentLedgerMode',
+    ['canonical', 'legacy', 'inconsistent']
+  )
+  const originCounts = countEvidenceBy(
+    occurrenceEvidence,
+    'originMode',
+    ['born_canonical', 'converted_legacy', 'legacy_unconverted', 'unknown']
+  )
+  const legacyPartitionCounts = countEvidenceBy(
+    occurrenceEvidence,
+    'legacyPartitionState',
+    ['already_converted', 'terminal_unconverted', 'safely_convertible', 'unsafe']
+  )
+  const cohortKeySet = new Set()
+  let safeOccurrences = 0
+  let blockedOccurrences = 0
+  const addBlockingCategories = (categories) => {
+    const blockingCategories = sortedBlockingCategories(categories)
+    for (const category of blockingCategories) {
+      if (!AUDIT_BLOCKER_CATEGORIES.includes(category)) {
+        failProtocol('Redacted artifact contains an unknown blocking category.')
+      }
+      categoryCounts[category] += 1
+    }
+    return blockingCategories
+  }
+  const addCohortKey = (rawKey) => {
+    const cohortKey = redactedCohortKey({
+      redactionKey,
+      academyId,
+      occurrenceKey: rawKey,
+    })
+    if (cohortKeySet.has(cohortKey)) {
+      failProtocol('Redacted artifact cohort key collision.')
+    }
+    cohortKeySet.add(cohortKey)
+    return cohortKey
+  }
+
+  const occurrences = occurrenceEvidence.map((evidence) => {
+    const blockingCategories = addBlockingCategories(evidence.blockingCategories)
+    const blocked = blockingCategories.length > 0
+    if (blocked) blockedOccurrences += 1
+    else safeOccurrences += 1
+    const rule = classifyPrimaryCohort({
+      ...evidence,
+      blockingCategories,
+    })
+    primaryCohortCounts[rule.name] += 1
+    return {
+      cohortKey: addCohortKey(evidence.occurrenceKey),
+      primaryCohort: rule.name,
+      secondaryCategories: blockingCategories.filter(
+        (category) => !rule.categories.includes(category)
+      ),
+      blockingCategories,
+      currentLedgerMode: evidence.currentLedgerMode,
+      originMode: evidence.originMode,
+      legacyPartitionState: evidence.legacyPartitionState,
+      repairability: classifyRepairability(evidence, rule.name),
+      evidenceFlags: { ...evidence.evidenceFlags },
+    }
+  }).sort((left, right) => left.cohortKey.localeCompare(right.cohortKey))
+
+  const nonOccurrenceEvidence = unmatchedEvidence.map((evidence) => {
+    if (evidence.evidenceType !== 'unmatched_fixed_deduction_credit') {
+      failProtocol('Redacted artifact contains an unknown evidence type.')
+    }
+    return {
+      cohortKey: addCohortKey(evidence.evidenceKey),
+      evidenceType: evidence.evidenceType,
+      blockingCategories: addBlockingCategories(evidence.blockingCategories),
+      repairability: 'financial_manual_review_only',
+    }
+  }).sort((left, right) => left.cohortKey.localeCompare(right.cohortKey))
+
+  const rawBlockingCategoryCount = Object.values(categoryCounts).reduce(
+    (sum, value) => sum + value,
+    0
+  )
+  const totalOccurrences = occurrences.length
+  const primaryTotal = Object.values(primaryCohortCounts).reduce(
+    (sum, value) => sum + value,
+    0
+  )
+  const blockedPrimaryTotal = PRIMARY_COHORT_RULES.reduce(
+    (sum, rule) => sum + primaryCohortCounts[rule.name],
+    0
+  )
+  if (
+    safeOccurrences + blockedOccurrences !== totalOccurrences ||
+    primaryTotal !== totalOccurrences ||
+    blockedPrimaryTotal !== blockedOccurrences ||
+    rawBlockingCategoryCount !== summary.blockerTotal
+  ) {
+    failProtocol('Redacted artifact occurrence reconciliation failed.')
+  }
+  for (const category of AUDIT_BLOCKER_CATEGORIES) {
+    if (categoryCounts[category] !== summary.counts[category]) {
+      failProtocol('Redacted artifact category parity failed.')
+    }
+  }
+  if (
+    currentLedgerCounts.canonical !== summary.counts.currentCanonicalLedgerTotal ||
+    currentLedgerCounts.legacy !== summary.counts.currentLegacyLedgerTotal ||
+    currentLedgerCounts.inconsistent !==
+      summary.counts.currentUnknownOrMixedLedgerTotal ||
+    originCounts.born_canonical !== summary.counts.bornCanonicalTotal ||
+    (
+      originCounts.converted_legacy +
+      originCounts.legacy_unconverted +
+      occurrenceEvidence.filter((row) =>
+        row.originMode === 'unknown' &&
+        row.legacyPartitionState !== 'not_legacy_origin'
+      ).length
+    ) !== summary.counts.legacyOriginTotal ||
+    legacyPartitionCounts.already_converted !==
+      summary.counts.legacyAlreadyConverted ||
+    legacyPartitionCounts.terminal_unconverted !== summary.counts.legacyTerminal ||
+    legacyPartitionCounts.safely_convertible !==
+      summary.counts.legacySafelyConvertible ||
+    legacyPartitionCounts.unsafe !== summary.counts.legacyUnsafeToConvert
+  ) {
+    failProtocol('Redacted artifact inventory parity failed.')
+  }
+  const expectedUnknownOrigin = occurrenceEvidence.filter((row) =>
+    row.originMode === 'unknown' &&
+    row.legacyPartitionState === 'not_legacy_origin'
+  ).length
+  if (expectedUnknownOrigin !== summary.counts.unknownOriginTotal) {
+    failProtocol('Redacted artifact origin partition failed.')
+  }
+
+  const allBlockingEvidence = [
+    ...occurrenceEvidence,
+    ...unmatchedEvidence,
+  ]
+  const overlapCounts = {}
+  for (let leftIndex = 0; leftIndex < AUDIT_BLOCKER_CATEGORIES.length; leftIndex++) {
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < AUDIT_BLOCKER_CATEGORIES.length;
+      rightIndex++
+    ) {
+      const left = AUDIT_BLOCKER_CATEGORIES[leftIndex]
+      const right = AUDIT_BLOCKER_CATEGORIES[rightIndex]
+      overlapCounts[`${left}&${right}`] = allBlockingEvidence.filter((row) => {
+        const categories = new Set(row.blockingCategories)
+        return categories.has(left) && categories.has(right)
+      }).length
+    }
+  }
+
+  return {
+    artifactVersion: REDACTED_ARTIFACT_VERSION,
+    auditVersion: AUDIT_VERSION,
+    project: PRODUCTION_PROJECT_ID,
+    academy: 'REDACTED',
+    completedRuns: summary.completedRuns,
+    consistency: summary.consistency,
+    runDigests: [...summary.runDigests],
+    summary: {
+      totalOccurrences,
+      safeOccurrences,
+      blockedOccurrences,
+      rawBlockingCategoryCount,
+      nonOccurrenceEvidenceCount: nonOccurrenceEvidence.length,
+    },
+    sourceCounts,
+    primaryCohortCounts,
+    categoryCounts,
+    overlapCounts,
+    occurrences,
+    nonOccurrenceEvidence,
+  }
+}
+
+export function validateRedactedArtifactEnvironment(env) {
+  const outputPath = normalizeString(env.AUDIT_REDACTED_OUTPUT)
+  const redactionKey = normalizeString(env.AUDIT_REDACTION_KEY)
+  if (!outputPath && !redactionKey) return null
+  if (!outputPath || !redactionKey) {
+    throw new Error(
+      'AUDIT_REDACTED_OUTPUT and AUDIT_REDACTION_KEY must be provided together.'
+    )
+  }
+  if (!path.isAbsolute(outputPath)) {
+    throw new Error('AUDIT_REDACTED_OUTPUT must be an absolute path.')
+  }
+  if (redactionKey.length < MIN_REDACTION_KEY_LENGTH) {
+    throw new Error(
+      `AUDIT_REDACTION_KEY must be at least ${MIN_REDACTION_KEY_LENGTH} characters.`
+    )
+  }
+  const resolvedOutputPath = path.resolve(outputPath)
+  if (fs.existsSync(resolvedOutputPath)) {
+    throw new Error('AUDIT_REDACTED_OUTPUT must not already exist.')
+  }
+  const parent = path.dirname(resolvedOutputPath)
+  if (!fs.existsSync(parent) || !fs.statSync(parent).isDirectory()) {
+    throw new Error('AUDIT_REDACTED_OUTPUT parent directory must exist.')
+  }
+  return {
+    outputPath: resolvedOutputPath,
+    redactionKey,
+  }
+}
+
+export async function writeRedactedCohortArtifact(outputPath, artifact) {
+  const parent = path.dirname(outputPath)
+  const temporaryPath = path.join(
+    parent,
+    `.${path.basename(outputPath)}.${process.pid}.` +
+      `${crypto.randomBytes(12).toString('hex')}.tmp`
+  )
+  let handle
+  try {
+    handle = await fs.promises.open(temporaryPath, 'wx', 0o600)
+    await handle.writeFile(`${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
+    await handle.sync()
+    await handle.close()
+    handle = null
+    await fs.promises.chmod(temporaryPath, 0o600)
+    await fs.promises.rename(temporaryPath, outputPath)
+  } catch {
+    if (handle) await handle.close().catch(() => {})
+    await fs.promises.unlink(temporaryPath).catch(() => {})
+    throw new Error('Redacted cohort artifact write failed.')
   }
 }
 
@@ -1357,7 +1926,11 @@ export function validateProductionAuditEnvironment(env) {
   if (!normalizeString(env.FIREBASE_ID_TOKEN)) {
     throw new Error('FIREBASE_ID_TOKEN is required.')
   }
-  return { academyId: env.ACADEMY_ID, token: env.FIREBASE_ID_TOKEN }
+  return {
+    academyId: env.ACADEMY_ID,
+    token: env.FIREBASE_ID_TOKEN,
+    redactedArtifact: validateRedactedArtifactEnvironment(env),
+  }
 }
 
 async function callAuditPage({
@@ -1434,7 +2007,7 @@ async function runSingleAudit({ fetchImpl, token, academyId }) {
       cursor = nextCursor
     }
   }
-  return aggregateAuditPages(pagesByFamily)
+  return aggregateAuditPagesWithEvidence(pagesByFamily)
 }
 
 function consistencyPayload(summary) {
@@ -1457,13 +2030,31 @@ function consistencyPayload(summary) {
 export async function runProductionAudit({
   env = process.env,
   fetchImpl = globalThis.fetch,
+  artifactWriter = writeRedactedCohortArtifact,
 } = {}) {
-  const { academyId, token } = validateProductionAuditEnvironment(env)
+  const {
+    academyId,
+    token,
+    redactedArtifact,
+  } = validateProductionAuditEnvironment(env)
   if (typeof fetchImpl !== 'function') throw new Error('fetch is unavailable.')
-  const first = await runSingleAudit({ fetchImpl, token, academyId })
-  const second = await runSingleAudit({ fetchImpl, token, academyId })
-  const consistency = stableStringify(consistencyPayload(first)) ===
+  const firstRun = await runSingleAudit({ fetchImpl, token, academyId })
+  const secondRun = await runSingleAudit({ fetchImpl, token, academyId })
+  const first = firstRun.summary
+  const second = secondRun.summary
+  const summaryConsistency = stableStringify(consistencyPayload(first)) ===
     stableStringify(consistencyPayload(second))
+  const artifactEvidenceConsistency = !redactedArtifact ||
+    stableStringify({
+      occurrenceEvidence: firstRun.occurrenceEvidence,
+      unmatchedEvidence: firstRun.unmatchedEvidence,
+      sourceReconciliation: firstRun.sourceReconciliation,
+    }) === stableStringify({
+      occurrenceEvidence: secondRun.occurrenceEvidence,
+      unmatchedEvidence: secondRun.unmatchedEvidence,
+      sourceReconciliation: secondRun.sourceReconciliation,
+    })
+  const consistency = summaryConsistency && artifactEvidenceConsistency
   const result = {
     ...second,
     quietWindowConfirmed: true,
@@ -1473,6 +2064,23 @@ export async function runProductionAudit({
     pass: second.pass && first.pass && consistency,
   }
   validateFinalAuditSummary(result)
+  if (
+    redactedArtifact &&
+    result.complete === true &&
+    result.truncated === false &&
+    result.omittedCount === 0 &&
+    result.consistency === true
+  ) {
+    const artifact = buildRedactedCohortArtifact({
+      summary: result,
+      occurrenceEvidence: secondRun.occurrenceEvidence,
+      unmatchedEvidence: secondRun.unmatchedEvidence,
+      sourceReconciliation: secondRun.sourceReconciliation,
+      academyId,
+      redactionKey: redactedArtifact.redactionKey,
+    })
+    await artifactWriter(redactedArtifact.outputPath, artifact)
+  }
   return result
 }
 
@@ -1662,17 +2270,28 @@ export function exitCodeForAuditSummary(summary) {
 export async function executeAuditCli({
   env = process.env,
   fetchImpl = globalThis.fetch,
+  artifactWriter = writeRedactedCohortArtifact,
   writeOutput = (value) => process.stdout.write(`${value}\n`),
   writeError = (value) => process.stderr.write(`${value}\n`),
 } = {}) {
   try {
-    const summary = await runProductionAudit({ env, fetchImpl })
+    const summary = await runProductionAudit({
+      env,
+      fetchImpl,
+      artifactWriter,
+    })
     writeOutput(JSON.stringify(summary))
     return exitCodeForAuditSummary(summary)
   } catch (error) {
     const token = normalizeString(env.FIREBASE_ID_TOKEN)
+    const redactionKey = normalizeString(env.AUDIT_REDACTION_KEY)
     const rawMessage = normalizeString(error?.message) || 'audit_failed'
-    const safeMessage = token ? rawMessage.split(token).join('[REDACTED]') : rawMessage
+    const safeMessage = [token, redactionKey]
+      .filter(Boolean)
+      .reduce(
+        (message, secret) => message.split(secret).join('[REDACTED]'),
+        rawMessage
+      )
     writeError(JSON.stringify({
       auditVersion: AUDIT_VERSION,
       error: safeMessage,

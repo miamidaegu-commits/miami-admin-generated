@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 
 import {
@@ -8,12 +11,16 @@ import {
   AUDIT_CATEGORY_REASONS,
   AUDIT_INVENTORY_CATEGORIES,
   AUDIT_SCAN_FAMILIES,
+  REDACTED_PRIMARY_COHORTS,
   aggregateAuditPages,
+  buildRedactedCohortArtifact,
   classifyLegacyPartitionState,
   executeAuditCli,
   exitCodeForAuditSummary,
+  redactedCohortKey,
   runProductionAudit,
   validateAuditV2Page,
+  writeRedactedCohortArtifact,
 } from '../scripts/run-fixed-private-outcome-ledger-audit.mjs'
 
 const ACADEMY_ID = 'production-audit-academy'
@@ -1114,18 +1121,41 @@ test('credit with deductionApplied false is conflicting evidence', () => {
   assert.equal(summary.pass, false)
 })
 
-test('fixed deduction credit without an occurrence is unclassifiable', async () => {
+test('fixed deduction credit without an occurrence is redacted and reconciled', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-audit-orphan-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const outputPath = path.join(directory, 'artifact.json')
   const orphan = deductionCredit(occurrence({ key: 'orphan' }), {
     id: 'orphan-fixed-credit',
   })
   const pages = pagesFor({ credits: [orphan] })
   const summary = await runProductionAudit({
-    env: environment(),
+    env: environment({
+      AUDIT_REDACTED_OUTPUT: outputPath,
+      AUDIT_REDACTION_KEY: REDACTION_KEY,
+    }),
     fetchImpl: mockStablePages(pages),
   })
   assert.equal(summary.counts.unclassifiableOccurrence, 1)
   assert.equal(summary.counts.conflictingDeductionEvidence, 1)
   assert.equal(exitCodeForAuditSummary(summary), 2)
+  const artifact = JSON.parse(fs.readFileSync(outputPath, 'utf8'))
+  assert.equal(artifact.summary.totalOccurrences, 0)
+  assert.equal(artifact.summary.nonOccurrenceEvidenceCount, 1)
+  assert.equal(artifact.summary.rawBlockingCategoryCount, 2)
+  assert.equal(artifact.occurrences.length, 0)
+  assert.equal(artifact.nonOccurrenceEvidence.length, 1)
+  assert.deepEqual(
+    artifact.nonOccurrenceEvidence[0].blockingCategories,
+    ['conflictingDeductionEvidence', 'unclassifiableOccurrence']
+  )
+  assert.equal(
+    artifact.overlapCounts[
+      'conflictingDeductionEvidence&unclassifiableOccurrence'
+    ],
+    1
+  )
+  assert.equal(JSON.stringify(artifact).includes(orphan.id), false)
 })
 
 test('protocol page validator accepts only the exact current schema', () => {
@@ -1180,4 +1210,565 @@ test('runner never writes token to stdout or stderr', async () => {
   })
   assert.equal(exitCode, 1)
   assert.equal(output.join('\n').includes(TOKEN), false)
+})
+
+const REDACTION_KEY = 'artifact-redaction-key-at-least-32-characters'
+
+function finalSummary(summary) {
+  return {
+    ...summary,
+    quietWindowConfirmed: true,
+    completedRuns: 2,
+    consistency: true,
+    runDigests: [summary.summaryDigest, summary.summaryDigest],
+  }
+}
+
+function sourceReconciliation(summary) {
+  return {
+    totals: { ...summary.totals },
+    scanFamilies: Object.fromEntries(AUDIT_SCAN_FAMILIES.map((family) => [
+      family,
+      {
+        scannedCount: summary.scanFamilies[family].scannedCount,
+        recordCount: summary.scanFamilies[family].matchedCount,
+        datasetDigest: summary.scanFamilies[family].datasetDigest,
+      },
+    ])),
+  }
+}
+
+function safeLegacyEvidence(record) {
+  return {
+    occurrenceKey: record.occurrenceKey,
+    blockingCategories: [],
+    currentLedgerMode: 'legacy',
+    originMode: 'legacy_unconverted',
+    legacyPartitionState: 'safely_convertible',
+    evidenceFlags: {
+      activeLifecycle: true,
+      terminalLifecycle: false,
+      hasAllLinkedDocuments: true,
+      allFixedFamilies: true,
+      packageReferencePresent: true,
+      teacherMappingResolved: true,
+      singleConsistentDeductionEvidence: false,
+      linkageEvidenceComplete: true,
+    },
+  }
+}
+
+test('redacted artifact opt-in guards fail before network', async () => {
+  const invalidArtifactEnvironments = [
+    environment({ AUDIT_REDACTED_OUTPUT: '/tmp/audit-artifact.json' }),
+    environment({ AUDIT_REDACTION_KEY: REDACTION_KEY }),
+    environment({
+      AUDIT_REDACTED_OUTPUT: 'relative-artifact.json',
+      AUDIT_REDACTION_KEY: REDACTION_KEY,
+    }),
+    environment({
+      AUDIT_REDACTED_OUTPUT: '/tmp/audit-artifact.json',
+      AUDIT_REDACTION_KEY: 'too-short',
+    }),
+  ]
+  for (const env of invalidArtifactEnvironments) {
+    let fetchCount = 0
+    const exitCode = await executeAuditCli({
+      env,
+      fetchImpl: async () => {
+        fetchCount += 1
+        throw new Error('network must not run')
+      },
+      writeOutput() {},
+      writeError() {},
+    })
+    assert.equal(exitCode, 1)
+    assert.equal(fetchCount, 0)
+  }
+})
+
+test('pre-existing artifact output fails before network', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-audit-stale-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const outputPath = path.join(directory, 'artifact.json')
+  const staleContent = '{"stale":true}\n'
+  fs.writeFileSync(outputPath, staleContent, { mode: 0o600 })
+  let fetchCount = 0
+  const exitCode = await executeAuditCli({
+    env: environment({
+      AUDIT_REDACTED_OUTPUT: outputPath,
+      AUDIT_REDACTION_KEY: REDACTION_KEY,
+    }),
+    fetchImpl: async () => {
+      fetchCount += 1
+      throw new Error('network must not run')
+    },
+    writeOutput() {},
+    writeError() {},
+  })
+  assert.equal(exitCode, 1)
+  assert.equal(fetchCount, 0)
+  assert.equal(fs.readFileSync(outputPath, 'utf8'), staleContent)
+})
+
+test('artifact opt-out preserves existing runner behavior', async () => {
+  let artifactWriteCount = 0
+  const summary = await runProductionAudit({
+    env: environment(),
+    fetchImpl: mockStablePages(pagesFor({})),
+    artifactWriter: async () => {
+      artifactWriteCount += 1
+    },
+  })
+  assert.equal(exitCodeForAuditSummary(summary), 0)
+  assert.equal(artifactWriteCount, 0)
+})
+
+test('cohort HMAC is deterministic per key and isolated across keys', () => {
+  const input = {
+    academyId: ACADEMY_ID,
+    occurrenceKey: 'raw-occurrence-key',
+  }
+  const first = redactedCohortKey({
+    ...input,
+    redactionKey: REDACTION_KEY,
+  })
+  const repeated = redactedCohortKey({
+    ...input,
+    redactionKey: REDACTION_KEY,
+  })
+  const otherKey = redactedCohortKey({
+    ...input,
+    redactionKey: `${REDACTION_KEY}-different`,
+  })
+  assert.match(first, /^[a-f0-9]{64}$/)
+  assert.equal(first, repeated)
+  assert.notEqual(first, otherKey)
+  assert.equal(first.includes(input.occurrenceKey), false)
+})
+
+test('artifact is exhaustive, redacted, deterministic, and mode 0600', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-audit-artifact-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const outputPath = path.join(directory, 'cohorts.json')
+  const financial = occurrence({
+    key: 'artifact-financial',
+    applied: true,
+    deductionIds: ['artifact-financial-missing-credit'],
+    diagnostics: {
+      packageMismatch: true,
+      missingLinkedDocument: true,
+    },
+  })
+  const packageBlocked = occurrence({
+    key: 'artifact-package',
+    diagnostics: { packageMismatch: true },
+  })
+  const structural = occurrence({
+    key: 'artifact-structural',
+    diagnostics: {
+      missingLinkedDocument: true,
+      orphanFixedReservation: true,
+    },
+  })
+  const linkMismatch = occurrence({
+    key: 'artifact-link',
+    diagnostics: {
+      linkMismatch: true,
+      fixedProvenanceMismatch: true,
+    },
+  })
+  const teacherMissing = occurrence({ key: 'artifact-teacher' })
+  const unsafe = occurrence({
+    key: 'artifact-unsafe',
+    ledgerMode: 'legacy',
+    diagnostics: { unclassifiableOccurrence: true },
+  })
+  const safe = occurrence({
+    key: 'artifact-safe',
+    ledgerMode: 'legacy',
+    lessonCountsByDate: true,
+    packageUsedCount: 1,
+  })
+  const records = [
+    financial,
+    packageBlocked,
+    structural,
+    linkMismatch,
+    teacherMissing,
+    unsafe,
+    safe,
+  ]
+  const memberships = records
+    .filter((record) => record !== teacherMissing)
+    .map((record) => membership(
+      record.lessonId.replace(/-lesson$/, '')
+    ))
+  const summary = await runProductionAudit({
+    env: environment({
+      AUDIT_REDACTED_OUTPUT: outputPath,
+      AUDIT_REDACTION_KEY: REDACTION_KEY,
+    }),
+    fetchImpl: mockStablePages(pagesFor({
+      occurrences: records,
+      memberships,
+    })),
+  })
+  assert.equal(exitCodeForAuditSummary(summary), 2)
+  assert.equal(fs.existsSync(outputPath), true)
+  assert.equal(fs.statSync(outputPath).mode & 0o777, 0o600)
+
+  const artifact = JSON.parse(fs.readFileSync(outputPath, 'utf8'))
+  assert.equal(artifact.artifactVersion, 1)
+  assert.equal(artifact.auditVersion, 2)
+  assert.equal(artifact.project, 'daegu-miami-production')
+  assert.equal(artifact.academy, 'REDACTED')
+  assert.equal(artifact.completedRuns, 2)
+  assert.equal(artifact.consistency, true)
+  assert.equal(artifact.summary.totalOccurrences, records.length)
+  assert.equal(artifact.summary.safeOccurrences, 1)
+  assert.equal(artifact.summary.blockedOccurrences, 6)
+  assert.equal(
+    Object.values(artifact.primaryCohortCounts).reduce(
+      (sum, value) => sum + value,
+      0
+    ),
+    records.length
+  )
+  for (const cohort of [
+    'financial_conflict_manual_only',
+    'student_or_package_manual_review',
+    'structural_missing_link',
+    'structural_link_mismatch',
+    'teacher_mapping_required',
+    'unclassifiable_manual_review',
+    'safe_convertible',
+  ]) {
+    assert.equal(artifact.primaryCohortCounts[cohort], 1)
+  }
+  assert.deepEqual(
+    Object.keys(artifact.primaryCohortCounts),
+    REDACTED_PRIMARY_COHORTS
+  )
+  assert.equal(
+    artifact.overlapCounts[
+      'missingLinkedDocument&orphanFixedReservation'
+    ],
+    1
+  )
+  const financialArtifact = artifact.occurrences.find(
+    (row) => row.primaryCohort === 'financial_conflict_manual_only'
+  )
+  assert.deepEqual(financialArtifact.secondaryCategories, [
+    'missingLinkedDocument',
+    'packageMismatch',
+  ])
+  assert.equal(
+    financialArtifact.repairability,
+    'financial_manual_review_only'
+  )
+  assert.equal(
+    artifact.occurrences.find(
+      (row) => row.primaryCohort === 'structural_missing_link'
+    ).repairability,
+    'obsolete_orphan_candidate'
+  )
+  assert.equal(
+    artifact.occurrences.find(
+      (row) => row.primaryCohort === 'safe_convertible'
+    ).repairability,
+    'deterministic_repair_candidate'
+  )
+  assert.deepEqual(
+    artifact.occurrences.map((row) => row.cohortKey),
+    artifact.occurrences.map((row) => row.cohortKey).sort()
+  )
+
+  const serialized = JSON.stringify(artifact)
+  for (const record of records) {
+    for (const rawValue of [
+      record.occurrenceKey,
+      record.lessonId,
+      record.reservationId,
+      record.slotId,
+      record.studentId,
+      record.packageId,
+      ...record.teacherIdentity.values,
+    ]) {
+      assert.equal(serialized.includes(rawValue), false)
+    }
+  }
+  for (const forbidden of [
+    ACADEMY_ID,
+    TOKEN,
+    REDACTION_KEY,
+    'Authorization',
+    'studentName',
+    'teacherName',
+    'email',
+    'phone',
+  ]) {
+    assert.equal(serialized.includes(forbidden), false)
+  }
+})
+
+test('artifact builder fails closed on occurrence and count mismatches', () => {
+  const safe = occurrence({
+    key: 'artifact-reconcile',
+    ledgerMode: 'legacy',
+    lessonCountsByDate: true,
+    packageUsedCount: 1,
+  })
+  const summary = finalSummary(aggregateAuditPages(pagesFor({
+    occurrences: [safe],
+    memberships: [membership('artifact-reconcile')],
+  })))
+  const evidence = safeLegacyEvidence(safe)
+  const artifact = buildRedactedCohortArtifact({
+    summary,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: sourceReconciliation(summary),
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  })
+  assert.equal(artifact.summary.totalOccurrences, 1)
+  assert.equal(artifact.summary.safeOccurrences, 1)
+  assert.deepEqual(
+    buildRedactedCohortArtifact({
+      summary,
+      occurrenceEvidence: [structuredClone(evidence)],
+      unmatchedEvidence: [],
+      sourceReconciliation: sourceReconciliation(summary),
+      academyId: ACADEMY_ID,
+      redactionKey: REDACTION_KEY,
+    }),
+    artifact
+  )
+
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary,
+    occurrenceEvidence: [evidence, structuredClone(evidence)],
+    unmatchedEvidence: [],
+    sourceReconciliation: sourceReconciliation(summary),
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+
+  const wrongTotal = structuredClone(summary)
+  wrongTotal.totals.occurrences = 2
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary: wrongTotal,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: sourceReconciliation(summary),
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+
+  const wrongBlockingTotal = structuredClone(summary)
+  wrongBlockingTotal.blockerTotal = 1
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary: wrongBlockingTotal,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: sourceReconciliation(summary),
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+
+  const wrongCategoryCount = structuredClone(summary)
+  wrongCategoryCount.counts.linkMismatch = 1
+  wrongCategoryCount.blockerTotal = 1
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary: wrongCategoryCount,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: sourceReconciliation(summary),
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+
+  const wrongSourceTotal = sourceReconciliation(summary)
+  wrongSourceTotal.totals.deductionCredits += 1
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: wrongSourceTotal,
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+
+  const wrongScanFamily = sourceReconciliation(summary)
+  wrongScanFamily.scanFamilies.fixedLessons.recordCount += 1
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: wrongScanFamily,
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+
+  const wrongScannedCount = sourceReconciliation(summary)
+  wrongScannedCount.scanFamilies.fixedLessons.scannedCount += 1
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: wrongScannedCount,
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+
+  const wrongScanDigest = sourceReconciliation(summary)
+  wrongScanDigest.scanFamilies.fixedLessons.datasetDigest = '0'.repeat(64)
+  assert.throws(() => buildRedactedCohortArtifact({
+    summary,
+    occurrenceEvidence: [evidence],
+    unmatchedEvidence: [],
+    sourceReconciliation: wrongScanDigest,
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  }))
+})
+
+test('non-convertible blocker-free occurrence is safe_other', () => {
+  const canonical = occurrence({ key: 'artifact-safe-other' })
+  const summary = finalSummary(aggregateAuditPages(pagesFor({
+    occurrences: [canonical],
+    memberships: [membership('artifact-safe-other')],
+  })))
+  const artifact = buildRedactedCohortArtifact({
+    summary,
+    occurrenceEvidence: [{
+      occurrenceKey: canonical.occurrenceKey,
+      blockingCategories: [],
+      currentLedgerMode: 'canonical',
+      originMode: 'born_canonical',
+      legacyPartitionState: 'not_legacy_origin',
+      evidenceFlags: {
+        activeLifecycle: true,
+        terminalLifecycle: false,
+        hasAllLinkedDocuments: true,
+        allFixedFamilies: true,
+        packageReferencePresent: true,
+        teacherMappingResolved: true,
+        singleConsistentDeductionEvidence: false,
+        linkageEvidenceComplete: true,
+      },
+    }],
+    unmatchedEvidence: [],
+    sourceReconciliation: sourceReconciliation(summary),
+    academyId: ACADEMY_ID,
+    redactionKey: REDACTION_KEY,
+  })
+  assert.equal(artifact.primaryCohortCounts.safe_other, 1)
+  assert.equal(
+    artifact.occurrences[0].repairability,
+    'safe_no_repair_required'
+  )
+})
+
+test('artifact writer leaves no partial file on failure', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-audit-partial-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const outputPath = path.join(directory, 'missing-parent', 'artifact.json')
+  await assert.rejects(
+    writeRedactedCohortArtifact(outputPath, { artifactVersion: 1 }),
+    /Redacted cohort artifact write failed/
+  )
+  assert.equal(fs.existsSync(outputPath), false)
+  assert.deepEqual(fs.readdirSync(directory), [])
+})
+
+test('artifact write failure overrides a successful audit with exit 1', async () => {
+  let fetchCount = 0
+  const pages = pagesFor({})
+  const fetchImpl = mockFetch((request) => {
+    fetchCount += 1
+    return structuredClone(pages[request.scanFamily][0])
+  })
+  const errors = []
+  const exitCode = await executeAuditCli({
+    env: environment({
+      AUDIT_REDACTED_OUTPUT: '/tmp/redacted-artifact.json',
+      AUDIT_REDACTION_KEY: REDACTION_KEY,
+    }),
+    fetchImpl,
+    artifactWriter: async () => {
+      throw new Error(`artifact failed ${REDACTION_KEY}`)
+    },
+    writeOutput() {},
+    writeError(value) {
+      errors.push(value)
+    },
+  })
+  assert.equal(fetchCount, AUDIT_SCAN_FAMILIES.length * 2)
+  assert.equal(exitCode, 1)
+  assert.equal(errors.join('\n').includes(REDACTION_KEY), false)
+})
+
+test('artifact contents and output path are never written to stdout', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-audit-stdout-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const outputPath = path.join(directory, 'artifact.json')
+  const output = []
+  const exitCode = await executeAuditCli({
+    env: environment({
+      AUDIT_REDACTED_OUTPUT: outputPath,
+      AUDIT_REDACTION_KEY: REDACTION_KEY,
+    }),
+    fetchImpl: mockStablePages(pagesFor({})),
+    writeOutput(value) {
+      output.push(value)
+    },
+    writeError(value) {
+      output.push(value)
+    },
+  })
+  const serializedOutput = output.join('\n')
+  assert.equal(exitCode, 0)
+  assert.equal(fs.existsSync(outputPath), true)
+  assert.equal(serializedOutput.includes(outputPath), false)
+  assert.equal(serializedOutput.includes('artifactVersion'), false)
+  assert.equal(serializedOutput.includes('cohortKey'), false)
+  assert.equal(serializedOutput.includes(REDACTION_KEY), false)
+})
+
+test('artifact is not written when double-run occurrence evidence differs', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fixed-audit-drift-'))
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }))
+  const outputPath = path.join(directory, 'artifact.json')
+  const first = occurrence({ key: 'artifact-drift' })
+  const second = occurrence({
+    key: 'artifact-drift',
+    diagnostics: { linkMismatch: true },
+  })
+  const firstPages = pagesFor({
+    occurrences: [first],
+    memberships: [membership('artifact-drift')],
+  })
+  const secondPages = pagesFor({
+    occurrences: [second],
+    memberships: [membership('artifact-drift')],
+  })
+  let callCount = 0
+  const fetchImpl = mockFetch((request) => {
+    const runPages = callCount++ < AUDIT_SCAN_FAMILIES.length
+      ? firstPages
+      : secondPages
+    return structuredClone(runPages[request.scanFamily][0])
+  })
+  const summary = await runProductionAudit({
+    env: environment({
+      AUDIT_REDACTED_OUTPUT: outputPath,
+      AUDIT_REDACTION_KEY: REDACTION_KEY,
+    }),
+    fetchImpl,
+  })
+  assert.equal(summary.consistency, false)
+  assert.equal(exitCodeForAuditSummary(summary), 3)
+  assert.equal(fs.existsSync(outputPath), false)
 })
