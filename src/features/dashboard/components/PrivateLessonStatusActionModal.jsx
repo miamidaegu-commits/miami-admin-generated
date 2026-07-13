@@ -109,8 +109,550 @@ function getOutcomeCommitErrorGuidance(error) {
   )
 }
 
+function getFixedOutcomeErrorGuidance(error) {
+  if (error?.retryWithSamePayload === true) {
+    return '네트워크/시간초과/알 수 없는 전송 오류입니다. 미리보기 payload, requestId, planHash를 유지했습니다. 같은 확정 버튼으로 동일 payload를 재전송해 idempotent 결과를 확인하세요.'
+  }
+  const searchable = [
+    error?.code,
+    error?.message,
+    ...(Array.isArray(error?.blockedReasons) ? error.blockedReasons : []),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  if (searchable.includes('preview_stale') || searchable.includes('planhash')) {
+    return 'preview_stale: 연결 문서나 수강권 원장이 변경되었습니다. 새 requestId로 미리보기부터 다시 실행하세요.'
+  }
+  if (searchable.includes('request_id_conflict') || searchable.includes('already-exists')) {
+    return 'request_id_conflict: 같은 requestId를 재사용하지 말고 새 미리보기부터 시작하세요.'
+  }
+  if (
+    searchable.includes('package_aggregate_conflict') ||
+    searchable.includes('inconsistent_ledger_markers')
+  ) {
+    return '원장 진단 충돌입니다. 고정 회차의 lesson/reservation/slot/package 연결을 관리자가 먼저 확인해야 합니다.'
+  }
+  if (searchable.includes('permission') || searchable.includes('teacher_not_owner')) {
+    return '권한 또는 선생님 소유권이 일치하지 않습니다. 현재 학원 멤버십과 회차 담당 선생님을 확인하세요.'
+  }
+  return error?.requiresFreshPreview === true
+    ? '결정적 서버 거부입니다. 기존 미리보기는 폐기되었습니다. 오류와 원장 진단을 확인한 뒤 새 미리보기를 실행하세요.'
+    : '전송 결과를 확정할 수 없습니다. 기존 payload를 유지한 채 동일 요청으로 결과를 다시 확인하세요.'
+}
+
+function getFixedOutcomeTargetIds(row) {
+  const rowKind = String(row?._calendarRowKind || '').trim()
+  return {
+    lessonId: String(
+      rowKind === 'privateReservation'
+        ? row?.lessonId || row?.fixedLessonId || row?.sourceLessonId || ''
+        : row?.id || row?.lessonId || row?.fixedLessonId || ''
+    ).trim(),
+    reservationId: String(
+      rowKind === 'privateReservation'
+        ? row?.id ||
+            row?.reservationId ||
+            row?.privateLessonReservationId ||
+            row?.privateReservationId ||
+            ''
+        : row?.reservationId ||
+            row?.privateLessonReservationId ||
+            row?.privateReservationId ||
+            ''
+    ).trim(),
+    slotId: String(row?.slotId || row?.privateLessonSlotId || row?.privateSlotId || '').trim(),
+    packageId: String(
+      row?.packageId ||
+        row?.deductionPackageId ||
+        row?.linkedPackageId ||
+        row?.fixedPrivatePackageId ||
+        ''
+    ).trim(),
+  }
+}
+
+function FixedPrivateLessonOutcomeMode({
+  target,
+  actionType,
+  setActionType,
+  fixedLocalGatePassed,
+  fixedOutcomePreviewBusy,
+  fixedOutcomePreviewError,
+  fixedOutcomePreviewResult,
+  fixedOutcomePreviewPayload,
+  fixedOutcomePreviewPlanHash,
+  fixedOutcomeCommitBusy,
+  fixedOutcomeCommitError,
+  fixedOutcomeCommitResult,
+  fixedOutcomeCommitConfirmed,
+  setFixedOutcomeCommitConfirmed,
+  onFixedOutcomePreview,
+  onFixedOutcomeCommit,
+  onClose,
+}) {
+  const ids = getFixedOutcomeTargetIds(target)
+  const preview = fixedOutcomePreviewResult || null
+  const payload = fixedOutcomePreviewPayload || null
+  const blockedReasons = Array.isArray(preview?.blockedReasons) ? preview.blockedReasons : []
+  const warnings = Array.isArray(preview?.warnings) ? preview.warnings : []
+  const classification = preview?.ledgerClassification || {}
+  const diagnostics = preview?.ledgerDiagnostics || {}
+  const packageImpact = preview?.packageImpact || {}
+  const creditPreview = preview?.creditTransactionPreview || {}
+  const normalizedPlan = preview?.normalizedPlan || {}
+  const requestId = String(payload?.requestId || '').trim()
+  const planHash = String(fixedOutcomePreviewPlanHash || '').trim()
+  const previewMatchesTargetAndAction =
+    Boolean(payload && requestId && planHash) &&
+    payload.lessonId === ids.lessonId &&
+    payload.reservationId === ids.reservationId &&
+    payload.slotId === ids.slotId &&
+    payload.packageId === ids.packageId &&
+    payload.actionType === actionType &&
+    preview?.requestId === requestId &&
+    preview?.actionType === actionType &&
+    String(preview?.planHash || '').trim() === planHash &&
+    normalizedPlan.lessonId === ids.lessonId &&
+    normalizedPlan.reservationId === ids.reservationId &&
+    normalizedPlan.slotId === ids.slotId &&
+    normalizedPlan.packageId === ids.packageId
+  const previewPassed =
+    Boolean(preview) &&
+    preview.ok === true &&
+    preview.allowed === true &&
+    blockedReasons.length === 0 &&
+    creditPreview.duplicateExists === false &&
+    fixedLocalGatePassed === true &&
+    previewMatchesTargetAndAction
+  const interactionBusy = fixedOutcomePreviewBusy || fixedOutcomeCommitBusy
+  const locked = Boolean(fixedOutcomeCommitResult)
+  const commitDisabled =
+    !previewPassed ||
+    fixedOutcomeCommitConfirmed !== true ||
+    interactionBusy ||
+    locked
+  const errorPlan = fixedOutcomeCommitError?.normalizedPlan || {}
+  const successPlan = fixedOutcomeCommitResult?.normalizedPlan || {}
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="fixed-private-lesson-outcome-modal-title"
+      data-testid="fixed-private-lesson-outcome-modal"
+      onClick={(event) => {
+        if (event.target === event.currentTarget && !interactionBusy) onClose?.()
+      }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 95,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 20,
+        background: 'rgba(0,0,0,0.58)',
+      }}
+    >
+      <section
+        style={{
+          width: 'min(820px, 100%)',
+          maxHeight: '88vh',
+          overflow: 'auto',
+          borderRadius: 16,
+          border: '1px solid #2e3240',
+          background: '#151922',
+          color: 'white',
+          padding: 20,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.38)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <h2 id="fixed-private-lesson-outcome-modal-title" style={{ margin: 0 }}>
+              고정 1:1 회차 결과 처리
+            </h2>
+            <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 14 }}>
+              고정 회차의 3-way 링크와 원장 전환을 서버에서 미리 확인한 뒤 전용 최종 확인으로
+              처리합니다.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={interactionBusy}
+            data-testid="fixed-private-lesson-outcome-close-button"
+            style={{
+              height: 34,
+              borderRadius: 8,
+              border: '1px solid #3b4254',
+              background: '#222938',
+              color: 'white',
+              cursor: interactionBusy ? 'not-allowed' : 'pointer',
+            }}
+          >
+            닫기
+          </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: 16,
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+            gap: 10,
+          }}
+        >
+          <FieldBlock label="lessonId" value={ids.lessonId} />
+          <FieldBlock label="linked reservationId" value={ids.reservationId} />
+          <FieldBlock label="slotId" value={ids.slotId} />
+          <FieldBlock label="packageId" value={ids.packageId} />
+        </div>
+
+        {!fixedLocalGatePassed ? (
+          <section
+            data-testid="fixed-private-lesson-outcome-local-gate-error"
+            style={{
+              marginTop: 14,
+              border: '1px solid #734141',
+              borderRadius: 12,
+              background: '#2a1719',
+              padding: 14,
+              color: '#ffc9c9',
+            }}
+          >
+            관리자이거나, 활성 교사 멤버십에 canManageOwnLessonDeductions 권한이 있고 담당
+            선생님 별칭이 일치해야 합니다.
+          </section>
+        ) : null}
+
+        <fieldset
+          style={{
+            margin: '16px 0 0 0',
+            border: '1px solid #2c3447',
+            borderRadius: 12,
+            padding: 14,
+          }}
+        >
+          <legend style={{ padding: '0 6px', fontWeight: 700 }}>처리 유형</legend>
+          {[
+            ['complete', '수업완료'],
+            ['no_show', '노쇼'],
+          ].map(([value, label]) => (
+            <label
+              key={value}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 18 }}
+            >
+              <input
+                type="radio"
+                name="fixedPrivateLessonOutcomeActionType"
+                value={value}
+                checked={actionType === value}
+                onChange={() => setActionType?.(value)}
+                disabled={interactionBusy || locked}
+                data-testid={`fixed-private-lesson-outcome-type-${value}`}
+              />
+              {label}
+            </label>
+          ))}
+        </fieldset>
+
+        <button
+          type="button"
+          onClick={onFixedOutcomePreview}
+          disabled={!fixedLocalGatePassed || interactionBusy || locked}
+          data-testid="fixed-private-lesson-outcome-preview-submit"
+          style={{
+            marginTop: 14,
+            padding: '9px 14px',
+            borderRadius: 10,
+            border: '1px solid #3c7a5f',
+            background: '#1e3a2d',
+            color: 'white',
+            fontWeight: 700,
+            cursor: !fixedLocalGatePassed || interactionBusy || locked ? 'not-allowed' : 'pointer',
+          }}
+        >
+          {fixedOutcomePreviewBusy ? '고정 회차 미리보기 중...' : '고정 회차 서버 미리보기'}
+        </button>
+
+        {fixedOutcomePreviewError ? (
+          <section
+            data-testid="fixed-private-lesson-outcome-preview-error"
+            style={{
+              marginTop: 14,
+              border: '1px solid #734141',
+              borderRadius: 12,
+              background: '#2a1719',
+              padding: 14,
+              color: '#ffc9c9',
+            }}
+          >
+            <strong>고정 회차 미리보기 실패</strong>
+            <p style={{ margin: '8px 0 0 0' }}>{fixedOutcomePreviewError}</p>
+          </section>
+        ) : null}
+
+        {preview ? (
+          <section
+            data-testid="fixed-private-lesson-outcome-preview-result"
+            style={{ marginTop: 16, display: 'grid', gap: 12 }}
+          >
+            <div
+              style={{
+                border: previewPassed ? '1px solid #375c45' : '1px solid #765233',
+                borderRadius: 12,
+                background: previewPassed ? '#14251c' : '#2b2117',
+                padding: 14,
+              }}
+            >
+              <strong>{previewPassed ? '고정 회차 미리보기 통과' : '고정 회차 처리 차단'}</strong>
+              <p style={{ margin: '8px 0 0 0', fontSize: 13, opacity: 0.82 }}>
+                requestId: {requestId || '-'} · actionType: {preview.actionType || actionType}
+              </p>
+            </div>
+
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: 10,
+              }}
+            >
+              <FieldBlock
+                label="3-way IDs"
+                value={{
+                  lessonId: normalizedPlan.lessonId,
+                  reservationId: normalizedPlan.reservationId,
+                  slotId: normalizedPlan.slotId,
+                }}
+              />
+              <FieldBlock
+                label="ledger classification (canonical vs legacy)"
+                value={classification}
+              />
+              <FieldBlock
+                label="package current → next counts"
+                value={{
+                  currentUsedCount: packageImpact.currentUsedCount,
+                  nextUsedCount: packageImpact.nextUsedCount,
+                  currentRemainingCount: packageImpact.currentRemainingCount,
+                  nextRemainingCount: packageImpact.nextRemainingCount,
+                }}
+              />
+              <FieldBlock
+                label="package deltas"
+                value={{
+                  usedCountDelta: packageImpact.usedCountDelta,
+                  remainingCountDelta: packageImpact.remainingCountDelta,
+                }}
+              />
+              <FieldBlock label="credit preview" value={creditPreview} />
+              <FieldBlock label="ledger diagnostics" value={diagnostics} />
+            </div>
+
+            {classification.mode === 'legacy' ? (
+              <section
+                data-testid="fixed-private-lesson-outcome-legacy-net-zero-warning"
+                style={{
+                  border: '1px solid #9b7433',
+                  borderRadius: 12,
+                  background: '#2a2415',
+                  padding: 14,
+                  color: '#ffe1a8',
+                }}
+              >
+                legacy 원장 전환: 기존 lesson 기여분을 reservation 원장으로 옮기므로 package net
+                delta zero(순변화 0)일 수 있습니다.
+              </section>
+            ) : null}
+
+            <ListBlock title="blockedReasons" items={blockedReasons} />
+            <ListBlock title="warnings" items={warnings} />
+            <FieldBlock label="normalizedPlan" value={normalizedPlan} />
+            <FieldBlock label="planHash" value={planHash} />
+            <FieldBlock label="nextStep" value={preview.nextStep} />
+
+            {previewPassed ? (
+              <section
+                data-testid="fixed-private-lesson-outcome-final-confirmation"
+                style={{
+                  border: '1px solid #9b7433',
+                  borderRadius: 12,
+                  background: '#2a2415',
+                  padding: 14,
+                }}
+              >
+                <h3 style={{ margin: 0, fontSize: 15 }}>고정 회차 실제 처리 전 최종 확인</h3>
+                <p style={{ margin: '8px 0 0 0', color: '#ffe1a8', fontSize: 13 }}>
+                  lesson/reservation 상태, slot 원장 표식, 수강권 횟수와 차감 기록을 함께
+                  변경합니다. 결과가 표시될 때까지 반복 클릭하거나 창을 닫지 마세요.
+                </p>
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    marginTop: 12,
+                    fontSize: 13,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={fixedOutcomeCommitConfirmed === true}
+                    onChange={(event) => setFixedOutcomeCommitConfirmed?.(event.target.checked)}
+                    disabled={interactionBusy || locked}
+                    data-testid="fixed-private-lesson-outcome-commit-checkbox"
+                  />
+                  미리보기의 대상, 원장 분류, 횟수 변화와 차감 기록을 확인했습니다.
+                </label>
+                <button
+                  type="button"
+                  onClick={onFixedOutcomeCommit}
+                  disabled={commitDisabled}
+                  data-testid="fixed-private-lesson-outcome-commit-button"
+                  style={{
+                    marginTop: 12,
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    border: '1px solid #a96d44',
+                    background: '#57311d',
+                    color: 'white',
+                    fontWeight: 700,
+                    cursor: commitDisabled ? 'not-allowed' : 'pointer',
+                    opacity: commitDisabled ? 0.68 : 1,
+                  }}
+                >
+                  {fixedOutcomeCommitBusy ? '고정 회차 실제 처리 중...' : '고정 회차 결과 확정'}
+                </button>
+              </section>
+            ) : null}
+          </section>
+        ) : null}
+
+        {fixedOutcomeCommitError ? (
+          <section
+            data-testid="fixed-private-lesson-outcome-commit-error"
+            data-retry-mode={
+              fixedOutcomeCommitError.retryWithSamePayload === true
+                ? 'same-payload'
+                : 'fresh-preview'
+            }
+            style={{
+              marginTop: 14,
+              display: 'grid',
+              gap: 12,
+              border: '1px solid #8d4444',
+              borderRadius: 12,
+              background: '#2a1719',
+              padding: 14,
+              color: '#ffc9c9',
+            }}
+          >
+            <div>
+              <strong>고정 회차 실제 처리 실패</strong>
+              <p style={{ margin: '8px 0 0 0' }}>{fixedOutcomeCommitError.message}</p>
+              <p style={{ margin: '8px 0 0 0', fontSize: 13 }}>
+                {getFixedOutcomeErrorGuidance(fixedOutcomeCommitError)}
+              </p>
+              <p style={{ margin: '8px 0 0 0', fontSize: 13, opacity: 0.82 }}>
+                {fixedOutcomeCommitError.retryWithSamePayload === true
+                  ? '보존됨: 동일 requestId / planHash / preview payload'
+                  : '폐기됨: 새 미리보기와 새 requestId 필요'}
+              </p>
+            </div>
+            <FieldBlock
+              label="batch / replay / IDs"
+              value={{
+                batchId: fixedOutcomeCommitError.batchId || '-',
+                idempotentReplay: fixedOutcomeCommitError.idempotentReplay === true,
+                lessonId: errorPlan.lessonId || ids.lessonId,
+                reservationId: errorPlan.reservationId || ids.reservationId,
+                slotId: errorPlan.slotId || ids.slotId,
+                packageId: errorPlan.packageId || ids.packageId,
+                creditTransactionId:
+                  errorPlan.creditTransactionId ||
+                  fixedOutcomeCommitError.creditTransactionPreview?.id ||
+                  '-',
+              }}
+            />
+            <FieldBlock
+              label="requestId / planHash"
+              value={{
+                requestId: fixedOutcomeCommitError.requestId,
+                planHash: fixedOutcomeCommitError.planHash,
+                actualPlanHash: fixedOutcomeCommitError.actualPlanHash,
+              }}
+            />
+            <ListBlock title="commit blockedReasons" items={fixedOutcomeCommitError.blockedReasons} />
+            <ListBlock title="commit warnings" items={fixedOutcomeCommitError.warnings} />
+            <FieldBlock
+              label="ledger classification / diagnostics"
+              value={{
+                ledgerClassification: fixedOutcomeCommitError.ledgerClassification,
+                ledgerDiagnostics: fixedOutcomeCommitError.ledgerDiagnostics,
+              }}
+            />
+          </section>
+        ) : null}
+
+        {fixedOutcomeCommitResult ? (
+          <section
+            data-testid="fixed-private-lesson-outcome-commit-result"
+            style={{
+              marginTop: 14,
+              display: 'grid',
+              gap: 12,
+              border: '1px solid #3c7a5f',
+              borderRadius: 12,
+              background: '#14251c',
+              padding: 14,
+            }}
+          >
+            <div>
+              <strong>고정 회차 실제 처리가 완료되었습니다</strong>
+              <p style={{ margin: '8px 0 0 0', fontSize: 13, opacity: 0.82 }}>
+                batchId: {fixedOutcomeCommitResult.batchId || '-'} · idempotentReplay:{' '}
+                {fixedOutcomeCommitResult.idempotentReplay === true ? 'true' : 'false'}
+              </p>
+            </div>
+            <FieldBlock
+              label="lesson / reservation / slot / package / credit IDs"
+              value={{
+                lessonId: successPlan.lessonId || ids.lessonId,
+                reservationId: successPlan.reservationId || ids.reservationId,
+                slotId: successPlan.slotId || ids.slotId,
+                packageId: fixedOutcomeCommitResult.packageId || successPlan.packageId,
+                creditTransactionId:
+                  fixedOutcomeCommitResult.creditTransactionId || successPlan.creditTransactionId,
+              }}
+            />
+            <FieldBlock
+              label="ledger classification"
+              value={fixedOutcomeCommitResult.ledgerClassification}
+            />
+            <FieldBlock
+              label="ledger diagnostics"
+              value={fixedOutcomeCommitResult.ledgerDiagnostics}
+            />
+            <FieldBlock label="updated" value={fixedOutcomeCommitResult.updated} />
+            <FieldBlock label="normalizedPlan" value={successPlan} />
+            <FieldBlock label="nextStep" value={fixedOutcomeCommitResult.nextStep} />
+            <p style={{ margin: 0, fontSize: 13, opacity: 0.82 }}>
+              이 요청은 성공 상태로 잠겼습니다. 새 작업은 창을 닫은 뒤 시작하세요.
+            </p>
+          </section>
+        ) : null}
+      </section>
+    </div>
+  )
+}
+
 export default function PrivateLessonStatusActionModal({
   target,
+  fixedOccurrenceMode = false,
+  fixedLocalGatePassed = false,
   actionType,
   setActionType,
   preview,
@@ -134,11 +676,46 @@ export default function PrivateLessonStatusActionModal({
   onPreview,
   onOutcomePreview,
   onOutcomeCommit,
+  fixedOutcomePreviewBusy,
+  fixedOutcomePreviewError,
+  fixedOutcomePreviewResult,
+  fixedOutcomePreviewPayload,
+  fixedOutcomePreviewPlanHash,
+  fixedOutcomeCommitBusy,
+  fixedOutcomeCommitError,
+  fixedOutcomeCommitResult,
+  fixedOutcomeCommitConfirmed,
+  setFixedOutcomeCommitConfirmed,
+  onFixedOutcomePreview,
+  onFixedOutcomeCommit,
   onCommit,
   onClose,
 }) {
   const [commitConfirmed, setCommitConfirmed] = useState(false)
   if (!target) return null
+  if (fixedOccurrenceMode) {
+    return (
+      <FixedPrivateLessonOutcomeMode
+        target={target}
+        actionType={actionType}
+        setActionType={setActionType}
+        fixedLocalGatePassed={fixedLocalGatePassed}
+        fixedOutcomePreviewBusy={fixedOutcomePreviewBusy}
+        fixedOutcomePreviewError={fixedOutcomePreviewError}
+        fixedOutcomePreviewResult={fixedOutcomePreviewResult}
+        fixedOutcomePreviewPayload={fixedOutcomePreviewPayload}
+        fixedOutcomePreviewPlanHash={fixedOutcomePreviewPlanHash}
+        fixedOutcomeCommitBusy={fixedOutcomeCommitBusy}
+        fixedOutcomeCommitError={fixedOutcomeCommitError}
+        fixedOutcomeCommitResult={fixedOutcomeCommitResult}
+        fixedOutcomeCommitConfirmed={fixedOutcomeCommitConfirmed}
+        setFixedOutcomeCommitConfirmed={setFixedOutcomeCommitConfirmed}
+        onFixedOutcomePreview={onFixedOutcomePreview}
+        onFixedOutcomeCommit={onFixedOutcomeCommit}
+        onClose={onClose}
+      />
+    )
+  }
   const blockedReasons = Array.isArray(preview?.blockedReasons) ? preview.blockedReasons : []
   const warnings = Array.isArray(preview?.warnings) ? preview.warnings : []
   const outcomeBlockedReasons = Array.isArray(outcomePreviewResult?.blockedReasons)

@@ -124,7 +124,6 @@ import {
   buildStudentGroupAccessPayloadFromGroupStudent,
   deleteStudentGroupAccessBatch,
 } from './src/features/group-booking/studentGroupAccessClient.js'
-import { buildPrivateLessonReservationId } from './src/features/private-booking/privateBookingModel.js'
 import {
   addStudentPrivateSlotAccessBatch,
   removeStudentPrivateSlotAccessBatch,
@@ -1029,6 +1028,8 @@ function getPrivateTeacherIdentityKeys(row) {
     row?.teacherKey,
     row?.teacher,
     row?.teacherName,
+    row?.teacherEmail,
+    row?.email,
     row?.displayName,
     row?.name,
   ].forEach((value) => {
@@ -1044,6 +1045,181 @@ function privateTeacherIdentitiesOverlap(a, b) {
   const left = getPrivateTeacherIdentityKeys(a)
   const right = new Set(getPrivateTeacherIdentityKeys(b))
   return left.some((key) => right.has(key))
+}
+
+function isFixedPrivateSourceRecord(row) {
+  const sourceType = String(row?.sourceType || '').trim().toLowerCase()
+  const reservationType = String(row?.reservationType || '').trim().toLowerCase()
+  const source = String(row?.source || '').trim().toLowerCase()
+  const slotType = String(row?.slotType || '').trim().toLowerCase()
+  return (
+    row?.fixedPrivateDeductionLedger === 'reservation_v1' ||
+    sourceType === 'fixed-private-slot-assignment' ||
+    sourceType === 'weekly-slot-fixed-assignment' ||
+    ['fixed', 'fixed_private'].includes(reservationType) ||
+    source === 'fixed_admin' ||
+    slotType === 'fixed' ||
+    Boolean(row?.fixedPrivateAssignmentBatchId) ||
+    Boolean(row?.privateLessonAvailabilityTemplateId && row?.fixedLessonId) ||
+    Boolean(row?.fixedPrivatePackageId && row?.fixedLessonId)
+  )
+}
+
+function isFixedPrivateCancellationTarget(reservation, slot) {
+  const directReleasedReservation =
+    String(reservation?.source || '').trim().toLowerCase() === 'student' &&
+    !isFixedPrivateSourceRecord(reservation) &&
+    String(slot?.slotType || '').trim().toLowerCase() === 'released_fixed'
+  if (directReleasedReservation) return false
+  return isFixedPrivateSourceRecord(reservation) || isFixedPrivateSourceRecord(slot)
+}
+
+function classifyFixedPrivateOutcomeCommitError(error) {
+  const details =
+    error?.details && typeof error.details === 'object' && !Array.isArray(error.details)
+      ? error.details
+      : {}
+  const code = String(error?.code || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^functions\//, '')
+  const blockedReasons = Array.isArray(details.blockedReasons)
+    ? details.blockedReasons.filter(Boolean).map(String)
+    : []
+  const searchable = [code, error?.message, ...blockedReasons]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  const deterministicCodes = new Set([
+    'failed-precondition',
+    'permission-denied',
+    'already-exists',
+    'invalid-argument',
+  ])
+  const requiresFreshPreview =
+    deterministicCodes.has(code) ||
+    blockedReasons.length > 0 ||
+    searchable.includes('request_id_conflict') ||
+    searchable.includes('request conflict')
+  return {
+    details,
+    code,
+    blockedReasons,
+    requiresFreshPreview,
+    retryWithSamePayload: !requiresFreshPreview,
+  }
+}
+
+function getFixedPrivateLessonOutcomeTargetIds(row) {
+  const rowKind = String(row?._calendarRowKind || '').trim()
+  return {
+    lessonId: String(
+      rowKind === 'privateReservation'
+        ? row?.lessonId || row?.fixedLessonId || row?.sourceLessonId || ''
+        : row?.id || row?.lessonId || row?.fixedLessonId || ''
+    ).trim(),
+    reservationId: String(
+      rowKind === 'privateReservation'
+        ? row?.id ||
+            row?.reservationId ||
+            row?.privateLessonReservationId ||
+            row?.privateReservationId ||
+            ''
+        : row?.reservationId ||
+            row?.privateLessonReservationId ||
+            row?.privateReservationId ||
+            ''
+    ).trim(),
+    slotId: String(row?.slotId || row?.privateLessonSlotId || row?.privateSlotId || '').trim(),
+    packageId: String(
+      row?.packageId ||
+        row?.deductionPackageId ||
+        row?.linkedPackageId ||
+        row?.fixedPrivatePackageId ||
+        ''
+    ).trim(),
+  }
+}
+
+function isFixedPrivateLessonOutcomeTarget(row) {
+  if (!isFixedPrivateSourceRecord(row)) return false
+  const packageType = String(row?.packageType || '').trim()
+  if (packageType && packageType !== 'private') return false
+  const ids = getFixedPrivateLessonOutcomeTargetIds(row)
+  return Boolean(ids.lessonId && ids.reservationId && ids.slotId && ids.packageId)
+}
+
+function fixedPrivateTeacherOwnershipMatches({ target, userProfile }) {
+  const actorUids = [
+    ...(Array.isArray(userProfile?.currentMembershipTeacherUidAliases)
+      ? userProfile.currentMembershipTeacherUidAliases
+      : []),
+    userProfile?.currentMembershipTeacherUid,
+    userProfile?.currentMembershipUid,
+  ]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  const targetUids = [target?.teacherUid, target?.teacherUID]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  if (actorUids.length > 0 && targetUids.length > 0) {
+    return targetUids.some((uid) => actorUids.includes(uid))
+  }
+  if (targetUids.length > 0) return false
+
+  const actorTeacherId = normalizeText(userProfile?.currentMembershipTeacherId || '')
+  const targetTeacherIds = [target?.teacherId, target?.teacherID]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  if (targetTeacherIds.length > 0) {
+    return Boolean(actorTeacherId && targetTeacherIds.includes(actorTeacherId))
+  }
+
+  const actorTeacherKey = normalizeText(
+    userProfile?.currentMembershipTeacherKey || ''
+  )
+  const targetTeacherKeys = [target?.teacherKey]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  if (actorTeacherKey && targetTeacherKeys.length > 0) {
+    return targetTeacherKeys.includes(actorTeacherKey)
+  }
+  if (targetTeacherKeys.length > 0) return false
+
+  const actorTeacherNames = [
+    userProfile?.currentMembershipTeacherName,
+    userProfile?.currentMembershipTeacherAlias,
+    userProfile?.currentMembershipDisplayName,
+    userProfile?.currentMembershipName,
+  ]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  const targetTeacherNames = [
+    target?.teacherName,
+    target?.teacher,
+    target?.displayName,
+    target?.name,
+  ]
+    .map((value) => normalizeText(value || ''))
+    .filter(Boolean)
+  return Boolean(
+    actorTeacherNames.length > 0 &&
+      targetTeacherNames.length > 0 &&
+      targetTeacherNames.some((name) => actorTeacherNames.includes(name))
+  )
+}
+
+function canManageFixedPrivateLessonOutcomeLocally({ target, isAdmin, user, userProfile }) {
+  if (!isFixedPrivateSourceRecord(target)) return false
+  if (isAdmin) return true
+  if (
+    userProfile?.isActive !== true ||
+    !['teacher', 'staff'].includes(userProfile?.membershipRole) ||
+    userProfile?.canManageOwnLessonDeductions !== true
+  ) {
+    return false
+  }
+  return fixedPrivateTeacherOwnershipMatches({ target, user, userProfile })
 }
 
 function normalizePrivateSlotEligibleStudentIds(values, privateStudents) {
@@ -1120,6 +1296,7 @@ async function recomputePrivatePackageUsage(packageId, academyId) {
   let usedCount = 0
   snap.docs.forEach((lessonDoc) => {
     const data = lessonDoc.data()
+    if (data.fixedPrivateDeductionLedger === 'reservation_v1') return
     const dateStr = getLessonStorageDateString(data)
     if (!dateStr || dateStr > today) return
     if (data.isDeductCancelled === true) return
@@ -1132,18 +1309,13 @@ async function recomputePrivatePackageUsage(packageId, academyId) {
       where('academyId', '==', scopedAcademyId),
       where('deductionPackageId', '==', pid)
     )
-  ).catch((error) => {
-    console.warn('privateLessonReservations usage lookup skipped:', error)
-    return null
+  )
+  reservationSnap.docs.forEach((reservationDoc) => {
+    const data = reservationDoc.data()
+    if (data.deductionApplied !== true) return
+    if (data.status !== 'completed' && data.status !== 'no_show') return
+    usedCount += 1
   })
-  if (reservationSnap) {
-    reservationSnap.docs.forEach((reservationDoc) => {
-      const data = reservationDoc.data()
-      if (data.deductionApplied !== true) return
-      if (data.status !== 'completed' && data.status !== 'no_show') return
-      usedCount += 1
-    })
-  }
 
   const totalRaw = Number(pkg.totalCount ?? 0)
   const total = Number.isFinite(totalRaw) ? totalRaw : 0
@@ -1408,12 +1580,27 @@ export default function Dashboard() {
   const [privateLessonOutcomeCommitConfirmed, setPrivateLessonOutcomeCommitConfirmed] =
     useState(false)
   const privateLessonOutcomeCommitBusyRef = useRef(false)
+  const [fixedPrivateOutcomePreviewBusy, setFixedPrivateOutcomePreviewBusy] = useState(false)
+  const [fixedPrivateOutcomePreviewError, setFixedPrivateOutcomePreviewError] = useState('')
+  const [fixedPrivateOutcomePreviewResult, setFixedPrivateOutcomePreviewResult] = useState(null)
+  const [fixedPrivateOutcomePreviewPayload, setFixedPrivateOutcomePreviewPayload] = useState(null)
+  const [fixedPrivateOutcomePreviewPlanHash, setFixedPrivateOutcomePreviewPlanHash] = useState('')
+  const fixedPrivateOutcomePreviewBusyRef = useRef(false)
+  const [fixedPrivateOutcomeCommitBusy, setFixedPrivateOutcomeCommitBusy] = useState(false)
+  const [fixedPrivateOutcomeCommitError, setFixedPrivateOutcomeCommitError] = useState(null)
+  const [fixedPrivateOutcomeCommitResult, setFixedPrivateOutcomeCommitResult] = useState(null)
+  const [fixedPrivateOutcomeCommitConfirmed, setFixedPrivateOutcomeCommitConfirmed] =
+    useState(false)
+  const fixedPrivateOutcomeCommitBusyRef = useRef(false)
+  const fixedPrivateOutcomePreviewEpochRef = useRef(0)
   const [privateLessonStatusActionCommitBusy, setPrivateLessonStatusActionCommitBusy] =
     useState(false)
   const [privateLessonStatusActionCommitError, setPrivateLessonStatusActionCommitError] =
     useState('')
   const [privateLessonStatusActionCommitResult, setPrivateLessonStatusActionCommitResult] =
     useState(null)
+  const privateLessonStatusActionCommitBusyRef = useRef(false)
+  const privateLessonActionContextResetPendingRef = useRef(false)
   const [reservationNotificationEvents, setReservationNotificationEvents] = useState([])
   const [reservationNotificationEventsLoading, setReservationNotificationEventsLoading] =
     useState(false)
@@ -2404,6 +2591,7 @@ export default function Dashboard() {
       if (String(lesson.academyId || '').trim() !== scopedAcademyId) return
       const packageId = String(lesson.packageId || '').trim()
       if (!privatePackagesById.has(packageId)) return
+      if (lesson.fixedPrivateDeductionLedger === 'reservation_v1') return
       const dateStr = getLessonStorageDateString(lesson)
       if (!dateStr || dateStr > today) return
       if (lesson.isDeductCancelled === true) return
@@ -3988,8 +4176,19 @@ export default function Dashboard() {
     [selectedDate]
   )
 
-  useEffect(() => {
-    if (privateLessonOutcomeCommitBusyRef.current) return
+  function resetPrivateLessonActionModalForContext({ force = false } = {}) {
+    if (
+      !force &&
+      (privateLessonStatusActionCommitBusyRef.current ||
+        privateLessonOutcomeCommitBusyRef.current ||
+        fixedPrivateOutcomeCommitBusyRef.current)
+    ) {
+      privateLessonActionContextResetPendingRef.current = true
+      return false
+    }
+    privateLessonActionContextResetPendingRef.current = false
+    fixedPrivateOutcomePreviewEpochRef.current += 1
+    fixedPrivateOutcomePreviewBusyRef.current = false
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
     setPrivateLessonStatusActionPreview(null)
@@ -4005,10 +4204,29 @@ export default function Dashboard() {
     setPrivateLessonOutcomeCommitError(null)
     setPrivateLessonOutcomeCommitResult(null)
     setPrivateLessonOutcomeCommitConfirmed(false)
+    setFixedPrivateOutcomePreviewBusy(false)
+    setFixedPrivateOutcomePreviewError('')
+    setFixedPrivateOutcomePreviewResult(null)
+    setFixedPrivateOutcomePreviewPayload(null)
+    setFixedPrivateOutcomePreviewPlanHash('')
+    setFixedPrivateOutcomeCommitBusy(false)
+    setFixedPrivateOutcomeCommitError(null)
+    setFixedPrivateOutcomeCommitResult(null)
+    setFixedPrivateOutcomeCommitConfirmed(false)
     setPrivateLessonStatusActionCommitBusy(false)
     setPrivateLessonStatusActionCommitError('')
     setPrivateLessonStatusActionCommitResult(null)
-  }, [selectedDateString, calendarMonth])
+    return true
+  }
+
+  function flushDeferredPrivateLessonActionContextReset() {
+    if (!privateLessonActionContextResetPendingRef.current) return false
+    return resetPrivateLessonActionModalForContext({ force: true })
+  }
+
+  useEffect(() => {
+    resetPrivateLessonActionModalForContext()
+  }, [selectedDateString, calendarMonth, currentAcademyId])
 
   const {
     groupModal,
@@ -4367,6 +4585,10 @@ export default function Dashboard() {
   }
 
   async function handleDeductionToggle(lesson) {
+    if (isFixedPrivateSourceRecord(lesson)) {
+      alert('고정 수업 회차는 기존 차감취소/차감복구 경로를 사용할 수 없습니다.')
+      return
+    }
     const adminUser = userProfile?.role === 'admin'
     const lessonTeacher = normalizeText(getTeacherName(lesson))
     const myTeacher = normalizeText(userProfile?.teacherName || '')
@@ -5825,147 +6047,23 @@ export default function Dashboard() {
 
     try {
       setBusyPrivateFixedSlotAssignment(true)
-      const batch = writeBatch(db)
-      const batchId = `fixed-private-assignment-${Date.now()}-${Math.random()
+      const requestId = `fixed-private-assignment-${Date.now()}-${Math.random()
         .toString(36)
         .slice(2, 10)}`
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
-      const studentName = String(plan.student?.name || plan.student?.studentName || '').trim() || '-'
-      const packageTitle = String(plan.selectedPackage?.title || '고정 1:1').trim()
-      plan.assignableDates.forEach((date) => {
-        const start = parseLegacyLessonToDate(date, plan.template.time)
-        const slotRef = doc(collection(db, 'privateLessonSlots'))
-        const lessonRef = doc(collection(db, 'lessons'))
-        const reservationId = buildPrivateLessonReservationId({
-          academyId: scopedAcademyId,
-          slotId: slotRef.id,
-          studentId: plan.student.id,
-        })
-        const reservationRef = doc(db, 'privateLessonReservations', reservationId)
-        const packageId = String(plan.selectedPackage.id || '').trim()
-        const packageName = String(
-          plan.selectedPackage.packageTitle ||
-            plan.selectedPackage.title ||
-            plan.selectedPackage.name ||
-            packageTitle ||
-            ''
-        ).trim()
-        const fixedAssignmentBase = {
-          academyId: scopedAcademyId,
-          studentId: plan.student.id,
-          studentID: plan.student.id,
-          studentName,
-          teacher: plan.teacherFields.teacher,
-          teacherName: plan.teacherFields.teacherName,
-          teacherKey: plan.teacherFields.teacherKey,
-          teacherUid: plan.teacherFields.teacherUid,
-          teacherUID: plan.teacherFields.teacherUID,
-          teacherId: plan.teacherFields.teacherId,
-          teacherEmail: plan.teacherFields.teacherEmail,
-          date,
-          time: String(plan.template.time || '').trim(),
-          subject: plan.subject,
-          durationMinutes: plan.durationMinutes,
-          packageId,
-          deductionPackageId: packageId,
-          linkedPackageId: packageId,
-          fixedPrivatePackageId: packageId,
-          packageName,
-          packageTitle: packageName,
-          packageTeacherKey: plan.teacherFields.teacherKey || plan.teacherFields.teacher || '',
-          packageType: 'private',
-          source: 'fixed_admin',
-          sourceType: 'fixed-private-slot-assignment',
-          reservationType: 'fixed',
-          privateLessonAvailabilityTemplateId: plan.template.id || '',
-          fixedPrivateAssignmentBatchId: batchId,
-        }
-        batch.set(slotRef, {
-          academyId: scopedAcademyId,
-          teacher: plan.teacherFields.teacher,
-          teacherName: plan.teacherFields.teacherName,
-          teacherKey: plan.teacherFields.teacherKey,
-          teacherUid: plan.teacherFields.teacherUid,
-          teacherEmail: plan.teacherFields.teacherEmail,
-          date,
-          time: String(plan.template.time || '').trim(),
-          durationMinutes: plan.durationMinutes,
-          status: 'reserved',
-          slotType: 'fixed',
-          isBookable: false,
-          reservedStudentId: plan.student.id,
-          fixedStudentId: plan.student.id,
-          fixedStudentName: studentName,
-          reservationId,
-          lessonId: lessonRef.id,
-          fixedLessonId: lessonRef.id,
-          packageId,
-          deductionPackageId: packageId,
-          linkedPackageId: packageId,
-          fixedPrivatePackageId: packageId,
-          packageName,
-          packageTitle: packageName,
-          packageTeacherKey: plan.teacherFields.teacherKey || plan.teacherFields.teacher || '',
-          privateLessonAvailabilityTemplateId: plan.template.id || '',
-          fixedPrivateAssignmentBatchId: batchId,
-          createdByUid: user?.uid || '',
-          ...(start ? { startAt: Timestamp.fromDate(start) } : {}),
-          reservedAt: serverTimestamp(),
-          cancelledAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
-        batch.set(reservationRef, {
-          academyId: scopedAcademyId,
-          slotId: slotRef.id,
-          studentName,
-          studentId: plan.student.id,
-          teacher: plan.teacherFields.teacher,
-          teacherName: plan.teacherFields.teacherName,
-          teacherKey: plan.teacherFields.teacherKey,
-          teacherUid: plan.teacherFields.teacherUid,
-          date,
-          time: String(plan.template.time || '').trim(),
-          subject: plan.subject,
-          status: 'active',
-          source: 'fixed_admin',
-          sourceType: 'fixed-private-slot-assignment',
-          reservationType: 'fixed',
-          lessonId: lessonRef.id,
-          fixedLessonId: lessonRef.id,
-          packageId,
-          deductionPackageId: packageId,
-          linkedPackageId: packageId,
-          fixedPrivatePackageId: packageId,
-          packageName,
-          packageTitle: packageName,
-          packageTeacherKey: plan.teacherFields.teacherKey || plan.teacherFields.teacher || '',
-          privateLessonAvailabilityTemplateId: plan.template.id || '',
-          fixedPrivateAssignmentBatchId: batchId,
-          durationMinutes: plan.durationMinutes,
-          reservedAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-          cancelledAt: null,
-        })
-        batch.set(lessonRef, {
-          ...fixedAssignmentBase,
-          id: lessonRef.id,
-          lessonId: lessonRef.id,
-          fixedLessonId: lessonRef.id,
-          reservationId,
-          slotId: slotRef.id,
-          scheduleDate: date,
-          scheduleTime: String(plan.template.time || '').trim(),
-          status: 'active',
-          createdByUid: user?.uid || '',
-          ...(start ? { startAt: Timestamp.fromDate(start), startsAt: Timestamp.fromDate(start) } : {}),
-          cancelledAt: null,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        })
+      const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonAssignment')
+      await callable({
+        academyId: scopedAcademyId,
+        requestId,
+        templateId: String(plan.template?.id || '').trim(),
+        studentId: String(plan.student?.id || '').trim(),
+        packageId: String(plan.selectedPackage?.id || '').trim(),
+        subject: plan.subject,
+        assignableDates: plan.assignableDates,
+        commit: true,
+        dryRun: false,
+        previewOnly: false,
       })
-      await batch.commit()
       setPrivateFixedSlotAssignmentPreview({
         mode: 'created',
         dates: plan.assignableDates,
@@ -6298,6 +6396,27 @@ export default function Dashboard() {
     if (!slot?.id) return
 
     const closeAsTeacherUnavailable = options?.closeAsTeacherUnavailable === true
+    if (isFixedPrivateCancellationTarget(reservation, slot)) {
+      const linkedLessonId = String(
+        reservation?.lessonId ||
+          reservation?.fixedLessonId ||
+          slot?.lessonId ||
+          slot?.fixedLessonId ||
+          ''
+      ).trim()
+      const linkedLesson =
+        lessons.find((lesson) => String(lesson.id || '').trim() === linkedLessonId) || null
+      if (!linkedLesson) {
+        alert('연결된 고정 수업을 찾을 수 없어 일반 예약 취소를 차단했습니다.')
+        return
+      }
+      await cancelFixedPrivateLessonOccurrence(
+        linkedLesson,
+        closeAsTeacherUnavailable ? 'lesson_cancelled' : 'seat_released',
+        closeAsTeacherUnavailable ? { reason: 'teacher_unavailable' } : {}
+      )
+      return
+    }
     const label = `${slot.date || ''} ${slot.time || ''} ${slot.teacher || ''}`.trim()
     const actionLabel = closeAsTeacherUnavailable
       ? '선생님 결석/휴강/수업불가로 닫을까요?'
@@ -6354,6 +6473,10 @@ export default function Dashboard() {
   }
 
   async function markPrivateReservationOutcome(reservation, outcome) {
+    if (isFixedPrivateSourceRecord(reservation)) {
+      alert('고정 수업 예약은 기존 완료/노쇼 처리 경로를 사용할 수 없습니다.')
+      return
+    }
     if (!isAdmin) {
       alert('예약 처리 권한이 없습니다.')
       return
@@ -6396,6 +6519,10 @@ export default function Dashboard() {
   }
 
   async function reversePrivateReservationOutcome(reservation) {
+    if (isFixedPrivateSourceRecord(reservation)) {
+      alert('고정 수업 예약은 기존 완료취소 경로를 사용할 수 없습니다.')
+      return
+    }
     if (!isAdmin) {
       alert('예약 처리 취소 권한이 없습니다.')
       return
@@ -6454,6 +6581,10 @@ export default function Dashboard() {
   })
 
   async function handleDeletePrivateLesson(lesson) {
+    if (isFixedPrivateSourceRecord(lesson)) {
+      alert('고정 수업은 일반 삭제할 수 없습니다. 고정수업 취소 흐름을 사용해 주세요.')
+      return
+    }
     if (!canDeleteLesson) {
       alert('수업 삭제 권한이 없습니다.')
       return
@@ -6576,6 +6707,13 @@ export default function Dashboard() {
       onMarkPrivateReservationOutcome: markPrivateReservationOutcome,
       onReversePrivateReservationOutcome: reversePrivateReservationOutcome,
       onOpenPrivateLessonStatusActionPreview: openPrivateLessonStatusActionPreview,
+      canOpenFixedPrivateLessonOutcome: (target) =>
+        canManageFixedPrivateLessonOutcomeLocally({
+          target,
+          isAdmin,
+          user,
+          userProfile,
+        }),
       canEditLesson,
       canDeleteLesson,
       onOpenCalendarGroupLessonAttendance: openCalendarGroupLessonAttendance,
@@ -6609,16 +6747,52 @@ export default function Dashboard() {
     setPrivateLessonOutcomePreviewPlanHash('')
   }
 
+  function clearFixedPrivateLessonOutcomeState() {
+    if (fixedPrivateOutcomeCommitBusyRef.current) return
+    fixedPrivateOutcomePreviewEpochRef.current += 1
+    fixedPrivateOutcomePreviewBusyRef.current = false
+    setFixedPrivateOutcomePreviewBusy(false)
+    setFixedPrivateOutcomePreviewError('')
+    setFixedPrivateOutcomePreviewResult(null)
+    setFixedPrivateOutcomePreviewPayload(null)
+    setFixedPrivateOutcomePreviewPlanHash('')
+    setFixedPrivateOutcomeCommitBusy(false)
+    setFixedPrivateOutcomeCommitError(null)
+    setFixedPrivateOutcomeCommitResult(null)
+    setFixedPrivateOutcomeCommitConfirmed(false)
+  }
+
   function clearPrivateLessonStatusActionPreview() {
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
     clearPrivateLessonOutcomePreview()
     clearPrivateLessonStatusActionCommitState()
+    clearFixedPrivateLessonOutcomeState()
   }
 
   function openPrivateLessonStatusActionPreview(target) {
-    if (!isAdmin || !target || privateLessonOutcomeCommitBusyRef.current) return
+    if (
+      !target ||
+      privateLessonOutcomeCommitBusyRef.current ||
+      fixedPrivateOutcomeCommitBusyRef.current ||
+      fixedPrivateOutcomePreviewBusyRef.current
+    ) {
+      return
+    }
+    const fixedTarget = isFixedPrivateSourceRecord(target)
+    if (
+      fixedTarget
+        ? !canManageFixedPrivateLessonOutcomeLocally({
+            target,
+            isAdmin,
+            user,
+            userProfile,
+          })
+        : !isAdmin
+    ) {
+      return
+    }
     setPrivateLessonStatusActionTarget(target)
     setPrivateLessonStatusActionMode('complete')
     clearPrivateLessonStatusActionPreview()
@@ -6629,7 +6803,11 @@ export default function Dashboard() {
       privateLessonStatusActionPreviewBusy ||
       privateLessonOutcomePreviewBusy ||
       privateLessonOutcomeCommitBusy ||
-      privateLessonStatusActionCommitBusy
+      privateLessonStatusActionCommitBusy ||
+      fixedPrivateOutcomePreviewBusy ||
+      fixedPrivateOutcomeCommitBusy ||
+      fixedPrivateOutcomePreviewBusyRef.current ||
+      fixedPrivateOutcomeCommitBusyRef.current
     ) {
       return
     }
@@ -6639,7 +6817,15 @@ export default function Dashboard() {
   }
 
   function selectPrivateLessonStatusActionMode(actionType) {
-    if (privateLessonOutcomeCommitBusyRef.current || privateLessonOutcomeCommitResult) return
+    if (
+      privateLessonOutcomeCommitBusyRef.current ||
+      fixedPrivateOutcomeCommitBusyRef.current ||
+      fixedPrivateOutcomePreviewBusyRef.current ||
+      privateLessonOutcomeCommitResult ||
+      fixedPrivateOutcomeCommitResult
+    ) {
+      return
+    }
     const safeActionType = actionType === 'no_show' ? 'no_show' : 'complete'
     setPrivateLessonStatusActionMode(safeActionType)
     clearPrivateLessonStatusActionPreview()
@@ -6667,6 +6853,9 @@ export default function Dashboard() {
     try {
       if (!isAdmin) {
         throw new Error('개인 수업 처리 미리보기 권한이 없습니다.')
+      }
+      if (isFixedPrivateSourceRecord(target)) {
+        throw new Error('고정 수업 회차는 고정 수업 전용 미리보기를 사용해야 합니다.')
       }
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(target, scopedAcademyId, '1:1 예약')
@@ -6728,10 +6917,14 @@ export default function Dashboard() {
     }
 
     clearPrivateLessonOutcomePreview()
+    const target = privateLessonStatusActionTarget || {}
 
     try {
       if (!isAdmin) {
         throw new Error('차감 포함 미리보기 권한이 없습니다.')
+      }
+      if (isFixedPrivateSourceRecord(target)) {
+        throw new Error('고정 수업 회차는 직접예약 차감 미리보기 경로를 사용할 수 없습니다.')
       }
 
       const statusPreview = privateLessonStatusActionPreview || {}
@@ -6747,7 +6940,6 @@ export default function Dashboard() {
         throw new Error('차감 포함 미리보기에 사용할 처리 유형이 올바르지 않습니다.')
       }
 
-      const target = privateLessonStatusActionTarget || {}
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(target, scopedAcademyId, '1:1 예약')
       const reservationId = String(
@@ -6800,6 +6992,109 @@ export default function Dashboard() {
       )
     } finally {
       setPrivateLessonOutcomePreviewBusy(false)
+    }
+  }
+
+  async function previewFixedPrivateLessonOutcomeActionOnServer() {
+    if (
+      fixedPrivateOutcomePreviewBusyRef.current ||
+      fixedPrivateOutcomePreviewBusy ||
+      fixedPrivateOutcomeCommitBusy ||
+      fixedPrivateOutcomeCommitResult ||
+      privateLessonStatusActionPreviewBusy ||
+      privateLessonOutcomePreviewBusy ||
+      privateLessonOutcomeCommitBusy ||
+      privateLessonStatusActionCommitBusy
+    ) {
+      return
+    }
+
+    clearFixedPrivateLessonOutcomeState()
+    const previewEpoch = fixedPrivateOutcomePreviewEpochRef.current
+    const target = privateLessonStatusActionTarget || {}
+    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+
+    try {
+      if (!isFixedPrivateLessonOutcomeTarget(target)) {
+        throw new Error('고정 수업 3-way 링크가 완성된 회차만 처리할 수 있습니다.')
+      }
+      if (
+        !canManageFixedPrivateLessonOutcomeLocally({
+          target,
+          isAdmin,
+          user,
+          userProfile,
+        })
+      ) {
+        throw new Error('이 고정 수업 회차를 처리할 로컬 권한 또는 선생님 소유권이 없습니다.')
+      }
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      assertSameAcademy(target, scopedAcademyId, '고정 1:1 수업')
+      const { lessonId, reservationId, slotId, packageId } =
+        getFixedPrivateLessonOutcomeTargetIds(target)
+      const requestId = `fixedPrivateLessonOutcome_${scopedAcademyId}_${lessonId}_${Date.now()}_${Math.random()
+        .toString(36)
+        .slice(2, 8)}`
+      const payload = {
+        academyId: scopedAcademyId,
+        lessonId,
+        reservationId,
+        slotId,
+        packageId,
+        requestId,
+        actionType,
+        dryRun: true,
+        previewOnly: true,
+        commit: false,
+      }
+
+      fixedPrivateOutcomePreviewBusyRef.current = true
+      setFixedPrivateOutcomePreviewBusy(true)
+      const callable = httpsCallable(
+        firebaseFunctions,
+        'previewFixedPrivateLessonOutcomeAction'
+      )
+      const result = await callable(payload)
+      if (fixedPrivateOutcomePreviewEpochRef.current !== previewEpoch) return
+      const previewData = result?.data || null
+      const planHash = String(previewData?.planHash || '').trim()
+      const normalizedPlan = previewData?.normalizedPlan || {}
+      if (
+        !previewData ||
+        previewData.dryRun !== true ||
+        previewData.previewOnly !== true ||
+        previewData.commit !== false ||
+        previewData.requestId !== requestId ||
+        previewData.actionType !== actionType ||
+        String(normalizedPlan.lessonId || '').trim() !== lessonId ||
+        String(normalizedPlan.reservationId || '').trim() !== reservationId ||
+        String(normalizedPlan.slotId || '').trim() !== slotId ||
+        String(normalizedPlan.packageId || '').trim() !== packageId ||
+        !planHash
+      ) {
+        throw new Error('서버 고정 수업 결과 미리보기의 대상 또는 결과가 유효하지 않습니다.')
+      }
+
+      setFixedPrivateOutcomePreviewResult(previewData)
+      setFixedPrivateOutcomePreviewPayload(payload)
+      setFixedPrivateOutcomePreviewPlanHash(planHash)
+    } catch (error) {
+      if (fixedPrivateOutcomePreviewEpochRef.current !== previewEpoch) return
+      console.error('고정 수업 결과 미리보기 실패:', error)
+      setFixedPrivateOutcomePreviewResult(null)
+      setFixedPrivateOutcomePreviewPayload(null)
+      setFixedPrivateOutcomePreviewPlanHash('')
+      setFixedPrivateOutcomeCommitError(null)
+      setFixedPrivateOutcomeCommitResult(null)
+      setFixedPrivateOutcomeCommitConfirmed(false)
+      setFixedPrivateOutcomePreviewError(
+        error?.message || '고정 수업 결과 미리보기에 실패했습니다.'
+      )
+    } finally {
+      if (fixedPrivateOutcomePreviewEpochRef.current === previewEpoch) {
+        fixedPrivateOutcomePreviewBusyRef.current = false
+        setFixedPrivateOutcomePreviewBusy(false)
+      }
     }
   }
 
@@ -8283,6 +8578,7 @@ export default function Dashboard() {
 
   async function commitPrivateLessonStatusActionOnServer() {
     if (
+      privateLessonStatusActionCommitBusyRef.current ||
       privateLessonStatusActionCommitBusy ||
       privateLessonStatusActionCommitResult ||
       privateLessonOutcomeCommitBusy
@@ -8293,6 +8589,9 @@ export default function Dashboard() {
     try {
       if (!isAdmin) {
         throw new Error('개인 수업 실제 처리 권한이 없습니다.')
+      }
+      if (isFixedPrivateSourceRecord(privateLessonStatusActionTarget)) {
+        throw new Error('고정 수업 회차는 상태만 처리 경로를 사용할 수 없습니다.')
       }
       const previewData = privateLessonStatusActionPreview || {}
       const blockedReasons = Array.isArray(previewData.blockedReasons)
@@ -8325,6 +8624,7 @@ export default function Dashboard() {
         previewOnly: false,
       }
 
+      privateLessonStatusActionCommitBusyRef.current = true
       setPrivateLessonStatusActionCommitBusy(true)
       setPrivateLessonStatusActionCommitError('')
       setPrivateLessonStatusActionCommitResult(null)
@@ -8347,7 +8647,9 @@ export default function Dashboard() {
         error?.message || '개인 수업 실제 처리에 실패했습니다.'
       )
     } finally {
+      privateLessonStatusActionCommitBusyRef.current = false
       setPrivateLessonStatusActionCommitBusy(false)
+      flushDeferredPrivateLessonActionContextReset()
     }
   }
 
@@ -8372,6 +8674,9 @@ export default function Dashboard() {
     try {
       if (!isAdmin) {
         throw new Error('차감 포함 실제 처리 권한이 없습니다.')
+      }
+      if (isFixedPrivateSourceRecord(target)) {
+        throw new Error('고정 수업 회차는 직접예약 차감 처리 경로를 사용할 수 없습니다.')
       }
       if (!reservationId) {
         throw new Error('차감 포함 실제 처리에 사용할 예약 ID가 없습니다.')
@@ -8476,11 +8781,167 @@ export default function Dashboard() {
     } finally {
       privateLessonOutcomeCommitBusyRef.current = false
       setPrivateLessonOutcomeCommitBusy(false)
+      flushDeferredPrivateLessonActionContextReset()
+    }
+  }
+
+  async function commitFixedPrivateLessonOutcomeActionOnServer() {
+    if (
+      fixedPrivateOutcomeCommitBusyRef.current ||
+      fixedPrivateOutcomeCommitBusy ||
+      fixedPrivateOutcomeCommitResult
+    ) {
+      return
+    }
+
+    const target = privateLessonStatusActionTarget || {}
+    const targetIds = getFixedPrivateLessonOutcomeTargetIds(target)
+    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const previewData = fixedPrivateOutcomePreviewResult || {}
+    const previewPayload = fixedPrivateOutcomePreviewPayload || {}
+    const planHash = String(fixedPrivateOutcomePreviewPlanHash || '').trim()
+    const requestId = String(previewPayload.requestId || '').trim()
+    const blockedReasons = Array.isArray(previewData.blockedReasons)
+      ? previewData.blockedReasons
+      : []
+    const creditTransactionPreview = previewData.creditTransactionPreview || {}
+    const normalizedPlan = previewData.normalizedPlan || {}
+
+    try {
+      if (!isFixedPrivateLessonOutcomeTarget(target)) {
+        throw new Error('현재 선택한 고정 수업의 3-way 링크가 유효하지 않습니다.')
+      }
+      if (
+        !canManageFixedPrivateLessonOutcomeLocally({
+          target,
+          isAdmin,
+          user,
+          userProfile,
+        })
+      ) {
+        throw new Error('현재 고정 수업을 처리할 로컬 권한 또는 선생님 소유권이 없습니다.')
+      }
+      if (!fixedPrivateOutcomePreviewResult || !fixedPrivateOutcomePreviewPayload) {
+        throw new Error('실제 처리에 사용할 고정 수업 미리보기 결과와 payload가 없습니다.')
+      }
+      if (!requestId || !planHash) {
+        throw new Error('고정 수업 미리보기 requestId 또는 planHash가 없습니다.')
+      }
+      if (previewData.ok !== true || previewData.allowed !== true || blockedReasons.length > 0) {
+        throw new Error('차단 사유가 없는 고정 수업 미리보기만 실제 처리할 수 있습니다.')
+      }
+      if (creditTransactionPreview.duplicateExists === true) {
+        throw new Error('이미 존재하는 차감 기록이 있어 고정 수업을 처리할 수 없습니다.')
+      }
+      if (!fixedPrivateOutcomeCommitConfirmed) {
+        throw new Error('고정 수업 실제 처리 전 최종 확인이 필요합니다.')
+      }
+      if (
+        previewPayload.lessonId !== targetIds.lessonId ||
+        previewPayload.reservationId !== targetIds.reservationId ||
+        previewPayload.slotId !== targetIds.slotId ||
+        previewPayload.packageId !== targetIds.packageId ||
+        normalizedPlan.lessonId !== targetIds.lessonId ||
+        normalizedPlan.reservationId !== targetIds.reservationId ||
+        normalizedPlan.slotId !== targetIds.slotId ||
+        normalizedPlan.packageId !== targetIds.packageId
+      ) {
+        throw new Error('현재 고정 수업 대상과 미리보기 대상이 일치하지 않습니다.')
+      }
+      if (
+        previewPayload.actionType !== actionType ||
+        previewData.actionType !== actionType ||
+        previewData.requestId !== requestId ||
+        String(previewData.planHash || '').trim() !== planHash
+      ) {
+        throw new Error('현재 처리 유형, requestId 또는 planHash가 미리보기와 일치하지 않습니다.')
+      }
+
+      const payload = {
+        ...fixedPrivateOutcomePreviewPayload,
+        planHash: fixedPrivateOutcomePreviewPlanHash,
+        commit: true,
+        dryRun: false,
+        previewOnly: false,
+      }
+
+      fixedPrivateOutcomeCommitBusyRef.current = true
+      setFixedPrivateOutcomeCommitBusy(true)
+      setFixedPrivateOutcomeCommitError(null)
+      setFixedPrivateOutcomeCommitResult(null)
+      const callable = httpsCallable(
+        firebaseFunctions,
+        'commitFixedPrivateLessonOutcomeAction'
+      )
+      const result = await callable(payload)
+      const commitData = result?.data || null
+      if (
+        commitData?.ok !== true ||
+        commitData?.committed !== true ||
+        commitData?.dryRun !== false ||
+        commitData?.previewOnly !== false ||
+        commitData?.requestId !== requestId ||
+        commitData?.actionType !== actionType
+      ) {
+        throw new Error('서버 고정 수업 실제 처리 결과가 유효하지 않습니다.')
+      }
+      setFixedPrivateOutcomeCommitResult(commitData)
+    } catch (error) {
+      console.error('고정 수업 결과 실제 처리 실패:', error)
+      const errorClassification = classifyFixedPrivateOutcomeCommitError(error)
+      const { details } = errorClassification
+      setFixedPrivateOutcomeCommitResult(null)
+      setFixedPrivateOutcomeCommitError({
+        message: error?.message || '고정 수업 결과 실제 처리에 실패했습니다.',
+        code: errorClassification.code,
+        requestId: String(details.requestId || requestId),
+        planHash: String(details.planHash || planHash),
+        actualPlanHash: String(details.actualPlanHash || ''),
+        blockedReasons:
+          errorClassification.blockedReasons.length > 0
+            ? errorClassification.blockedReasons
+            : blockedReasons,
+        warnings: Array.isArray(details.warnings) ? details.warnings : previewData.warnings || [],
+        ledgerClassification:
+          details.ledgerClassification || previewData.ledgerClassification || {},
+        ledgerDiagnostics: details.ledgerDiagnostics || previewData.ledgerDiagnostics || {},
+        packageImpact: details.packageImpact || previewData.packageImpact || {},
+        creditTransactionPreview:
+          details.creditTransactionPreview || creditTransactionPreview || {},
+        normalizedPlan: details.normalizedPlan || normalizedPlan || {},
+        batchId: String(details.batchId || ''),
+        idempotentReplay: details.idempotentReplay === true,
+        requiresFreshPreview: errorClassification.requiresFreshPreview,
+        retryWithSamePayload: errorClassification.retryWithSamePayload,
+      })
+      if (errorClassification.requiresFreshPreview) {
+        fixedPrivateOutcomePreviewEpochRef.current += 1
+        setFixedPrivateOutcomePreviewResult(null)
+        setFixedPrivateOutcomePreviewPayload(null)
+        setFixedPrivateOutcomePreviewPlanHash('')
+        setFixedPrivateOutcomeCommitConfirmed(false)
+        setFixedPrivateOutcomePreviewError(
+          '서버가 결정적으로 요청을 거부했습니다. 새 requestId로 미리보기부터 다시 실행하세요.'
+        )
+      } else {
+        setFixedPrivateOutcomePreviewError('')
+      }
+    } finally {
+      fixedPrivateOutcomeCommitBusyRef.current = false
+      setFixedPrivateOutcomeCommitBusy(false)
+      flushDeferredPrivateLessonActionContextReset()
     }
   }
 
   const privateLessonStatusActionModalProps = {
     target: privateLessonStatusActionTarget,
+    fixedOccurrenceMode: isFixedPrivateSourceRecord(privateLessonStatusActionTarget),
+    fixedLocalGatePassed: canManageFixedPrivateLessonOutcomeLocally({
+      target: privateLessonStatusActionTarget,
+      isAdmin,
+      user,
+      userProfile,
+    }),
     actionType: privateLessonStatusActionMode,
     setActionType: selectPrivateLessonStatusActionMode,
     preview: privateLessonStatusActionPreview,
@@ -8504,6 +8965,18 @@ export default function Dashboard() {
     onPreview: previewPrivateLessonStatusActionOnServer,
     onOutcomePreview: previewPrivateLessonOutcomeActionOnServer,
     onOutcomeCommit: commitPrivateLessonOutcomeActionOnServer,
+    fixedOutcomePreviewBusy: fixedPrivateOutcomePreviewBusy,
+    fixedOutcomePreviewError: fixedPrivateOutcomePreviewError,
+    fixedOutcomePreviewResult: fixedPrivateOutcomePreviewResult,
+    fixedOutcomePreviewPayload: fixedPrivateOutcomePreviewPayload,
+    fixedOutcomePreviewPlanHash: fixedPrivateOutcomePreviewPlanHash,
+    fixedOutcomeCommitBusy: fixedPrivateOutcomeCommitBusy,
+    fixedOutcomeCommitError: fixedPrivateOutcomeCommitError,
+    fixedOutcomeCommitResult: fixedPrivateOutcomeCommitResult,
+    fixedOutcomeCommitConfirmed: fixedPrivateOutcomeCommitConfirmed,
+    setFixedOutcomeCommitConfirmed: setFixedPrivateOutcomeCommitConfirmed,
+    onFixedOutcomePreview: previewFixedPrivateLessonOutcomeActionOnServer,
+    onFixedOutcomeCommit: commitFixedPrivateLessonOutcomeActionOnServer,
     onCommit: commitPrivateLessonStatusActionOnServer,
     onClose: closePrivateLessonStatusActionPreview,
   }
@@ -8666,7 +9139,14 @@ export default function Dashboard() {
 
       </main>
 
-      {isAdmin && privateLessonStatusActionTarget ? (
+      {privateLessonStatusActionTarget &&
+      (isAdmin ||
+        canManageFixedPrivateLessonOutcomeLocally({
+          target: privateLessonStatusActionTarget,
+          isAdmin,
+          user,
+          userProfile,
+        })) ? (
         <PrivateLessonStatusActionModal {...privateLessonStatusActionModalProps} />
       ) : null}
 

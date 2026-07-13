@@ -48,6 +48,14 @@ function createDefaultPrivateLessonEditForm(overrides = {}) {
   }
 }
 
+function isFixedPrivateSourceRecordForLegacyCrud(row) {
+  return (
+    String(row?.sourceType || '').trim().toLowerCase() ===
+      'fixed-private-slot-assignment' ||
+    String(row?.reservationType || '').trim().toLowerCase() === 'fixed'
+  )
+}
+
 export function validatePrivateLessonFormFields(form, options = {}) {
   const { isAdmin = false } = options
   const errors = {}
@@ -435,6 +443,10 @@ export default function usePrivateLessonFlow({
   }
 
   function openPrivateLessonEditModal(lesson) {
+    if (isFixedPrivateSourceRecordForLegacyCrud(lesson)) {
+      alert('고정 수업은 일반 수정이 아닌 고정수업 수정 범위 미리보기/일정 변경 흐름을 사용해 주세요.')
+      return
+    }
     if (!canEditLesson) {
       alert('수업 수정 권한이 없습니다.')
       return
@@ -452,6 +464,11 @@ export default function usePrivateLessonFlow({
 
   async function submitPrivateLessonEditModal() {
     if (!privateLessonEditModal?.lesson) return
+    const { lesson } = privateLessonEditModal
+    if (isFixedPrivateSourceRecordForLegacyCrud(lesson)) {
+      alert('고정 수업은 일반 수정으로 저장할 수 없습니다. 고정수업 일정 변경 흐름을 사용해 주세요.')
+      return
+    }
     if (!canEditLesson) {
       alert('수업 수정 권한이 없습니다.')
       return
@@ -461,7 +478,6 @@ export default function usePrivateLessonFlow({
     setPrivateLessonEditFormErrors(result.errors)
     if (!result.valid) return
 
-    const { lesson } = privateLessonEditModal
     const startDate = parseLegacyLessonToDate(result.date, result.time)
     if (!startDate) {
       setPrivateLessonEditFormErrors((prev) => ({

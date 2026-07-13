@@ -94,7 +94,10 @@ function isProductionProject() {
 }
 
 function isE2eProject() {
-  return getRuntimeProjectId() === E2E_PROJECT_ID;
+  const projectId = getRuntimeProjectId();
+  return projectId === E2E_PROJECT_ID ||
+    (Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
+      projectId.startsWith("demo-"));
 }
 
 function requireE2eTestProject() {
@@ -1095,6 +1098,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     source: "fixed_admin",
     sourceType: "fixed-private-slot-assignment",
     reservationType: "fixed",
+    fixedPrivateDeductionLedger: "reservation_v1",
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
   };
@@ -1122,6 +1126,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     packageTeacherKey: plan.teacherKey || teacher.teacher,
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+    fixedPrivateDeductionLedger: "reservation_v1",
     createdByUid: actor.actorUid,
     startAt: startTimestamp,
     reservedAt: now,
@@ -1142,6 +1147,8 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     source: "fixed_admin",
     sourceType: "fixed-private-slot-assignment",
     reservationType: "fixed",
+    fixedPrivateDeductionLedger: "reservation_v1",
+    deductionApplied: false,
     lessonId: occurrence.lessonId,
     fixedLessonId: occurrence.lessonId,
     packageId,
@@ -1169,6 +1176,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     scheduleDate: occurrence.date,
     scheduleTime: plan.time,
     status: "active",
+    deductionApplied: false,
     createdByUid: actor.actorUid,
     startAt: startTimestamp,
     startsAt: startTimestamp,
@@ -1683,6 +1691,409 @@ async function runFixedPrivateRenewalWriteTransaction({
       normalizedPlan: validation.normalizedPlan,
       warnings: validation.warnings,
       wouldCreate: validation.wouldCreate,
+      created,
+    };
+  });
+}
+
+function validateFixedPrivateAssignmentPayload(data) {
+  if (data.commit !== true ||
+      data.dryRun !== false ||
+      data.previewOnly !== false) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Assignment requires commit true, dryRun false, and previewOnly false.",
+    );
+  }
+  const academyId = requireString(data, "academyId");
+  const requestId = validateCallableRequestId(
+      requireString(data, "requestId"),
+  );
+  const templateId = validateCallableDocumentId(
+      requireString(data, "templateId"),
+      "templateId",
+  );
+  const studentId = validateCallableDocumentId(
+      requireString(data, "studentId"),
+      "studentId",
+  );
+  const packageId = validateCallableDocumentId(
+      requireString(data, "packageId"),
+      "packageId",
+  );
+  const assignableDates = normalizeFixedPrivateRenewalDateList(
+      data.assignableDates,
+      "assignableDates",
+  );
+  validateAcademyId(academyId);
+  requireUniqueFixedPrivateRenewalDates(assignableDates, "assignableDates");
+  if (assignableDates.length === 0 ||
+      assignableDates.length > FIXED_PRIVATE_RENEWAL_MAX_ASSIGNABLE_COUNT) {
+    throw new HttpsError(
+        "invalid-argument",
+        `assignableDates must contain 1 to ` +
+          `${FIXED_PRIVATE_RENEWAL_MAX_ASSIGNABLE_COUNT} dates.`,
+    );
+  }
+  const today = getSeoulTodayDateString();
+  if (assignableDates.some((date) => date < today)) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Past fixed private assignments are not allowed.",
+    );
+  }
+  const assignmentBatchIdCandidate = sanitizeFixedPrivateRenewalDocId(
+      `fixedPrivateAssignment_${academyId}_${requestId}`,
+  );
+  return {
+    academyId,
+    requestId,
+    templateId,
+    studentId,
+    packageId,
+    assignmentBatchIdCandidate,
+    subject: normalizeId(data.subject) || "1:1 수업",
+    assignableDates,
+  };
+}
+
+function buildFixedPrivateAssignmentIds(validation) {
+  const occurrences = validation.assignableDates.map((date) => {
+    const compactDate = ymdToCompactDate(date);
+    const slotKey = hashFixedPrivateRenewalPayload({
+      academyId: validation.academyId,
+      templateId: validation.templateId,
+      date,
+    }).slice(0, 32);
+    const lessonKey = hashFixedPrivateRenewalPayload({
+      academyId: validation.academyId,
+      templateId: validation.templateId,
+      studentId: validation.studentId,
+      date,
+    }).slice(0, 32);
+    const lessonId = sanitizeFixedPrivateRenewalDocId(
+        `fixedPrivateLesson_${compactDate}_${lessonKey}`,
+    );
+    const slotId = sanitizeFixedPrivateRenewalDocId(
+        `fixedPrivateSlot_${compactDate}_${slotKey}`,
+    );
+    return {
+      date,
+      lessonId,
+      slotId,
+      reservationId: privateReservationDocId({
+        academyId: validation.academyId,
+        slotId,
+        studentId: validation.studentId,
+      }),
+    };
+  });
+  return {
+    batchId: validation.assignmentBatchIdCandidate,
+    occurrences,
+  };
+}
+
+function fixedPrivateAssignmentPayloadHash(validation) {
+  return hashFixedPrivateRenewalPayload({
+    version: 1,
+    academyId: validation.academyId,
+    requestId: validation.requestId,
+    templateId: validation.templateId,
+    studentId: validation.studentId,
+    packageId: validation.packageId,
+    subject: validation.subject,
+    assignableDates: validation.assignableDates,
+  });
+}
+
+function fixedPrivateAssignmentTeacherFromTemplate(template) {
+  return normalizeFixedPrivateRenewalTeacherIdentity({
+    teacherKey: template.teacherKey,
+    teacherId: template.teacherId || template.teacherID,
+    teacherUid: template.teacherUid || template.teacherUID,
+    teacherName: template.teacherName || template.teacher,
+  });
+}
+
+function assertFixedPrivateAssignmentTemplateDates({
+  template,
+  validation,
+}) {
+  if (template.useForFixedAssignment !== true) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Teacher time template is not enabled for fixed assignment.",
+    );
+  }
+  const weekday = Number(template.weekday);
+  const startDate = normalizeId(template.effectiveStartDate);
+  const endDate = normalizeId(template.effectiveEndDate);
+  validation.assignableDates.forEach((date) => {
+    const dateWeekday = new Date(`${date}T12:00:00+09:00`).getUTCDay();
+    if (dateWeekday !== weekday ||
+        (startDate && date < startDate) ||
+        (endDate && date > endDate)) {
+      throw new HttpsError(
+          "failed-precondition",
+          `Assignment date does not match teacher template: ${date}.`,
+      );
+    }
+  });
+}
+
+async function assertFixedPrivateAssignmentActiveTeacher({
+  transaction,
+  db,
+  academyId,
+  template,
+}) {
+  const targetIdentity = getPrivateTeacherIdentity(template);
+  const memberships = await transaction.get(
+      db.collection("academyMemberships")
+          .where("academyId", "==", academyId),
+  );
+  const matches = memberships.docs.filter((docSnap) => {
+    const membership = docSnap.data() || {};
+    const role = normalizeId(membership.role).toLowerCase();
+    if (normalizeId(membership.status).toLowerCase() !== "active" ||
+        !["teacher", "staff"].includes(role)) {
+      return false;
+    }
+    const uid = activeTeacherMembershipUid(docSnap, academyId);
+    const actorIdentity = getPrivateTeacherIdentity({
+      teacherUid: uid,
+      teacherId: membership.teacherId || membership.teacherID,
+      teacherKey: membership.teacherKey,
+      teacherName: membership.teacherName ||
+        membership.displayName ||
+        membership.name,
+    });
+    return privateTeacherIdentityMatches(actorIdentity, targetIdentity);
+  });
+  if (matches.length !== 1) {
+    throw new HttpsError(
+        "failed-precondition",
+        matches.length === 0 ?
+          "Assignment teacher is not an active academy teacher." :
+          "Assignment teacher identity is ambiguous.",
+    );
+  }
+}
+
+async function assertNoFixedPrivateAssignmentStudentConflicts({
+  transaction,
+  db,
+  validation,
+  effectiveValidation,
+}) {
+  const plan = effectiveValidation.normalizedPlan;
+  for (const date of validation.assignableDates) {
+    const snap = await transaction.get(
+        db.collection("lessons")
+            .where("academyId", "==", validation.academyId)
+            .where("studentId", "==", validation.studentId)
+            .where("date", "==", date),
+    );
+    const candidate = {
+      date,
+      time: plan.time,
+      durationMinutes: plan.durationMinutes,
+    };
+    if (snap.docs.some((docSnap) => {
+      const row = docSnap.data() || {};
+      return isTeacherBlockingScheduleRow(row) &&
+        privateSchedulesOverlap(candidate, row);
+    })) {
+      throw new HttpsError(
+          "failed-precondition",
+          `Student schedule conflict exists on ${date}.`,
+      );
+    }
+  }
+}
+
+async function runFixedPrivateAssignmentWriteTransaction({
+  db,
+  auth,
+  membership,
+  validation,
+}) {
+  const ids = buildFixedPrivateAssignmentIds(validation);
+  const payloadHash = fixedPrivateAssignmentPayloadHash(validation);
+  const actor = buildAdminActorContext(auth, membership);
+  return db.runTransaction(async (transaction) => {
+    const batchRef = db.collection("fixedPrivateAssignmentBatches")
+        .doc(ids.batchId);
+    const studentRef = db.collection("privateStudents")
+        .doc(validation.studentId);
+    const packageRef = db.collection("studentPackages")
+        .doc(validation.packageId);
+    const templateRef = db.collection("privateLessonAvailabilityTemplates")
+        .doc(validation.templateId);
+    const occurrenceRefs = ids.occurrences.map((occurrence) => ({
+      occurrence,
+      lessonRef: db.collection("lessons").doc(occurrence.lessonId),
+      slotRef: db.collection("privateLessonSlots").doc(occurrence.slotId),
+      reservationRef: db.collection("privateLessonReservations")
+          .doc(occurrence.reservationId),
+    }));
+    const readSnaps = await Promise.all([
+      transaction.get(batchRef),
+      transaction.get(studentRef),
+      transaction.get(packageRef),
+      transaction.get(templateRef),
+      ...occurrenceRefs.flatMap((refs) => [
+        transaction.get(refs.lessonRef),
+        transaction.get(refs.slotRef),
+        transaction.get(refs.reservationRef),
+      ]),
+    ]);
+    const batchSnap = readSnaps[0];
+    if (batchSnap.exists) {
+      const checkpoint = batchSnap.data() || {};
+      if (checkpoint.payloadHash !== payloadHash) {
+        throw new HttpsError(
+            "already-exists",
+            "requestId was already used for another fixed assignment.",
+        );
+      }
+      if (checkpoint.status !== "completed") {
+        throw new HttpsError(
+            "failed-precondition",
+            "Fixed assignment checkpoint is incomplete.",
+        );
+      }
+      return {
+        ok: true,
+        committed: true,
+        idempotentReplay: true,
+        requestId: validation.requestId,
+        assignmentBatchIdCandidate: ids.batchId,
+        created: checkpoint.created || {},
+      };
+    }
+    const studentData = assertFixedPrivateRenewalStudent({
+      studentSnap: readSnaps[1],
+      validation,
+    });
+    const templateSnap = readSnaps[3];
+    if (!templateSnap.exists) {
+      throw new HttpsError("not-found", "Teacher time template not found.");
+    }
+    const template = templateSnap.data() || {};
+    if (normalizeId(template.academyId) !== validation.academyId) {
+      throw new HttpsError(
+          "permission-denied",
+          "Teacher time template does not belong to academy.",
+      );
+    }
+    const teacher = fixedPrivateAssignmentTeacherFromTemplate(template);
+    const effectiveValidation = {
+      academyId: validation.academyId,
+      renewalBatchIdCandidate: validation.assignmentBatchIdCandidate,
+      normalizedPlan: {
+        studentId: validation.studentId,
+        ...teacher,
+        weekday: Number(template.weekday),
+        time: requireString(template, "time"),
+        durationMinutes: Number(template.durationMinutes),
+        startDate: validation.assignableDates[0],
+        endDate: validation.assignableDates[
+            validation.assignableDates.length - 1
+        ],
+        lessonName: validation.subject,
+        packageMode: "existing",
+        existingPackageId: validation.packageId,
+        assignableDates: validation.assignableDates,
+      },
+    };
+    assertFixedPrivateRenewalTemplate({
+      templateSnap,
+      validation: effectiveValidation,
+    });
+    assertFixedPrivateAssignmentTemplateDates({template, validation});
+    await assertFixedPrivateAssignmentActiveTeacher({
+      transaction,
+      db,
+      academyId: validation.academyId,
+      template,
+    });
+    const usageRows = await loadFixedPrivateRenewalPackageUsageRows(
+        transaction,
+        db,
+        {
+          academyId: validation.academyId,
+          studentId: validation.studentId,
+          packageId: validation.packageId,
+        },
+    );
+    const packageResult = assertFixedPrivateRenewalExistingPackage({
+      packageSnap: readSnaps[2],
+      validation: effectiveValidation,
+      usageRows,
+    });
+    const deterministicSnaps = readSnaps.slice(4);
+    assertNoFixedPrivateRenewalDeterministicDocs({
+      docSnaps: deterministicSnaps,
+    });
+    await assertFixedPrivateRenewalNoScheduleConflicts({
+      transaction,
+      db,
+      validation: effectiveValidation,
+    });
+    await assertNoFixedPrivateAssignmentStudentConflicts({
+      transaction,
+      db,
+      validation,
+      effectiveValidation,
+    });
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    occurrenceRefs.forEach((refs) => {
+      const payloads = buildFixedPrivateRenewalOccurrencePayloads({
+        validation: effectiveValidation,
+        occurrence: refs.occurrence,
+        packageId: validation.packageId,
+        packageData: {
+          ...packageResult.data,
+          studentName: normalizeId(
+              packageResult.data.studentName ||
+              studentData.name ||
+              studentData.studentName,
+          ) || "-",
+        },
+        templateId: validation.templateId,
+        actor,
+        now,
+      });
+      transaction.create(refs.lessonRef, payloads.lesson);
+      transaction.create(refs.slotRef, payloads.slot);
+      transaction.create(refs.reservationRef, payloads.reservation);
+    });
+    const created = {
+      packageId: validation.packageId,
+      templateId: validation.templateId,
+      lessons: ids.occurrences.map((row) => row.lessonId),
+      privateLessonSlots: ids.occurrences.map((row) => row.slotId),
+      privateLessonReservations:
+        ids.occurrences.map((row) => row.reservationId),
+    };
+    transaction.create(batchRef, {
+      academyId: validation.academyId,
+      requestId: validation.requestId,
+      payloadHash,
+      status: "completed",
+      created,
+      actor,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return {
+      ok: true,
+      committed: true,
+      idempotentReplay: false,
+      requestId: validation.requestId,
+      assignmentBatchIdCandidate: ids.batchId,
       created,
     };
   });
@@ -4607,6 +5018,131 @@ const PRIVATE_LESSON_STATUS_BLOCKED_STATUSES = [
   "archived",
 ];
 
+const CALLABLE_DOCUMENT_ID_MAX_LENGTH = 200;
+const CALLABLE_REQUEST_ID_MAX_LENGTH = 128;
+const FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON =
+  "fixed_private_requires_fixed_outcome_action";
+const FIXED_PRIVATE_DIRECT_CANCEL_BLOCK_REASON =
+  "fixed_private_requires_dedicated_cancel";
+
+function getAuthUid(auth) {
+  return auth && typeof auth.uid === "string" ? auth.uid : "";
+}
+
+function validateCallableId(value, fieldName, maxLength) {
+  const normalized = normalizeId(value);
+  if (!normalized ||
+      normalized.length > maxLength ||
+      normalized.includes("/")) {
+    throw new HttpsError(
+        "invalid-argument",
+        `${fieldName} must be a bounded Firestore document ID without '/'.`,
+    );
+  }
+  return normalized;
+}
+
+function validateCallableDocumentId(value, fieldName) {
+  return validateCallableId(
+      value,
+      fieldName,
+      CALLABLE_DOCUMENT_ID_MAX_LENGTH,
+  );
+}
+
+function validateCallableRequestId(value) {
+  return validateCallableId(
+      value,
+      "requestId",
+      CALLABLE_REQUEST_ID_MAX_LENGTH,
+  );
+}
+
+function classifyFixedPrivateProvenance(...rows) {
+  const evidence = [];
+  let canonicalMarkerFound = false;
+  rows.filter(Boolean).forEach((row, rowIndex) => {
+    const addEvidence = (field, value) => {
+      evidence.push({rowIndex, field, value});
+    };
+    const ledger = normalizeId(row.fixedPrivateDeductionLedger);
+    const sourceType = normalizeId(row.sourceType).toLowerCase();
+    const reservationType = normalizeId(row.reservationType).toLowerCase();
+    const source = normalizeId(row.source).toLowerCase();
+    const slotType = normalizeId(row.slotType).toLowerCase();
+    if (ledger) {
+      addEvidence("fixedPrivateDeductionLedger", ledger);
+      canonicalMarkerFound =
+        canonicalMarkerFound || ledger === "reservation_v1";
+    }
+    if (sourceType === "fixed-private-slot-assignment" ||
+        sourceType.startsWith("weekly-slot-fixed-assignment")) {
+      addEvidence("sourceType", sourceType);
+    }
+    if (["fixed", "fixed_private"].includes(reservationType)) {
+      addEvidence("reservationType", reservationType);
+    }
+    if (source.startsWith("fixed_admin")) addEvidence("source", source);
+    if (slotType === "fixed") addEvidence("slotType", slotType);
+    [
+      "fixedPrivateAssignmentBatchId",
+      "privateLessonAvailabilityTemplateId",
+      "fixedPrivatePackageId",
+      "fixedLessonId",
+    ].forEach((field) => {
+      const value = normalizeId(row[field]);
+      if (value) addEvidence(field, value);
+    });
+  });
+  return {
+    isFixed: evidence.length > 0,
+    ledgerType: evidence.length === 0 ?
+      "" :
+      canonicalMarkerFound ? "canonical" : "legacy",
+    evidence,
+  };
+}
+
+function isFixedPrivateDirectTarget(target) {
+  return classifyFixedPrivateProvenance(
+      target && target.lessonDoc && target.lessonDoc.data,
+      target && target.reservationDoc && target.reservationDoc.data,
+      target && target.slotDoc && target.slotDoc.data,
+  ).isFixed;
+}
+
+function assertNotFixedPrivateDirectReservation(...rows) {
+  if (!classifyFixedPrivateProvenance(...rows).isFixed) return;
+  throw new HttpsError(
+      "failed-precondition",
+      "Fixed private occurrences require the fixed outcome action.",
+      {blockedReasons: [FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON]},
+  );
+}
+
+function rowHasFixedPrivateProvenance(row) {
+  return classifyFixedPrivateProvenance(row).isFixed;
+}
+
+function isDirectStudentReservationOnReleasedFixedSlot(reservation, slot) {
+  return normalizeId(reservation && reservation.source).toLowerCase() ===
+      "student" &&
+    !rowHasFixedPrivateProvenance(reservation) &&
+    normalizeId(slot && slot.slotType).toLowerCase() === "released_fixed";
+}
+
+function assertNotFixedPrivateDirectCancel({reservation, slot, lesson}) {
+  if (isDirectStudentReservationOnReleasedFixedSlot(reservation, slot)) return;
+  const classification =
+    classifyFixedPrivateProvenance(reservation, slot, lesson);
+  if (!classification.isFixed) return;
+  throw new HttpsError(
+      "failed-precondition",
+      "Fixed private occurrences require the dedicated fixed cancel action.",
+      {blockedReasons: [FIXED_PRIVATE_DIRECT_CANCEL_BLOCK_REASON]},
+  );
+}
+
 function getPrivateStatusActionPermission(membership, permissionKey) {
   const permissions = membership &&
     typeof membership.permissions === "object" ?
@@ -4616,19 +5152,35 @@ function getPrivateStatusActionPermission(membership, permissionKey) {
 }
 
 function buildTeacherStatusActor(auth, membership) {
+  const authUid = getAuthUid(auth);
+  const teacherIdentity = getPrivateTeacherIdentity({
+    teacherUid: authUid,
+    teacherId: membership && membership.teacherId,
+    teacherID: membership && membership.teacherID,
+    teacherKey: membership && membership.teacherKey,
+    teacherName: membership && membership.teacherName,
+    teacher: membership && membership.teacher,
+    displayName: membership && membership.displayName,
+    name: membership && membership.name,
+  });
   return {
     actorRole: "teacher",
-    actorUid: normalizeId(auth && auth.uid),
+    actorUid: authUid,
+    membershipTeacherUid: membership &&
+      typeof membership.teacherUID === "string" ?
+      membership.teacherUID :
+      "",
     actorName: getCallableActorName(auth, membership),
     teacherKeys: getPrivateTeacherScopeKeys({
       teacherName: membership && membership.teacherName,
       teacher: membership && membership.teacherName,
       teacherKey: membership && membership.teacherKey,
-      teacherUid: normalizeId(auth && auth.uid),
+      teacherUid: authUid,
       teacherEmail: auth && auth.token && auth.token.email,
       displayName: membership && membership.displayName,
       name: membership && membership.name,
     }),
+    teacherIdentity,
     permissions: {
       canManageOwnLessonDeductions: getPrivateStatusActionPermission(
           membership,
@@ -4643,7 +5195,7 @@ function buildTeacherStatusActor(auth, membership) {
 }
 
 async function resolvePrivateLessonStatusActor(db, academyId, auth) {
-  const uid = normalizeId(auth && auth.uid);
+  const uid = getAuthUid(auth);
   const membershipSnap = await db
       .collection("academyMemberships")
       .doc(`${academyId}_${uid}`)
@@ -4983,16 +5535,27 @@ async function resolvePrivateLessonStatusTarget({db, academyId, data}) {
 
 function isTeacherOwnPrivateLessonTarget(actor, target) {
   if (!actor || actor.isTeacher !== true) return false;
-  const actorKeys = Array.isArray(actor.teacherKeys) ? actor.teacherKeys : [];
-  if (actorKeys.length === 0) return false;
-  const targetKeys = getPrivateTeacherScopeKeys(
-      target.lessonDoc && target.lessonDoc.data,
-      target.reservationDoc && target.reservationDoc.data,
-      target.slotDoc && target.slotDoc.data,
-      target.packageDoc && target.packageDoc.data,
+  const actorIdentity = actor.teacherIdentity ||
+    getPrivateTeacherIdentity({
+      teacherUid: actor.uid || actor.actorUid,
+      teacherKey: Array.isArray(actor.teacherKeys) ?
+        actor.teacherKeys[0] :
+        "",
+      teacherName: actor.actorName,
+    });
+  const targetIdentity =
+    getPrivateLessonStatusTargetTeacherIdentity(target);
+  if (targetIdentity.conflict) return false;
+  const targetUids = targetIdentity.identity.uidIds || [];
+  if (targetUids.length > 0 &&
+      actor.membershipTeacherUid &&
+      !targetUids.includes(actor.membershipTeacherUid)) {
+    return false;
+  }
+  return privateTeacherIdentityMatches(
+      actorIdentity,
+      targetIdentity.identity,
   );
-  return targetKeys.length > 0 &&
-    targetKeys.some((key) => actorKeys.includes(key));
 }
 
 function canPreviewPrivateLessonStatusAction({actor, actionType, target}) {
@@ -5007,6 +5570,144 @@ function canPreviewPrivateLessonStatusAction({actor, actionType, target}) {
     };
   }
   if (!isTeacherOwnPrivateLessonTarget(actor, target)) {
+    return {
+      allowed: false,
+      permissionSource: "teacher_target_scope",
+      blockedReason: "teacher_not_owner",
+    };
+  }
+  if (actionType === "reverse_deduction") {
+    if (actor.permissions.canReverseOwnPrivateLessonDeduction === true) {
+      return {
+        allowed: true,
+        permissionSource: "canReverseOwnPrivateLessonDeduction",
+      };
+    }
+    return {
+      allowed: false,
+      permissionSource: "canReverseOwnPrivateLessonDeduction",
+      blockedReason: "teacher_permission_missing",
+    };
+  }
+  if (actor.permissions.canManageOwnLessonDeductions === true) {
+    return {
+      allowed: true,
+      permissionSource: "canManageOwnLessonDeductions",
+    };
+  }
+  return {
+    allowed: false,
+    permissionSource: "canManageOwnLessonDeductions",
+    blockedReason: "teacher_permission_missing",
+  };
+}
+
+function activeTeacherMembershipUid(docSnap, academyId) {
+  const data = docSnap.data() || {};
+  const directUid = typeof data.uid === "string" ? data.uid : "";
+  if (directUid) return directUid;
+  const prefix = `${academyId}_`;
+  return docSnap.id.startsWith(prefix) ? docSnap.id.slice(prefix.length) : "";
+}
+
+async function resolveUniqueActiveTeacherNameOwner({
+  db,
+  transaction,
+  academyId,
+  targetNames,
+}) {
+  const query = db.collection("academyMemberships")
+      .where("academyId", "==", academyId);
+  const snap = transaction ?
+    await transaction.get(query) :
+    await query.get();
+  const normalizedTargetNames =
+    uniqueNormalizedTeacherKeyList(targetNames || []);
+  const matches = snap.docs.filter((docSnap) => {
+    const membership = docSnap.data() || {};
+    const role = normalizeId(membership.role).toLowerCase();
+    const status = normalizeId(membership.status).toLowerCase();
+    if (status !== "active" || !["teacher", "staff"].includes(role)) {
+      return false;
+    }
+    const identity = getPrivateTeacherIdentity({
+      teacherName: membership.teacherName,
+      teacher: membership.teacher,
+      displayName: membership.displayName,
+      name: membership.name,
+    });
+    return identity.names.some((name) =>
+      normalizedTargetNames.includes(name),
+    );
+  });
+  if (matches.length === 0) {
+    return {ok: false, blockedReason: "teacher_identity_not_found"};
+  }
+  if (matches.length > 1) {
+    return {ok: false, blockedReason: "teacher_identity_ambiguous"};
+  }
+  return {
+    ok: true,
+    uid: activeTeacherMembershipUid(matches[0], academyId),
+  };
+}
+
+async function resolveFixedPrivateOutcomePermission({
+  db,
+  transaction = null,
+  academyId,
+  actor,
+  actionType,
+  target,
+}) {
+  if (actor.isAdmin) {
+    return {allowed: true, permissionSource: "academy_admin"};
+  }
+  if (!actor.isTeacher) {
+    return {
+      allowed: false,
+      permissionSource: actor.permissionSource,
+      blockedReason: "permission_denied",
+    };
+  }
+  const targetTeacher =
+    getPrivateLessonStatusTargetTeacherIdentity(target);
+  if (targetTeacher.conflict) {
+    return {
+      allowed: false,
+      permissionSource: "teacher_target_scope",
+      blockedReason: "teacher_identity_mismatch",
+    };
+  }
+  const targetIdentity = targetTeacher.identity;
+  const actorIdentity = actor.teacherIdentity || {};
+  let ownsTarget = false;
+  if ((targetIdentity.uidIds || []).length > 0 ||
+      (targetIdentity.teacherIds || []).length > 0 ||
+      (targetIdentity.teacherKeys || []).length > 0) {
+    const targetUids = targetIdentity.uidIds || [];
+    const membershipUidConflicts = targetUids.length > 0 &&
+      actor.membershipTeacherUid &&
+      !targetUids.includes(actor.membershipTeacherUid);
+    ownsTarget = !membershipUidConflicts &&
+      privateTeacherIdentityMatches(actorIdentity, targetIdentity);
+  } else if ((targetIdentity.names || []).length > 0) {
+    const uniqueOwner = await resolveUniqueActiveTeacherNameOwner({
+      db,
+      transaction,
+      academyId,
+      targetNames: targetIdentity.names,
+    });
+    if (!uniqueOwner.ok) {
+      return {
+        allowed: false,
+        permissionSource: "teacher_name_scope",
+        blockedReason: uniqueOwner.blockedReason,
+      };
+    }
+    ownsTarget = uniqueOwner.uid === String(actor.uid || actor.actorUid || "");
+  }
+  if (!ownsTarget) {
     return {
       allowed: false,
       permissionSource: "teacher_target_scope",
@@ -5269,6 +5970,9 @@ function buildPrivateLessonStatusPackageCreditPolicy({
 function buildPrivateLessonStatusPlan({actionType, target}) {
   const blockedReasons = [];
   const warnings = [];
+  if (isFixedPrivateDirectTarget(target)) {
+    blockedReasons.push(FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON);
+  }
   if (!target.lessonDoc.exists && !target.reservationDoc.exists) {
     blockedReasons.push("missing_target");
   }
@@ -5428,7 +6132,13 @@ async function previewPrivateLessonStatusAction({db, auth, data}) {
         "lessonId or reservationId is required.",
     );
   }
-  const requestId = optionalString(data, "requestId") ||
+  ["lessonId", "reservationId", "slotId"].forEach((fieldName) => {
+    const value = optionalString(data, fieldName);
+    if (value) validateCallableDocumentId(value, fieldName);
+  });
+  const providedRequestId = optionalString(data, "requestId");
+  if (providedRequestId) validateCallableRequestId(providedRequestId);
+  const requestId = providedRequestId ||
     `preview_private_lesson_status_${Date.now()}`;
   const target = await resolvePrivateLessonStatusTarget({db, academyId, data});
   const actor = await resolvePrivateLessonStatusActor(db, academyId, auth);
@@ -5536,7 +6246,7 @@ function hashPrivateLessonStatusActionPayload(payload) {
 
 function buildPrivateLessonStatusActionPayloadHash({auth, data}) {
   return hashPrivateLessonStatusActionPayload({
-    uid: normalizeId(auth && auth.uid),
+    uid: getAuthUid(auth),
     academyId: normalizeId(data && data.academyId),
     requestId: normalizeId(data && data.requestId),
     actionType: normalizeId(data && data.actionType),
@@ -5551,7 +6261,9 @@ function buildPrivateLessonStatusActionPayloadHash({auth, data}) {
 
 function validatePrivateLessonStatusCommitPayload(data) {
   const academyId = requireString(data, "academyId");
-  const requestId = requireString(data, "requestId");
+  const requestId = validateCallableRequestId(
+      requireString(data, "requestId"),
+  );
   const actionType = requireString(data, "actionType");
   validateAcademyId(academyId);
   if (actionType === "reverse_deduction") {
@@ -5578,6 +6290,10 @@ function validatePrivateLessonStatusCommitPayload(data) {
         "lessonId or reservationId is required.",
     );
   }
+  ["lessonId", "reservationId", "slotId"].forEach((fieldName) => {
+    const value = optionalString(data, fieldName);
+    if (value) validateCallableDocumentId(value, fieldName);
+  });
   return {
     academyId,
     requestId,
@@ -5595,7 +6311,7 @@ function buildPrivateLessonStatusActorFromMembership({auth, membership}) {
   const status = String((membership && membership.status) || "")
       .trim()
       .toLowerCase();
-  const uid = normalizeId(auth && auth.uid);
+  const uid = getAuthUid(auth);
   if (!membership || status !== "active") {
     return {
       uid,
@@ -6111,6 +6827,19 @@ async function commitPrivateLessonStatusAction({db, auth, data}) {
   return await db.runTransaction(async (transaction) => {
     const batchSnap = await transaction.get(batchRef);
     if (batchSnap.exists) {
+      const replayTarget = await resolvePrivateLessonStatusTargetInTransaction({
+        transaction,
+        db,
+        academyId: validation.academyId,
+        data: validation,
+      });
+      if (isFixedPrivateDirectTarget(replayTarget)) {
+        throw new HttpsError(
+            "failed-precondition",
+            "Fixed private occurrences require the fixed outcome action.",
+            {blockedReasons: [FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON]},
+        );
+      }
       const checkpoint = batchSnap.data() || {};
       if (
         checkpoint.status === "completed" &&
@@ -6144,7 +6873,7 @@ async function commitPrivateLessonStatusAction({db, auth, data}) {
     }
     const membershipRef = db
         .collection("academyMemberships")
-        .doc(`${validation.academyId}_${normalizeId(auth && auth.uid)}`);
+        .doc(`${validation.academyId}_${getAuthUid(auth)}`);
     const membershipSnap = await transaction.get(membershipRef);
     const membership = membershipSnap.exists ?
       membershipSnap.data() || {} :
@@ -6772,7 +7501,7 @@ function getDeductionSkipReasonForLesson(lesson) {
   return "";
 }
 
-function getPrivateReservationSkipReason(reservation) {
+function getPrivateReservationSkipReason(reservation, ...linkedRows) {
   const status = normalizeId(reservation && reservation.status).toLowerCase();
   const cancellationType = normalizeId(
       reservation && reservation.cancellationType,
@@ -6780,6 +7509,9 @@ function getPrivateReservationSkipReason(reservation) {
   const cancelledReason = normalizeId(
       reservation && reservation.cancelledReason,
   ).toLowerCase();
+  if (classifyFixedPrivateProvenance(reservation, ...linkedRows).isFixed) {
+    return "unsupportedFixedPrivate";
+  }
   if (status === "cancelled" || status === "canceled") return "cancelled";
   if (reservation && reservation.noDeduction === true) return "noDeduction";
   if (cancellationType === "no_deduction") return "noDeduction";
@@ -6870,6 +7602,171 @@ function getReservationTeacherKey(reservation, slot) {
 
 function getReservationTeacherKeys(reservation, slot) {
   return getPrivateTeacherScopeKeys(reservation, slot);
+}
+
+function getPrivateTeacherIdentity(...rows) {
+  const uidIds = [];
+  const teacherIds = [];
+  const stableIds = [];
+  const teacherKeys = [];
+  const names = [];
+  rows.forEach((row) => {
+    if (!row) return;
+    [
+      row.teacherUid,
+      row.teacherUID,
+    ].forEach((value) => {
+      const exactUid = typeof value === "string" ? value : "";
+      if (exactUid) uidIds.push(exactUid);
+    });
+    [
+      row.teacherId,
+      row.teacherID,
+    ].forEach((value) => {
+      const normalized = normalizeTeacherKey(value);
+      if (normalized) teacherIds.push(normalized);
+    });
+    const teacherKey = normalizeTeacherKey(row.teacherKey);
+    if (teacherKey) teacherKeys.push(teacherKey);
+    [
+      row.teacher,
+      row.teacherName,
+      row.displayName,
+      row.name,
+    ].forEach((value) => {
+      const normalized = normalizeTeacherKey(value);
+      if (normalized) names.push(normalized);
+    });
+  });
+  stableIds.push(...teacherIds);
+  return {
+    uidIds: Array.from(new Set(uidIds)),
+    teacherIds: uniqueNormalizedTeacherKeyList(teacherIds),
+    stableIds: uniqueNormalizedTeacherKeyList(stableIds),
+    teacherKeys: uniqueNormalizedTeacherKeyList(teacherKeys),
+    names: uniqueNormalizedTeacherKeyList(names),
+  };
+}
+
+function privateTeacherIdentityMatches(actorIdentity, targetIdentity) {
+  const actor = actorIdentity || {};
+  const target = targetIdentity || {};
+  const actorUids = actor.uidIds || [];
+  const targetUids = target.uidIds || [];
+  if (targetUids.length > 0) {
+    return actorUids.length > 0 &&
+      targetUids.some((id) => actorUids.includes(id));
+  }
+  const actorTeacherIds = actor.teacherIds || [];
+  const targetTeacherIds = target.teacherIds || [];
+  if (targetTeacherIds.length > 0) {
+    return actorTeacherIds.length > 0 &&
+      targetTeacherIds.some((id) => actorTeacherIds.includes(id));
+  }
+  const actorKeys = actor.teacherKeys || [];
+  const targetKeys = target.teacherKeys || [];
+  if (targetKeys.length > 0) {
+    return actorKeys.length > 0 &&
+      targetKeys.some((key) => actorKeys.includes(key));
+  }
+  const actorNames = actor.names || [];
+  const targetNames = target.names || [];
+  return actorNames.length > 0 &&
+    targetNames.some((name) => actorNames.includes(name));
+}
+
+function intersectPrivateTeacherIdentityValues(identities, fieldName) {
+  if (identities.length === 0) return [];
+  return identities.slice(1).reduce(
+      (values, identity) =>
+        values.filter((value) =>
+          (identity[fieldName] || []).includes(value),
+        ),
+      [...(identities[0][fieldName] || [])],
+  );
+}
+
+function uniquePrivateTeacherIdentityValues(values, fieldName) {
+  return fieldName === "uidIds" ?
+    Array.from(new Set(values.filter((value) =>
+      typeof value === "string" && value.length > 0,
+    ))) :
+    uniqueNormalizedTeacherKeyList(values);
+}
+
+function getPrivateLessonStatusTargetTeacherIdentity(target) {
+  const rowIdentities = [
+    target && target.lessonDoc && target.lessonDoc.exists ?
+      getPrivateTeacherIdentity(target.lessonDoc.data) :
+      null,
+    target && target.reservationDoc && target.reservationDoc.exists ?
+      getPrivateTeacherIdentity(target.reservationDoc.data) :
+      null,
+    target && target.slotDoc && target.slotDoc.exists ?
+      getPrivateTeacherIdentity(target.slotDoc.data) :
+      null,
+  ].filter(Boolean);
+  const hasStrongTierConflict = [
+    "uidIds",
+    "teacherIds",
+    "teacherKeys",
+  ].some((fieldName) => {
+    return uniquePrivateTeacherIdentityValues(
+        rowIdentities.flatMap((identity) => identity[fieldName]),
+        fieldName,
+    ).length > 1;
+  });
+  const identityTiers = ["uidIds", "teacherIds", "teacherKeys", "names"];
+  let selectedField = "";
+  let selectedIdentities = [];
+  for (const fieldName of identityTiers) {
+    const identities = rowIdentities.filter(
+        (identity) => (identity[fieldName] || []).length > 0,
+    );
+    if (identities.length > 0) {
+      selectedField = fieldName;
+      selectedIdentities = identities;
+      break;
+    }
+  }
+  if (!selectedField) {
+    return {
+      conflict: false,
+      identity: {
+        uidIds: [],
+        teacherIds: [],
+        stableIds: [],
+        teacherKeys: [],
+        names: [],
+      },
+    };
+  }
+  const selectedValues = uniquePrivateTeacherIdentityValues(
+      selectedIdentities.flatMap(
+          (rowIdentity) => rowIdentity[selectedField],
+      ),
+      selectedField,
+  );
+  const consistentValues = intersectPrivateTeacherIdentityValues(
+      selectedIdentities,
+      selectedField,
+  );
+  const strongIdentity = selectedField !== "names";
+  const conflict = hasStrongTierConflict || (strongIdentity ?
+    selectedValues.length > 1 :
+    selectedIdentities.length > 1 && consistentValues.length === 0);
+  const identity = {
+    uidIds: [],
+    teacherIds: [],
+    stableIds: [],
+    teacherKeys: [],
+    names: [],
+    [selectedField]: consistentValues.length > 0 ?
+      consistentValues :
+      selectedValues,
+  };
+  identity.stableIds = uniqueNormalizedTeacherKeyList(identity.teacherIds);
+  return {conflict, identity};
 }
 
 function getPrivateTeacherScopeKeys(...rows) {
@@ -7317,6 +8214,46 @@ function getPrivateSlotLinkedReservationId({academyId, slotId, slot}) {
   });
 }
 
+function getPrivateLinkedLessonId(reservation, slot) {
+  return normalizeId(
+      (reservation && (reservation.lessonId || reservation.fixedLessonId)) ||
+      (slot && (slot.lessonId || slot.fixedLessonId)),
+  );
+}
+
+async function readPrivateSlotLinkedProvenance({
+  transaction,
+  db,
+  academyId,
+  slotId,
+  slot,
+}) {
+  const reservationId = getPrivateSlotLinkedReservationId({
+    academyId,
+    slotId,
+    slot,
+  });
+  const reservationSnap = reservationId ?
+    await transaction.get(
+        db.collection("privateLessonReservations").doc(reservationId),
+    ) :
+    null;
+  const reservation = reservationSnap && reservationSnap.exists ?
+    reservationSnap.data() || {} :
+    null;
+  const lessonId = getPrivateLinkedLessonId(reservation, slot);
+  const lessonSnap = lessonId ?
+    await transaction.get(db.collection("lessons").doc(lessonId)) :
+    null;
+  return {
+    reservationId,
+    reservation,
+    reservationSnap,
+    lessonId,
+    lesson: lessonSnap && lessonSnap.exists ? lessonSnap.data() || {} : null,
+  };
+}
+
 function privateSlotHasCancelledLinkedReservation({
   slot,
   reservation,
@@ -7332,7 +8269,7 @@ function privateSlotHasCancelledLinkedReservation({
   }
   const cancellationType = normalizeId(slot.cancellationType).toLowerCase();
   if (cancellationType === "lesson_cancelled") return false;
-  if (isFixedPrivateSlot(slot, reservation) &&
+  if (classifyFixedPrivateProvenance(slot, reservation).isFixed &&
       !isReleasedFixedPrivateSlot(slot, reservation)) {
     return false;
   }
@@ -8602,15 +9539,19 @@ async function autoDeductPrivateReservation({
       incrementDeductionSkip(summary, "noPackage");
       return summary;
     }
+    const reservationSkipReason = getPrivateReservationSkipReason(reservation);
+    if (reservationSkipReason === "unsupportedFixedPrivate") {
+      incrementDeductionSkip(summary, "unsupportedFixedPrivate");
+      return summary;
+    }
     if (reservation.deductionApplied === true ||
         normalizeId(reservation.deductionTransactionId) ||
         normalizeId(reservation.deductionCreditTransactionId)) {
       incrementDeductionSkip(summary, "alreadyDeducted");
       return summary;
     }
-    const skipReason = getPrivateReservationSkipReason(reservation);
-    if (skipReason) {
-      incrementDeductionSkip(summary, skipReason);
+    if (reservationSkipReason) {
+      incrementDeductionSkip(summary, reservationSkipReason);
       return summary;
     }
     if (!isActivePrivateReservation(reservation)) {
@@ -8635,6 +9576,22 @@ async function autoDeductPrivateReservation({
     const student = studentSnap.exists ? studentSnap.data() || {} : null;
     if (slot && normalizeId(slot.academyId) !== academyId) {
       incrementDeductionSkip(summary, "noPackage");
+      return summary;
+    }
+    const linkedLessonId = getPrivateLinkedLessonId(reservation, slot);
+    const linkedLessonSnap = linkedLessonId ?
+      await transaction.get(db.collection("lessons").doc(linkedLessonId)) :
+      null;
+    const linkedLesson = linkedLessonSnap && linkedLessonSnap.exists ?
+      linkedLessonSnap.data() || {} :
+      null;
+    const linkedSkipReason = getPrivateReservationSkipReason(
+        reservation,
+        slot,
+        linkedLesson,
+    );
+    if (linkedSkipReason === "unsupportedFixedPrivate") {
+      incrementDeductionSkip(summary, linkedSkipReason);
       return summary;
     }
     const endMillis = getPrivateReservationEndMillis(reservation, slot);
@@ -8683,6 +9640,14 @@ async function autoDeductPrivateReservation({
     }
     if (dryRun) {
       summary.deducted += 1;
+      return summary;
+    }
+    if (classifyFixedPrivateProvenance(
+        reservation,
+        slot,
+        linkedLesson,
+    ).isFixed) {
+      incrementDeductionSkip(summary, "unsupportedFixedPrivate");
       return summary;
     }
 
@@ -9039,6 +10004,17 @@ async function runAutoDeductPendingLessons({
           .limit(200)
           .get();
       for (const docSnap of privateSnap.docs) {
+        const candidateSkipReason = getPrivateReservationSkipReason(
+            docSnap.data() || {},
+        );
+        if (candidateSkipReason === "unsupportedFixedPrivate") {
+          const candidateSummary = createDeductionSummary();
+          candidateSummary.checked = 1;
+          incrementDeductionSkip(candidateSummary, candidateSkipReason);
+          addDeductionSummary(academySummary, candidateSummary);
+          addDeductionSummary(summary, candidateSummary);
+          continue;
+        }
         try {
           const result = await autoDeductPrivateReservation({
             db,
@@ -11740,6 +12716,7 @@ exports.reservePrivateLessonSlot = onCall(
             );
           }
           const slotStatus = normalizeId(slot.status).toLowerCase();
+          let linkedReservationForFixedGuard = null;
           if (slotStatus !== "open") {
             let canUseStaleCancelledReservation = false;
             if (slotStatus === "reserved") {
@@ -11757,6 +12734,7 @@ exports.reservePrivateLessonSlot = onCall(
                 const linkedReservation = linkedReservationSnap.exists ?
                   linkedReservationSnap.data() || {} :
                   null;
+                linkedReservationForFixedGuard = linkedReservation;
                 canUseStaleCancelledReservation =
                   privateSlotHasCancelledLinkedReservation({
                     slot,
@@ -11773,6 +12751,29 @@ exports.reservePrivateLessonSlot = onCall(
               );
             }
             slot = buildReservablePrivateSlotFromStaleReservation(slot);
+          }
+          const linkedLessonId = getPrivateLinkedLessonId(
+              linkedReservationForFixedGuard,
+              slot,
+          );
+          const linkedLessonSnap = linkedLessonId ?
+            await transaction.get(
+                db.collection("lessons").doc(linkedLessonId),
+            ) :
+            null;
+          const directReservationForFixedGuard =
+            linkedReservationForFixedGuard || {source: "student"};
+          if (!isDirectStudentReservationOnReleasedFixedSlot(
+              directReservationForFixedGuard,
+              slot,
+          )) {
+            assertNotFixedPrivateDirectReservation(
+                directReservationForFixedGuard,
+                slot,
+                linkedLessonSnap && linkedLessonSnap.exists ?
+                  linkedLessonSnap.data() || {} :
+                  null,
+            );
           }
 
           const studentId = membership.studentId;
@@ -12174,6 +13175,25 @@ exports.cancelPrivateLessonReservation = onCall(
                 "Private lesson slot academy mismatch.",
             );
           }
+          const linkedLessonId = normalizeId(
+              reservation.lessonId ||
+              reservation.fixedLessonId ||
+              slot.lessonId ||
+              slot.fixedLessonId,
+          );
+          const linkedLessonSnap = linkedLessonId ?
+            await transaction.get(
+                db.collection("lessons").doc(linkedLessonId),
+            ) :
+            null;
+          const linkedLesson = linkedLessonSnap && linkedLessonSnap.exists ?
+            linkedLessonSnap.data() || {} :
+            null;
+          assertNotFixedPrivateDirectCancel({
+            reservation,
+            slot,
+            lesson: linkedLesson,
+          });
           const summary = summarySnap.exists ? summarySnap.data() || {} : null;
           requirePrivateSlotBookingPilotEnabled(summary);
           const startMillis = getPrivateSlotStartMillis(slot);
@@ -12702,27 +13722,33 @@ exports.adminClosePrivateLessonSlot = onCall(
                   "Private lesson slot academy mismatch.",
               );
             }
+            const linkedTarget = await readPrivateSlotLinkedProvenance({
+              transaction,
+              db,
+              academyId,
+              slotId,
+              slot,
+            });
+            assertNotFixedPrivateDirectCancel({
+              reservation: linkedTarget.reservation,
+              slot,
+              lesson: linkedTarget.lesson,
+            });
             const status = normalizeId(slot.status).toLowerCase();
             if (status === "reserved") {
-              const linkedReservationId = getPrivateSlotLinkedReservationId({
-                academyId,
-                slotId,
-                slot,
-              });
-              if (linkedReservationId) {
+              if (linkedTarget.reservationId && linkedTarget.reservationSnap) {
                 const reservationRef = db
                     .collection("privateLessonReservations")
-                    .doc(linkedReservationId);
-                const reservationSnap = await transaction.get(reservationRef);
-                if (reservationSnap.exists) {
-                  const reservation = reservationSnap.data() || {};
+                    .doc(linkedTarget.reservationId);
+                if (linkedTarget.reservationSnap.exists) {
+                  const reservation = linkedTarget.reservation;
                   if (
                     normalizeId(reservation.academyId) === academyId &&
                     normalizeId(reservation.slotId) === slotId &&
                     isActivePrivateReservation(reservation)
                   ) {
                     closedReservation = reservation;
-                    closedReservationId = linkedReservationId;
+                    closedReservationId = linkedTarget.reservationId;
                     transaction.update(
                         reservationRef,
                         buildCancelledPrivateReservationUpdates({
@@ -12899,6 +13925,18 @@ exports.adminReopenPrivateLessonSlot = onCall(
                 "Private lesson slot academy mismatch.",
             );
           }
+          const linkedTarget = await readPrivateSlotLinkedProvenance({
+            transaction,
+            db,
+            academyId,
+            slotId,
+            slot,
+          });
+          assertNotFixedPrivateDirectCancel({
+            reservation: linkedTarget.reservation,
+            slot,
+            lesson: linkedTarget.lesson,
+          });
 
           const status = normalizeId(slot.status).toLowerCase();
           const closedReason = normalizeId(
@@ -13048,6 +14086,25 @@ exports.adminCancelPrivateLessonReservation = onCall(
                 "Private slot reservation mismatch.",
             );
           }
+          const linkedLessonId = normalizeId(
+              reservation.lessonId ||
+              reservation.fixedLessonId ||
+              slot.lessonId ||
+              slot.fixedLessonId,
+          );
+          const linkedLessonSnap = linkedLessonId ?
+            await transaction.get(
+                db.collection("lessons").doc(linkedLessonId),
+            ) :
+            null;
+          const linkedLesson = linkedLessonSnap && linkedLessonSnap.exists ?
+            linkedLessonSnap.data() || {} :
+            null;
+          assertNotFixedPrivateDirectCancel({
+            reservation,
+            slot,
+            lesson: linkedLesson,
+          });
 
           const now = admin.firestore.FieldValue.serverTimestamp();
           transaction.update(
@@ -13222,6 +14279,34 @@ exports.inspectFixedPrivateLessonRescheduleScope = onCall({
     throw asHttpsError(error);
   }
 });
+
+exports.createFixedPrivateLessonAssignment = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "Login required.");
+        }
+        const validation = validateFixedPrivateAssignmentPayload(
+            request.data || {},
+        );
+        const db = admin.firestore();
+        const membership = await requireAcademyAdmin(
+            db,
+            validation.academyId,
+            request.auth.uid,
+        );
+        return await runFixedPrivateAssignmentWriteTransaction({
+          db,
+          auth: request.auth,
+          membership,
+          validation,
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
 
 exports.createFixedPrivateLessonRenewal = onCall(
     {region: REGION, cors: true},
@@ -13420,6 +14505,1388 @@ exports.previewPrivateLessonStatusAction = onCall(
     },
 );
 
+const FIXED_PRIVATE_DEDUCTION_LEDGER = "reservation_v1";
+const FIXED_PRIVATE_OUTCOME_ACTIONS = ["complete", "no_show"];
+const FIXED_PRIVATE_OUTCOME_BATCH_COLLECTION =
+  "fixedPrivateLessonOutcomeActionBatches";
+
+function validateFixedPrivateOutcomeActionPayload(data, commitMode) {
+  const academyId = requireString(data, "academyId");
+  const lessonId = validateCallableDocumentId(
+      requireString(data, "lessonId"),
+      "lessonId",
+  );
+  const requestId = validateCallableRequestId(
+      requireString(data, "requestId"),
+  );
+  const actionType = requireString(data, "actionType");
+  validateAcademyId(academyId);
+  ["reservationId", "slotId", "packageId"].forEach((fieldName) => {
+    const value = optionalString(data, fieldName);
+    if (value) validateCallableDocumentId(value, fieldName);
+  });
+  if (!FIXED_PRIVATE_OUTCOME_ACTIONS.includes(actionType)) {
+    throw new HttpsError("invalid-argument", "unsupported_action_type");
+  }
+  if (commitMode) {
+    const planHash = requireString(data, "planHash").toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(planHash)) {
+      throw new HttpsError("invalid-argument", "invalid_plan_hash");
+    }
+    if (data.commit !== true ||
+        data.dryRun !== false ||
+        data.previewOnly !== false) {
+      throw new HttpsError(
+          "invalid-argument",
+          "Commit requires commit true, dryRun false, and previewOnly false.",
+      );
+    }
+    return {
+      academyId,
+      lessonId,
+      reservationId: optionalString(data, "reservationId"),
+      slotId: optionalString(data, "slotId"),
+      packageId: optionalString(data, "packageId"),
+      requestId,
+      actionType,
+      planHash,
+    };
+  }
+  if (data.commit !== false ||
+      data.dryRun !== true ||
+      data.previewOnly !== true) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Preview requires commit false, dryRun true, and previewOnly true.",
+    );
+  }
+  return {
+    academyId,
+    lessonId,
+    reservationId: optionalString(data, "reservationId"),
+    slotId: optionalString(data, "slotId"),
+    packageId: optionalString(data, "packageId"),
+    requestId,
+    actionType,
+  };
+}
+
+function fixedPrivateOutcomeBatchId({academyId, requestId}) {
+  return [
+    "fixedPrivateLessonOutcomeAction",
+    normalizeId(academyId),
+    normalizeId(requestId),
+  ].join("_");
+}
+
+function fixedPrivateOutcomePayloadHash({auth, validation}) {
+  return hashPrivateReservationOutcomeActionValue({
+    version: 1,
+    actorUid: getAuthUid(auth),
+    academyId: validation.academyId,
+    lessonId: validation.lessonId,
+    reservationId: validation.reservationId,
+    slotId: validation.slotId,
+    packageId: validation.packageId,
+    requestId: validation.requestId,
+    actionType: validation.actionType,
+    planHash: validation.planHash,
+    commit: true,
+    dryRun: false,
+    previewOnly: false,
+  });
+}
+
+function fixedPrivateOutcomeEmptyDoc(id = "") {
+  return {id: normalizeId(id), exists: false, data: null, ref: null};
+}
+
+async function readFixedPrivateOutcomeDoc({
+  db,
+  transaction,
+  collectionName,
+  docId,
+}) {
+  const id = normalizeId(docId);
+  if (!id) return fixedPrivateOutcomeEmptyDoc();
+  const ref = db.collection(collectionName).doc(id);
+  const snap = transaction ?
+    await transaction.get(ref) :
+    await ref.get();
+  return {
+    id,
+    exists: snap.exists,
+    data: snap.exists ? snap.data() || {} : null,
+    ref,
+  };
+}
+
+function fixedPrivateOutcomeLinkedId(row, fields) {
+  return firstPrivateLessonStatusValue(row, fields);
+}
+
+function fixedPrivateOutcomePackageIds(...rows) {
+  return Array.from(new Set(normalizeIdList(rows.flatMap((row) => [
+    row && row.packageId,
+    row && row.deductionPackageId,
+    row && row.linkedPackageId,
+    row && row.fixedPrivatePackageId,
+  ]))));
+}
+
+function isFixedPrivateOutcomeLesson(row) {
+  return normalizeId(row && row.sourceType).toLowerCase() ===
+      "fixed-private-slot-assignment" &&
+    normalizeId(row && row.packageType).toLowerCase() === "private";
+}
+
+function isFixedPrivateOutcomeReservation(row) {
+  return normalizeId(row && row.sourceType).toLowerCase() ===
+      "fixed-private-slot-assignment" &&
+    normalizeId(row && row.reservationType).toLowerCase() === "fixed";
+}
+
+function isFixedPrivateOutcomeSlot(row) {
+  return normalizeId(row && row.slotType).toLowerCase() === "fixed";
+}
+
+function classifyFixedPrivateDeductionLedger({lesson, reservation, slot}) {
+  const markers = [lesson, reservation, slot].map((row) =>
+    normalizeId(row && row.fixedPrivateDeductionLedger),
+  );
+  if (markers.every((marker) => marker === FIXED_PRIVATE_DEDUCTION_LEDGER)) {
+    return {
+      mode: "canonical",
+      marker: FIXED_PRIVATE_DEDUCTION_LEDGER,
+      markers,
+      lessonLedgerContribution: 0,
+      reservationLedgerContribution: 1,
+    };
+  }
+  if (markers.every((marker) => marker === "")) {
+    return {
+      mode: "legacy",
+      marker: "",
+      markers,
+      lessonLedgerContribution: 1,
+      reservationLedgerContribution: 1,
+    };
+  }
+  return {
+    mode: "inconsistent",
+    marker: "",
+    markers,
+    lessonLedgerContribution: 0,
+    reservationLedgerContribution: 0,
+  };
+}
+
+function fixedPrivateLessonCountsByDate(row, todayYmd) {
+  const date = getLessonDateString(row);
+  return Boolean(
+      date &&
+      date <= todayYmd &&
+      row &&
+      row.isDeductCancelled !== true &&
+      normalizeId(row.fixedPrivateDeductionLedger) !==
+        FIXED_PRIVATE_DEDUCTION_LEDGER,
+  );
+}
+
+function fixedPrivateReservationCountsByEvidence(row) {
+  const status = normalizeId(row && row.status).toLowerCase();
+  return Boolean(
+      row &&
+      row.deductionApplied === true &&
+      (status === "completed" || status === "no_show"),
+  );
+}
+
+async function readFixedPrivatePackageLedgerRows({
+  db,
+  transaction,
+  academyId,
+  packageId,
+}) {
+  if (!packageId) return {lessons: [], reservations: []};
+  const lessonQuery = db.collection("lessons")
+      .where("academyId", "==", academyId)
+      .where("packageId", "==", packageId);
+  const reservationQuery = db.collection("privateLessonReservations")
+      .where("academyId", "==", academyId)
+      .where("deductionPackageId", "==", packageId);
+  const [lessonSnap, reservationSnap] = transaction ?
+    await Promise.all([
+      transaction.get(lessonQuery),
+      transaction.get(reservationQuery),
+    ]) :
+    await Promise.all([lessonQuery.get(), reservationQuery.get()]);
+  return {
+    lessons: lessonSnap.docs.map((docSnap) => ({
+      id: docSnap.id,
+      ...docSnap.data(),
+    })),
+    reservations: reservationSnap.docs.map((docSnap) => ({
+      id: docSnap.id,
+      ...docSnap.data(),
+    })),
+  };
+}
+
+function buildFixedPrivatePackageLedgerDiagnostics({
+  rows,
+  packageData,
+  lessonId,
+  reservationId,
+  todayYmd,
+  classification,
+}) {
+  const lessonIds = rows.lessons
+      .filter((row) => fixedPrivateLessonCountsByDate(row, todayYmd))
+      .map((row) => row.id);
+  const reservationIds = rows.reservations
+      .filter(fixedPrivateReservationCountsByEvidence)
+      .map((row) => row.id);
+  const countedReservationIds = new Set(reservationIds);
+  const duplicateOccurrenceContributions = rows.lessons
+      .filter((row) => lessonIds.includes(row.id))
+      .map((row) => ({
+        lessonId: row.id,
+        reservationId: fixedPrivateOutcomeLinkedId(
+            row,
+            ["reservationId", "privateLessonReservationId"],
+        ),
+      }))
+      .filter((row) =>
+        row.reservationId &&
+        countedReservationIds.has(row.reservationId),
+      );
+  const expectedUsedCount = lessonIds.length + reservationIds.length;
+  const totalValue = Number(packageData && packageData.totalCount);
+  const usedValue = Number(packageData && packageData.usedCount);
+  const remainingValue = Number(packageData && packageData.remainingCount);
+  const totalCount = Number.isFinite(totalValue) ? totalValue : null;
+  const currentUsedCount = Number.isFinite(usedValue) ? usedValue : null;
+  const currentRemainingCount =
+    Number.isFinite(remainingValue) ? remainingValue : null;
+  const expectedRemainingCount = totalCount === null ?
+    null :
+    Math.max(0, totalCount - expectedUsedCount);
+  const selectedLessonCounted = lessonIds.includes(lessonId);
+  const selectedReservationCounted = reservationIds.includes(reservationId);
+  const transitionDelta = classification.mode === "canonical" ? 1 :
+    classification.mode === "legacy" ? 0 : null;
+  const nextUsedCount = transitionDelta === null ?
+    null :
+    expectedUsedCount + transitionDelta;
+  const nextRemainingCount = totalCount === null || nextUsedCount === null ?
+    null :
+    Math.max(0, totalCount - nextUsedCount);
+  return {
+    lessonLedgerCount: lessonIds.length,
+    reservationLedgerCount: reservationIds.length,
+    expectedUsedCount,
+    expectedRemainingCount,
+    totalCount,
+    currentUsedCount,
+    currentRemainingCount,
+    selectedLessonCounted,
+    selectedReservationCounted,
+    duplicateOccurrenceContributions,
+    hasDuplicateOccurrenceContributions:
+      duplicateOccurrenceContributions.length > 0,
+    transitionDelta,
+    nextUsedCount,
+    nextRemainingCount,
+    aggregateMatches:
+      duplicateOccurrenceContributions.length === 0 &&
+      currentUsedCount === expectedUsedCount &&
+      currentRemainingCount === expectedRemainingCount,
+  };
+}
+
+async function resolveFixedPrivateOutcomeTarget({
+  db,
+  transaction = null,
+  validation,
+}) {
+  const lessonDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    transaction,
+    collectionName: "lessons",
+    docId: validation.lessonId,
+  });
+  const lesson = lessonDoc.exists ? lessonDoc.data : {};
+  const linkedReservationId = fixedPrivateOutcomeLinkedId(
+      lesson,
+      ["reservationId", "privateLessonReservationId"],
+  );
+  const linkedSlotId = fixedPrivateOutcomeLinkedId(
+      lesson,
+      ["slotId", "privateLessonSlotId"],
+  );
+  const reservationId = linkedReservationId || validation.reservationId;
+  const reservationDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    transaction,
+    collectionName: "privateLessonReservations",
+    docId: reservationId,
+  });
+  const reservation = reservationDoc.exists ? reservationDoc.data : {};
+  const slotId = linkedSlotId ||
+    fixedPrivateOutcomeLinkedId(
+        reservation,
+        ["slotId", "privateLessonSlotId"],
+    ) ||
+    validation.slotId;
+  const slotDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    transaction,
+    collectionName: "privateLessonSlots",
+    docId: slotId,
+  });
+  const slot = slotDoc.exists ? slotDoc.data : {};
+  const packageIds = fixedPrivateOutcomePackageIds(
+      lesson,
+      reservation,
+      slot,
+      {packageId: validation.packageId},
+  );
+  const packageId = packageIds[0] || "";
+  const packageDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    transaction,
+    collectionName: "studentPackages",
+    docId: packageId,
+  });
+  const studentId = normalizeId(
+      lesson.studentId || lesson.studentID || reservation.studentId,
+  );
+  const creditTransactionId = packageId && studentId && reservationDoc.id ?
+    buildDeductionKey({
+      academyId: validation.academyId,
+      lessonId: reservationDoc.id,
+      studentId,
+      packageId,
+    }) :
+    "";
+  const creditDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    transaction,
+    collectionName: "creditTransactions",
+    docId: creditTransactionId,
+  });
+  const ledgerRows = await readFixedPrivatePackageLedgerRows({
+    db,
+    transaction,
+    academyId: validation.academyId,
+    packageId,
+  });
+  return {
+    lessonDoc,
+    reservationDoc,
+    slotDoc,
+    packageDoc,
+    creditDoc,
+    ledgerRows,
+    linkedReservationId,
+    linkedSlotId,
+    packageIds,
+    packageId,
+    studentId,
+    creditTransactionId,
+  };
+}
+
+function fixedPrivateOutcomeValuesConflict(rows, fields) {
+  const values = new Set(normalizeIdList(rows.map((row) =>
+    firstPrivateLessonStatusValue(row || {}, fields),
+  )));
+  return values.size > 1;
+}
+
+function fixedPrivateOutcomeHasMatchingDeductionEvidence(target) {
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const expectedCreditId = target.creditTransactionId;
+  const expectedPackageId = target.packageId;
+  return Boolean(
+      reservation.deductionApplied === true &&
+      normalizeId(reservation.deductionPackageId) === expectedPackageId &&
+      normalizeId(
+          reservation.deductionCreditTransactionId ||
+          reservation.deductionTransactionId,
+      ) === expectedCreditId &&
+      lesson.deductionApplied === true &&
+      normalizeId(lesson.deductionPackageId) === expectedPackageId &&
+      normalizeId(
+          lesson.deductionCreditTransactionId ||
+          lesson.deductionTransactionId,
+      ) === expectedCreditId,
+  );
+}
+
+function fixedPrivatePackageOccurrenceMismatch({
+  academyId,
+  packageData,
+  studentId,
+  reservation,
+  slot,
+}) {
+  if (normalizeId(packageData.academyId) !== academyId) {
+    return "package_academy_mismatch";
+  }
+  if (normalizeId(packageData.studentId) !== studentId) {
+    return "package_student_mismatch";
+  }
+  if (normalizeId(packageData.packageType).toLowerCase() !== "private") {
+    return "package_type_mismatch";
+  }
+  const packageTeacherKeys = getPrivatePackageTeacherKeys(packageData);
+  const occurrenceTeacherKeys = getReservationTeacherKeys(reservation, slot);
+  if (packageTeacherKeys.length === 0 || occurrenceTeacherKeys.length === 0) {
+    return "package_teacher_missing";
+  }
+  if (!occurrenceTeacherKeys.some((key) => packageTeacherKeys.includes(key))) {
+    return "package_teacher_mismatch";
+  }
+  const lessonDate = normalizeId(reservation.date || slot.date);
+  if (!privatePackageCoversDate(packageData, lessonDate)) {
+    return "package_date_out_of_range";
+  }
+  return "";
+}
+
+function fixedPrivateOutcomeRowFlagReasons(row, label) {
+  if (!row || Object.keys(row).length === 0) return [];
+  const reasons = [];
+  if (row.noDeduction === true) {
+    reasons.push(`${label}_no_deduction`);
+  }
+  if (row.isDeductCancelled === true ||
+      row.deductionCanceled === true ||
+      row.deductionCancelled === true ||
+      row.deductionReversed === true) {
+    reasons.push(`${label}_deduction_cancelled`);
+  }
+  if (row.cancelled === true ||
+      row.canceled === true ||
+      row.isCancelled === true ||
+      row.cancelledAt ||
+      row.canceledAt) {
+    reasons.push(`${label}_cancelled`);
+  }
+  if (row.released === true ||
+      row.isReleased === true ||
+      row.releasedFromFixed === true ||
+      row.releasedAt) {
+    reasons.push(`${label}_released`);
+  }
+  return reasons;
+}
+
+function buildFixedPrivateOutcomePlan({
+  validation,
+  target,
+  actor,
+  permission,
+  nowMillis,
+}) {
+  const blockedReasons = [];
+  const warnings = [];
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const slot = target.slotDoc.exists ? target.slotDoc.data : {};
+  const packageData = target.packageDoc.exists ? target.packageDoc.data : {};
+  const classification = classifyFixedPrivateDeductionLedger({
+    lesson,
+    reservation,
+    slot,
+  });
+  const teacherIdentity =
+    getPrivateLessonStatusTargetTeacherIdentity(target);
+  if (!target.lessonDoc.exists) blockedReasons.push("lesson_missing");
+  if (!target.reservationDoc.exists) blockedReasons.push("reservation_missing");
+  if (!target.slotDoc.exists) blockedReasons.push("slot_missing");
+  if (!target.packageDoc.exists) blockedReasons.push("package_missing");
+  if (!permission.allowed) {
+    blockedReasons.push(permission.blockedReason || "permission_denied");
+  }
+  if (teacherIdentity.conflict) {
+    blockedReasons.push("teacher_identity_mismatch");
+  }
+  [lesson, reservation, slot, packageData].filter((row) =>
+    Object.keys(row).length > 0,
+  ).forEach((row) => {
+    if (normalizeId(row.academyId) !== validation.academyId) {
+      blockedReasons.push("academy_mismatch");
+    }
+  });
+  if (target.lessonDoc.exists && !isFixedPrivateOutcomeLesson(lesson)) {
+    blockedReasons.push("lesson_not_fixed_private");
+  }
+  if (target.reservationDoc.exists &&
+      !isFixedPrivateOutcomeReservation(reservation)) {
+    blockedReasons.push("reservation_not_fixed_private");
+  }
+  if (target.slotDoc.exists && !isFixedPrivateOutcomeSlot(slot)) {
+    blockedReasons.push("slot_not_fixed_private");
+  }
+  if (classification.mode === "inconsistent") {
+    blockedReasons.push("inconsistent_ledger_markers");
+  }
+  if (!target.linkedReservationId || !target.linkedSlotId) {
+    blockedReasons.push("missing_three_way_link");
+  }
+  if (validation.reservationId &&
+      validation.reservationId !== target.reservationDoc.id) {
+    blockedReasons.push("reservation_mismatch");
+  }
+  if (validation.slotId && validation.slotId !== target.slotDoc.id) {
+    blockedReasons.push("slot_mismatch");
+  }
+  if (validation.packageId && validation.packageId !== target.packageId) {
+    blockedReasons.push("package_mismatch");
+  }
+  if (target.packageIds.length !== 1) {
+    blockedReasons.push(
+        target.packageIds.length > 1 ?
+          "ambiguous_package_links" :
+          "missing_package_link",
+    );
+  }
+  const reservationLessonId = fixedPrivateOutcomeLinkedId(
+      reservation,
+      ["lessonId", "fixedLessonId"],
+  );
+  const reservationSlotId = fixedPrivateOutcomeLinkedId(
+      reservation,
+      ["slotId", "privateLessonSlotId"],
+  );
+  const slotLessonId = fixedPrivateOutcomeLinkedId(
+      slot,
+      ["lessonId", "fixedLessonId"],
+  );
+  const slotReservationId = normalizeId(slot.reservationId);
+  if (reservationLessonId !== target.lessonDoc.id ||
+      slotLessonId !== target.lessonDoc.id) {
+    blockedReasons.push("lesson_link_mismatch");
+  }
+  if (reservationSlotId !== target.slotDoc.id) {
+    blockedReasons.push("slot_link_mismatch");
+  }
+  if (slotReservationId !== target.reservationDoc.id) {
+    blockedReasons.push("reservation_link_mismatch");
+  }
+  [
+    ["student_mismatch", ["studentId", "studentID", "fixedStudentId"]],
+    ["date_mismatch", ["date", "lessonDate", "scheduleDate"]],
+    ["time_mismatch", ["time", "startTime", "scheduleTime"]],
+  ].forEach(([reason, fields]) => {
+    if (fixedPrivateOutcomeValuesConflict(
+        [lesson, reservation, slot],
+        fields,
+    )) {
+      blockedReasons.push(reason);
+    }
+  });
+  if (target.packageDoc.exists) {
+    const packageMismatch = fixedPrivatePackageOccurrenceMismatch({
+      academyId: validation.academyId,
+      packageData,
+      studentId: target.studentId,
+      reservation,
+      slot,
+    });
+    if (packageMismatch) blockedReasons.push(packageMismatch);
+  }
+  const lessonStatus = normalizeId(lesson.status).toLowerCase();
+  const reservationStatus = normalizeId(reservation.status).toLowerCase();
+  const slotStatus = normalizeId(slot.status).toLowerCase();
+  if (target.lessonDoc.exists && lessonStatus !== "active") {
+    blockedReasons.push("lesson_not_active");
+  }
+  if (target.reservationDoc.exists && reservationStatus !== "active") {
+    blockedReasons.push("reservation_not_active");
+  }
+  if (target.slotDoc.exists && slotStatus !== "reserved") {
+    blockedReasons.push("slot_not_reserved");
+  }
+  blockedReasons.push(
+      ...fixedPrivateOutcomeRowFlagReasons(lesson, "lesson"),
+      ...fixedPrivateOutcomeRowFlagReasons(reservation, "reservation"),
+      ...fixedPrivateOutcomeRowFlagReasons(slot, "slot"),
+  );
+  const endMillis = getPrivateReservationEndMillis(reservation, slot);
+  if (endMillis === null) {
+    blockedReasons.push("lesson_schedule_missing");
+  } else if (!Number.isFinite(nowMillis) || nowMillis < endMillis) {
+    blockedReasons.push("lesson_not_ended");
+  }
+  const todayYmd = getKstDateString(new Date(nowMillis));
+  const ledgerDiagnostics = buildFixedPrivatePackageLedgerDiagnostics({
+    rows: target.ledgerRows,
+    packageData,
+    lessonId: target.lessonDoc.id,
+    reservationId: target.reservationDoc.id,
+    todayYmd,
+    classification,
+  });
+  if (target.packageDoc.exists &&
+      (ledgerDiagnostics.totalCount === null ||
+       ledgerDiagnostics.currentUsedCount === null ||
+       ledgerDiagnostics.currentRemainingCount === null)) {
+    blockedReasons.push("package_count_invalid");
+  }
+  if (target.packageDoc.exists && !ledgerDiagnostics.aggregateMatches) {
+    blockedReasons.push("package_aggregate_conflict");
+  }
+  if (ledgerDiagnostics.hasDuplicateOccurrenceContributions) {
+    blockedReasons.push("duplicate_fixed_occurrence_contribution");
+  }
+  if (ledgerDiagnostics.totalCount !== null &&
+      ledgerDiagnostics.expectedUsedCount > ledgerDiagnostics.totalCount) {
+    blockedReasons.push("package_aggregate_conflict");
+  }
+  if (classification.mode === "legacy" &&
+      !ledgerDiagnostics.selectedLessonCounted) {
+    blockedReasons.push("legacy_lesson_not_counted");
+  }
+  if (ledgerDiagnostics.selectedReservationCounted) {
+    blockedReasons.push("reservation_already_counted");
+  }
+  if (classification.mode === "canonical" &&
+      ledgerDiagnostics.currentRemainingCount !== null &&
+      ledgerDiagnostics.currentRemainingCount <= 0) {
+    blockedReasons.push("package_remaining_insufficient");
+  }
+  const packageStatus = normalizeId(packageData.status || "active")
+      .toLowerCase();
+  if (classification.mode === "canonical" &&
+      ["inactive", "expired", "ended", "revoked", "cancelled", "canceled"]
+          .includes(packageStatus)) {
+    blockedReasons.push("package_not_active");
+  }
+  const matchingDeductionEvidence =
+    fixedPrivateOutcomeHasMatchingDeductionEvidence(target);
+  if (target.creditDoc.exists && !matchingDeductionEvidence) {
+    blockedReasons.push("credit_without_matching_deduction_evidence");
+  } else if (target.creditDoc.exists || matchingDeductionEvidence ||
+      reservation.deductionApplied === true ||
+      lesson.deductionApplied === true) {
+    blockedReasons.push("deduction_already_applied");
+  }
+  if (classification.mode === "legacy") {
+    warnings.push("legacy_lesson_ledger_will_be_replaced");
+    warnings.push("package_net_delta_zero");
+  } else if (classification.mode === "canonical") {
+    warnings.push("canonical_reservation_ledger_will_increment");
+  }
+  const normalizedOutcome = validation.actionType === "complete" ?
+    "completed" :
+    "no_show";
+  const nextStatus = target.packageDoc.exists &&
+      ledgerDiagnostics.nextRemainingCount !== null ?
+    getNextStudentPackageStatus(
+        packageData.status,
+        ledgerDiagnostics.nextRemainingCount,
+    ) :
+    "";
+  const packageImpact = {
+    packageId: target.packageId,
+    currentUsedCount: ledgerDiagnostics.currentUsedCount,
+    currentRemainingCount: ledgerDiagnostics.currentRemainingCount,
+    usedCountDelta: ledgerDiagnostics.transitionDelta,
+    remainingCountDelta: ledgerDiagnostics.transitionDelta === null ?
+      null :
+      -ledgerDiagnostics.transitionDelta,
+    nextUsedCount: ledgerDiagnostics.nextUsedCount,
+    nextRemainingCount: ledgerDiagnostics.nextRemainingCount,
+    currentStatus: normalizeId(packageData.status),
+    nextStatus,
+  };
+  const normalizedPlan = {
+    academyId: validation.academyId,
+    actionType: validation.actionType,
+    normalizedOutcome,
+    lessonId: target.lessonDoc.id,
+    reservationId: target.reservationDoc.id,
+    slotId: target.slotDoc.id,
+    packageId: target.packageId,
+    studentId: target.studentId,
+    creditTransactionId: target.creditTransactionId,
+    ledgerMode: classification.mode,
+    ledgerMarker: FIXED_PRIVATE_DEDUCTION_LEDGER,
+    packageUsedCount: ledgerDiagnostics.nextUsedCount,
+    packageRemainingCount: ledgerDiagnostics.nextRemainingCount,
+    packageStatus: nextStatus,
+    actorUid: String(actor.uid || actor.actorUid || ""),
+    actorRole: normalizeId(actor.role || actor.actorRole),
+  };
+  return {
+    ok: Array.from(new Set(blockedReasons)).length === 0,
+    blockedReasons: Array.from(new Set(blockedReasons)),
+    warnings: Array.from(new Set(warnings)),
+    classification,
+    ledgerDiagnostics,
+    packageImpact,
+    creditTransactionPreview: {
+      wouldCreate: !target.creditDoc.exists,
+      id: target.creditTransactionId,
+      sourceType: "fixedPrivateReservation",
+      sourceId: target.reservationDoc.id,
+      packageId: target.packageId,
+      deltaCount: -1,
+      duplicateExists: target.creditDoc.exists,
+      matchingDeductionEvidence,
+    },
+    normalizedPlan,
+  };
+}
+
+function fixedPrivateOutcomeHashCurrentState(target, plan) {
+  const summarize = (doc, fields) => {
+    if (!doc.exists) return null;
+    return fields.reduce((summary, field) => {
+      const value = doc.data[field];
+      summary[field] = value && typeof value.toMillis === "function" ?
+        value.toMillis() :
+        value === undefined ? null : value;
+      return summary;
+    }, {id: doc.id});
+  };
+  return {
+    lesson: summarize(target.lessonDoc, [
+      "academyId", "status", "outcome", "attendanceStatus",
+      "reservationId", "slotId", "packageId", "deductionPackageId",
+      "fixedPrivateDeductionLedger", "deductionApplied",
+      "deductionCreditTransactionId", "isDeductCancelled", "noDeduction",
+      "deductionCanceled", "deductionCancelled", "deductionReversed",
+      "cancelledAt", "releasedAt", "releasedFromFixed",
+      "teacherUid", "teacherUID", "teacherId", "teacherID", "teacherKey",
+      "teacher", "teacherName", "updatedAt",
+    ]),
+    reservation: summarize(target.reservationDoc, [
+      "academyId", "status", "outcome", "attendanceStatus", "lessonId",
+      "slotId", "packageId", "deductionPackageId",
+      "fixedPrivateDeductionLedger", "deductionApplied",
+      "deductionCreditTransactionId", "noDeduction", "deductionCanceled",
+      "deductionCancelled", "deductionReversed", "cancelledAt",
+      "releasedAt", "releasedFromFixed", "teacherUid", "teacherUID",
+      "teacherId", "teacherID", "teacherKey", "teacher", "teacherName",
+      "updatedAt",
+    ]),
+    slot: summarize(target.slotDoc, [
+      "academyId", "status", "lessonId", "reservationId", "packageId",
+      "fixedPrivateDeductionLedger", "noDeduction", "deductionCanceled",
+      "deductionCancelled", "deductionReversed", "cancelledAt",
+      "releasedAt", "releasedFromFixed", "teacherUid", "teacherUID",
+      "teacherId", "teacherID", "teacherKey", "teacher", "teacherName",
+      "updatedAt",
+    ]),
+    package: summarize(target.packageDoc, [
+      "academyId", "studentId", "packageType", "status", "totalCount",
+      "usedCount", "remainingCount", "updatedAt",
+    ]),
+    creditTransaction: {
+      id: target.creditDoc.id,
+      exists: target.creditDoc.exists,
+    },
+    ledgerDiagnostics: plan.ledgerDiagnostics,
+  };
+}
+
+function buildFixedPrivateOutcomePlanHash({
+  validation,
+  target,
+  plan,
+  actor,
+}) {
+  return hashPrivateReservationOutcomeActionValue({
+    version: 1,
+    actorUid: normalizeId(actor.uid || actor.actorUid),
+    academyId: validation.academyId,
+    requestId: validation.requestId,
+    actionType: validation.actionType,
+    currentState: fixedPrivateOutcomeHashCurrentState(target, plan),
+    allowed: plan.ok,
+    blockedReasons: [...plan.blockedReasons].sort(),
+    normalizedPlan: plan.normalizedPlan,
+  });
+}
+
+function summarizeFixedPrivateOutcomeTarget(target) {
+  const summarize = (doc) => ({
+    id: doc.id,
+    exists: doc.exists,
+    status: normalizeId(doc.data && doc.data.status),
+    marker: normalizeId(
+        doc.data && doc.data.fixedPrivateDeductionLedger,
+    ),
+  });
+  return {
+    lesson: summarize(target.lessonDoc),
+    reservation: summarize(target.reservationDoc),
+    slot: summarize(target.slotDoc),
+    package: summarize(target.packageDoc),
+    creditTransaction: summarize(target.creditDoc),
+  };
+}
+
+async function previewFixedPrivateLessonOutcomeAction({
+  db,
+  auth,
+  data,
+}) {
+  const validation = validateFixedPrivateOutcomeActionPayload(
+      data || {},
+      false,
+  );
+  const target = await resolveFixedPrivateOutcomeTarget({
+    db,
+    validation,
+  });
+  const actor = await resolvePrivateLessonStatusActor(
+      db,
+      validation.academyId,
+      auth,
+  );
+  const permission = await resolveFixedPrivateOutcomePermission({
+    db,
+    academyId: validation.academyId,
+    actor,
+    actionType: validation.actionType,
+    target,
+  });
+  const plan = buildFixedPrivateOutcomePlan({
+    validation,
+    target,
+    actor,
+    permission,
+    nowMillis: Date.now(),
+  });
+  const planHash = buildFixedPrivateOutcomePlanHash({
+    validation,
+    target,
+    plan,
+    actor,
+  });
+  return {
+    ok: plan.ok,
+    allowed: plan.ok,
+    dryRun: true,
+    previewOnly: true,
+    commit: false,
+    requestId: validation.requestId,
+    actionType: validation.actionType,
+    normalizedOutcome: plan.normalizedPlan.normalizedOutcome,
+    actor: {
+      uid: actor.uid,
+      role: actor.role,
+      isAdmin: actor.isAdmin === true,
+      isTeacher: actor.isTeacher === true,
+      allowed: permission.allowed === true,
+      permissionSource: permission.permissionSource || actor.permissionSource,
+    },
+    target: summarizeFixedPrivateOutcomeTarget(target),
+    ledgerClassification: plan.classification,
+    ledgerDiagnostics: plan.ledgerDiagnostics,
+    packageImpact: plan.packageImpact,
+    creditTransactionPreview: plan.creditTransactionPreview,
+    blockedReasons: plan.blockedReasons,
+    warnings: plan.warnings,
+    normalizedPlan: plan.normalizedPlan,
+    planHash,
+    nextStep: plan.ok ?
+      "고정 수업 결과와 원장 전환 내용을 확인한 뒤 최종 처리할 수 있습니다." :
+      "차단 사유와 원장 진단을 먼저 확인하세요.",
+  };
+}
+
+const FIXED_PRIVATE_OUTCOME_AUDIT_MAX_LIMIT = 50;
+const FIXED_PRIVATE_OUTCOME_AUDIT_SAMPLE_LIMIT = 10;
+const FIXED_PRIVATE_OUTCOME_AUDIT_PACKAGE_LIMIT = 20;
+const FIXED_PRIVATE_OUTCOME_AUDIT_LEDGER_ROW_LIMIT = 500;
+const FIXED_PRIVATE_OUTCOME_AUDIT_CATEGORIES = [
+  "canonicalReady",
+  "legacyReady",
+  "alreadyReservationDeducted",
+  "conflict",
+  "missingLink",
+];
+
+function validateFixedPrivateOutcomeAuditPayload(data) {
+  const academyId = requireString(data, "academyId");
+  validateAcademyId(academyId);
+  if (data.dryRun !== true ||
+      data.previewOnly !== true ||
+      data.commit !== false) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Audit requires dryRun true, previewOnly true, and commit false.",
+    );
+  }
+  const packageId = optionalString(data, "packageId");
+  if (packageId) validateCallableDocumentId(packageId, "packageId");
+  const cursor = optionalString(data, "cursor");
+  if (cursor) validateCallableDocumentId(cursor, "cursor");
+  const rawLimit = data.limit === undefined ? 25 : Number(data.limit);
+  if (!Number.isInteger(rawLimit) ||
+      rawLimit < 1 ||
+      rawLimit > FIXED_PRIVATE_OUTCOME_AUDIT_MAX_LIMIT) {
+    throw new HttpsError(
+        "invalid-argument",
+        `limit must be between 1 and ` +
+          `${FIXED_PRIVATE_OUTCOME_AUDIT_MAX_LIMIT}.`,
+    );
+  }
+  return {academyId, packageId, cursor, limit: rawLimit};
+}
+
+async function resolveFixedPrivateOutcomeAuditTarget({
+  db,
+  academyId,
+  lessonDoc,
+}) {
+  const lesson = lessonDoc.data || {};
+  const reservationId = fixedPrivateOutcomeLinkedId(
+      lesson,
+      ["reservationId", "privateLessonReservationId"],
+  );
+  const slotId = fixedPrivateOutcomeLinkedId(
+      lesson,
+      ["slotId", "privateLessonSlotId"],
+  );
+  const [reservationDoc, slotDoc] = await Promise.all([
+    readFixedPrivateOutcomeDoc({
+      db,
+      collectionName: "privateLessonReservations",
+      docId: reservationId,
+    }),
+    readFixedPrivateOutcomeDoc({
+      db,
+      collectionName: "privateLessonSlots",
+      docId: slotId,
+    }),
+  ]);
+  const reservation = reservationDoc.exists ? reservationDoc.data : {};
+  const slot = slotDoc.exists ? slotDoc.data : {};
+  const packageIds = fixedPrivateOutcomePackageIds(lesson, reservation, slot);
+  const packageId = packageIds[0] || "";
+  const packageDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    collectionName: "studentPackages",
+    docId: packageId,
+  });
+  const studentId = normalizeId(
+      lesson.studentId || lesson.studentID || reservation.studentId,
+  );
+  const creditTransactionId = packageId && studentId && reservationDoc.id ?
+    buildDeductionKey({
+      academyId,
+      lessonId: reservationDoc.id,
+      studentId,
+      packageId,
+    }) :
+    "";
+  const creditDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    collectionName: "creditTransactions",
+    docId: creditTransactionId,
+  });
+  return {
+    lessonDoc,
+    reservationDoc,
+    slotDoc,
+    packageDoc,
+    creditDoc,
+    packageIds,
+    packageId,
+    studentId,
+    creditTransactionId,
+    linkedReservationId: reservationId,
+    linkedSlotId: slotId,
+  };
+}
+
+function fixedPrivateOutcomeAuditLinkReasons(target) {
+  const reasons = [];
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const slot = target.slotDoc.exists ? target.slotDoc.data : {};
+  if (!target.linkedReservationId) reasons.push("reservation_link_missing");
+  if (!target.linkedSlotId) reasons.push("slot_link_missing");
+  if (!target.reservationDoc.exists) reasons.push("reservation_missing");
+  if (!target.slotDoc.exists) reasons.push("slot_missing");
+  if (target.packageIds.length === 0) reasons.push("package_link_missing");
+  if (!target.packageDoc.exists) reasons.push("package_missing");
+  if (reasons.length > 0) return reasons;
+  const reservationLessonId = fixedPrivateOutcomeLinkedId(
+      reservation,
+      ["lessonId", "fixedLessonId"],
+  );
+  const reservationSlotId = fixedPrivateOutcomeLinkedId(
+      reservation,
+      ["slotId", "privateLessonSlotId"],
+  );
+  const slotLessonId = fixedPrivateOutcomeLinkedId(
+      slot,
+      ["lessonId", "fixedLessonId"],
+  );
+  if (reservationLessonId !== target.lessonDoc.id ||
+      slotLessonId !== target.lessonDoc.id) {
+    reasons.push("lesson_link_mismatch");
+  }
+  if (reservationSlotId !== target.slotDoc.id) {
+    reasons.push("slot_link_mismatch");
+  }
+  if (normalizeId(slot.reservationId) !== target.reservationDoc.id) {
+    reasons.push("reservation_link_mismatch");
+  }
+  if (target.packageIds.length > 1) {
+    reasons.push("ambiguous_package_links");
+  }
+  return reasons;
+}
+
+function fixedPrivateOutcomeAuditCreditMatches(target) {
+  if (!target.creditDoc.exists) return false;
+  const credit = target.creditDoc.data || {};
+  return normalizeId(credit.academyId) ===
+      normalizeId(target.lessonDoc.data.academyId) &&
+    normalizeId(credit.packageId) === target.packageId &&
+    normalizeId(credit.sourceId) === target.reservationDoc.id &&
+    Number(credit.deltaCount) === -1;
+}
+
+function classifyFixedPrivateOutcomeAuditTarget({
+  academyId,
+  target,
+  todayYmd,
+}) {
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const slot = target.slotDoc.exists ? target.slotDoc.data : {};
+  const packageData = target.packageDoc.exists ? target.packageDoc.data : {};
+  const linkReasons = fixedPrivateOutcomeAuditLinkReasons(target);
+  const base = {
+    lessonId: target.lessonDoc.id,
+    reservationId: target.reservationDoc.id,
+    slotId: target.slotDoc.id,
+    packageId: target.packageId,
+  };
+  if (linkReasons.length > 0) {
+    return {...base, category: "missingLink", reasons: linkReasons};
+  }
+  const reasons = [];
+  const ledger = classifyFixedPrivateDeductionLedger({
+    lesson,
+    reservation,
+    slot,
+  });
+  [lesson, reservation, slot, packageData].forEach((row) => {
+    if (normalizeId(row.academyId) !== academyId) {
+      reasons.push("academy_mismatch");
+    }
+  });
+  if (!isFixedPrivateOutcomeLesson(lesson)) {
+    reasons.push("lesson_not_fixed_private");
+  }
+  if (!isFixedPrivateOutcomeReservation(reservation)) {
+    reasons.push("reservation_not_fixed_private");
+  }
+  if (!isFixedPrivateOutcomeSlot(slot)) {
+    reasons.push("slot_not_fixed_private");
+  }
+  if (ledger.mode === "inconsistent") {
+    reasons.push("inconsistent_ledger_markers");
+  }
+  [
+    ["student_mismatch", ["studentId", "studentID", "fixedStudentId"]],
+    ["date_mismatch", ["date", "lessonDate", "scheduleDate"]],
+    ["time_mismatch", ["time", "startTime", "scheduleTime"]],
+  ].forEach(([reason, fields]) => {
+    if (fixedPrivateOutcomeValuesConflict(
+        [lesson, reservation, slot],
+        fields,
+    )) {
+      reasons.push(reason);
+    }
+  });
+  const packageMismatch = fixedPrivatePackageOccurrenceMismatch({
+    academyId,
+    packageData,
+    studentId: target.studentId,
+    reservation,
+    slot,
+  });
+  if (packageMismatch) reasons.push(packageMismatch);
+  reasons.push(
+      ...fixedPrivateOutcomeRowFlagReasons(lesson, "lesson"),
+      ...fixedPrivateOutcomeRowFlagReasons(reservation, "reservation"),
+      ...fixedPrivateOutcomeRowFlagReasons(slot, "slot"),
+  );
+  const matchingDeductionEvidence =
+    fixedPrivateOutcomeHasMatchingDeductionEvidence(target);
+  const matchingCredit = fixedPrivateOutcomeAuditCreditMatches(target);
+  if (target.creditDoc.exists &&
+      (!matchingDeductionEvidence || !matchingCredit)) {
+    reasons.push("credit_without_matching_deduction_evidence");
+  }
+  const reservationStatus = normalizeId(reservation.status).toLowerCase();
+  const lessonStatus = normalizeId(lesson.status).toLowerCase();
+  const slotStatus = normalizeId(slot.status).toLowerCase();
+  const terminalReservation = reservationStatus === "completed" ||
+    reservationStatus === "no_show";
+  const duplicateContribution = ledger.mode === "legacy" &&
+    fixedPrivateLessonCountsByDate(lesson, todayYmd) &&
+    fixedPrivateReservationCountsByEvidence(reservation);
+  if (duplicateContribution) {
+    reasons.push("duplicate_fixed_occurrence_contribution");
+  }
+  if (reasons.length > 0) {
+    return {
+      ...base,
+      category: "conflict",
+      reasons: Array.from(new Set(reasons)),
+    };
+  }
+  if (terminalReservation &&
+      reservation.deductionApplied === true &&
+      target.creditDoc.exists &&
+      matchingDeductionEvidence &&
+      matchingCredit) {
+    if (lessonStatus !== reservationStatus || slotStatus !== "reserved") {
+      return {
+        ...base,
+        category: "conflict",
+        reasons: ["three_way_status_mismatch"],
+      };
+    }
+    return {
+      ...base,
+      category: "alreadyReservationDeducted",
+      reasons: [],
+    };
+  }
+  if (reservation.deductionApplied === true ||
+      lesson.deductionApplied === true ||
+      terminalReservation) {
+    return {
+      ...base,
+      category: "conflict",
+      reasons: ["incomplete_reservation_deduction_evidence"],
+    };
+  }
+  if (!PRIVATE_LESSON_STATUS_ACTIVE_STATUSES.includes(reservationStatus)) {
+    return {
+      ...base,
+      category: "conflict",
+      reasons: ["unsupported_current_status"],
+    };
+  }
+  if (lessonStatus !== "active" ||
+      reservationStatus !== "active" ||
+      slotStatus !== "reserved") {
+    return {
+      ...base,
+      category: "conflict",
+      reasons: ["three_way_status_mismatch"],
+    };
+  }
+  if (ledger.mode === "canonical") {
+    return {...base, category: "canonicalReady", reasons: []};
+  }
+  if (ledger.mode === "legacy" &&
+      fixedPrivateLessonCountsByDate(lesson, todayYmd)) {
+    return {...base, category: "legacyReady", reasons: []};
+  }
+  return {
+    ...base,
+    category: "conflict",
+    reasons: ["legacy_lesson_not_counted"],
+  };
+}
+
+async function readFixedPrivateOutcomeAuditPackageDiagnostics({
+  db,
+  academyId,
+  packageId,
+  todayYmd,
+}) {
+  const packageDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    collectionName: "studentPackages",
+    docId: packageId,
+  });
+  const rowLimit = FIXED_PRIVATE_OUTCOME_AUDIT_LEDGER_ROW_LIMIT + 1;
+  const [lessonSnap, reservationSnap] = await Promise.all([
+    db.collection("lessons")
+        .where("academyId", "==", academyId)
+        .where("packageId", "==", packageId)
+        .limit(rowLimit)
+        .get(),
+    db.collection("privateLessonReservations")
+        .where("academyId", "==", academyId)
+        .where("deductionPackageId", "==", packageId)
+        .limit(rowLimit)
+        .get(),
+  ]);
+  const truncated =
+    lessonSnap.size > FIXED_PRIVATE_OUTCOME_AUDIT_LEDGER_ROW_LIMIT ||
+    reservationSnap.size > FIXED_PRIVATE_OUTCOME_AUDIT_LEDGER_ROW_LIMIT;
+  const rows = {
+    lessons: lessonSnap.docs
+        .slice(0, FIXED_PRIVATE_OUTCOME_AUDIT_LEDGER_ROW_LIMIT)
+        .map((docSnap) => ({id: docSnap.id, ...docSnap.data()})),
+    reservations: reservationSnap.docs
+        .slice(0, FIXED_PRIVATE_OUTCOME_AUDIT_LEDGER_ROW_LIMIT)
+        .map((docSnap) => ({id: docSnap.id, ...docSnap.data()})),
+  };
+  const diagnostics = buildFixedPrivatePackageLedgerDiagnostics({
+    rows,
+    packageData: packageDoc.exists ? packageDoc.data : {},
+    lessonId: "",
+    reservationId: "",
+    todayYmd,
+    classification: {mode: "inconsistent"},
+  });
+  return {
+    packageId,
+    packageExists: packageDoc.exists,
+    lessonRowsScanned: rows.lessons.length,
+    reservationRowsScanned: rows.reservations.length,
+    truncated,
+    totalCount: diagnostics.totalCount,
+    currentUsedCount: diagnostics.currentUsedCount,
+    currentRemainingCount: diagnostics.currentRemainingCount,
+    lessonLedgerCount: diagnostics.lessonLedgerCount,
+    reservationLedgerCount: diagnostics.reservationLedgerCount,
+    duplicateOccurrenceContributionCount:
+      diagnostics.duplicateOccurrenceContributions.length,
+    duplicateOccurrenceIds: diagnostics.duplicateOccurrenceContributions
+        .slice(0, FIXED_PRIVATE_OUTCOME_AUDIT_SAMPLE_LIMIT),
+    expectedUsedCount: truncated ? null : diagnostics.expectedUsedCount,
+    expectedRemainingCount: truncated ?
+      null :
+      diagnostics.expectedRemainingCount,
+    aggregateMatches: truncated ? null : diagnostics.aggregateMatches,
+  };
+}
+
+async function inspectFixedPrivateLessonOutcomeLedger({db, auth, data}) {
+  const validation = validateFixedPrivateOutcomeAuditPayload(data || {});
+  await requireAcademyAdmin(db, validation.academyId, auth.uid);
+  let lessonQuery = db.collection("lessons")
+      .where("academyId", "==", validation.academyId);
+  if (validation.packageId) {
+    lessonQuery = lessonQuery.where(
+        "packageId",
+        "==",
+        validation.packageId,
+    );
+  }
+  lessonQuery = lessonQuery.orderBy(
+      admin.firestore.FieldPath.documentId(),
+  );
+  if (validation.cursor) {
+    lessonQuery = lessonQuery.startAfter(validation.cursor);
+  }
+  const pageSnap = await lessonQuery.limit(validation.limit + 1).get();
+  const pageDocs = pageSnap.docs.slice(0, validation.limit);
+  const hasMore = pageSnap.size > validation.limit;
+  const todayYmd = getKstDateString();
+  const counts = FIXED_PRIVATE_OUTCOME_AUDIT_CATEGORIES.reduce(
+      (result, category) => ({...result, [category]: 0}),
+      {scanned: pageDocs.length, fixedOccurrences: 0},
+  );
+  const samples = FIXED_PRIVATE_OUTCOME_AUDIT_CATEGORIES.reduce(
+      (result, category) => ({...result, [category]: []}),
+      {},
+  );
+  const classifications = [];
+  for (const docSnap of pageDocs) {
+    const lesson = docSnap.data() || {};
+    if (!isFixedPrivateOutcomeLesson(lesson)) continue;
+    counts.fixedOccurrences += 1;
+    const target = await resolveFixedPrivateOutcomeAuditTarget({
+      db,
+      academyId: validation.academyId,
+      lessonDoc: {
+        id: docSnap.id,
+        exists: true,
+        data: lesson,
+        ref: docSnap.ref,
+      },
+    });
+    const classification = classifyFixedPrivateOutcomeAuditTarget({
+      academyId: validation.academyId,
+      target,
+      todayYmd,
+    });
+    classifications.push(classification);
+    counts[classification.category] += 1;
+    if (samples[classification.category].length <
+        FIXED_PRIVATE_OUTCOME_AUDIT_SAMPLE_LIMIT) {
+      samples[classification.category].push(classification);
+    }
+  }
+  const packageIds = Array.from(new Set([
+    validation.packageId,
+    ...classifications.map((row) => row.packageId),
+  ].map(normalizeId).filter(Boolean)));
+  const diagnosticPackageIds = packageIds.slice(
+      0,
+      FIXED_PRIVATE_OUTCOME_AUDIT_PACKAGE_LIMIT,
+  );
+  const packageAggregateDiagnostics = await Promise.all(
+      diagnosticPackageIds.map((packageId) =>
+        readFixedPrivateOutcomeAuditPackageDiagnostics({
+          db,
+          academyId: validation.academyId,
+          packageId,
+          todayYmd,
+        }),
+      ),
+  );
+  return {
+    ok: true,
+    dryRun: true,
+    previewOnly: true,
+    commit: false,
+    academyId: validation.academyId,
+    packageId: validation.packageId,
+    counts,
+    samples,
+    packageAggregateDiagnostics,
+    packageDiagnosticsOmittedCount: Math.max(
+        0,
+        packageIds.length - diagnosticPackageIds.length,
+    ),
+    pagination: {
+      limit: validation.limit,
+      cursor: validation.cursor,
+      nextCursor: hasMore && pageDocs.length > 0 ?
+        pageDocs[pageDocs.length - 1].id :
+        "",
+      hasMore,
+    },
+    bounds: {
+      sampleIdsPerCategory: FIXED_PRIVATE_OUTCOME_AUDIT_SAMPLE_LIMIT,
+      packageDiagnostics: FIXED_PRIVATE_OUTCOME_AUDIT_PACKAGE_LIMIT,
+      ledgerRowsPerCollection:
+        FIXED_PRIVATE_OUTCOME_AUDIT_LEDGER_ROW_LIMIT,
+    },
+  };
+}
+
 const PRIVATE_LESSON_OUTCOME_COMMIT_ACTIONS = ["complete", "no_show"];
 const PRIVATE_LESSON_OUTCOME_ACTION_BATCH_COLLECTION =
   "privateLessonOutcomeActionBatches";
@@ -13434,8 +15901,13 @@ function buildPrivateLessonOutcomeActionBatchId({academyId, requestId}) {
 
 function validatePrivateLessonOutcomeCommitPayload(data) {
   const academyId = requireString(data, "academyId");
-  const reservationId = requireString(data, "reservationId");
-  const requestId = requireString(data, "requestId");
+  const reservationId = validateCallableDocumentId(
+      requireString(data, "reservationId"),
+      "reservationId",
+  );
+  const requestId = validateCallableRequestId(
+      requireString(data, "requestId"),
+  );
   const actionType = requireString(data, "actionType");
   const planHash = requireString(data, "planHash").toLowerCase();
   validateAcademyId(academyId);
@@ -13465,7 +15937,7 @@ function validatePrivateLessonOutcomeCommitPayload(data) {
 function buildPrivateLessonOutcomeActionPayloadHash({auth, validation}) {
   return hashPrivateReservationOutcomeActionValue({
     version: 1,
-    actorUid: normalizeId(auth && auth.uid),
+    actorUid: getAuthUid(auth),
     academyId: validation.academyId,
     reservationId: validation.reservationId,
     requestId: validation.requestId,
@@ -13673,7 +16145,7 @@ async function commitPrivateLessonOutcomeAction({db, auth, data}) {
       });
     }
 
-    const actorUid = normalizeId(auth && auth.uid);
+    const actorUid = getAuthUid(auth);
     const membershipRef = db
         .collection("academyMemberships")
         .doc(`${validation.academyId}_${actorUid}`);
@@ -13697,6 +16169,7 @@ async function commitPrivateLessonOutcomeAction({db, auth, data}) {
       actionType: validation.actionType,
       reservation: target.reservation,
       slot: target.slot,
+      lesson: target.lesson,
       packageDoc: target.packageDoc,
       packageIdCandidate: target.packageId,
       packageLookupReason: target.packageLookupReason,
@@ -13819,6 +16292,7 @@ function buildPrivateReservationOutcomePlanHashCurrentState(target) {
   const packageDateBounds = packageData ?
     getPrivatePackageDateBounds(packageData) :
     {startDate: "", endDate: ""};
+  const lesson = target && target.lesson ? target.lesson : null;
   return {
     reservation: reservation ? {
       academyId: normalizeId(reservation.academyId),
@@ -13859,6 +16333,11 @@ function buildPrivateReservationOutcomePlanHashCurrentState(target) {
       durationMinutes: normalizePrivateReservationOutcomeHashNumber(
           slot.durationMinutes,
       ),
+    } : null,
+    lesson: lesson ? {
+      academyId: normalizeId(lesson.academyId),
+      status: normalizeId(lesson.status).toLowerCase(),
+      fixedProvenance: classifyFixedPrivateProvenance(lesson),
     } : null,
     package: packageData ? {
       id: normalizeId(packageDoc.id),
@@ -13942,6 +16421,7 @@ function buildPrivateReservationOutcomePlan({
   actionType,
   reservation,
   slot,
+  lesson = null,
   packageDoc,
   packageIdCandidate = "",
   packageLookupReason = "",
@@ -13965,6 +16445,13 @@ function buildPrivateReservationOutcomePlan({
   if (!normalizedOutcome) blockedReasons.push("invalid_action");
   if (!reservationData) {
     blockedReasons.push("reservation_missing");
+  }
+  if (classifyFixedPrivateProvenance(
+      reservationData,
+      slot,
+      lesson,
+  ).isFixed) {
+    blockedReasons.push(FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON);
   }
 
   const currentReservationStatus = normalizeId(
@@ -14203,6 +16690,7 @@ async function resolvePrivateReservationOutcomePreviewTarget({
     return {
       reservation: null,
       slot: null,
+      lesson: null,
       packageDoc: null,
       packageId: "",
       packageLookupReason: "",
@@ -14218,6 +16706,7 @@ async function resolvePrivateReservationOutcomePreviewTarget({
         academyId: normalizeId(reservation.academyId),
       },
       slot: null,
+      lesson: null,
       packageDoc: null,
       packageId: "",
       packageLookupReason: "",
@@ -14231,6 +16720,17 @@ async function resolvePrivateReservationOutcomePreviewTarget({
     await read(db.collection("privateLessonSlots").doc(slotId)) :
     null;
   const slot = slotSnap && slotSnap.exists ? slotSnap.data() || {} : null;
+  const linkedLessonId = normalizeId(
+      reservation.lessonId ||
+      reservation.fixedLessonId ||
+      (slot && (slot.lessonId || slot.fixedLessonId)),
+  );
+  const lessonSnap = linkedLessonId ?
+    await read(db.collection("lessons").doc(linkedLessonId)) :
+    null;
+  const lesson = lessonSnap && lessonSnap.exists ?
+    lessonSnap.data() || {} :
+    null;
   const explicitPackageId = normalizeId(reservation.packageId);
   let packageDoc = null;
   let packageLookupReason = "";
@@ -14352,6 +16852,7 @@ async function resolvePrivateReservationOutcomePreviewTarget({
   return {
     reservation,
     slot,
+    lesson,
     packageDoc,
     packageId: packageDoc ? packageDoc.id : explicitPackageId,
     packageLookupReason,
@@ -14380,6 +16881,16 @@ function buildPrivateReservationOutcomePreviewTarget({
       exists: Boolean(target.slot),
       status: normalizeId(target.slot && target.slot.status),
     },
+    lesson: {
+      id: normalizeId(
+          target.reservation && (
+            target.reservation.lessonId ||
+            target.reservation.fixedLessonId
+          ),
+      ),
+      exists: Boolean(target.lesson),
+      status: normalizeId(target.lesson && target.lesson.status),
+    },
     package: {
       id: normalizeId(target.packageId),
       exists: Boolean(packageData),
@@ -14392,6 +16903,355 @@ function buildPrivateReservationOutcomePreviewTarget({
   };
 }
 
+function buildFixedPrivateOutcomeCommitResult({
+  validation,
+  batchId,
+  checkpoint,
+  idempotentReplay,
+}) {
+  return {
+    ok: true,
+    committed: true,
+    dryRun: false,
+    previewOnly: false,
+    requestId: validation.requestId,
+    batchId,
+    idempotentReplay,
+    actionType: validation.actionType,
+    outcome: checkpoint.outcome,
+    packageId: checkpoint.packageId,
+    creditTransactionId: checkpoint.creditTransactionId,
+    updated: checkpoint.updated,
+    ledgerClassification: checkpoint.ledgerClassification,
+    ledgerDiagnostics: checkpoint.ledgerDiagnostics,
+    normalizedPlan: checkpoint.normalizedPlan,
+    nextStep: "Fixed private lesson outcome action committed.",
+  };
+}
+
+function fixedPrivateOutcomeErrorDetails({
+  validation,
+  plan,
+  actualPlanHash = "",
+  blockedReasons,
+}) {
+  return {
+    requestId: validation.requestId,
+    actionType: validation.actionType,
+    planHash: validation.planHash,
+    actualPlanHash,
+    blockedReasons: Array.from(new Set(blockedReasons || [])),
+    warnings: plan ? plan.warnings : [],
+    ledgerClassification: plan ? plan.classification : {},
+    ledgerDiagnostics: plan ? plan.ledgerDiagnostics : {},
+    packageImpact: plan ? plan.packageImpact : {},
+    creditTransactionPreview: plan ? plan.creditTransactionPreview : {},
+    normalizedPlan: plan ? plan.normalizedPlan : {},
+  };
+}
+
+async function commitFixedPrivateLessonOutcomeAction({db, auth, data}) {
+  const validation = validateFixedPrivateOutcomeActionPayload(data || {}, true);
+  const payloadHash = fixedPrivateOutcomePayloadHash({auth, validation});
+  const batchId = fixedPrivateOutcomeBatchId(validation);
+  const batchRef = db
+      .collection(FIXED_PRIVATE_OUTCOME_BATCH_COLLECTION)
+      .doc(batchId);
+  return await db.runTransaction(async (transaction) => {
+    const batchSnap = await transaction.get(batchRef);
+    if (batchSnap.exists) {
+      const checkpoint = batchSnap.data() || {};
+      if (checkpoint.payloadHash !== payloadHash) {
+        throw new HttpsError(
+            "already-exists",
+            "fixed private lesson outcome requestId already exists.",
+            {
+              requestId: validation.requestId,
+              blockedReasons: ["request_id_conflict"],
+            },
+        );
+      }
+      if (checkpoint.status !== "completed") {
+        throw new HttpsError(
+            "failed-precondition",
+            "fixed private lesson outcome checkpoint is not completed.",
+            {
+              requestId: validation.requestId,
+              blockedReasons: ["checkpoint_not_completed"],
+            },
+        );
+      }
+      return buildFixedPrivateOutcomeCommitResult({
+        validation,
+        batchId,
+        checkpoint,
+        idempotentReplay: true,
+      });
+    }
+    const actorUid = getAuthUid(auth);
+    const membershipRef = db.collection("academyMemberships")
+        .doc(`${validation.academyId}_${actorUid}`);
+    const membershipSnap = await transaction.get(membershipRef);
+    const membership = membershipSnap.exists ?
+      membershipSnap.data() || {} :
+      null;
+    const actor = buildPrivateLessonStatusActorFromMembership({
+      auth,
+      membership,
+    });
+    const target = await resolveFixedPrivateOutcomeTarget({
+      db,
+      transaction,
+      validation,
+    });
+    const permission = await resolveFixedPrivateOutcomePermission({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      actor,
+      actionType: validation.actionType,
+      target,
+    });
+    const plan = buildFixedPrivateOutcomePlan({
+      validation,
+      target,
+      actor,
+      permission,
+      nowMillis: Date.now(),
+    });
+    const actualPlanHash = buildFixedPrivateOutcomePlanHash({
+      validation,
+      target,
+      plan,
+      actor,
+    });
+    if (actualPlanHash !== validation.planHash) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Fixed private lesson outcome preview is stale.",
+          fixedPrivateOutcomeErrorDetails({
+            validation,
+            plan,
+            actualPlanHash,
+            blockedReasons: ["preview_stale"],
+          }),
+      );
+    }
+    if (!permission.allowed) {
+      throw new HttpsError(
+          "permission-denied",
+          "Fixed private lesson outcome permission denied.",
+          fixedPrivateOutcomeErrorDetails({
+            validation,
+            plan,
+            actualPlanHash,
+            blockedReasons: plan.blockedReasons,
+          }),
+      );
+    }
+    if (!plan.ok) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Fixed private lesson outcome action is blocked.",
+          fixedPrivateOutcomeErrorDetails({
+            validation,
+            plan,
+            actualPlanHash,
+            blockedReasons: plan.blockedReasons,
+          }),
+      );
+    }
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const normalizedPlan = plan.normalizedPlan;
+    const targetStatus = normalizedPlan.normalizedOutcome;
+    const deductionAttemptNumber = Math.max(
+        normalizePositiveAttempt(
+            target.reservationDoc.data.deductionAttemptNumber,
+        ),
+        normalizePositiveAttempt(
+            target.lessonDoc.data.deductionAttemptNumber,
+        ),
+    ) + 1;
+    const actorRole = normalizeId(actor.actorRole || actor.role);
+    const actorName = normalizeId(actor.actorName);
+    const outcomePatch = {
+      status: targetStatus,
+      outcome: targetStatus,
+      attendanceStatus: targetStatus,
+      fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER,
+      deductionApplied: true,
+      deductionAppliedAt: now,
+      deductionPackageId: normalizedPlan.packageId,
+      deductionCreditTransactionId: normalizedPlan.creditTransactionId,
+      deductionTransactionId: normalizedPlan.creditTransactionId,
+      deductionSource: "manual",
+      deductionStatus: "deducted",
+      deductionAttemptNumber,
+      outcomeByUid: actorUid,
+      outcomeActorRole: actorRole,
+      outcomeActorName: actorName,
+      outcomeActionType: validation.actionType,
+      outcomeActionBatchId: batchId,
+      outcomeActionRequestId: validation.requestId,
+      completedAt: targetStatus === "completed" ? now : null,
+      noShowAt: targetStatus === "no_show" ? now : null,
+      updatedAt: now,
+    };
+    transaction.update(target.packageDoc.ref, {
+      usedCount: normalizedPlan.packageUsedCount,
+      remainingCount: normalizedPlan.packageRemainingCount,
+      status: normalizedPlan.packageStatus,
+      updatedAt: now,
+    });
+    transaction.update(target.reservationDoc.ref, outcomePatch);
+    transaction.update(target.lessonDoc.ref, outcomePatch);
+    transaction.update(target.slotDoc.ref, {
+      fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER,
+      ledgerUpdatedAt: now,
+      updatedAt: now,
+    });
+    const reservation = target.reservationDoc.data;
+    const slot = target.slotDoc.data;
+    const packageData = target.packageDoc.data;
+    const datePart = [
+      normalizeId(reservation.date || slot.date),
+      normalizeId(reservation.time || slot.time),
+      normalizeId(reservation.subject || slot.subject),
+    ].filter(Boolean).join(" ");
+    transaction.create(target.creditDoc.ref, {
+      academyId: validation.academyId,
+      studentId: target.studentId,
+      studentName: normalizeId(
+          reservation.studentName || target.lessonDoc.data.studentName,
+      ) || target.studentId,
+      teacher: getReservationTeacherKey(reservation, slot),
+      packageId: normalizedPlan.packageId,
+      packageType: "private",
+      packageTitle: String(
+          packageData.packageTitle || packageData.title || "",
+      ),
+      groupClassName: "",
+      sourceType: "fixedPrivateReservation",
+      sourceId: target.reservationDoc.id,
+      lessonId: target.lessonDoc.id,
+      slotId: target.slotDoc.id,
+      fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER,
+      ledgerTransition: plan.classification.mode === "legacy" ?
+        "lesson_to_reservation" :
+        "reservation_increment",
+      actionType: targetStatus === "completed" ?
+        "fixed_private_completed_deduct" :
+        "fixed_private_no_show_deduct",
+      deltaCount: -1,
+      memo: datePart ?
+        `고정 1:1 결과 차감 ${datePart}` :
+        "고정 1:1 결과 차감",
+      actorUid,
+      actorRole,
+      actorName,
+      reason: targetStatus,
+      createdAt: now,
+    });
+    const updated = {
+      reservations: [target.reservationDoc.id],
+      lessons: [target.lessonDoc.id],
+      privateLessonSlots: [target.slotDoc.id],
+      studentPackages: [target.packageDoc.id],
+      creditTransactions: [target.creditDoc.id],
+    };
+    const checkpoint = {
+      batchId,
+      academyId: validation.academyId,
+      requestId: validation.requestId,
+      payloadHash,
+      planHash: validation.planHash,
+      actionType: validation.actionType,
+      outcome: targetStatus,
+      lessonId: target.lessonDoc.id,
+      reservationId: target.reservationDoc.id,
+      slotId: target.slotDoc.id,
+      packageId: target.packageDoc.id,
+      creditTransactionId: target.creditDoc.id,
+      actor: {
+        uid: actorUid,
+        role: actorRole,
+        name: actorName,
+        permissionSource: permission.permissionSource,
+      },
+      status: "completed",
+      updated,
+      warnings: plan.warnings,
+      ledgerClassification: plan.classification,
+      ledgerDiagnostics: plan.ledgerDiagnostics,
+      normalizedPlan,
+      sourceType: "fixed-private-lesson-outcome-action",
+      createdAt: now,
+      completedAt: now,
+    };
+    transaction.create(batchRef, checkpoint);
+    return buildFixedPrivateOutcomeCommitResult({
+      validation,
+      batchId,
+      checkpoint,
+      idempotentReplay: false,
+    });
+  });
+}
+
+exports.inspectFixedPrivateLessonOutcomeLedger = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "auth_required");
+        }
+        return await inspectFixedPrivateLessonOutcomeLedger({
+          db: admin.firestore(),
+          auth: request.auth,
+          data: request.data || {},
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.previewFixedPrivateLessonOutcomeAction = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "auth_required");
+        }
+        return await previewFixedPrivateLessonOutcomeAction({
+          db: admin.firestore(),
+          auth: request.auth,
+          data: request.data || {},
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.commitFixedPrivateLessonOutcomeAction = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "auth_required");
+        }
+        return await commitFixedPrivateLessonOutcomeAction({
+          db: admin.firestore(),
+          auth: request.auth,
+          data: request.data || {},
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
 exports.previewPrivateLessonOutcomeAction = onCall(
     {region: REGION, cors: true},
     async (request) => {
@@ -14400,8 +17260,13 @@ exports.previewPrivateLessonOutcomeAction = onCall(
       }
       const data = request.data || {};
       const academyId = requireString(data, "academyId");
-      const reservationId = requireString(data, "reservationId");
-      const requestId = requireString(data, "requestId");
+      const reservationId = validateCallableDocumentId(
+          requireString(data, "reservationId"),
+          "reservationId",
+      );
+      const requestId = validateCallableRequestId(
+          requireString(data, "requestId"),
+      );
       const actionType = requireString(data, "actionType");
       validateAcademyId(academyId);
       if (!["complete", "no_show"].includes(actionType)) {
@@ -14433,6 +17298,7 @@ exports.previewPrivateLessonOutcomeAction = onCall(
         actionType,
         reservation: target.reservation,
         slot: target.slot,
+        lesson: target.lesson,
         packageDoc: target.packageDoc,
         packageIdCandidate: target.packageId,
         packageLookupReason: target.packageLookupReason,
@@ -14547,6 +17413,18 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
   ]);
   const slot = slotSnap.exists ? slotSnap.data() || {} : null;
   const student = studentSnap.exists ? studentSnap.data() || {} : null;
+  const linkedLessonId = normalizeId(
+      reservation.lessonId ||
+      reservation.fixedLessonId ||
+      (slot && (slot.lessonId || slot.fixedLessonId)),
+  );
+  const linkedLessonSnap = linkedLessonId ?
+    await transaction.get(db.collection("lessons").doc(linkedLessonId)) :
+    null;
+  const linkedLesson = linkedLessonSnap && linkedLessonSnap.exists ?
+    linkedLessonSnap.data() || {} :
+    null;
+  assertNotFixedPrivateDirectReservation(reservation, slot, linkedLesson);
   if (slot && normalizeId(slot.academyId) !== academyId) {
     throw new HttpsError(
         "permission-denied",
@@ -14749,7 +17627,10 @@ exports.markPrivateReservationOutcome = onCall(
 
         const data = request.data || {};
         const academyId = requireString(data, "academyId");
-        const reservationId = requireString(data, "reservationId");
+        const reservationId = validateCallableDocumentId(
+            requireString(data, "reservationId"),
+            "reservationId",
+        );
         const outcome = requireString(data, "outcome");
         validateAcademyId(academyId);
         if (!["completed", "no_show"].includes(outcome)) {
@@ -14944,7 +17825,10 @@ exports.reversePrivateReservationOutcome = onCall(
 
         const data = request.data || {};
         const academyId = requireString(data, "academyId");
-        const reservationId = requireString(data, "reservationId");
+        const reservationId = validateCallableDocumentId(
+            requireString(data, "reservationId"),
+            "reservationId",
+        );
         const reason = requireString(data, "reason");
         validateAcademyId(academyId);
         if (reason.length < 2) {
@@ -14978,6 +17862,7 @@ exports.reversePrivateReservationOutcome = onCall(
                 "Private reservation academy mismatch.",
             );
           }
+          assertNotFixedPrivateDirectReservation(reservation);
 
           const previousOutcomeStatus = String(reservation.status || "")
               .trim();
@@ -15032,6 +17917,25 @@ exports.reversePrivateReservationOutcome = onCall(
           const slot = slotSnap && slotSnap.exists ?
             slotSnap.data() || {} :
             null;
+          const linkedLessonId = normalizeId(
+              reservation.lessonId ||
+              reservation.fixedLessonId ||
+              (slot && (slot.lessonId || slot.fixedLessonId)),
+          );
+          const linkedLessonSnap = linkedLessonId ?
+            await transaction.get(
+                db.collection("lessons").doc(linkedLessonId),
+            ) :
+            null;
+          const linkedLesson =
+            linkedLessonSnap && linkedLessonSnap.exists ?
+              linkedLessonSnap.data() || {} :
+              null;
+          assertNotFixedPrivateDirectReservation(
+              reservation,
+              slot,
+              linkedLesson,
+          );
           if (normalizeId(packageData.academyId) !== academyId) {
             throw new HttpsError(
                 "permission-denied",

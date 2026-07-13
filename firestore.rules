@@ -199,6 +199,124 @@ service cloud.firestore {
       return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
     }
 
+    function hasFixedPrivateSourceFamily(data) {
+      return
+        (
+          "sourceType" in data.keys() &&
+          data.sourceType is string &&
+          (
+            data.sourceType == "fixed-private-slot-assignment" ||
+            data.sourceType.matches("weekly-slot-fixed-assignment.*")
+          )
+        ) ||
+        (
+          "source" in data.keys() &&
+          data.source is string &&
+          data.source.matches("fixed_admin.*")
+        );
+    }
+
+    function hasFixedPrivateLinkProvenance(data) {
+      return
+        (
+          "fixedLessonId" in data.keys() &&
+          data.fixedLessonId is string &&
+          data.fixedLessonId != ""
+        ) ||
+        (
+          "fixedPrivateAssignmentBatchId" in data.keys() &&
+          data.fixedPrivateAssignmentBatchId is string &&
+          data.fixedPrivateAssignmentBatchId != ""
+        ) ||
+        (
+          "privateLessonAvailabilityTemplateId" in data.keys() &&
+          data.privateLessonAvailabilityTemplateId is string &&
+          data.privateLessonAvailabilityTemplateId != ""
+        ) ||
+        (
+          "fixedPrivatePackageId" in data.keys() &&
+          data.fixedPrivatePackageId is string &&
+          data.fixedPrivatePackageId != ""
+        );
+    }
+
+    function isFixedLessonData(data) {
+      return
+        (
+          "fixedPrivateDeductionLedger" in data.keys() &&
+          data.fixedPrivateDeductionLedger is string &&
+          data.fixedPrivateDeductionLedger != ""
+        ) ||
+        hasFixedPrivateLinkProvenance(data) ||
+        hasFixedPrivateSourceFamily(data) ||
+        (
+          "reservationType" in data.keys() &&
+          data.reservationType is string &&
+          data.reservationType in ["fixed", "fixed_private"]
+        );
+    }
+
+    function isFixedPrivateSlotData(data) {
+      return
+        (
+          "fixedPrivateDeductionLedger" in data.keys() &&
+          data.fixedPrivateDeductionLedger is string &&
+          data.fixedPrivateDeductionLedger != ""
+        ) ||
+        hasFixedPrivateLinkProvenance(data) ||
+        hasFixedPrivateSourceFamily(data) ||
+        (
+          "reservationType" in data.keys() &&
+          data.reservationType is string &&
+          data.reservationType in ["fixed", "fixed_private"]
+        ) ||
+        (
+          "slotType" in data.keys() &&
+          data.slotType is string &&
+          data.slotType == "fixed"
+        );
+    }
+
+    function isFixedPrivateReservationData(data) {
+      return
+        (
+          "fixedPrivateDeductionLedger" in data.keys() &&
+          data.fixedPrivateDeductionLedger is string &&
+          data.fixedPrivateDeductionLedger != ""
+        ) ||
+        hasFixedPrivateLinkProvenance(data) ||
+        hasFixedPrivateSourceFamily(data) ||
+        (
+          "reservationType" in data.keys() &&
+          data.reservationType is string &&
+          data.reservationType in ["fixed", "fixed_private"]
+        );
+    }
+
+    function isFixedPrivateCreditData(data) {
+      return
+        (
+          "fixedPrivateDeductionLedger" in data.keys() &&
+          data.fixedPrivateDeductionLedger is string &&
+          data.fixedPrivateDeductionLedger != ""
+        ) ||
+        hasFixedPrivateLinkProvenance(data) ||
+        hasFixedPrivateSourceFamily(data) ||
+        (
+          "sourceType" in data.keys() &&
+          data.sourceType is string &&
+          data.sourceType == "fixedPrivateReservation"
+        ) ||
+        (
+          "actionType" in data.keys() &&
+          data.actionType is string &&
+          data.actionType in [
+            "fixed_private_completed_deduct",
+            "fixed_private_no_show_deduct"
+          ]
+        );
+    }
+
     function validBookedCountDelta() {
       return request.resource.data.bookedCount is int &&
         resource.data.bookedCount is int &&
@@ -433,19 +551,61 @@ service cloud.firestore {
     }
 
     function privateSlotVisibleToCurrentStudent(data, slotId) {
-      return hasStudentIdentity(data.academyId) &&
+      let academyId = data.academyId;
+      let studentId = myStudentId(academyId);
+      let summaryPath = myStudentPrivateAccessSummaryPath(academyId);
+      let summary = get(summaryPath).data;
+      return hasStudentIdentity(academyId) &&
         data.status in ["open", "reserved"] &&
+        exists(summaryPath) &&
+        summary.academyId == academyId &&
+        summary.studentId == studentId &&
         (
-          data.reservedStudentId == myStudentId(data.academyId) ||
-          hasPrivateAllowedSlotAccess(data.academyId, slotId) ||
+          data.reservedStudentId == studentId ||
           (
-            data.eligibleStudentIds is list &&
-            myStudentId(data.academyId) in data.eligibleStudentIds
+            "allowedSlotIds" in summary.keys() &&
+            summary.allowedSlotIds is list &&
+            slotId in summary.allowedSlotIds
           ) ||
-          hasPrivateTeacherAccess(data.academyId, data.teacherUid) ||
-          hasPrivateTeacherAccess(data.academyId, data.teacherKey) ||
-          hasPrivateTeacherAccess(data.academyId, data.teacher) ||
-          hasPrivateTeacherAccess(data.academyId, data.teacherName)
+          (
+            "allowedPrivateLessonSlotIds" in summary.keys() &&
+            summary.allowedPrivateLessonSlotIds is list &&
+            slotId in summary.allowedPrivateLessonSlotIds
+          ) ||
+          (
+            "eligibleStudentIds" in data.keys() &&
+            data.eligibleStudentIds is list &&
+            studentId in data.eligibleStudentIds
+          ) ||
+          (
+            "teacherKeys" in summary.keys() &&
+            summary.teacherKeys is list &&
+            "activePackageIds" in summary.keys() &&
+            summary.activePackageIds is list &&
+            summary.activePackageIds.size() > 0 &&
+            (
+              (
+                "teacherUid" in data.keys() &&
+                data.teacherUid is string &&
+                data.teacherUid in summary.teacherKeys
+              ) ||
+              (
+                "teacherKey" in data.keys() &&
+                data.teacherKey is string &&
+                data.teacherKey in summary.teacherKeys
+              ) ||
+              (
+                "teacher" in data.keys() &&
+                data.teacher is string &&
+                data.teacher in summary.teacherKeys
+              ) ||
+              (
+                "teacherName" in data.keys() &&
+                data.teacherName is string &&
+                data.teacherName in summary.teacherKeys
+              )
+            )
+          )
         );
     }
 
@@ -736,6 +896,7 @@ service cloud.firestore {
           "fixedStudentId",
           "fixedStudentName",
           "fixedPrivateAssignmentBatchId",
+          "fixedPrivateDeductionLedger",
           "packageId",
           "deductionPackageId",
           "linkedPackageId",
@@ -790,6 +951,8 @@ service cloud.firestore {
         (!("fixedStudentName" in data.keys()) || data.fixedStudentName is string) &&
         (!("fixedPrivateAssignmentBatchId" in data.keys()) ||
           data.fixedPrivateAssignmentBatchId is string) &&
+        (!("fixedPrivateDeductionLedger" in data.keys()) ||
+          data.fixedPrivateDeductionLedger == "reservation_v1") &&
         (!("packageId" in data.keys()) || data.packageId is string) &&
         (!("deductionPackageId" in data.keys()) || data.deductionPackageId is string) &&
         (!("linkedPackageId" in data.keys()) || data.linkedPackageId is string) &&
@@ -842,6 +1005,8 @@ service cloud.firestore {
         request.resource.data.privateLessonAvailabilityTemplateId != "" &&
         request.resource.data.fixedPrivateAssignmentBatchId is string &&
         request.resource.data.fixedPrivateAssignmentBatchId != "" &&
+        (!("fixedPrivateDeductionLedger" in request.resource.data.keys()) ||
+          request.resource.data.fixedPrivateDeductionLedger == "reservation_v1") &&
         request.resource.data.createdByUid == currentUid() &&
         request.resource.data.createdAt == request.time &&
         request.resource.data.updatedAt == request.time &&
@@ -930,8 +1095,7 @@ service cloud.firestore {
     function validPrivateSlotStudentReserve(slotId) {
       let studentId = myStudentId(resource.data.academyId);
       let reservationPath = privateLessonReservationPath(resource.data.academyId, slotId, studentId);
-      return validPrivateSlotBaseShape(request.resource.data) &&
-        changedOnly(["status", "reservedStudentId", "reservationId", "reservedAt", "updatedAt"]) &&
+      return changedOnly(["status", "reservedStudentId", "reservationId", "reservedAt", "updatedAt"]) &&
         resource.data.status == "open" &&
         request.resource.data.status == "reserved" &&
         request.resource.data.academyId == resource.data.academyId &&
@@ -959,8 +1123,7 @@ service cloud.firestore {
     function validPrivateSlotStudentCancel(slotId) {
       let studentId = myStudentId(resource.data.academyId);
       let reservationPath = privateLessonReservationPath(resource.data.academyId, slotId, studentId);
-      return validPrivateSlotBaseShape(request.resource.data) &&
-        changedOnly(["status", "reservedStudentId", "reservationId", "reservedAt", "updatedAt"]) &&
+      return changedOnly(["status", "reservedStudentId", "reservationId", "reservedAt", "updatedAt"]) &&
         resource.data.status == "reserved" &&
         resource.data.reservedStudentId == studentId &&
         resource.data.reservationId == resource.data.academyId + "__" + slotId + "__" + studentId &&
@@ -1165,6 +1328,7 @@ service cloud.firestore {
           "packageTeacherKey",
           "privateLessonAvailabilityTemplateId",
           "fixedPrivateAssignmentBatchId",
+          "fixedPrivateDeductionLedger",
           "durationMinutes",
           "reservedAt",
           "createdAt",
@@ -1208,6 +1372,8 @@ service cloud.firestore {
         request.resource.data.privateLessonAvailabilityTemplateId != "" &&
         request.resource.data.fixedPrivateAssignmentBatchId is string &&
         request.resource.data.fixedPrivateAssignmentBatchId != "" &&
+        (!("fixedPrivateDeductionLedger" in request.resource.data.keys()) ||
+          request.resource.data.fixedPrivateDeductionLedger == "reservation_v1") &&
         (!("packageName" in request.resource.data.keys()) || request.resource.data.packageName is string) &&
         (!("packageTitle" in request.resource.data.keys()) || request.resource.data.packageTitle is string) &&
         (!("packageTeacherKey" in request.resource.data.keys()) ||
@@ -1233,18 +1399,10 @@ service cloud.firestore {
 
     function validPrivateReservationReactivate(reservationId) {
       let slot = get(privateLessonSlotPath(resource.data.slotId)).data;
-      return validPrivateReservationBaseShape(request.resource.data) &&
+      return changedOnly(["status", "updatedAt", "cancelledAt"]) &&
         reservationId == resource.data.academyId + "__" + resource.data.slotId + "__" + resource.data.studentId &&
         resource.data.status == "cancelled" &&
         request.resource.data.status == "active" &&
-        request.resource.data.academyId == resource.data.academyId &&
-        request.resource.data.slotId == resource.data.slotId &&
-        request.resource.data.studentId == resource.data.studentId &&
-        request.resource.data.teacher == resource.data.teacher &&
-        request.resource.data.date == resource.data.date &&
-        request.resource.data.time == resource.data.time &&
-        request.resource.data.source == resource.data.source &&
-        request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.cancelledAt == null &&
         hasPrivateTeacherAccess(resource.data.academyId, resource.data.teacher) &&
@@ -1258,36 +1416,20 @@ service cloud.firestore {
     }
 
     function validPrivateReservationCancel(reservationId) {
-      return validPrivateReservationBaseShape(request.resource.data) &&
+      return changedOnly(["status", "updatedAt", "cancelledAt"]) &&
         reservationId == resource.data.academyId + "__" + resource.data.slotId + "__" + resource.data.studentId &&
         resource.data.status == "active" &&
         request.resource.data.status == "cancelled" &&
-        request.resource.data.academyId == resource.data.academyId &&
-        request.resource.data.slotId == resource.data.slotId &&
-        request.resource.data.studentId == resource.data.studentId &&
-        request.resource.data.teacher == resource.data.teacher &&
-        request.resource.data.date == resource.data.date &&
-        request.resource.data.time == resource.data.time &&
-        request.resource.data.source == resource.data.source &&
-        request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.cancelledAt == request.time &&
         privateSlotAfterMatchesCancel(resource.data.slotId, resource.data.academyId);
     }
 
     function validPrivateReservationManagerCancel(reservationId) {
-      return validPrivateReservationBaseShape(request.resource.data) &&
+      return changedOnly(["status", "updatedAt", "cancelledAt"]) &&
         reservationId == resource.data.academyId + "__" + resource.data.slotId + "__" + resource.data.studentId &&
         resource.data.status == "active" &&
         request.resource.data.status == "cancelled" &&
-        request.resource.data.academyId == resource.data.academyId &&
-        request.resource.data.slotId == resource.data.slotId &&
-        request.resource.data.studentId == resource.data.studentId &&
-        request.resource.data.teacher == resource.data.teacher &&
-        request.resource.data.date == resource.data.date &&
-        request.resource.data.time == resource.data.time &&
-        request.resource.data.source == resource.data.source &&
-        request.resource.data.createdAt == resource.data.createdAt &&
         request.resource.data.updatedAt == request.time &&
         request.resource.data.cancelledAt == request.time;
     }
@@ -1712,12 +1854,20 @@ service cloud.firestore {
         lessonBelongsToTeacher(resource.data) ||
         lessonBelongsToCurrentStudent(resource.data)
       );
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if !isFixedLessonData(request.resource.data) &&
+        sameAcademyOnCreate() &&
         isAcademyAdmin(request.resource.data.academyId);
-      allow update: if sameAcademyOnUpdate() &&
-        isAcademyAdmin(resource.data.academyId);
-      allow delete: if sameAcademyOnRead() &&
-        isAcademyAdmin(resource.data.academyId);
+      allow update: if (
+        isFixedLessonData(resource.data) ||
+        isFixedLessonData(request.resource.data)
+      ) ? false : (
+        sameAcademyOnUpdate() &&
+        isAcademyAdmin(resource.data.academyId)
+      );
+      allow delete: if isFixedLessonData(resource.data) ? false : (
+        sameAcademyOnRead() &&
+        isAcademyAdmin(resource.data.academyId)
+      );
     }
 
     match /lessonRequests/{requestId} {
@@ -1906,31 +2056,30 @@ service cloud.firestore {
         privateSlotVisibleToCurrentStudent(resource.data, slotId)
       );
 
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if !isFixedPrivateSlotData(request.resource.data) &&
+        sameAcademyOnCreate() &&
         isAcademyAdmin(request.resource.data.academyId) &&
-        (
-          (
-            request.resource.data.status == "open" &&
-            validPrivateSlotCreateShape()
-          ) ||
-          (
-            request.resource.data.status == "reserved" &&
-            request.resource.data.slotType == "fixed" &&
-            validPrivateFixedSlotAdminCreateShape()
-          )
-        );
+        request.resource.data.status == "open" &&
+        validPrivateSlotCreateShape();
 
-      allow update: if sameAcademyOnUpdate() && (
-        (
-          isAcademyAdmin(resource.data.academyId) &&
-          validPrivateSlotManagerEligibilityUpdate()
-        ) ||
-        (
-          isAcademyAdmin(resource.data.academyId) &&
-          (
-            validPrivateSlotManagerCancelOpen() ||
-            validPrivateSlotManagerCancelReservedSlot(slotId) ||
-            validPrivateSlotManagerCancelReservation(slotId)
+      allow update: if (
+        isFixedPrivateSlotData(resource.data) ||
+        isFixedPrivateSlotData(request.resource.data)
+      ) ? false : (
+        sameAcademyOnUpdate() && (
+          myMembership(resource.data.academyId).role == "student" ? (
+            (
+              validPrivateSlotStudentReserve(slotId) ||
+              validPrivateSlotStudentCancel(slotId)
+            )
+          ) : (
+            isAcademyAdmin(resource.data.academyId) &&
+            (
+              validPrivateSlotManagerEligibilityUpdate() ||
+              validPrivateSlotManagerCancelOpen() ||
+              validPrivateSlotManagerCancelReservedSlot(slotId) ||
+              validPrivateSlotManagerCancelReservation(slotId)
+            )
           )
         )
       );
@@ -1993,32 +2142,26 @@ service cloud.firestore {
         )
       );
 
-      allow create: if sameAcademyOnCreate() &&
-        (
-          (
-            request.resource.data.source == "student" &&
-            validPrivateReservationStudentCreate(reservationId)
-          ) ||
-          (
-            isAcademyAdmin(request.resource.data.academyId) &&
-            request.resource.data.source == "fixed_admin" &&
-            request.resource.data.sourceType == "fixed-private-slot-assignment" &&
-            validPrivateFixedReservationAdminCreate(reservationId)
-          )
-        );
+      allow create: if !isFixedPrivateReservationData(request.resource.data) &&
+        sameAcademyOnCreate() &&
+        request.resource.data.source == "student" &&
+        validPrivateReservationStudentCreate(reservationId);
 
-      allow update: if sameAcademyOnUpdate() && (
-        (
-          hasStudentIdentity(resource.data.academyId) &&
-          resource.data.studentId == myStudentId(resource.data.academyId) &&
-          (
-            validPrivateReservationReactivate(reservationId) ||
-            validPrivateReservationCancel(reservationId)
+      allow update: if (
+        isFixedPrivateReservationData(resource.data) ||
+        isFixedPrivateReservationData(request.resource.data)
+      ) ? false : (
+        sameAcademyOnUpdate() && (
+          myMembership(resource.data.academyId).role == "student" ? (
+            resource.data.studentId == myStudentId(resource.data.academyId) &&
+            (
+              validPrivateReservationReactivate(reservationId) ||
+              validPrivateReservationCancel(reservationId)
+            )
+          ) : (
+            isAcademyAdmin(resource.data.academyId) &&
+            validPrivateReservationManagerCancel(reservationId)
           )
-        ) ||
-        (
-          isAcademyAdmin(resource.data.academyId) &&
-          validPrivateReservationManagerCancel(reservationId)
         )
       );
 
@@ -2044,36 +2187,42 @@ service cloud.firestore {
 
     match /groupLessons/{groupLessonId} {
       allow read: if sameAcademyOnRead() && (
-        isAcademyAdmin(resource.data.academyId) ||
-        (
-          effectiveGroupClassIdFromData(resource.data) != "" &&
-          parentGroupClassBelongsToTeacher(
-            resource.data.academyId,
-            effectiveGroupClassIdFromData(resource.data)
-          )
-        ) ||
-        (
-          resource.data.isBookable == true &&
+        myMembership(resource.data.academyId).role in ["owner", "admin"] ?
+          true :
           (
-            (
-              resource.data.groupClassId is string &&
-              resource.data.groupClassId != "" &&
-              hasActiveStudentGroupAccess(resource.data.academyId, resource.data.groupClassId)
-            ) ||
-            hasActiveStudentGroupCourseTypeAccessForStudent(
-              resource.data.academyId,
-              myStudentId(resource.data.academyId),
-              resource.data.groupCourseType
-            )
+            myMembership(resource.data.academyId).role in ["teacher", "staff"] ?
+              (
+                effectiveGroupClassIdFromData(resource.data) != "" &&
+                parentGroupClassBelongsToTeacher(
+                  resource.data.academyId,
+                  effectiveGroupClassIdFromData(resource.data)
+                )
+              ) :
+              (
+                myMembership(resource.data.academyId).role == "student" &&
+                resource.data.isBookable == true &&
+                hasActiveStudentGroupLessonAccess(
+                  resource.data.academyId,
+                  resource.data.groupClassId,
+                  resource.data.groupCourseType
+                )
+              )
           )
-        )
       );
 
       allow create: if sameAcademyOnCreate() &&
         isAcademyAdmin(request.resource.data.academyId);
 
-      allow update: if sameAcademyOnUpdate() &&
-        isAcademyAdmin(resource.data.academyId);
+      allow update: if sameAcademyOnUpdate() && (
+        myMembership(resource.data.academyId).role == "student" ? (
+          changedOnly(["bookedCount", "updatedAt"]) &&
+          request.resource.data.updatedAt == request.time &&
+          validBookedCountDelta() &&
+          validStudentBookedCountPairing(groupLessonId)
+        ) : (
+          isAcademyAdmin(resource.data.academyId)
+        )
+      );
 
       allow delete: if sameAcademyOnRead() &&
         isAcademyAdmin(resource.data.academyId);
@@ -2084,12 +2233,19 @@ service cloud.firestore {
         !exists(/databases/$(database)/documents/groupLessonReservations/$(reservationId));
 
       allow read: if sameAcademyOnRead() && (
-        isAcademyAdmin(resource.data.academyId) ||
-        (
-          resource.data.groupClassId is string &&
-          parentGroupClassBelongsToTeacher(resource.data.academyId, resource.data.groupClassId)
-        ) ||
-        studentOwnsReservation(resource.data)
+        myMembership(resource.data.academyId).role in ["owner", "admin"] ?
+          true :
+          (
+            myMembership(resource.data.academyId).role in ["teacher", "staff"] ?
+              (
+                resource.data.groupClassId is string &&
+                parentGroupClassBelongsToTeacher(
+                  resource.data.academyId,
+                  resource.data.groupClassId
+                )
+              ) :
+              studentOwnsReservation(resource.data)
+          )
       );
 
       allow create: if sameAcademyOnCreate() &&
@@ -2101,15 +2257,15 @@ service cloud.firestore {
         request.resource.data.lessonId is string &&
         request.resource.data.studentId is string &&
         (
-          (
+          myMembership(request.resource.data.academyId).role == "student" ? (
+            validStudentReservationCreateShape() &&
+            validStudentReservationPairingOnCreate()
+          ) : (
             request.resource.data.status == "active" &&
             request.resource.data.source == "dashboard" &&
-            (
-              isAcademyAdmin(request.resource.data.academyId)
-            )
+            isAcademyAdmin(request.resource.data.academyId)
           )
-        )
-      ;
+        );
 
       allow update: if sameAcademyOnUpdate() &&
         reservationId ==
@@ -2122,53 +2278,56 @@ service cloud.firestore {
         request.resource.data.status in ["active", "cancelled"] &&
         request.resource.data.source == resource.data.source &&
         (
-          (
+          myMembership(resource.data.academyId).role == "student" ? (
             changedOnly(["status", "updatedAt", "cancelledAt"]) &&
-            request.resource.data.source == "dashboard" &&
+            validStudentReservationPairingOnUpdate()
+          ) : (
             (
+              changedOnly(["status", "updatedAt", "cancelledAt"]) &&
+              request.resource.data.source == "dashboard" &&
               isAcademyAdmin(resource.data.academyId)
+            ) ||
+            (
+              isAcademyAdmin(resource.data.academyId) &&
+              resource.data.status == "active" &&
+              request.resource.data.status == "cancelled" &&
+              request.resource.data.noDeduction == true &&
+              request.resource.data.cancellationType in ["no_deduction", "class_closure"] &&
+              request.resource.data.cancelledReason in [
+                "holiday",
+                "teacher_unavailable",
+                "academy_closed",
+                "other",
+                "group_class_closed"
+              ] &&
+              request.resource.data.cancelledAt is timestamp &&
+              request.resource.data.updatedAt is timestamp &&
+              (!("cancelledByUid" in request.resource.data.keys()) ||
+                request.resource.data.cancelledByUid is string) &&
+              (!("cancellationNote" in request.resource.data.keys()) ||
+                request.resource.data.cancellationNote is string) &&
+              (!("date" in request.resource.data.keys()) ||
+                request.resource.data.date is string) &&
+              (!("time" in request.resource.data.keys()) ||
+                request.resource.data.time is string) &&
+              (!("subject" in request.resource.data.keys()) ||
+                request.resource.data.subject is string) &&
+              changedOnly([
+                "status",
+                "cancellationType",
+                "cancelledReason",
+                "cancellationNote",
+                "noDeduction",
+                "cancelledAt",
+                "cancelledByUid",
+                "date",
+                "time",
+                "subject",
+                "updatedAt"
+              ])
             )
-          ) ||
-          (
-            isAcademyAdmin(resource.data.academyId) &&
-            resource.data.status == "active" &&
-            request.resource.data.status == "cancelled" &&
-            request.resource.data.noDeduction == true &&
-            request.resource.data.cancellationType in ["no_deduction", "class_closure"] &&
-            request.resource.data.cancelledReason in [
-              "holiday",
-              "teacher_unavailable",
-              "academy_closed",
-              "other",
-              "group_class_closed"
-            ] &&
-            request.resource.data.cancelledAt is timestamp &&
-            request.resource.data.updatedAt is timestamp &&
-            (!("cancelledByUid" in request.resource.data.keys()) ||
-              request.resource.data.cancelledByUid is string) &&
-            (!("cancellationNote" in request.resource.data.keys()) ||
-              request.resource.data.cancellationNote is string) &&
-            (!("date" in request.resource.data.keys()) ||
-              request.resource.data.date is string) &&
-            (!("time" in request.resource.data.keys()) ||
-              request.resource.data.time is string) &&
-            (!("subject" in request.resource.data.keys()) ||
-              request.resource.data.subject is string) &&
-            changedOnly([
-              "status",
-              "cancellationType",
-              "cancelledReason",
-              "cancellationNote",
-              "noDeduction",
-              "cancelledAt",
-              "cancelledByUid",
-              "date",
-              "time",
-              "subject",
-              "updatedAt"
-            ])
           )
-        );
+      );
 
       allow delete: if false;
     }
@@ -2190,7 +2349,8 @@ service cloud.firestore {
     match /creditTransactions/{txId} {
       allow read: if sameAcademyOnRead() &&
         isAcademyAdmin(resource.data.academyId);
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if !isFixedPrivateCreditData(request.resource.data) &&
+        sameAcademyOnCreate() &&
         isAcademyAdmin(request.resource.data.academyId);
       allow update: if false;
       allow delete: if false;

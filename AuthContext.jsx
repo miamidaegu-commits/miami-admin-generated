@@ -125,11 +125,35 @@ function buildUserProfileAdapter({
     academyId: currentAcademyId || '',
     currentAcademyId: currentAcademyId || '',
     membershipId: currentMembership?.id || '',
+    currentMembershipUid: String(sourceProfile?.uid || firebaseUser.uid || '').trim(),
+    currentMembershipTeacherUid: String(firebaseUser.uid || sourceProfile?.uid || '').trim(),
+    currentMembershipTeacherUidAliases: Array.from(
+      new Set(
+        [firebaseUser.uid, sourceProfile?.teacherUID]
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      )
+    ),
+    currentMembershipTeacherId: normalizeText(
+      sourceProfile?.teacherId || sourceProfile?.teacherID || ''
+    ),
+    currentMembershipTeacherKey: normalizeText(sourceProfile?.teacherKey || ''),
+    currentMembershipTeacherName: normalizeText(sourceProfile?.teacherName || ''),
+    currentMembershipTeacherAlias: normalizeText(sourceProfile?.teacher || ''),
+    currentMembershipDisplayName: normalizeText(sourceProfile?.displayName || ''),
+    currentMembershipName: normalizeText(sourceProfile?.name || ''),
     membershipRole,
     role,
     studentId: String(sourceProfile?.studentId || '').trim(),
-    isActive: currentMembership.status !== 'disabled',
-    teacherName: normalizeText(sourceProfile?.teacherName || globalUserProfile.teacherName),
+    isActive: normalizeText(currentMembership.status) === 'active',
+    teacherUid: String(firebaseUser.uid || sourceProfile?.uid || '').trim(),
+    teacherKey: normalizeText(sourceProfile?.teacherKey || ''),
+    teacherName: normalizeText(
+      sourceProfile?.teacherName ||
+        sourceProfile?.teacher ||
+        globalUserProfile.teacherName ||
+        ''
+    ),
     canManageAttendance: admin || permissions.canManageAttendance === true,
     canAddStudent: admin || permissions.canAddStudent === true,
     canEditStudent: admin || permissions.canEditStudent === true,
