@@ -92,8 +92,8 @@ test('production runner is pinned and fail-closed', () => {
   expect(runnerSource).toContain('return summary.pass === true ? 0 : 1')
   expect(runnerSource).toContain('validateAuditV2Page')
   expect(runnerSource).toContain('validateFinalAuditSummary')
-  expect(runnerSource).toContain('const first = await runSingleAudit')
-  expect(runnerSource).toContain('const second = await runSingleAudit')
+  expect(runnerSource).toContain('const firstRun = await runSingleAudit')
+  expect(runnerSource).toContain('const secondRun = await runSingleAudit')
   expect(runnerSource).toContain('MAX_PAGES_PER_FAMILY')
   expect(runnerSource).toContain('MAX_RECORDS_PER_RUN')
 })
@@ -151,4 +151,43 @@ test('runner separates ledger and origin inventory with fail-closed partitions',
   expect(runnerSource).toContain(
     "failProtocol('Audit summary digest does not match its aggregate records.')"
   )
+})
+
+test('runner emits only opt-in exhaustive redacted cohort artifacts', () => {
+  for (const marker of [
+    'AUDIT_REDACTED_OUTPUT',
+    'AUDIT_REDACTION_KEY',
+    "createHmac('sha256', redactionKey)",
+    "academy: 'REDACTED'",
+    'buildRedactedCohortArtifact',
+    'writeRedactedCohortArtifact',
+    "fs.promises.open(temporaryPath, 'wx', 0o600)",
+    'fs.promises.rename(temporaryPath, outputPath)',
+    'artifactEvidenceConsistency',
+    'unmatchedEvidence: secondRun.unmatchedEvidence',
+    'sourceReconciliation: secondRun.sourceReconciliation',
+    'nonOccurrenceEvidence',
+    'sourceCounts',
+    'AUDIT_REDACTED_OUTPUT must not already exist.',
+  ]) {
+    expect(runnerSource).toContain(marker)
+  }
+  const artifactReturn = runnerSource.slice(
+    runnerSource.indexOf('return {', runnerSource.indexOf(
+      'export function buildRedactedCohortArtifact'
+    )),
+    runnerSource.indexOf('export function validateRedactedArtifactEnvironment')
+  )
+  for (const forbiddenField of [
+    'lessonId',
+    'reservationId',
+    'slotId',
+    'studentId',
+    'packageId',
+    'teacherUid',
+    'email',
+    'phone',
+  ]) {
+    expect(artifactReturn).not.toContain(`${forbiddenField},`)
+  }
 })
