@@ -17002,6 +17002,2177 @@ async function inspectFixedPrivateLessonOutcomeLedger({db, auth, data}) {
   throw new HttpsError("invalid-argument", "unsupported_audit_version");
 }
 
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_VERSION = 1;
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_CURSOR_VERSION = 1;
+const MAX_ACADEMY_CREDIT_SIDE_READS = 10000;
+const MAX_ACADEMY_MEMBERSHIP_SIDE_READS = 5000;
+const MAX_CREDIT_CLOSURE_REFERENCED_IDS = 2000;
+const MAX_CREDIT_CLOSURE_INCLUDED_DOCS = 2000;
+const MAX_CREDIT_CLOSURE_ITERATIONS = 2001;
+const MAX_CREDIT_CLOSURE_DIRECT_POINT_READS = 2000;
+const MAX_PACKAGE_CANDIDATES = 500;
+const MAX_STUDENT_CANDIDATES = 500;
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_PURPOSE =
+  "local_sensitive_remediation_manifest";
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_CURSOR_NAMESPACE =
+  "fixed-private-remediation-evidence-v1";
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_SCAN_FAMILIES = {
+  lessons: "lessons",
+  reservations: "privateLessonReservations",
+  slots: "privateLessonSlots",
+  credits: "creditTransactions",
+  memberships: "academyMemberships",
+  packages: "studentPackages",
+};
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_REQUEST_KEYS = [
+  "academyId",
+  "commit",
+  "cursor",
+  "dryRun",
+  "evidenceVersion",
+  "limit",
+  "previewOnly",
+  "purpose",
+  "scanFamily",
+];
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_SCHEMA = {
+  evidenceVersion: FIXED_PRIVATE_REMEDIATION_EVIDENCE_VERSION,
+  responseKeys: [
+    "academyId",
+    "commit",
+    "dryRun",
+    "evidenceVersion",
+    "page",
+    "pageDigest",
+    "previewOnly",
+    "records",
+    "scanFamily",
+    "schemaDigest",
+  ],
+  pageKeys: [
+    "complete",
+    "hasMore",
+    "nextCursor",
+    "omittedCount",
+    "pageSize",
+    "returnedCount",
+    "scannedCount",
+    "truncated",
+  ],
+  records: {
+    occurrence: {
+      keys: [
+        "academyId",
+        "auditFingerprint",
+        "creditIds",
+        "credits",
+        "documentPresence",
+        "documentScopes",
+        "kind",
+        "ledgerTargeting",
+        "lessonId",
+        "membershipIds",
+        "occurrenceKey",
+        "packageCandidateIds",
+        "packageCandidates",
+        "packageId",
+        "provenance",
+        "reservationId",
+        "resolvedLinks",
+        "rootFamily",
+        "rootId",
+        "schedule",
+        "slotId",
+        "statusDeduction",
+        "storedLinkAliases",
+        "storedLinkConflict",
+        "storedLinks",
+        "studentCandidateIds",
+        "studentId",
+        "teacher",
+      ],
+      resolvedLinksKeys: ["lessonId", "reservationId", "slotId"],
+      documentFamilyKeys: ["lesson", "reservation", "slot"],
+      storedLinkKeys: [
+        "deductionPackageId",
+        "fixedLessonId",
+        "fixedPrivatePackageId",
+        "lessonId",
+        "linkedLessonId",
+        "linkedPackageId",
+        "linkedReservationId",
+        "linkedSlotId",
+        "packageId",
+        "privateLessonId",
+        "privateLessonReservationId",
+        "privateLessonSlotId",
+        "reservationId",
+        "slotId",
+      ],
+      storedLinkAliasesKeys: ["lesson", "reservation", "slot"],
+      storedLinkAliasSourceKeys: ["lesson", "reservation", "slot"],
+      storedLessonAliasKeys: [
+        "conflict",
+        "fixedLessonId",
+        "lessonId",
+        "linkedLessonId",
+        "privateLessonId",
+        "resolvedValue",
+        "uniqueValues",
+      ],
+      storedReservationAliasKeys: [
+        "conflict",
+        "linkedReservationId",
+        "privateLessonReservationId",
+        "reservationId",
+        "resolvedValue",
+        "uniqueValues",
+      ],
+      storedSlotAliasKeys: [
+        "conflict",
+        "linkedSlotId",
+        "privateLessonSlotId",
+        "resolvedValue",
+        "slotId",
+        "uniqueValues",
+      ],
+      documentPresenceKeys: [
+        "credits",
+        "lesson",
+        "memberships",
+        "package",
+        "packages",
+        "reservation",
+        "slot",
+        "student",
+        "students",
+      ],
+      presenceEntryKeys: [
+        "academyId",
+        "academyScoped",
+        "exists",
+        "id",
+      ],
+      documentScopesKeys: [
+        "lesson",
+        "reservation",
+        "slot",
+        "student",
+      ],
+      documentScopeKeys: [
+        "academyId",
+        "academyScoped",
+        "exists",
+        "id",
+      ],
+      packageCandidateKeys: [
+        "academyId",
+        "academyScoped",
+        "exists",
+        "id",
+        "remainingCount",
+        "scope",
+        "sources",
+        "status",
+        "studentId",
+        "totalCount",
+        "type",
+        "usedCount",
+      ],
+      teacherKeys: [
+        "lesson",
+        "matchedMemberships",
+        "reservation",
+        "slot",
+      ],
+      persistedTeacherKeys: [
+        "assignedTeacherID",
+        "assignedTeacherId",
+        "assignedTeacherKey",
+        "assignedTeacherUID",
+        "assignedTeacherUid",
+        "instructorUID",
+        "instructorUid",
+        "normalizedNameDigest",
+        "teacherID",
+        "teacherId",
+        "teacherKey",
+        "teacherUID",
+        "teacherUid",
+      ],
+      provenanceKeys: ["classifier", "ledger", "origin", "raw"],
+      classifierKeys: ["evidence", "isFixed", "ledgerType"],
+      classifierEvidenceKeys: ["field", "rowIndex", "value"],
+      ledgerKeys: [
+        "lessonLedgerContribution",
+        "marker",
+        "markers",
+        "mode",
+        "reservationLedgerContribution",
+      ],
+      originKeys: [
+        "hasLegacyEvidence",
+        "legacyEvidenceConsistent",
+        "originMode",
+      ],
+      provenanceRawKeys: [
+        "createdByFlow",
+        "createdBySource",
+        "fixedLessonId",
+        "fixedPrivateAssignmentBatchId",
+        "fixedPrivateDeductionLedger",
+        "fixedPrivateMigrationMarker",
+        "fixedPrivatePackageId",
+        "ledgerTransition",
+        "migrationMarker",
+        "migrationVersion",
+        "originFlow",
+        "originSource",
+        "packageType",
+        "privateLessonAvailabilityTemplateId",
+        "renewalBatchId",
+        "reservationType",
+        "slotType",
+        "source",
+        "sourceType",
+      ],
+      statusDeductionKeys: [
+        "actionType",
+        "actorUID",
+        "actorUid",
+        "attendance",
+        "attendanceStatus",
+        "createdByUid",
+        "deductionApplied",
+        "deductionAttemptNumber",
+        "deductionCreditTransactionId",
+        "deductionPackageId",
+        "deductionReversed",
+        "deductionSource",
+        "deductionStatus",
+        "deductionTransactionId",
+        "isDeductCancelled",
+        "noDeduction",
+        "outcome",
+        "outcomeActionBatchId",
+        "outcomeActionRequestId",
+        "outcomeActionType",
+        "outcomeActorUID",
+        "outcomeActorUid",
+        "outcomeByUID",
+        "outcomeByUid",
+        "outcomeReversedByUID",
+        "outcomeReversedByUid",
+        "outcomeStatus",
+        "originalCreditTransactionId",
+        "previousOutcomeStatus",
+        "requestId",
+        "reversalAttemptNumber",
+        "reversalCreditTransactionId",
+        "reversalOfTransactionId",
+        "status",
+        "statusActionBatchId",
+        "statusActionRequestId",
+        "statusActionType",
+        "timestamps",
+        "updatedByUid",
+      ],
+      timestampKeys: [
+        "attendanceAppliedAt",
+        "cancelledAt",
+        "completedAt",
+        "createdAt",
+        "deductionAppliedAt",
+        "deductionReversedAt",
+        "ledgerUpdatedAt",
+        "noShowAt",
+        "outcomeAt",
+        "outcomeReversedAt",
+        "reservedAt",
+        "updatedAt",
+      ],
+      scheduleKeys: [
+        "date",
+        "durationMinutes",
+        "endAt",
+        "lessonDate",
+        "scheduleDate",
+        "scheduleTime",
+        "startAt",
+        "startTime",
+        "time",
+      ],
+      ledgerTargetingKeys: [
+        "academyId",
+        "collectionFamily",
+        "date",
+        "deltaCount",
+        "documentId",
+        "effect",
+        "isDeduction",
+        "isReversal",
+        "lessonId",
+        "ledgerTransition",
+        "packageId",
+        "reservationId",
+        "slotId",
+        "sourceType",
+        "studentId",
+      ],
+      matchedMembershipKeys: [
+        "academyId",
+        "active",
+        "authUid",
+        "id",
+        "memberUid",
+        "normalizedNameDigest",
+        "role",
+        "status",
+        "teacherID",
+        "teacherId",
+        "teacherKey",
+        "teacherUID",
+        "teacherUid",
+        "uid",
+      ],
+    },
+    credit: {
+      keys: [
+        "academyId",
+        "academyScoped",
+        "actionType",
+        "auditFingerprint",
+        "deltaCount",
+        "effect",
+        "fixedPrivateDeductionLedger",
+        "id",
+        "isDeduction",
+        "isDeterministicCanonicalId",
+        "isReversal",
+        "kind",
+        "ledgerTargeting",
+        "ledgerTransition",
+        "packageId",
+        "sourceType",
+        "studentId",
+        "targeting",
+        "timestamp",
+      ],
+      targetingKeys: [
+        "fixedLessonId",
+        "lessonId",
+        "linkedLessonId",
+        "linkedReservationId",
+        "linkedSlotId",
+        "originalCreditTransactionId",
+        "reservationId",
+        "reversalOfTransactionId",
+        "slotId",
+        "sourceId",
+      ],
+    },
+    membership: {
+      keys: [
+        "academyId",
+        "active",
+        "auditFingerprint",
+        "authUid",
+        "id",
+        "kind",
+        "memberUid",
+        "normalizedNameDigest",
+        "role",
+        "status",
+        "teacherID",
+        "teacherId",
+        "teacherKey",
+        "teacherUID",
+        "teacherUid",
+        "uid",
+      ],
+    },
+    package: {
+      keys: [
+        "academyId",
+        "auditFingerprint",
+        "id",
+        "kind",
+        "remainingCount",
+        "scope",
+        "status",
+        "studentId",
+        "totalCount",
+        "type",
+        "usedCount",
+      ],
+    },
+  },
+};
+
+function fixedPrivateRemediationEvidenceDigest(value) {
+  return crypto
+      .createHash("sha256")
+      .update(stableStringify(value))
+      .digest("hex");
+}
+
+const FIXED_PRIVATE_REMEDIATION_EVIDENCE_SCHEMA_DIGEST =
+  fixedPrivateRemediationEvidenceDigest(
+      FIXED_PRIVATE_REMEDIATION_EVIDENCE_SCHEMA,
+  );
+
+function fixedPrivateRemediationNullableString(value) {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function fixedPrivateRemediationNormalizedString(value) {
+  const normalized = normalizeId(value);
+  return normalized || null;
+}
+
+function fixedPrivateRemediationNullableBoolean(value) {
+  return typeof value === "boolean" ? value : null;
+}
+
+function fixedPrivateRemediationNullableNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function fixedPrivateRemediationNullableScalar(value) {
+  if (typeof value === "string" && value.length > 0) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "boolean") return value;
+  return null;
+}
+
+function fixedPrivateRemediationTimestamp(value) {
+  if (value === undefined || value === null) return null;
+  let date = null;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value.toDate === "function") {
+    date = value.toDate();
+  } else if (typeof value === "object" &&
+      (value.seconds !== undefined || value._seconds !== undefined)) {
+    const seconds = Number(
+        value.seconds === undefined ? value._seconds : value.seconds,
+    );
+    const nanoseconds = Number(
+        value.nanoseconds === undefined ?
+          value._nanoseconds || 0 :
+          value.nanoseconds,
+    );
+    date = new Date(seconds * 1000 + Math.floor(nanoseconds / 1000000));
+  } else if (typeof value === "number" || typeof value === "string") {
+    date = new Date(value);
+  }
+  return date instanceof Date && Number.isFinite(date.getTime()) ?
+    date.toISOString() :
+    null;
+}
+
+function fixedPrivateRemediationWithFingerprint(record) {
+  return {
+    ...record,
+    auditFingerprint: fixedPrivateRemediationEvidenceDigest(record),
+  };
+}
+
+function validateFixedPrivateRemediationEvidencePayload(data) {
+  if (!data || Array.isArray(data) || typeof data !== "object") {
+    throw new HttpsError("invalid-argument", "request_object_required");
+  }
+  const unknownKeys = Object.keys(data).filter(
+      (key) =>
+        !FIXED_PRIVATE_REMEDIATION_EVIDENCE_REQUEST_KEYS.includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new HttpsError(
+        "invalid-argument",
+        "unsupported_remediation_evidence_request_field",
+    );
+  }
+  if (data.evidenceVersion !==
+      FIXED_PRIVATE_REMEDIATION_EVIDENCE_VERSION) {
+    throw new HttpsError(
+        "invalid-argument",
+        "evidenceVersion must be numeric 1.",
+    );
+  }
+  if (data.purpose !== FIXED_PRIVATE_REMEDIATION_EVIDENCE_PURPOSE) {
+    throw new HttpsError(
+        "invalid-argument",
+        "invalid_remediation_evidence_purpose",
+    );
+  }
+  if (data.dryRun !== true ||
+      data.previewOnly !== true ||
+      data.commit !== false) {
+    throw new HttpsError(
+        "invalid-argument",
+        "Remediation evidence requires read-only preview flags.",
+    );
+  }
+  if (typeof data.academyId !== "string" || !data.academyId.trim()) {
+    throw new HttpsError("invalid-argument", "academyId is required.");
+  }
+  const academyId = data.academyId.trim();
+  validateAcademyId(academyId);
+  if (typeof data.scanFamily !== "string" ||
+      !Object.prototype.hasOwnProperty.call(
+          FIXED_PRIVATE_REMEDIATION_EVIDENCE_SCAN_FAMILIES,
+          data.scanFamily,
+      )) {
+    throw new HttpsError("invalid-argument", "unsupported scanFamily.");
+  }
+  const limit = data.limit === undefined ? 25 : data.limit;
+  if (!Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > FIXED_PRIVATE_OUTCOME_AUDIT_MAX_LIMIT) {
+    throw new HttpsError(
+        "invalid-argument",
+        "limit must be a number between 1 and 50.",
+    );
+  }
+  const cursor = data.cursor === undefined || data.cursor === null ?
+    null :
+    data.cursor;
+  if (cursor !== null &&
+      (typeof cursor !== "string" ||
+       !cursor ||
+       cursor.length > 2048 ||
+       !/^[A-Za-z0-9_-]+$/.test(cursor))) {
+    throw new HttpsError(
+        "invalid-argument",
+        "invalid_remediation_evidence_cursor",
+    );
+  }
+  const cursorPayload = cursor !== null ?
+    decodeFixedPrivateRemediationEvidenceCursor(cursor) :
+    null;
+  if (cursorPayload &&
+      (cursorPayload.evidenceVersion !==
+        FIXED_PRIVATE_REMEDIATION_EVIDENCE_VERSION ||
+       cursorPayload.academyId !== academyId ||
+       cursorPayload.scanFamily !== data.scanFamily)) {
+    throw new HttpsError(
+        "invalid-argument",
+        "remediation_evidence_cursor_scope_mismatch",
+    );
+  }
+  return {
+    academyId,
+    scanFamily: data.scanFamily,
+    limit,
+    cursor,
+    cursorDocumentId: cursorPayload ? cursorPayload.lastDocumentId : null,
+  };
+}
+
+function encodeFixedPrivateRemediationEvidenceCursor({
+  academyId,
+  scanFamily,
+  lastDocumentId,
+}) {
+  return Buffer.from(JSON.stringify({
+    namespace: FIXED_PRIVATE_REMEDIATION_EVIDENCE_CURSOR_NAMESPACE,
+    cursorVersion: FIXED_PRIVATE_REMEDIATION_EVIDENCE_CURSOR_VERSION,
+    evidenceVersion: FIXED_PRIVATE_REMEDIATION_EVIDENCE_VERSION,
+    academyId,
+    scanFamily,
+    lastDocumentId,
+  }), "utf8").toString("base64url");
+}
+
+function decodeFixedPrivateRemediationEvidenceCursor(cursor) {
+  let payload;
+  try {
+    const decoded = Buffer.from(cursor, "base64url").toString("utf8");
+    if (Buffer.from(decoded, "utf8").toString("base64url") !== cursor) {
+      throw new Error("non-canonical cursor");
+    }
+    payload = JSON.parse(decoded);
+  } catch (error) {
+    throw new HttpsError(
+        "invalid-argument",
+        "invalid_remediation_evidence_cursor",
+    );
+  }
+  const expectedKeys = [
+    "academyId",
+    "cursorVersion",
+    "evidenceVersion",
+    "lastDocumentId",
+    "namespace",
+    "scanFamily",
+  ];
+  if (!payload ||
+      Array.isArray(payload) ||
+      typeof payload !== "object" ||
+      stableStringify(Object.keys(payload).sort()) !==
+        stableStringify(expectedKeys) ||
+      payload.namespace !==
+        FIXED_PRIVATE_REMEDIATION_EVIDENCE_CURSOR_NAMESPACE ||
+      payload.cursorVersion !==
+        FIXED_PRIVATE_REMEDIATION_EVIDENCE_CURSOR_VERSION ||
+      payload.evidenceVersion !==
+        FIXED_PRIVATE_REMEDIATION_EVIDENCE_VERSION ||
+      typeof payload.academyId !== "string" ||
+      typeof payload.scanFamily !== "string" ||
+      typeof payload.lastDocumentId !== "string" ||
+      !payload.lastDocumentId) {
+    throw new HttpsError(
+        "invalid-argument",
+        "invalid_remediation_evidence_cursor",
+    );
+  }
+  validateCallableDocumentId(
+      payload.lastDocumentId,
+      "cursor.lastDocumentId",
+  );
+  return payload;
+}
+
+async function assertFixedPrivateRemediationEvidenceCursor({
+  db,
+  academyId,
+  collectionName,
+  cursorDocumentId,
+}) {
+  if (!cursorDocumentId) return;
+  const cursorSnap = await db.collection(collectionName)
+      .doc(cursorDocumentId)
+      .get();
+  if (!cursorSnap.exists ||
+      normalizeId(cursorSnap.get("academyId")) !== academyId) {
+    throw new HttpsError(
+        "invalid-argument",
+        "cursor must reference the requested academy scan.",
+    );
+  }
+}
+
+function fixedPrivateRemediationStoredLinks(row) {
+  const source = row || {};
+  return {
+    lessonId: fixedPrivateRemediationNullableString(source.lessonId),
+    privateLessonId:
+      fixedPrivateRemediationNullableString(source.privateLessonId),
+    fixedLessonId:
+      fixedPrivateRemediationNullableString(source.fixedLessonId),
+    linkedLessonId:
+      fixedPrivateRemediationNullableString(source.linkedLessonId),
+    reservationId:
+      fixedPrivateRemediationNullableString(source.reservationId),
+    privateLessonReservationId:
+      fixedPrivateRemediationNullableString(
+          source.privateLessonReservationId,
+      ),
+    linkedReservationId:
+      fixedPrivateRemediationNullableString(source.linkedReservationId),
+    slotId: fixedPrivateRemediationNullableString(source.slotId),
+    privateLessonSlotId:
+      fixedPrivateRemediationNullableString(source.privateLessonSlotId),
+    linkedSlotId:
+      fixedPrivateRemediationNullableString(source.linkedSlotId),
+    packageId: fixedPrivateRemediationNullableString(source.packageId),
+    deductionPackageId:
+      fixedPrivateRemediationNullableString(source.deductionPackageId),
+    linkedPackageId:
+      fixedPrivateRemediationNullableString(source.linkedPackageId),
+    fixedPrivatePackageId:
+      fixedPrivateRemediationNullableString(source.fixedPrivatePackageId),
+  };
+}
+
+function fixedPrivateRemediationAliasEvidence(row, fields) {
+  const source = row || {};
+  const aliases = {};
+  fields.forEach((field) => {
+    aliases[field] = fixedPrivateRemediationNullableString(source[field]);
+  });
+  const uniqueValues = Array.from(new Set(
+      fields.map((field) => aliases[field]).filter(Boolean),
+  )).sort();
+  return {
+    ...aliases,
+    uniqueValues,
+    resolvedValue: uniqueValues.length === 1 ? uniqueValues[0] : null,
+    conflict: uniqueValues.length > 1,
+  };
+}
+
+function fixedPrivateRemediationStoredLinkAliases(row) {
+  return {
+    lesson: fixedPrivateRemediationAliasEvidence(row, [
+      "lessonId",
+      "fixedLessonId",
+      "linkedLessonId",
+      "privateLessonId",
+    ]),
+    reservation: fixedPrivateRemediationAliasEvidence(row, [
+      "reservationId",
+      "linkedReservationId",
+      "privateLessonReservationId",
+    ]),
+    slot: fixedPrivateRemediationAliasEvidence(row, [
+      "slotId",
+      "linkedSlotId",
+      "privateLessonSlotId",
+    ]),
+  };
+}
+
+function fixedPrivateRemediationAggregateStoredLinkAliases({
+  rootFamily,
+  rootId,
+  storedLinkAliases,
+}) {
+  const rootTarget = rootFamily === "lessons" ?
+    "lesson" :
+    rootFamily === "reservations" ? "reservation" : "slot";
+  const sourceFamilies = ["lesson", "reservation", "slot"];
+  const targetTypes = ["lesson", "reservation", "slot"];
+  const resolved = {};
+  let conflict = false;
+  targetTypes.forEach((targetType) => {
+    const targetEvidence = sourceFamilies.map(
+        (sourceFamily) => storedLinkAliases[sourceFamily][targetType],
+    );
+    const uniqueValues = Array.from(new Set(targetEvidence
+        .map((evidence) => evidence.resolvedValue)
+        .filter(Boolean))).sort();
+    const targetConflict =
+      targetEvidence.some((evidence) => evidence.conflict) ||
+      uniqueValues.length > 1;
+    conflict = conflict || targetConflict;
+    resolved[`${targetType}Id`] = targetType === rootTarget ?
+      rootId :
+      targetConflict || uniqueValues.length !== 1 ?
+        null :
+        uniqueValues[0];
+  });
+  return {ids: resolved, conflict};
+}
+
+function fixedPrivateRemediationNameDigest(row) {
+  const normalizedNames = uniqueNormalizedTeacherKeyList([
+    row && row.teacher,
+    row && row.teacherName,
+    row && row.displayName,
+    row && row.name,
+  ]);
+  return normalizedNames.length > 0 ?
+    fixedPrivateRemediationEvidenceDigest({
+      namespace: "fixed-private-remediation-teacher-name-v1",
+      names: normalizedNames,
+    }) :
+    null;
+}
+
+function fixedPrivateRemediationTeacherEvidence(row) {
+  const source = row || {};
+  return {
+    teacherUid:
+      fixedPrivateRemediationNullableString(source.teacherUid),
+    teacherUID:
+      fixedPrivateRemediationNullableString(source.teacherUID),
+    instructorUid:
+      fixedPrivateRemediationNullableString(source.instructorUid),
+    instructorUID:
+      fixedPrivateRemediationNullableString(source.instructorUID),
+    teacherId:
+      fixedPrivateRemediationNullableString(source.teacherId),
+    teacherID:
+      fixedPrivateRemediationNullableString(source.teacherID),
+    teacherKey:
+      fixedPrivateRemediationNullableString(source.teacherKey),
+    assignedTeacherUid:
+      fixedPrivateRemediationNullableString(source.assignedTeacherUid),
+    assignedTeacherUID:
+      fixedPrivateRemediationNullableString(source.assignedTeacherUID),
+    assignedTeacherId:
+      fixedPrivateRemediationNullableString(source.assignedTeacherId),
+    assignedTeacherID:
+      fixedPrivateRemediationNullableString(source.assignedTeacherID),
+    assignedTeacherKey:
+      fixedPrivateRemediationNullableString(source.assignedTeacherKey),
+    normalizedNameDigest: fixedPrivateRemediationNameDigest(source),
+  };
+}
+
+function fixedPrivateRemediationMembershipSummary({docSnap}) {
+  const row = docSnap.data() || {};
+  const role = fixedPrivateRemediationNullableString(row.role);
+  const status = fixedPrivateRemediationNullableString(row.status);
+  return {
+    id: docSnap.id,
+    academyId: fixedPrivateRemediationNormalizedString(row.academyId),
+    uid: fixedPrivateRemediationNullableString(row.uid),
+    authUid: fixedPrivateRemediationNullableString(row.authUid),
+    memberUid: fixedPrivateRemediationNullableString(row.memberUid),
+    teacherUid:
+      fixedPrivateRemediationNullableString(row.teacherUid),
+    teacherUID:
+      fixedPrivateRemediationNullableString(row.teacherUID),
+    teacherId:
+      fixedPrivateRemediationNullableString(row.teacherId),
+    teacherID:
+      fixedPrivateRemediationNullableString(row.teacherID),
+    teacherKey:
+      fixedPrivateRemediationNullableString(row.teacherKey),
+    role,
+    status,
+    active: normalizeId(status).toLowerCase() === "active",
+    normalizedNameDigest: fixedPrivateRemediationNameDigest(row),
+  };
+}
+
+function buildFixedPrivateRemediationMembershipRecord({docSnap}) {
+  return fixedPrivateRemediationWithFingerprint({
+    kind: "membership",
+    ...fixedPrivateRemediationMembershipSummary({docSnap}),
+  });
+}
+
+function fixedPrivateRemediationIdentityValues(evidence, fields, normalize) {
+  return Array.from(new Set(fields
+      .map((field) => evidence && evidence[field])
+      .filter((value) => typeof value === "string" && value.length > 0)
+      .map((value) => normalize ? normalizeTeacherKey(value) : value)
+      .filter(Boolean)));
+}
+
+function fixedPrivateRemediationMembershipMatches(teacherRows, membership) {
+  const rowUids = teacherRows.flatMap((row) =>
+    fixedPrivateRemediationIdentityValues(
+        row,
+        ["teacherUid", "teacherUID", "assignedTeacherUid",
+          "assignedTeacherUID", "instructorUid", "instructorUID"],
+        false,
+    ),
+  );
+  const membershipUids = fixedPrivateRemediationIdentityValues(
+      membership,
+      ["uid", "authUid", "memberUid", "teacherUid", "teacherUID"],
+      false,
+  );
+  if (rowUids.some((uid) => membershipUids.includes(uid))) return true;
+  const rowIds = teacherRows.flatMap((row) =>
+    fixedPrivateRemediationIdentityValues(
+        row,
+        ["teacherId", "teacherID", "assignedTeacherId",
+          "assignedTeacherID"],
+        true,
+    ),
+  );
+  const membershipIds = fixedPrivateRemediationIdentityValues(
+      membership,
+      ["teacherId", "teacherID"],
+      true,
+  );
+  if (rowIds.some((id) => membershipIds.includes(id))) return true;
+  const rowKeys = teacherRows.flatMap((row) =>
+    fixedPrivateRemediationIdentityValues(
+        row,
+        ["teacherKey", "assignedTeacherKey"],
+        true,
+    ),
+  );
+  const membershipKeys = fixedPrivateRemediationIdentityValues(
+      membership,
+      ["teacherKey"],
+      true,
+  );
+  if (rowKeys.some((key) => membershipKeys.includes(key))) return true;
+  const rowDigests = teacherRows
+      .map((row) => row.normalizedNameDigest)
+      .filter(Boolean);
+  return Boolean(
+      membership.normalizedNameDigest &&
+      rowDigests.includes(membership.normalizedNameDigest),
+  );
+}
+
+function fixedPrivateRemediationProvenanceEvidence(row) {
+  const source = row || {};
+  return {
+    fixedPrivateDeductionLedger:
+      fixedPrivateRemediationNullableString(
+          source.fixedPrivateDeductionLedger,
+      ),
+    sourceType:
+      fixedPrivateRemediationNullableString(source.sourceType),
+    reservationType:
+      fixedPrivateRemediationNullableString(source.reservationType),
+    source: fixedPrivateRemediationNullableString(source.source),
+    slotType: fixedPrivateRemediationNullableString(source.slotType),
+    fixedPrivateAssignmentBatchId:
+      fixedPrivateRemediationNullableString(
+          source.fixedPrivateAssignmentBatchId,
+      ),
+    privateLessonAvailabilityTemplateId:
+      fixedPrivateRemediationNullableString(
+          source.privateLessonAvailabilityTemplateId,
+      ),
+    fixedPrivatePackageId:
+      fixedPrivateRemediationNullableString(source.fixedPrivatePackageId),
+    fixedLessonId:
+      fixedPrivateRemediationNullableString(source.fixedLessonId),
+    packageType:
+      fixedPrivateRemediationNullableString(source.packageType),
+    renewalBatchId:
+      fixedPrivateRemediationNullableString(source.renewalBatchId),
+    createdByFlow:
+      fixedPrivateRemediationNullableString(source.createdByFlow),
+    createdBySource:
+      fixedPrivateRemediationNullableString(source.createdBySource),
+    originFlow:
+      fixedPrivateRemediationNullableString(source.originFlow),
+    originSource:
+      fixedPrivateRemediationNullableString(source.originSource),
+    migrationMarker:
+      fixedPrivateRemediationNullableString(source.migrationMarker),
+    fixedPrivateMigrationMarker:
+      fixedPrivateRemediationNullableString(
+          source.fixedPrivateMigrationMarker,
+      ),
+    migrationVersion:
+      fixedPrivateRemediationNullableScalar(source.migrationVersion),
+    ledgerTransition:
+      fixedPrivateRemediationNullableString(source.ledgerTransition),
+  };
+}
+
+function fixedPrivateRemediationStatusEvidence(row) {
+  const source = row || {};
+  return {
+    status: fixedPrivateRemediationNullableString(source.status),
+    attendance:
+      fixedPrivateRemediationNullableString(source.attendance),
+    attendanceStatus:
+      fixedPrivateRemediationNullableString(source.attendanceStatus),
+    outcome: fixedPrivateRemediationNullableString(source.outcome),
+    outcomeStatus:
+      fixedPrivateRemediationNullableString(source.outcomeStatus),
+    previousOutcomeStatus:
+      fixedPrivateRemediationNullableString(source.previousOutcomeStatus),
+    actionType:
+      fixedPrivateRemediationNullableString(source.actionType),
+    statusActionType:
+      fixedPrivateRemediationNullableString(source.statusActionType),
+    outcomeActionType:
+      fixedPrivateRemediationNullableString(source.outcomeActionType),
+    deductionApplied:
+      fixedPrivateRemediationNullableBoolean(source.deductionApplied),
+    deductionReversed:
+      fixedPrivateRemediationNullableBoolean(source.deductionReversed),
+    noDeduction:
+      fixedPrivateRemediationNullableBoolean(source.noDeduction),
+    isDeductCancelled:
+      fixedPrivateRemediationNullableBoolean(source.isDeductCancelled),
+    deductionPackageId:
+      fixedPrivateRemediationNullableString(source.deductionPackageId),
+    deductionCreditTransactionId:
+      fixedPrivateRemediationNullableString(
+          source.deductionCreditTransactionId,
+      ),
+    deductionTransactionId:
+      fixedPrivateRemediationNullableString(source.deductionTransactionId),
+    reversalCreditTransactionId:
+      fixedPrivateRemediationNullableString(
+          source.reversalCreditTransactionId,
+      ),
+    originalCreditTransactionId:
+      fixedPrivateRemediationNullableString(
+          source.originalCreditTransactionId,
+      ),
+    reversalOfTransactionId:
+      fixedPrivateRemediationNullableString(
+          source.reversalOfTransactionId,
+      ),
+    deductionSource:
+      fixedPrivateRemediationNullableString(source.deductionSource),
+    deductionStatus:
+      fixedPrivateRemediationNullableString(source.deductionStatus),
+    deductionAttemptNumber:
+      fixedPrivateRemediationNullableNumber(source.deductionAttemptNumber),
+    reversalAttemptNumber:
+      fixedPrivateRemediationNullableNumber(source.reversalAttemptNumber),
+    outcomeByUid:
+      fixedPrivateRemediationNullableString(source.outcomeByUid),
+    outcomeByUID:
+      fixedPrivateRemediationNullableString(source.outcomeByUID),
+    outcomeActorUid:
+      fixedPrivateRemediationNullableString(source.outcomeActorUid),
+    outcomeActorUID:
+      fixedPrivateRemediationNullableString(source.outcomeActorUID),
+    actorUid: fixedPrivateRemediationNullableString(source.actorUid),
+    actorUID: fixedPrivateRemediationNullableString(source.actorUID),
+    outcomeReversedByUid:
+      fixedPrivateRemediationNullableString(source.outcomeReversedByUid),
+    outcomeReversedByUID:
+      fixedPrivateRemediationNullableString(source.outcomeReversedByUID),
+    createdByUid:
+      fixedPrivateRemediationNullableString(source.createdByUid),
+    updatedByUid:
+      fixedPrivateRemediationNullableString(source.updatedByUid),
+    requestId:
+      fixedPrivateRemediationNullableString(source.requestId),
+    statusActionRequestId:
+      fixedPrivateRemediationNullableString(source.statusActionRequestId),
+    outcomeActionRequestId:
+      fixedPrivateRemediationNullableString(source.outcomeActionRequestId),
+    statusActionBatchId:
+      fixedPrivateRemediationNullableString(source.statusActionBatchId),
+    outcomeActionBatchId:
+      fixedPrivateRemediationNullableString(source.outcomeActionBatchId),
+    timestamps: {
+      createdAt: fixedPrivateRemediationTimestamp(source.createdAt),
+      updatedAt: fixedPrivateRemediationTimestamp(source.updatedAt),
+      completedAt: fixedPrivateRemediationTimestamp(source.completedAt),
+      noShowAt: fixedPrivateRemediationTimestamp(source.noShowAt),
+      outcomeAt: fixedPrivateRemediationTimestamp(source.outcomeAt),
+      deductionAppliedAt:
+        fixedPrivateRemediationTimestamp(source.deductionAppliedAt),
+      deductionReversedAt:
+        fixedPrivateRemediationTimestamp(source.deductionReversedAt),
+      outcomeReversedAt:
+        fixedPrivateRemediationTimestamp(source.outcomeReversedAt),
+      attendanceAppliedAt:
+        fixedPrivateRemediationTimestamp(source.attendanceAppliedAt),
+      ledgerUpdatedAt:
+        fixedPrivateRemediationTimestamp(source.ledgerUpdatedAt),
+      cancelledAt: fixedPrivateRemediationTimestamp(source.cancelledAt),
+      reservedAt: fixedPrivateRemediationTimestamp(source.reservedAt),
+    },
+  };
+}
+
+function fixedPrivateRemediationScheduleEvidence(row) {
+  const source = row || {};
+  return {
+    date: fixedPrivateRemediationNullableString(source.date),
+    lessonDate:
+      fixedPrivateRemediationNullableString(source.lessonDate),
+    scheduleDate:
+      fixedPrivateRemediationNullableString(source.scheduleDate),
+    time: fixedPrivateRemediationNullableString(source.time),
+    startTime:
+      fixedPrivateRemediationNullableString(source.startTime),
+    scheduleTime:
+      fixedPrivateRemediationNullableString(source.scheduleTime),
+    durationMinutes:
+      fixedPrivateRemediationNullableNumber(source.durationMinutes),
+    startAt: fixedPrivateRemediationTimestamp(source.startAt),
+    endAt: fixedPrivateRemediationTimestamp(source.endAt),
+  };
+}
+
+function fixedPrivateRemediationUniqueValue(row, fields) {
+  const values = Array.from(new Set(fields
+      .map((field) => normalizeId(row && row[field]))
+      .filter(Boolean)));
+  return values.length === 1 ? values[0] : null;
+}
+
+function fixedPrivateRemediationDocData(doc) {
+  if (!doc || doc.exists === false) return {};
+  if (typeof doc.data === "function") return doc.data() || {};
+  return doc.data || {};
+}
+
+function fixedPrivateRemediationDocumentScope(doc, academyId) {
+  const id = normalizeId(doc && doc.id);
+  if (!doc || doc.exists === false) {
+    return {
+      id: id || null,
+      exists: false,
+      academyScoped: null,
+      academyId: null,
+    };
+  }
+  const rowAcademyId = normalizeId(
+      fixedPrivateRemediationDocData(doc).academyId,
+  );
+  return {
+    id: id || null,
+    exists: true,
+    academyScoped: rowAcademyId === academyId,
+    academyId: rowAcademyId || null,
+  };
+}
+
+function fixedPrivateRemediationScopedDocData(doc, academyId) {
+  const scope = fixedPrivateRemediationDocumentScope(doc, academyId);
+  return scope.academyScoped === true ?
+    fixedPrivateRemediationDocData(doc) :
+    {};
+}
+
+function fixedPrivateRemediationLedgerTargeting({
+  collectionFamily,
+  documentId,
+  row,
+}) {
+  const source = row || {};
+  const deltaCount =
+    fixedPrivateRemediationNullableNumber(source.deltaCount);
+  const actionType = normalizeId(
+      source.actionType ||
+      source.outcomeActionType ||
+      source.statusActionType,
+  ).toLowerCase();
+  const isReversal = Boolean(
+      deltaCount !== null && deltaCount > 0 ||
+      source.deductionReversed === true ||
+      source.outcomeReversedAt ||
+      normalizeId(source.reversalCreditTransactionId) ||
+      actionType.includes("reversal") ||
+      actionType.includes("reverse"),
+  );
+  const isDeduction = Boolean(
+      !isReversal &&
+      (deltaCount !== null && deltaCount < 0 ||
+       source.deductionApplied === true),
+  );
+  return {
+    collectionFamily,
+    documentId,
+    academyId:
+      fixedPrivateRemediationNormalizedString(source.academyId),
+    studentId: fixedPrivateRemediationUniqueValue(source, [
+      "studentId",
+      "studentID",
+      "fixedStudentId",
+      "reservedStudentId",
+    ]),
+    packageId: fixedPrivateRemediationUniqueValue(source, [
+      "packageId",
+      "deductionPackageId",
+      "linkedPackageId",
+      "fixedPrivatePackageId",
+    ]),
+    reservationId: fixedPrivateRemediationUniqueValue(source, [
+      "reservationId",
+      "linkedReservationId",
+    ]),
+    lessonId: fixedPrivateRemediationUniqueValue(source, [
+      "lessonId",
+      "fixedLessonId",
+      "linkedLessonId",
+    ]),
+    slotId: fixedPrivateRemediationUniqueValue(source, [
+      "slotId",
+      "linkedSlotId",
+    ]),
+    date: fixedPrivateRemediationUniqueValue(source, [
+      "date",
+      "lessonDate",
+      "scheduleDate",
+    ]),
+    sourceType:
+      fixedPrivateRemediationNullableString(source.sourceType),
+    deltaCount,
+    ledgerTransition:
+      fixedPrivateRemediationNullableString(source.ledgerTransition),
+    effect: isDeduction ? "deduction" :
+      isReversal ? "reversal" : "neutral",
+    isDeduction,
+    isReversal,
+  };
+}
+
+function fixedPrivateRemediationDeclaredCreditIds(...rows) {
+  const fields = [
+    "creditTransactionId",
+    "deductionCreditTransactionId",
+    "deductionTransactionId",
+    "reversalCreditTransactionId",
+    "originalCreditTransactionId",
+    "reversalOfTransactionId",
+    "creditId",
+  ];
+  return Array.from(new Set(rows.flatMap((row) =>
+    fields.map((field) => normalizeId(row && row[field])).filter(Boolean),
+  ))).sort();
+}
+
+function fixedPrivateRemediationEmptyCreditTargeting() {
+  return {
+    sourceId: null,
+    reservationId: null,
+    lessonId: null,
+    fixedLessonId: null,
+    slotId: null,
+    linkedReservationId: null,
+    linkedLessonId: null,
+    linkedSlotId: null,
+    originalCreditTransactionId: null,
+    reversalOfTransactionId: null,
+  };
+}
+
+function fixedPrivateRemediationCreditSummary(id, row, academyId) {
+  const source = row || {};
+  const persistedAcademyId = normalizeId(source.academyId);
+  const academyScoped = persistedAcademyId === academyId;
+  if (!academyScoped) {
+    return {
+      id: normalizeId(id),
+      academyId: persistedAcademyId || null,
+      academyScoped: false,
+      studentId: null,
+      packageId: null,
+      targeting: fixedPrivateRemediationEmptyCreditTargeting(),
+      sourceType: null,
+      actionType: null,
+      deltaCount: null,
+      ledgerTransition: null,
+      fixedPrivateDeductionLedger: null,
+      effect: null,
+      isDeduction: false,
+      isReversal: false,
+      timestamp: null,
+      isDeterministicCanonicalId: false,
+      ledgerTargeting: {
+        ...fixedPrivateRemediationLedgerTargeting({
+          collectionFamily: "creditTransactions",
+          documentId: normalizeId(id),
+          row: {},
+        }),
+        effect: null,
+      },
+    };
+  }
+  const sourceId = normalizeId(source.sourceId);
+  const reservationId = fixedPrivateRemediationUniqueValue(source, [
+    "reservationId",
+    "linkedReservationId",
+  ]);
+  const canonicalReservationId = reservationId || sourceId;
+  const studentId = fixedPrivateRemediationUniqueValue(source, [
+    "studentId",
+    "studentID",
+  ]);
+  const packageId = fixedPrivateRemediationUniqueValue(source, [
+    "packageId",
+    "deductionPackageId",
+    "linkedPackageId",
+    "fixedPrivatePackageId",
+  ]);
+  const expectedId =
+    persistedAcademyId && canonicalReservationId && studentId && packageId ?
+    buildDeductionKey({
+      academyId: persistedAcademyId,
+      lessonId: canonicalReservationId,
+      studentId,
+      packageId,
+    }) :
+    "";
+  const deltaCount = fixedPrivateRemediationNullableNumber(
+      source.deltaCount,
+  );
+  const actionType = normalizeId(source.actionType);
+  const reversal = deltaCount !== null && deltaCount > 0 ||
+    actionType.toLowerCase().includes("reversal") ||
+    actionType.toLowerCase().includes("reverse");
+  const deduction = deltaCount !== null && deltaCount < 0 && !reversal;
+  return {
+    id: normalizeId(id),
+    academyId: persistedAcademyId || null,
+    academyScoped: true,
+    studentId,
+    packageId,
+    targeting: {
+      sourceId: sourceId || null,
+      reservationId,
+      lessonId:
+        fixedPrivateRemediationNormalizedString(source.lessonId),
+      fixedLessonId:
+        fixedPrivateRemediationNormalizedString(source.fixedLessonId),
+      slotId: fixedPrivateRemediationNormalizedString(source.slotId),
+      linkedReservationId:
+        fixedPrivateRemediationNormalizedString(
+            source.linkedReservationId,
+        ),
+      linkedLessonId:
+        fixedPrivateRemediationNormalizedString(source.linkedLessonId),
+      linkedSlotId:
+        fixedPrivateRemediationNormalizedString(source.linkedSlotId),
+      originalCreditTransactionId:
+        fixedPrivateRemediationNormalizedString(
+            source.originalCreditTransactionId,
+        ),
+      reversalOfTransactionId:
+        fixedPrivateRemediationNormalizedString(
+            source.reversalOfTransactionId,
+        ),
+    },
+    sourceType:
+      fixedPrivateRemediationNullableString(source.sourceType),
+    actionType:
+      fixedPrivateRemediationNullableString(source.actionType),
+    deltaCount,
+    ledgerTransition:
+      fixedPrivateRemediationNullableString(source.ledgerTransition),
+    fixedPrivateDeductionLedger:
+      fixedPrivateRemediationNullableString(
+          source.fixedPrivateDeductionLedger,
+      ),
+    effect: deduction ? "deduction" : reversal ? "reversal" : "neutral",
+    isDeduction: deduction,
+    isReversal: reversal,
+    timestamp: fixedPrivateRemediationTimestamp(
+        source.createdAt || source.timestamp || source.updatedAt,
+    ),
+    isDeterministicCanonicalId: Boolean(expectedId && expectedId === id),
+    ledgerTargeting: fixedPrivateRemediationLedgerTargeting({
+      collectionFamily: "creditTransactions",
+      documentId: normalizeId(id),
+      row: source,
+    }),
+  };
+}
+
+function buildFixedPrivateRemediationCreditRecord(id, row, academyId) {
+  return fixedPrivateRemediationWithFingerprint({
+    kind: "credit",
+    ...fixedPrivateRemediationCreditSummary(id, row, academyId),
+  });
+}
+
+function fixedPrivateRemediationPackageSummary(id, row) {
+  const source = row || {};
+  return {
+    id: normalizeId(id),
+    academyId:
+      fixedPrivateRemediationNormalizedString(source.academyId),
+    studentId: fixedPrivateRemediationUniqueValue(source, [
+      "studentId",
+      "studentID",
+    ]),
+    type: fixedPrivateRemediationUniqueValue(source, [
+      "type",
+      "packageType",
+    ]),
+    scope: fixedPrivateRemediationUniqueValue(source, [
+      "scope",
+      "packageScope",
+    ]),
+    status: fixedPrivateRemediationNullableString(source.status),
+    totalCount:
+      fixedPrivateRemediationNullableNumber(source.totalCount),
+    usedCount: fixedPrivateRemediationNullableNumber(source.usedCount),
+    remainingCount:
+      fixedPrivateRemediationNullableNumber(source.remainingCount),
+  };
+}
+
+function fixedPrivateRemediationPackageCandidate({
+  doc,
+  academyId,
+  sources,
+}) {
+  const scope = fixedPrivateRemediationDocumentScope(doc, academyId);
+  const details = scope.academyScoped === true ?
+    fixedPrivateRemediationPackageSummary(
+        doc.id,
+        fixedPrivateRemediationDocData(doc),
+    ) :
+    {
+      id: normalizeId(doc && doc.id),
+      academyId: scope.academyId,
+      studentId: null,
+      type: null,
+      scope: null,
+      status: null,
+      totalCount: null,
+      usedCount: null,
+      remainingCount: null,
+    };
+  return {
+    ...details,
+    exists: scope.exists,
+    academyScoped: scope.academyScoped,
+    sources: [...sources].sort(),
+  };
+}
+
+function buildFixedPrivateRemediationPackageRecord(id, row) {
+  return fixedPrivateRemediationWithFingerprint({
+    kind: "package",
+    ...fixedPrivateRemediationPackageSummary(id, row),
+  });
+}
+
+function fixedPrivateRemediationPackageSourceMap({
+  lesson,
+  reservation,
+  slot,
+  creditDocs,
+}) {
+  const sourceEntries = [];
+  const add = (value, source) => {
+    const id = normalizeId(value);
+    if (!id) return;
+    let entry = sourceEntries.find((candidate) => candidate.id === id);
+    if (!entry) {
+      if (sourceEntries.length >= MAX_PACKAGE_CANDIDATES) {
+        throw new HttpsError(
+            "resource-exhausted",
+            "remediation_evidence_package_candidate_limit_exceeded",
+        );
+      }
+      entry = {id, sources: new Set()};
+      sourceEntries.push(entry);
+    }
+    entry.sources.add(source);
+  };
+  const packageFields = [
+    "packageId",
+    "deductionPackageId",
+    "linkedPackageId",
+    "fixedPrivatePackageId",
+  ];
+  [
+    ["lesson", lesson],
+    ["reservation", reservation],
+    ["slot", slot],
+  ].forEach(([family, row]) => {
+    packageFields.forEach((field) => {
+      add(row && row[field], `${family}.${field}`);
+    });
+  });
+  creditDocs.forEach((docSnap) => {
+    const row = docSnap.data() || {};
+    packageFields.forEach((field) => {
+      add(row[field], `credit:${docSnap.id}.${field}`);
+    });
+  });
+  return sourceEntries.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function fixedPrivateRemediationStudentCandidateIds({
+  lesson,
+  reservation,
+  slot,
+  packageDocs,
+  creditDocs,
+}) {
+  const studentFields = [
+    "studentId",
+    "studentID",
+    "fixedStudentId",
+    "reservedStudentId",
+  ];
+  return Array.from(new Set([
+    ...[lesson, reservation, slot].flatMap((row) =>
+      studentFields.map((field) => normalizeId(row && row[field])),
+    ),
+    ...packageDocs.flatMap((doc) =>
+      studentFields.map((field) =>
+        normalizeId(doc.exists && doc.data && doc.data[field]),
+      ),
+    ),
+    ...creditDocs.flatMap((docSnap) =>
+      studentFields.map((field) =>
+        normalizeId((docSnap.data() || {})[field]),
+      ),
+    ),
+  ].filter(Boolean))).sort();
+}
+
+async function resolveFixedPrivateRemediationOccurrenceDocs({
+  db,
+  academyId,
+  rootFamily,
+  rootDoc,
+}) {
+  const rootKey = rootFamily === "lessons" ?
+    "lesson" :
+    rootFamily === "reservations" ? "reservation" : "slot";
+  const docs = {
+    lesson: fixedPrivateOutcomeEmptyDoc(),
+    reservation: fixedPrivateOutcomeEmptyDoc(),
+    slot: fixedPrivateOutcomeEmptyDoc(),
+  };
+  docs[rootKey] = {
+    id: rootDoc.id,
+    exists: true,
+    data: rootDoc.data() || {},
+    ref: rootDoc.ref,
+  };
+  let resolution = null;
+  for (let round = 0; round < 3; round += 1) {
+    const storedLinkAliases = {
+      lesson: fixedPrivateRemediationStoredLinkAliases(
+          fixedPrivateRemediationScopedDocData(docs.lesson, academyId),
+      ),
+      reservation: fixedPrivateRemediationStoredLinkAliases(
+          fixedPrivateRemediationScopedDocData(docs.reservation, academyId),
+      ),
+      slot: fixedPrivateRemediationStoredLinkAliases(
+          fixedPrivateRemediationScopedDocData(docs.slot, academyId),
+      ),
+    };
+    resolution = fixedPrivateRemediationAggregateStoredLinkAliases({
+      rootFamily,
+      rootId: rootDoc.id,
+      storedLinkAliases,
+    });
+    const ids = resolution.ids;
+    await Promise.all([
+      ids.lessonId && !docs.lesson.exists ?
+        readFixedPrivateOutcomeDoc({
+          db,
+          collectionName: "lessons",
+          docId: ids.lessonId,
+        }).then((doc) => {
+          docs.lesson = doc;
+        }) :
+        Promise.resolve(),
+      ids.reservationId && !docs.reservation.exists ?
+        readFixedPrivateOutcomeDoc({
+          db,
+          collectionName: "privateLessonReservations",
+          docId: ids.reservationId,
+        }).then((doc) => {
+          docs.reservation = doc;
+        }) :
+        Promise.resolve(),
+      ids.slotId && !docs.slot.exists ?
+        readFixedPrivateOutcomeDoc({
+          db,
+          collectionName: "privateLessonSlots",
+          docId: ids.slotId,
+        }).then((doc) => {
+          docs.slot = doc;
+        }) :
+        Promise.resolve(),
+    ]);
+  }
+  const storedLinkAliases = {
+    lesson: fixedPrivateRemediationStoredLinkAliases(
+        fixedPrivateRemediationScopedDocData(docs.lesson, academyId),
+    ),
+    reservation: fixedPrivateRemediationStoredLinkAliases(
+        fixedPrivateRemediationScopedDocData(docs.reservation, academyId),
+    ),
+    slot: fixedPrivateRemediationStoredLinkAliases(
+        fixedPrivateRemediationScopedDocData(docs.slot, academyId),
+    ),
+  };
+  resolution = fixedPrivateRemediationAggregateStoredLinkAliases({
+    rootFamily,
+    rootId: rootDoc.id,
+    storedLinkAliases,
+  });
+  return {
+    docs,
+    ids: resolution.ids,
+    storedLinkAliases,
+    storedLinkConflict: resolution.conflict,
+  };
+}
+
+function fixedPrivateRemediationCreditMatchesOccurrence({
+  creditId,
+  credit,
+  declaredCreditIds,
+  ids,
+}) {
+  if (declaredCreditIds.includes(creditId)) return true;
+  const reservationTargets = [
+    credit.sourceId,
+    credit.reservationId,
+    credit.linkedReservationId,
+  ].map(normalizeId).filter(Boolean);
+  const lessonTargets = [
+    credit.lessonId,
+    credit.fixedLessonId,
+    credit.linkedLessonId,
+  ].map(normalizeId).filter(Boolean);
+  const slotTargets = [
+    credit.slotId,
+    credit.linkedSlotId,
+  ].map(normalizeId).filter(Boolean);
+  return Boolean(
+      ids.reservationId &&
+        reservationTargets.includes(ids.reservationId) ||
+      ids.lessonId && lessonTargets.includes(ids.lessonId) ||
+      ids.slotId && slotTargets.includes(ids.slotId),
+  );
+}
+
+function fixedPrivateRemediationCreditChainIds(row) {
+  return Array.from(new Set([
+    normalizeId(row && row.originalCreditTransactionId),
+    normalizeId(row && row.reversalOfTransactionId),
+  ].filter(Boolean))).sort();
+}
+
+function fixedPrivateRemediationTypedCreditKey(id) {
+  return `credit:${normalizeId(id)}`;
+}
+
+async function resolveFixedPrivateRemediationCreditClosure({
+  db,
+  academyId,
+  academyCreditDocs,
+  seedCreditDocs,
+  declaredCreditIds,
+}) {
+  const referencedIds = new Set();
+  const attemptedPointReads = new Set();
+  const pendingCreditKeys = [];
+  const queuedCreditKeys = new Set();
+  const visitedCreditKeys = new Set();
+  const missingCreditKeys = new Set();
+  const creditDocsByKey = new Map();
+  const academyCreditDocsByKey = new Map();
+  const adjacency = new Map();
+  const reverseAdjacency = new Map();
+  let directPointReadCount = 0;
+  const setMapValue = (map, key, value) =>
+    Map.prototype.set.call(map, key, value);
+  const addReferencedId = (value) => {
+    const id = normalizeId(value);
+    if (!id || referencedIds.has(id)) return false;
+    if (referencedIds.size >= MAX_CREDIT_CLOSURE_REFERENCED_IDS) {
+      throw new HttpsError(
+          "resource-exhausted",
+          "remediation_evidence_credit_reference_limit_exceeded",
+      );
+    }
+    referencedIds.add(id);
+    return true;
+  };
+  const addGraphEdge = (sourceKey, targetKey) => {
+    if (!adjacency.has(sourceKey)) {
+      setMapValue(adjacency, sourceKey, new Set());
+    }
+    adjacency.get(sourceKey).add(targetKey);
+    if (!reverseAdjacency.has(targetKey)) {
+      setMapValue(reverseAdjacency, targetKey, new Set());
+    }
+    reverseAdjacency.get(targetKey).add(sourceKey);
+  };
+  const enqueueId = (value) => {
+    const id = normalizeId(value);
+    if (!id) return false;
+    addReferencedId(id);
+    const key = fixedPrivateRemediationTypedCreditKey(id);
+    if (queuedCreditKeys.has(key) || visitedCreditKeys.has(key)) return false;
+    queuedCreditKeys.add(key);
+    pendingCreditKeys.push({id, key});
+    return true;
+  };
+  const indexCreditDoc = (doc) => {
+    if (!doc || doc.exists === false) return;
+    const sourceKey = fixedPrivateRemediationTypedCreditKey(doc.id);
+    fixedPrivateRemediationCreditChainIds(
+        fixedPrivateRemediationDocData(doc),
+    ).forEach((targetId) => {
+      const targetKey = fixedPrivateRemediationTypedCreditKey(targetId);
+      addGraphEdge(sourceKey, targetKey);
+    });
+  };
+  const addDoc = (doc) => {
+    if (!doc || doc.exists === false) return false;
+    const key = fixedPrivateRemediationTypedCreditKey(doc.id);
+    if (creditDocsByKey.has(key)) return false;
+    if (creditDocsByKey.size >= MAX_CREDIT_CLOSURE_INCLUDED_DOCS) {
+      throw new HttpsError(
+          "resource-exhausted",
+          "remediation_evidence_credit_document_limit_exceeded",
+      );
+    }
+    addReferencedId(doc.id);
+    setMapValue(creditDocsByKey, key, doc);
+    Set.prototype.delete.call(missingCreditKeys, key);
+    enqueueId(doc.id);
+    if (fixedPrivateRemediationDocumentScope(doc, academyId)
+        .academyScoped === true) {
+      indexCreditDoc(doc);
+      for (const targetKey of adjacency.get(key) || []) {
+        enqueueId(targetKey.slice("credit:".length));
+      }
+    }
+    return true;
+  };
+  academyCreditDocs.forEach((doc) => {
+    if (fixedPrivateRemediationDocumentScope(doc, academyId)
+        .academyScoped === true) {
+      const key = fixedPrivateRemediationTypedCreditKey(doc.id);
+      if (academyCreditDocsByKey.has(key)) {
+        throw new HttpsError(
+            "internal",
+            "remediation_evidence_duplicate_credit_document",
+        );
+      }
+      setMapValue(academyCreditDocsByKey, key, doc);
+      indexCreditDoc(doc);
+    }
+  });
+  declaredCreditIds.forEach(enqueueId);
+  [...seedCreditDocs]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .forEach(addDoc);
+  const loadCreditKey = async ({id, key}) => {
+    if (!id || creditDocsByKey.has(key)) return false;
+    const academyDoc = academyCreditDocsByKey.get(key);
+    if (academyDoc) return addDoc(academyDoc);
+    if (attemptedPointReads.has(id)) return false;
+    attemptedPointReads.add(id);
+    if (directPointReadCount >=
+        MAX_CREDIT_CLOSURE_DIRECT_POINT_READS) {
+      throw new HttpsError(
+          "resource-exhausted",
+          "remediation_evidence_credit_point_read_limit_exceeded",
+      );
+    }
+    directPointReadCount += 1;
+    const doc = await readFixedPrivateOutcomeDoc({
+      db,
+      collectionName: "creditTransactions",
+      docId: id,
+    });
+    if (!doc.exists) {
+      missingCreditKeys.add(key);
+      return false;
+    }
+    return addDoc({
+      id: doc.id,
+      exists: true,
+      data: () => doc.data,
+    });
+  };
+  let queueIndex = 0;
+  while (queueIndex < pendingCreditKeys.length) {
+    if (queueIndex >= MAX_CREDIT_CLOSURE_ITERATIONS) {
+      throw new HttpsError(
+          "resource-exhausted",
+          "remediation_evidence_credit_iteration_limit_exceeded",
+      );
+    }
+    const node = pendingCreditKeys[queueIndex];
+    queueIndex += 1;
+    if (visitedCreditKeys.has(node.key)) continue;
+    visitedCreditKeys.add(node.key);
+    await loadCreditKey(node);
+    const incomingKeys =
+      [...(reverseAdjacency.get(node.key) || [])].sort();
+    incomingKeys.forEach((incomingKey) => {
+      const incomingDoc =
+        academyCreditDocsByKey.get(incomingKey) ||
+        creditDocsByKey.get(incomingKey);
+      if (incomingDoc) addDoc(incomingDoc);
+    });
+  }
+  for (const id of referencedIds) {
+    const key = fixedPrivateRemediationTypedCreditKey(id);
+    if (!creditDocsByKey.has(key) && !missingCreditKeys.has(key)) {
+      throw new HttpsError(
+          "internal",
+          "remediation_evidence_credit_closure_incomplete",
+      );
+    }
+  }
+  return {
+    creditDocs: [...creditDocsByKey.values()].sort(
+        (left, right) => left.id.localeCompare(right.id),
+    ),
+    creditIds: Array.from(referencedIds).sort(),
+  };
+}
+
+async function buildFixedPrivateRemediationOccurrenceRecord({
+  db,
+  academyId,
+  rootFamily,
+  rootDoc,
+  academyCreditDocs,
+  academyMembershipDocs,
+}) {
+  const {docs, ids, storedLinkAliases, storedLinkConflict} =
+    await resolveFixedPrivateRemediationOccurrenceDocs({
+      db,
+      academyId,
+      rootFamily,
+      rootDoc,
+    });
+  const documentScopes = {
+    lesson: fixedPrivateRemediationDocumentScope(docs.lesson, academyId),
+    reservation:
+      fixedPrivateRemediationDocumentScope(docs.reservation, academyId),
+    slot: fixedPrivateRemediationDocumentScope(docs.slot, academyId),
+  };
+  const lesson =
+    fixedPrivateRemediationScopedDocData(docs.lesson, academyId);
+  const reservation =
+    fixedPrivateRemediationScopedDocData(docs.reservation, academyId);
+  const slot = fixedPrivateRemediationScopedDocData(docs.slot, academyId);
+  const rows = [lesson, reservation, slot];
+  const declaredCreditIds =
+    fixedPrivateRemediationDeclaredCreditIds(...rows);
+  const relevantAcademyCredits = academyCreditDocs.filter((docSnap) =>
+    fixedPrivateRemediationCreditMatchesOccurrence({
+      creditId: docSnap.id,
+      credit: docSnap.data() || {},
+      declaredCreditIds,
+      ids,
+    }),
+  );
+  const creditClosure =
+    await resolveFixedPrivateRemediationCreditClosure({
+      db,
+      academyId,
+      academyCreditDocs,
+      seedCreditDocs: relevantAcademyCredits,
+      declaredCreditIds,
+    });
+  const creditDocs = creditClosure.creditDocs;
+  const academyScopedCreditDocs = creditDocs.filter((doc) =>
+    fixedPrivateRemediationDocumentScope(doc, academyId)
+        .academyScoped === true,
+  );
+  const packageSources = fixedPrivateRemediationPackageSourceMap({
+    lesson,
+    reservation,
+    slot,
+    creditDocs: academyScopedCreditDocs,
+  });
+  const packageCandidateIds = packageSources.map((entry) => entry.id);
+  if (packageCandidateIds.length > MAX_PACKAGE_CANDIDATES) {
+    throw new HttpsError(
+        "resource-exhausted",
+        "remediation_evidence_package_candidate_limit_exceeded",
+    );
+  }
+  const packageDocs = await Promise.all(packageCandidateIds.map((id) =>
+    readFixedPrivateOutcomeDoc({
+      db,
+      collectionName: "studentPackages",
+      docId: id,
+    }),
+  ));
+  const packageCandidates = packageDocs.map((doc) =>
+    fixedPrivateRemediationPackageCandidate({
+      doc,
+      academyId,
+      sources:
+        packageSources.find((entry) => entry.id === doc.id).sources,
+    }),
+  );
+  const studentCandidateIds =
+    fixedPrivateRemediationStudentCandidateIds({
+      lesson,
+      reservation,
+      slot,
+      packageDocs: packageDocs.filter((doc) =>
+        fixedPrivateRemediationDocumentScope(doc, academyId)
+            .academyScoped === true,
+      ),
+      creditDocs: academyScopedCreditDocs,
+    });
+  const studentId =
+    studentCandidateIds.length === 1 ? studentCandidateIds[0] : null;
+  const packageId =
+    packageCandidateIds.length === 1 ? packageCandidateIds[0] : null;
+  if (studentCandidateIds.length > MAX_STUDENT_CANDIDATES) {
+    throw new HttpsError(
+        "resource-exhausted",
+        "remediation_evidence_student_candidate_limit_exceeded",
+    );
+  }
+  const studentDocs = await Promise.all(studentCandidateIds.map((id) =>
+    readFixedPrivateOutcomeDoc({
+      db,
+      collectionName: "privateStudents",
+      docId: id,
+    }),
+  ));
+  const teacherRows = rows.map(fixedPrivateRemediationTeacherEvidence);
+  const matchedMemberships = academyMembershipDocs
+      .map((docSnap) =>
+        fixedPrivateRemediationMembershipSummary({docSnap}),
+      )
+      .filter((membership) =>
+        fixedPrivateRemediationMembershipMatches(
+            teacherRows,
+            membership,
+        ),
+      )
+      .sort((left, right) => left.id.localeCompare(right.id));
+  const credits = creditDocs.map((docSnap) =>
+    buildFixedPrivateRemediationCreditRecord(
+        docSnap.id,
+        fixedPrivateRemediationDocData(docSnap),
+        academyId,
+    ),
+  );
+  const creditIds = creditClosure.creditIds;
+  const packageDoc = packageId ?
+    packageDocs.find((doc) => doc.id === packageId) :
+    null;
+  const studentDoc = studentId ?
+    studentDocs.find((doc) => doc.id === studentId) :
+    null;
+  const studentScope = fixedPrivateRemediationDocumentScope(
+      studentDoc || {id: studentId, exists: false},
+      academyId,
+  );
+  const ledger = classifyFixedPrivateDeductionLedger({
+    lesson,
+    reservation,
+    slot,
+  });
+  const origin = fixedPrivateOutcomeAuditV2OriginProvenance({
+    lesson,
+    reservation,
+    slot,
+    ledger,
+  });
+  const classifier = classifyFixedPrivateProvenance(
+      lesson,
+      reservation,
+      slot,
+  );
+  const occurrenceKey = ids.lessonId ?
+    `lesson:${ids.lessonId}` :
+    ids.reservationId ?
+      `reservation:${ids.reservationId}` :
+      `slot:${ids.slotId || rootDoc.id}`;
+  const record = {
+    kind: "occurrence",
+    rootFamily,
+    rootId: rootDoc.id,
+    occurrenceKey,
+    academyId,
+    resolvedLinks: {
+      lessonId: ids.lessonId || null,
+      reservationId: ids.reservationId || null,
+      slotId: ids.slotId || null,
+    },
+    lessonId: docs.lesson.exists ? docs.lesson.id : null,
+    reservationId: docs.reservation.exists ? docs.reservation.id : null,
+    slotId: docs.slot.exists ? docs.slot.id : null,
+    studentCandidateIds,
+    studentId,
+    packageCandidateIds,
+    packageId,
+    membershipIds: matchedMemberships.map((row) => row.id),
+    creditIds,
+    documentScopes: {
+      ...documentScopes,
+      student: studentScope,
+    },
+    documentPresence: {
+      lesson: docs.lesson.exists,
+      reservation: docs.reservation.exists,
+      slot: docs.slot.exists,
+      student: Boolean(studentDoc && studentDoc.exists),
+      package: Boolean(packageDoc && packageDoc.exists),
+      memberships: matchedMemberships.map((row) => ({
+        id: row.id,
+        exists: true,
+        academyScoped: true,
+        academyId,
+      })),
+      credits: creditIds.map((id) =>
+        fixedPrivateRemediationDocumentScope(
+            creditDocs.find((docSnap) => docSnap.id === id) ||
+              {id, exists: false},
+            academyId,
+        ),
+      ),
+      packages: packageDocs.map((doc) =>
+        fixedPrivateRemediationDocumentScope(doc, academyId),
+      ),
+      students: studentDocs.map((doc) =>
+        fixedPrivateRemediationDocumentScope(doc, academyId),
+      ),
+    },
+    storedLinkAliases,
+    storedLinkConflict,
+    storedLinks: {
+      lesson: fixedPrivateRemediationStoredLinks(lesson),
+      reservation: fixedPrivateRemediationStoredLinks(reservation),
+      slot: fixedPrivateRemediationStoredLinks(slot),
+    },
+    packageCandidates,
+    teacher: {
+      lesson: teacherRows[0],
+      reservation: teacherRows[1],
+      slot: teacherRows[2],
+      matchedMemberships,
+    },
+    provenance: {
+      classifier,
+      ledger,
+      origin,
+      raw: {
+        lesson: fixedPrivateRemediationProvenanceEvidence(lesson),
+        reservation:
+          fixedPrivateRemediationProvenanceEvidence(reservation),
+        slot: fixedPrivateRemediationProvenanceEvidence(slot),
+      },
+    },
+    statusDeduction: {
+      lesson: fixedPrivateRemediationStatusEvidence(lesson),
+      reservation: fixedPrivateRemediationStatusEvidence(reservation),
+      slot: fixedPrivateRemediationStatusEvidence(slot),
+    },
+    schedule: {
+      lesson: fixedPrivateRemediationScheduleEvidence(lesson),
+      reservation: fixedPrivateRemediationScheduleEvidence(reservation),
+      slot: fixedPrivateRemediationScheduleEvidence(slot),
+    },
+    ledgerTargeting: {
+      lesson: fixedPrivateRemediationLedgerTargeting({
+        collectionFamily: "lessons",
+        documentId: docs.lesson.id || null,
+        row: lesson,
+      }),
+      reservation: fixedPrivateRemediationLedgerTargeting({
+        collectionFamily: "privateLessonReservations",
+        documentId: docs.reservation.id || null,
+        row: reservation,
+      }),
+      slot: fixedPrivateRemediationLedgerTargeting({
+        collectionFamily: "privateLessonSlots",
+        documentId: docs.slot.id || null,
+        row: slot,
+      }),
+    },
+    credits,
+  };
+  return fixedPrivateRemediationWithFingerprint(record);
+}
+
+async function inspectFixedPrivateLessonOutcomeRemediationEvidence({
+  db,
+  auth,
+  data,
+}) {
+  const validation =
+    validateFixedPrivateRemediationEvidencePayload(data || {});
+  await requireAcademyAdmin(
+      db,
+      validation.academyId,
+      auth.uid,
+  );
+  const collectionName =
+    FIXED_PRIVATE_REMEDIATION_EVIDENCE_SCAN_FAMILIES[
+        validation.scanFamily
+    ];
+  await assertFixedPrivateRemediationEvidenceCursor({
+    db,
+    academyId: validation.academyId,
+    collectionName,
+    cursorDocumentId: validation.cursorDocumentId,
+  });
+  let query = db.collection(collectionName)
+      .where("academyId", "==", validation.academyId)
+      .orderBy(admin.firestore.FieldPath.documentId());
+  if (validation.cursorDocumentId) {
+    query = query.startAfter(validation.cursorDocumentId);
+  }
+  const pageSnap = await query.limit(validation.limit + 1).get();
+  const pageDocs = pageSnap.docs.slice(0, validation.limit);
+  const hasMore = pageSnap.size > validation.limit;
+  let records;
+  if (["lessons", "reservations", "slots"].includes(
+      validation.scanFamily,
+  )) {
+    const [creditSnap, membershipSnap] = await Promise.all([
+      db.collection("creditTransactions")
+          .where("academyId", "==", validation.academyId)
+          .orderBy(admin.firestore.FieldPath.documentId())
+          .limit(MAX_ACADEMY_CREDIT_SIDE_READS + 1)
+          .get(),
+      db.collection("academyMemberships")
+          .where("academyId", "==", validation.academyId)
+          .orderBy(admin.firestore.FieldPath.documentId())
+          .limit(MAX_ACADEMY_MEMBERSHIP_SIDE_READS + 1)
+          .get(),
+    ]);
+    if (creditSnap.size > MAX_ACADEMY_CREDIT_SIDE_READS) {
+      throw new HttpsError(
+          "resource-exhausted",
+          "remediation_evidence_credit_side_read_limit_exceeded",
+      );
+    }
+    if (membershipSnap.size > MAX_ACADEMY_MEMBERSHIP_SIDE_READS) {
+      throw new HttpsError(
+          "resource-exhausted",
+          "remediation_evidence_membership_side_read_limit_exceeded",
+      );
+    }
+    records = await Promise.all(pageDocs.map((rootDoc) =>
+      buildFixedPrivateRemediationOccurrenceRecord({
+        db,
+        academyId: validation.academyId,
+        rootFamily: validation.scanFamily,
+        rootDoc,
+        academyCreditDocs: creditSnap.docs,
+        academyMembershipDocs: membershipSnap.docs,
+      }),
+    ));
+  } else if (validation.scanFamily === "credits") {
+    records = pageDocs.map((docSnap) =>
+      buildFixedPrivateRemediationCreditRecord(
+          docSnap.id,
+          docSnap.data() || {},
+          validation.academyId,
+      ),
+    );
+  } else if (validation.scanFamily === "memberships") {
+    records = pageDocs.map((docSnap) =>
+      buildFixedPrivateRemediationMembershipRecord({
+        docSnap,
+      }),
+    );
+  } else {
+    records = pageDocs.map((docSnap) =>
+      buildFixedPrivateRemediationPackageRecord(
+          docSnap.id,
+          docSnap.data() || {},
+      ),
+    );
+  }
+  const complete = !hasMore;
+  const nextCursor = hasMore && pageDocs.length > 0 ?
+    encodeFixedPrivateRemediationEvidenceCursor({
+      academyId: validation.academyId,
+      scanFamily: validation.scanFamily,
+      lastDocumentId: pageDocs[pageDocs.length - 1].id,
+    }) :
+    null;
+  return {
+    evidenceVersion: FIXED_PRIVATE_REMEDIATION_EVIDENCE_VERSION,
+    academyId: validation.academyId,
+    scanFamily: validation.scanFamily,
+    dryRun: true,
+    previewOnly: true,
+    commit: false,
+    page: {
+      pageSize: validation.limit,
+      returnedCount: records.length,
+      scannedCount: pageDocs.length,
+      hasMore,
+      nextCursor,
+      complete,
+      truncated: false,
+      omittedCount: 0,
+    },
+    records,
+    pageDigest: fixedPrivateRemediationEvidenceDigest(records),
+    schemaDigest: FIXED_PRIVATE_REMEDIATION_EVIDENCE_SCHEMA_DIGEST,
+  };
+}
+
 const PRIVATE_LESSON_OUTCOME_COMMIT_ACTIONS = ["complete", "no_show"];
 const PRIVATE_LESSON_OUTCOME_ACTION_BATCH_COLLECTION =
   "privateLessonOutcomeActionBatches";
@@ -18321,6 +20492,24 @@ exports.inspectFixedPrivateLessonOutcomeLedger = onCall(
           throw new HttpsError("unauthenticated", "auth_required");
         }
         return await inspectFixedPrivateLessonOutcomeLedger({
+          db: admin.firestore(),
+          auth: request.auth,
+          data: request.data || {},
+        });
+      } catch (error) {
+        throw asHttpsError(error);
+      }
+    },
+);
+
+exports.inspectFixedPrivateLessonOutcomeRemediationEvidence = onCall(
+    {region: REGION, cors: true},
+    async (request) => {
+      try {
+        if (!request.auth) {
+          throw new HttpsError("unauthenticated", "auth_required");
+        }
+        return await inspectFixedPrivateLessonOutcomeRemediationEvidence({
           db: admin.firestore(),
           auth: request.auth,
           data: request.data || {},

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 export const AUDIT_VERSION = 2
 export const PRODUCTION_PROJECT_ID = 'daegu-miami-production'
@@ -58,6 +58,25 @@ export const AUDIT_CATEGORY_NAMES = [
   ...AUDIT_BLOCKER_CATEGORIES,
 ]
 export const REDACTED_ARTIFACT_VERSION = 1
+export const REMEDIATION_MANIFEST_VERSION = 1
+export const REMEDIATION_EVIDENCE_VERSION = 1
+export const REMEDIATION_EVIDENCE_CALLABLE =
+  'inspectFixedPrivateLessonOutcomeRemediationEvidence'
+export const REMEDIATION_EVIDENCE_ENDPOINT =
+  `https://${AUDIT_REGION}-${PRODUCTION_PROJECT_ID}.cloudfunctions.net/` +
+  REMEDIATION_EVIDENCE_CALLABLE
+export const REMEDIATION_EVIDENCE_PURPOSE =
+  'local_sensitive_remediation_manifest'
+export const REMEDIATION_EVIDENCE_SCAN_FAMILIES = [
+  'lessons',
+  'reservations',
+  'slots',
+  'credits',
+  'memberships',
+  'packages',
+]
+export const LOCAL_REMEDIATION_SENSITIVITY =
+  'LOCAL_ONLY_CONTAINS_RAW_FIRESTORE_IDS'
 export const REDACTED_PRIMARY_COHORTS = [
   'financial_conflict_manual_only',
   'student_or_package_manual_review',
@@ -119,11 +138,31 @@ const MAX_RECORDS_PER_RUN = 500000
 const MIN_REDACTION_KEY_LENGTH = 32
 const HEX_64 = /^[a-f0-9]{64}$/
 const OPAQUE_CURSOR = /^[A-Za-z0-9_-]+$/
+const RUNNER_REPOSITORY_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '..'
+)
 const OCCURRENCE_FAMILIES = new Set([
   'fixedLessons',
   'fixedReservations',
   'fixedSlots',
 ])
+const TYPED_DOCUMENT_TYPES = new Set([
+  'credit',
+  'lesson',
+  'membership',
+  'package',
+  'reservation',
+  'slot',
+])
+const ROOT_FAMILY_DOCUMENT_TYPES = {
+  fixedLessons: 'lesson',
+  fixedReservations: 'reservation',
+  fixedSlots: 'slot',
+  lessons: 'lesson',
+  reservations: 'reservation',
+  slots: 'slot',
+}
 const PAGE_FIELDS = [
   'complete',
   'cursor',
@@ -215,11 +254,175 @@ const LEDGER_ROW_FIELDS = [
   'reservationCountsByEvidence',
   'rootFamily',
 ]
+export const REMEDIATION_EVIDENCE_SCHEMA = {
+  evidenceVersion: REMEDIATION_EVIDENCE_VERSION,
+  responseKeys: [
+    'academyId', 'commit', 'dryRun', 'evidenceVersion', 'page', 'pageDigest',
+    'previewOnly', 'records', 'scanFamily', 'schemaDigest',
+  ],
+  pageKeys: [
+    'complete', 'hasMore', 'nextCursor', 'omittedCount', 'pageSize',
+    'returnedCount', 'scannedCount', 'truncated',
+  ],
+  records: {
+    occurrence: {
+      keys: [
+        'academyId', 'auditFingerprint', 'creditIds', 'credits',
+        'documentPresence', 'documentScopes', 'kind', 'ledgerTargeting', 'lessonId',
+        'membershipIds', 'occurrenceKey', 'packageCandidateIds',
+        'packageCandidates', 'packageId', 'provenance', 'reservationId',
+        'resolvedLinks', 'rootFamily', 'rootId', 'schedule', 'slotId',
+        'statusDeduction', 'storedLinkAliases', 'storedLinkConflict',
+        'storedLinks', 'studentCandidateIds', 'studentId', 'teacher',
+      ],
+      resolvedLinksKeys: ['lessonId', 'reservationId', 'slotId'],
+      documentFamilyKeys: ['lesson', 'reservation', 'slot'],
+      storedLinkKeys: [
+        'deductionPackageId', 'fixedLessonId', 'fixedPrivatePackageId',
+        'lessonId', 'linkedLessonId', 'linkedPackageId',
+        'linkedReservationId', 'linkedSlotId', 'packageId', 'privateLessonId',
+        'privateLessonReservationId', 'privateLessonSlotId', 'reservationId',
+        'slotId',
+      ],
+      storedLinkAliasesKeys: ['lesson', 'reservation', 'slot'],
+      storedLinkAliasSourceKeys: ['lesson', 'reservation', 'slot'],
+      storedLessonAliasKeys: [
+        'conflict', 'fixedLessonId', 'lessonId', 'linkedLessonId',
+        'privateLessonId', 'resolvedValue', 'uniqueValues',
+      ],
+      storedReservationAliasKeys: [
+        'conflict', 'linkedReservationId', 'privateLessonReservationId',
+        'reservationId', 'resolvedValue', 'uniqueValues',
+      ],
+      storedSlotAliasKeys: [
+        'conflict', 'linkedSlotId', 'privateLessonSlotId', 'resolvedValue',
+        'slotId', 'uniqueValues',
+      ],
+      documentPresenceKeys: [
+        'credits', 'lesson', 'memberships', 'package', 'packages',
+        'reservation', 'slot', 'student', 'students',
+      ],
+      presenceEntryKeys: ['academyId', 'academyScoped', 'exists', 'id'],
+      documentScopesKeys: ['lesson', 'reservation', 'slot', 'student'],
+      documentScopeKeys: ['academyId', 'academyScoped', 'exists', 'id'],
+      packageCandidateKeys: [
+        'academyId', 'academyScoped', 'exists', 'id', 'remainingCount',
+        'scope', 'sources', 'status', 'studentId', 'totalCount', 'type',
+        'usedCount',
+      ],
+      teacherKeys: ['lesson', 'matchedMemberships', 'reservation', 'slot'],
+      persistedTeacherKeys: [
+        'assignedTeacherID', 'assignedTeacherId', 'assignedTeacherKey',
+        'assignedTeacherUID', 'assignedTeacherUid', 'instructorUID',
+        'instructorUid', 'normalizedNameDigest', 'teacherID', 'teacherId',
+        'teacherKey', 'teacherUID', 'teacherUid',
+      ],
+      provenanceKeys: ['classifier', 'ledger', 'origin', 'raw'],
+      classifierKeys: ['evidence', 'isFixed', 'ledgerType'],
+      classifierEvidenceKeys: ['field', 'rowIndex', 'value'],
+      ledgerKeys: [
+        'lessonLedgerContribution', 'marker', 'markers', 'mode',
+        'reservationLedgerContribution',
+      ],
+      originKeys: [
+        'hasLegacyEvidence', 'legacyEvidenceConsistent', 'originMode',
+      ],
+      provenanceRawKeys: [
+        'createdByFlow', 'createdBySource', 'fixedLessonId',
+        'fixedPrivateAssignmentBatchId', 'fixedPrivateDeductionLedger',
+        'fixedPrivateMigrationMarker', 'fixedPrivatePackageId',
+        'ledgerTransition', 'migrationMarker', 'migrationVersion',
+        'originFlow', 'originSource', 'packageType',
+        'privateLessonAvailabilityTemplateId', 'renewalBatchId',
+        'reservationType', 'slotType', 'source', 'sourceType',
+      ],
+      statusDeductionKeys: [
+        'actionType', 'actorUID', 'actorUid', 'attendance',
+        'attendanceStatus', 'createdByUid', 'deductionApplied',
+        'deductionAttemptNumber', 'deductionCreditTransactionId',
+        'deductionPackageId', 'deductionReversed', 'deductionSource',
+        'deductionStatus', 'deductionTransactionId', 'isDeductCancelled',
+        'noDeduction', 'outcome', 'outcomeActionBatchId',
+        'outcomeActionRequestId', 'outcomeActionType', 'outcomeActorUID',
+        'outcomeActorUid', 'outcomeByUID', 'outcomeByUid',
+        'outcomeReversedByUID', 'outcomeReversedByUid', 'outcomeStatus',
+        'originalCreditTransactionId', 'previousOutcomeStatus', 'requestId',
+        'reversalAttemptNumber', 'reversalCreditTransactionId',
+        'reversalOfTransactionId', 'status', 'statusActionBatchId',
+        'statusActionRequestId', 'statusActionType', 'timestamps',
+        'updatedByUid',
+      ],
+      timestampKeys: [
+        'attendanceAppliedAt', 'cancelledAt', 'completedAt', 'createdAt',
+        'deductionAppliedAt', 'deductionReversedAt', 'ledgerUpdatedAt',
+        'noShowAt', 'outcomeAt', 'outcomeReversedAt', 'reservedAt',
+        'updatedAt',
+      ],
+      scheduleKeys: [
+        'date', 'durationMinutes', 'endAt', 'lessonDate', 'scheduleDate',
+        'scheduleTime', 'startAt', 'startTime', 'time',
+      ],
+      ledgerTargetingKeys: [
+        'academyId', 'collectionFamily', 'date', 'deltaCount', 'documentId',
+        'effect', 'isDeduction', 'isReversal', 'lessonId',
+        'ledgerTransition', 'packageId', 'reservationId', 'slotId',
+        'sourceType', 'studentId',
+      ],
+      matchedMembershipKeys: [
+        'academyId', 'active', 'authUid', 'id', 'memberUid',
+        'normalizedNameDigest', 'role', 'status', 'teacherID', 'teacherId',
+        'teacherKey', 'teacherUID', 'teacherUid', 'uid',
+      ],
+    },
+    credit: {
+      keys: [
+        'academyId', 'academyScoped', 'actionType', 'auditFingerprint',
+        'deltaCount', 'effect', 'fixedPrivateDeductionLedger', 'id',
+        'isDeduction', 'isDeterministicCanonicalId', 'isReversal', 'kind',
+        'ledgerTargeting', 'ledgerTransition', 'packageId', 'sourceType',
+        'studentId', 'targeting', 'timestamp',
+      ],
+      targetingKeys: [
+        'fixedLessonId', 'lessonId', 'linkedLessonId',
+        'linkedReservationId', 'linkedSlotId', 'originalCreditTransactionId',
+        'reservationId', 'reversalOfTransactionId', 'slotId', 'sourceId',
+      ],
+    },
+    membership: {
+      keys: [
+        'academyId', 'active', 'auditFingerprint', 'authUid', 'id', 'kind',
+        'memberUid', 'normalizedNameDigest', 'role', 'status', 'teacherID',
+        'teacherId', 'teacherKey', 'teacherUID', 'teacherUid', 'uid',
+      ],
+    },
+    package: {
+      keys: [
+        'academyId', 'auditFingerprint', 'id', 'kind', 'remainingCount',
+        'scope', 'status', 'studentId', 'totalCount', 'type', 'usedCount',
+      ],
+    },
+  },
+}
+const EVIDENCE_RESULT_FIELDS = REMEDIATION_EVIDENCE_SCHEMA.responseKeys
+const EVIDENCE_PAGE_FIELDS = REMEDIATION_EVIDENCE_SCHEMA.pageKeys
+const OCCURRENCE_EVIDENCE_FIELDS =
+  REMEDIATION_EVIDENCE_SCHEMA.records.occurrence.keys
+const CREDIT_EVIDENCE_FIELDS = REMEDIATION_EVIDENCE_SCHEMA.records.credit.keys
+const MEMBERSHIP_EVIDENCE_FIELDS =
+  REMEDIATION_EVIDENCE_SCHEMA.records.membership.keys
+const PACKAGE_EVIDENCE_FIELDS = REMEDIATION_EVIDENCE_SCHEMA.records.package.keys
 
 class AuditProtocolError extends Error {
   constructor(message) {
     super(message)
     this.name = 'AuditProtocolError'
+  }
+}
+
+class RemediationEvidenceIncompleteError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'RemediationEvidenceIncompleteError'
   }
 }
 
@@ -251,6 +454,35 @@ function sha256(value) {
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+export function buildTypedDocumentKey(documentType, documentId) {
+  const type = normalizeString(documentType)
+  const id = normalizeString(documentId)
+  if (!TYPED_DOCUMENT_TYPES.has(type) || !id) {
+    failProtocol('Typed document identity is invalid.')
+  }
+  assertRawIdentifier(id, 'typed document id', { allowEmpty: false })
+  return `${type}:${id}`
+}
+
+function rootFamilyDocumentType(rootFamily) {
+  const documentType = ROOT_FAMILY_DOCUMENT_TYPES[rootFamily]
+  if (!documentType) failProtocol('Occurrence root family is unsupported.')
+  return documentType
+}
+
+function typedOccurrenceKey(value) {
+  const key = normalizeString(value)
+  const separator = key.indexOf(':')
+  if (separator <= 0 || separator === key.length - 1) {
+    failProtocol('Occurrence key is not collection-qualified.')
+  }
+  const documentType = key.slice(0, separator)
+  if (!['lesson', 'reservation', 'slot'].includes(documentType)) {
+    failProtocol('Occurrence key has an unsupported document type.')
+  }
+  return buildTypedDocumentKey(documentType, key.slice(separator + 1))
 }
 
 function uniqueStrings(values) {
@@ -319,6 +551,862 @@ function assertRecordFingerprint(record, label) {
   if (sha256(stableStringify(fingerprintedRecord)) !== auditFingerprint) {
     failProtocol(`${label}.auditFingerprint does not match its content.`)
   }
+}
+
+function assertDigest(value, label) {
+  if (typeof value !== 'string' || !HEX_64.test(value)) {
+    failProtocol(`${label} must be a digest.`)
+  }
+  return value
+}
+
+function assertRawIdentifier(value, label, { allowEmpty = true } = {}) {
+  assertString(value, label, { allowEmpty })
+  if (
+    value.length > 1500 ||
+    value.includes('/') ||
+    /[\u0000-\u001f\u007f\s@]/u.test(value) ||
+    /^bearer$/i.test(value)
+  ) {
+    failProtocol(`${label} is not a bounded raw identifier.`)
+  }
+  return value
+}
+
+function assertRawIdentifierArray(value, label) {
+  assertStringArray(value, label)
+  value.forEach((entry, index) =>
+    assertRawIdentifier(entry, `${label}[${index}]`, { allowEmpty: false })
+  )
+  return value
+}
+
+export function remediationEvidenceSchemaDigest() {
+  return sha256(stableStringify(REMEDIATION_EVIDENCE_SCHEMA))
+}
+
+export function remediationEvidencePageDigest(resultOrRecords) {
+  const records = Array.isArray(resultOrRecords)
+    ? resultOrRecords
+    : resultOrRecords?.records
+  if (!Array.isArray(records)) failProtocol('Evidence records are unavailable.')
+  return sha256(stableStringify(records))
+}
+
+function assertNullableString(value, label, { digest = false } = {}) {
+  if (value === null) return value
+  assertString(value, label, { allowEmpty: false })
+  if (digest && !HEX_64.test(value)) failProtocol(`${label} must be a digest.`)
+  return value
+}
+
+function assertNullableIdentifier(value, label) {
+  if (value === null) return value
+  return assertRawIdentifier(value, label, { allowEmpty: false })
+}
+
+function assertNullableNumber(value, label) {
+  if (value === null) return value
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    failProtocol(`${label} must be a finite number or null.`)
+  }
+  return value
+}
+
+function assertNullableTimestamp(value, label) {
+  if (value === null) return value
+  if (
+    typeof value !== 'string' ||
+    !Number.isFinite(Date.parse(value)) ||
+    new Date(value).toISOString() !== value
+  ) {
+    failProtocol(`${label} must be an ISO timestamp or null.`)
+  }
+  return value
+}
+
+function assertCanonicalIdentifierArray(value, label) {
+  assertRawIdentifierArray(value, label)
+  if (stableStringify(value) !== stableStringify([...value].sort())) {
+    failProtocol(`${label} must be sorted.`)
+  }
+  return value
+}
+
+function validateDocumentScope(value, academyId, label, {
+  requireId = true,
+} = {}) {
+  assertExactKeys(
+    value,
+    REMEDIATION_EVIDENCE_SCHEMA.records.occurrence.documentScopeKeys,
+    label
+  )
+  if (requireId) {
+    assertRawIdentifier(value.id, `${label}.id`, { allowEmpty: false })
+  } else {
+    assertNullableIdentifier(value.id, `${label}.id`)
+  }
+  assertBoolean(value.exists, `${label}.exists`)
+  assertNullableIdentifier(value.academyId, `${label}.academyId`)
+  if (value.academyScoped !== null) {
+    assertBoolean(value.academyScoped, `${label}.academyScoped`)
+  }
+  if (
+    (!value.exists && (
+      value.academyScoped !== null ||
+      value.academyId !== null
+    )) ||
+    (value.exists && value.academyScoped === null) ||
+    (value.academyScoped === true && value.academyId !== academyId) ||
+    (value.academyScoped === false && value.academyId === academyId)
+  ) {
+    failProtocol(`${label} scope state is inconsistent.`)
+  }
+}
+
+function validatePresenceEntries(value, academyId, label) {
+  if (!Array.isArray(value)) failProtocol(`${label} must be an array.`)
+  value.forEach((entry, index) =>
+    validateDocumentScope(entry, academyId, `${label}[${index}]`)
+  )
+  const ids = value.map((entry) => entry.id)
+  if (
+    new Set(ids).size !== ids.length ||
+    stableStringify(ids) !== stableStringify([...ids].sort())
+  ) {
+    failProtocol(`${label} ids must be unique and sorted.`)
+  }
+}
+
+function validateMembershipSummary(record, academyId, label, {
+  fingerprint = false,
+} = {}) {
+  const expected = fingerprint
+    ? MEMBERSHIP_EVIDENCE_FIELDS
+    : REMEDIATION_EVIDENCE_SCHEMA.records.occurrence.matchedMembershipKeys
+  assertExactKeys(record, expected, label)
+  if (fingerprint && record.kind !== 'membership') {
+    failProtocol(`${label}.kind is unsupported.`)
+  }
+  assertRawIdentifier(record.id, `${label}.id`, { allowEmpty: false })
+  if (record.academyId !== academyId) failProtocol(`${label}.academyId mismatch.`)
+  for (const field of [
+    'uid', 'authUid', 'memberUid', 'teacherUid', 'teacherUID', 'teacherId',
+    'teacherID', 'teacherKey', 'role', 'status',
+  ]) {
+    assertNullableIdentifier(record[field], `${label}.${field}`)
+  }
+  assertBoolean(record.active, `${label}.active`)
+  assertNullableString(record.normalizedNameDigest,
+    `${label}.normalizedNameDigest`, { digest: true })
+  if (fingerprint) assertRecordFingerprint(record, label)
+}
+
+function validateCreditEvidenceRecord(record, academyId, label, {
+  allowAcademyMismatch = false,
+} = {}) {
+  assertExactKeys(record, CREDIT_EVIDENCE_FIELDS, label)
+  if (record.kind !== 'credit') failProtocol(`${label}.kind is unsupported.`)
+  assertRawIdentifier(record.id, `${label}.id`, { allowEmpty: false })
+  assertBoolean(record.academyScoped, `${label}.academyScoped`)
+  if (
+    (!allowAcademyMismatch && record.academyScoped !== true) ||
+    (record.academyScoped && record.academyId !== academyId) ||
+    (!record.academyScoped && record.academyId === academyId)
+  ) {
+    failProtocol(`${label}.academyId mismatch.`)
+  }
+  for (const field of [
+    'academyId', 'studentId', 'packageId', 'sourceType', 'actionType',
+    'ledgerTransition', 'fixedPrivateDeductionLedger',
+  ]) {
+    assertNullableIdentifier(record[field], `${label}.${field}`)
+  }
+  assertNullableNumber(record.deltaCount, `${label}.deltaCount`)
+  if (
+    record.effect !== null &&
+    !['deduction', 'reversal', 'neutral'].includes(record.effect)
+  ) {
+    failProtocol(`${label}.effect is unsupported.`)
+  }
+  for (const field of [
+    'isDeduction', 'isReversal', 'isDeterministicCanonicalId',
+  ]) {
+    assertBoolean(record[field], `${label}.${field}`)
+  }
+  assertNullableTimestamp(record.timestamp, `${label}.timestamp`)
+  assertExactKeys(
+    record.targeting,
+    REMEDIATION_EVIDENCE_SCHEMA.records.credit.targetingKeys,
+    `${label}.targeting`
+  )
+  for (const field of REMEDIATION_EVIDENCE_SCHEMA.records.credit.targetingKeys) {
+    assertNullableIdentifier(record.targeting[field], `${label}.targeting.${field}`)
+  }
+  validateLedgerTargetingRow(
+    record.ledgerTargeting,
+    `${label}.ledgerTargeting`,
+    { nullableEffect: !record.academyScoped }
+  )
+  if (!record.academyScoped) {
+    const safeForeignProjection = {
+      actionType: record.actionType,
+      deltaCount: record.deltaCount,
+      effect: record.effect,
+      fixedPrivateDeductionLedger: record.fixedPrivateDeductionLedger,
+      isDeduction: record.isDeduction,
+      isDeterministicCanonicalId: record.isDeterministicCanonicalId,
+      isReversal: record.isReversal,
+      ledgerTransition: record.ledgerTransition,
+      packageId: record.packageId,
+      sourceType: record.sourceType,
+      studentId: record.studentId,
+      targeting: record.targeting,
+      timestamp: record.timestamp,
+    }
+    const expectedSafeProjection = {
+      actionType: null,
+      deltaCount: null,
+      effect: null,
+      fixedPrivateDeductionLedger: null,
+      isDeduction: false,
+      isDeterministicCanonicalId: false,
+      isReversal: false,
+      ledgerTransition: null,
+      packageId: null,
+      sourceType: null,
+      studentId: null,
+      targeting: Object.fromEntries(
+        REMEDIATION_EVIDENCE_SCHEMA.records.credit.targetingKeys.map(
+          (field) => [field, null]
+        )
+      ),
+      timestamp: null,
+    }
+    assertSameValue(
+      safeForeignProjection,
+      expectedSafeProjection,
+      `${label} foreign evidence is not safely redacted.`
+    )
+    const expectedLedgerTargeting = {
+      ...Object.fromEntries(
+        REMEDIATION_EVIDENCE_SCHEMA.records.occurrence.ledgerTargetingKeys.map(
+          (field) => [field, null]
+        )
+      ),
+      collectionFamily: 'creditTransactions',
+      documentId: record.id,
+      isDeduction: false,
+      isReversal: false,
+    }
+    assertSameValue(
+      record.ledgerTargeting,
+      expectedLedgerTargeting,
+      `${label}.ledgerTargeting leaks foreign evidence.`
+    )
+  }
+  assertRecordFingerprint(record, label)
+}
+
+function validatePackageSummary(record, academyId, label, {
+  fingerprint = false,
+  candidate = false,
+  allowAcademyMismatch = false,
+} = {}) {
+  const expected = candidate
+    ? REMEDIATION_EVIDENCE_SCHEMA.records.occurrence.packageCandidateKeys
+    : PACKAGE_EVIDENCE_FIELDS
+  assertExactKeys(record, expected, label)
+  if (fingerprint && record.kind !== 'package') {
+    failProtocol(`${label}.kind is unsupported.`)
+  }
+  assertRawIdentifier(record.id, `${label}.id`, { allowEmpty: false })
+  if (
+    !allowAcademyMismatch &&
+    record.academyId !== null &&
+    record.academyId !== academyId
+  ) {
+    failProtocol(`${label}.academyId mismatch.`)
+  }
+  for (const field of ['academyId', 'studentId', 'type', 'scope', 'status']) {
+    assertNullableIdentifier(record[field], `${label}.${field}`)
+  }
+  for (const field of ['totalCount', 'usedCount', 'remainingCount']) {
+    assertNullableNumber(record[field], `${label}.${field}`)
+  }
+  if (candidate) {
+    assertBoolean(record.exists, `${label}.exists`)
+    if (record.academyScoped !== null) {
+      assertBoolean(record.academyScoped, `${label}.academyScoped`)
+    }
+    assertCanonicalIdentifierArray(record.sources, `${label}.sources`)
+    if (
+      (!record.exists && (
+        record.academyScoped !== null ||
+        record.academyId !== null
+      )) ||
+      (record.exists && record.academyScoped === null) ||
+      (record.academyScoped === true && record.academyId !== academyId) ||
+      (record.academyScoped === false && record.academyId === academyId)
+    ) {
+      failProtocol(`${label} package scope is inconsistent.`)
+    }
+    if (record.academyScoped !== true) {
+      for (const field of [
+        'studentId', 'type', 'scope', 'status', 'totalCount', 'usedCount',
+        'remainingCount',
+      ]) {
+        if (record[field] !== null) {
+          failProtocol(`${label}.${field} leaks out-of-scope package data.`)
+        }
+      }
+    }
+  }
+  if (fingerprint) assertRecordFingerprint(record, label)
+}
+
+function validatePersistedTeacher(value, label) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(value, schema.persistedTeacherKeys, label)
+  for (const field of schema.persistedTeacherKeys) {
+    if (field === 'normalizedNameDigest') {
+      assertNullableString(value[field], `${label}.${field}`, { digest: true })
+    } else {
+      assertNullableIdentifier(value[field], `${label}.${field}`)
+    }
+  }
+}
+
+function validateOccurrenceProvenance(value, label) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(value, schema.provenanceKeys, label)
+  assertExactKeys(value.classifier, schema.classifierKeys, `${label}.classifier`)
+  assertBoolean(value.classifier.isFixed, `${label}.classifier.isFixed`)
+  if (!['', 'canonical', 'legacy'].includes(value.classifier.ledgerType)) {
+    failProtocol(`${label}.classifier.ledgerType is unsupported.`)
+  }
+  if (!Array.isArray(value.classifier.evidence)) {
+    failProtocol(`${label}.classifier.evidence must be an array.`)
+  }
+  value.classifier.evidence.forEach((entry, index) => {
+    assertExactKeys(
+      entry,
+      schema.classifierEvidenceKeys,
+      `${label}.classifier.evidence[${index}]`
+    )
+    assertSafeInteger(entry.rowIndex,
+      `${label}.classifier.evidence[${index}].rowIndex`)
+    assertString(entry.field, `${label}.classifier.evidence[${index}].field`, {
+      allowEmpty: false,
+    })
+    assertString(entry.value, `${label}.classifier.evidence[${index}].value`, {
+      allowEmpty: false,
+    })
+  })
+  assertExactKeys(value.ledger, schema.ledgerKeys, `${label}.ledger`)
+  if (!['canonical', 'legacy', 'inconsistent'].includes(value.ledger.mode)) {
+    failProtocol(`${label}.ledger.mode is unsupported.`)
+  }
+  assertString(value.ledger.marker, `${label}.ledger.marker`)
+  if (!Array.isArray(value.ledger.markers) ||
+      value.ledger.markers.length !== 3) {
+    failProtocol(`${label}.ledger.markers must contain three values.`)
+  }
+  value.ledger.markers.forEach((marker, index) =>
+    assertString(marker, `${label}.ledger.markers[${index}]`)
+  )
+  assertSafeInteger(value.ledger.lessonLedgerContribution,
+    `${label}.ledger.lessonLedgerContribution`)
+  assertSafeInteger(value.ledger.reservationLedgerContribution,
+    `${label}.ledger.reservationLedgerContribution`)
+  assertExactKeys(value.origin, schema.originKeys, `${label}.origin`)
+  if (![
+    'born_canonical', 'converted_legacy', 'legacy_unconverted', 'unknown',
+  ].includes(value.origin.originMode)) {
+    failProtocol(`${label}.origin.originMode is unsupported.`)
+  }
+  assertBoolean(value.origin.hasLegacyEvidence,
+    `${label}.origin.hasLegacyEvidence`)
+  assertBoolean(value.origin.legacyEvidenceConsistent,
+    `${label}.origin.legacyEvidenceConsistent`)
+  assertExactKeys(value.raw, schema.documentFamilyKeys, `${label}.raw`)
+  for (const family of schema.documentFamilyKeys) {
+    const raw = value.raw[family]
+    assertExactKeys(raw, schema.provenanceRawKeys, `${label}.raw.${family}`)
+    for (const field of schema.provenanceRawKeys) {
+      const scalar = raw[field]
+      if (scalar !== null &&
+          !['string', 'number', 'boolean'].includes(typeof scalar)) {
+        failProtocol(`${label}.raw.${family}.${field} must be scalar or null.`)
+      }
+    }
+  }
+}
+
+function validateStatusDeduction(value, label) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(value, schema.documentFamilyKeys, label)
+  const booleanFields = new Set([
+    'deductionApplied', 'deductionReversed', 'noDeduction', 'isDeductCancelled',
+  ])
+  const numberFields = new Set(['deductionAttemptNumber', 'reversalAttemptNumber'])
+  for (const family of schema.documentFamilyKeys) {
+    const row = value[family]
+    assertExactKeys(row, schema.statusDeductionKeys, `${label}.${family}`)
+    for (const field of schema.statusDeductionKeys) {
+      if (field === 'timestamps') {
+        assertExactKeys(row.timestamps, schema.timestampKeys,
+          `${label}.${family}.timestamps`)
+        for (const timestamp of schema.timestampKeys) {
+          assertNullableTimestamp(
+            row.timestamps[timestamp],
+            `${label}.${family}.timestamps.${timestamp}`
+          )
+        }
+      } else if (booleanFields.has(field)) {
+        if (row[field] !== null) assertBoolean(row[field], `${label}.${family}.${field}`)
+      } else if (numberFields.has(field)) {
+        assertNullableNumber(row[field], `${label}.${family}.${field}`)
+      } else {
+        assertNullableString(row[field], `${label}.${family}.${field}`)
+      }
+    }
+  }
+}
+
+function validateSchedule(value, label) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(value, schema.documentFamilyKeys, label)
+  for (const family of schema.documentFamilyKeys) {
+    const row = value[family]
+    assertExactKeys(row, schema.scheduleKeys, `${label}.${family}`)
+    for (const field of schema.scheduleKeys) {
+      if (['durationMinutes'].includes(field)) {
+        assertNullableNumber(row[field], `${label}.${family}.${field}`)
+      } else if (['startAt', 'endAt'].includes(field)) {
+        assertNullableTimestamp(row[field], `${label}.${family}.${field}`)
+      } else {
+        assertNullableString(row[field], `${label}.${family}.${field}`)
+      }
+    }
+  }
+}
+
+function validateLedgerTargetingRow(row, label, {
+  nullableEffect = false,
+} = {}) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(row, schema.ledgerTargetingKeys, label)
+  for (const field of schema.ledgerTargetingKeys) {
+    if (field === 'deltaCount') {
+      assertNullableNumber(row[field], `${label}.${field}`)
+    } else if (['isDeduction', 'isReversal'].includes(field)) {
+      assertBoolean(row[field], `${label}.${field}`)
+    } else if (field === 'effect') {
+      if (
+        !(nullableEffect && row[field] === null) &&
+        !['deduction', 'reversal', 'neutral'].includes(row[field])
+      ) {
+        failProtocol(`${label}.effect is unsupported.`)
+      }
+    } else {
+      assertNullableString(row[field], `${label}.${field}`)
+    }
+  }
+}
+
+function validateLedgerTargeting(value, label) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(value, schema.documentFamilyKeys, label)
+  for (const family of schema.documentFamilyKeys) {
+    validateLedgerTargetingRow(value[family], `${label}.${family}`)
+  }
+}
+
+function storedAliasKeysForTarget(schema, targetType) {
+  const field = `stored${targetType[0].toUpperCase()}${targetType.slice(1)}AliasKeys`
+  return schema[field]
+}
+
+function validateStoredLinkAliases(record, label) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(
+    record.storedLinkAliases,
+    schema.storedLinkAliasesKeys,
+    `${label}.storedLinkAliases`
+  )
+  const sourceTypes = schema.storedLinkAliasSourceKeys
+  const targetTypes = schema.storedLinkAliasesKeys
+  const targetResolvedValues = Object.fromEntries(
+    targetTypes.map((targetType) => [targetType, []])
+  )
+  let aggregateConflict = false
+  for (const sourceType of sourceTypes) {
+    const sourceAliases = record.storedLinkAliases[sourceType]
+    assertExactKeys(
+      sourceAliases,
+      targetTypes,
+      `${label}.storedLinkAliases.${sourceType}`
+    )
+    for (const targetType of targetTypes) {
+      const alias = sourceAliases[targetType]
+      const aliasKeys = storedAliasKeysForTarget(schema, targetType)
+      const valueKeys = aliasKeys.filter((field) =>
+        !['conflict', 'resolvedValue', 'uniqueValues'].includes(field)
+      )
+      assertExactKeys(
+        alias,
+        aliasKeys,
+        `${label}.storedLinkAliases.${sourceType}.${targetType}`
+      )
+      for (const field of valueKeys) {
+        assertNullableIdentifier(
+          alias[field],
+          `${label}.storedLinkAliases.${sourceType}.${targetType}.${field}`
+        )
+      }
+      assertCanonicalIdentifierArray(
+        alias.uniqueValues,
+        `${label}.storedLinkAliases.${sourceType}.${targetType}.uniqueValues`
+      )
+      assertNullableIdentifier(
+        alias.resolvedValue,
+        `${label}.storedLinkAliases.${sourceType}.${targetType}.resolvedValue`
+      )
+      assertBoolean(
+        alias.conflict,
+        `${label}.storedLinkAliases.${sourceType}.${targetType}.conflict`
+      )
+      const expectedUniqueValues = uniqueStrings(
+        valueKeys.map((field) => alias[field])
+      )
+      const expectedResolvedValue = expectedUniqueValues.length === 1
+        ? expectedUniqueValues[0]
+        : null
+      const expectedConflict = expectedUniqueValues.length > 1
+      if (
+        stableStringify(alias.uniqueValues) !==
+          stableStringify(expectedUniqueValues) ||
+        alias.resolvedValue !== expectedResolvedValue ||
+        alias.conflict !== expectedConflict
+      ) {
+        failProtocol(
+          `${label}.storedLinkAliases.${sourceType}.${targetType} is inconsistent.`
+        )
+      }
+      if (
+        record.documentScopes[sourceType].academyScoped !== true &&
+        expectedUniqueValues.length > 0
+      ) {
+        failProtocol(`${label} foreign or missing data created stored aliases.`)
+      }
+      if (alias.resolvedValue) {
+        targetResolvedValues[targetType].push(alias.resolvedValue)
+      }
+      aggregateConflict = aggregateConflict || alias.conflict
+    }
+  }
+
+  const rootType = rootFamilyDocumentType(record.rootFamily)
+  for (const targetType of targetTypes) {
+    const resolvedValues = uniqueStrings(targetResolvedValues[targetType])
+    const targetConflict = sourceTypes.some(
+      (sourceType) =>
+        record.storedLinkAliases[sourceType][targetType].conflict === true
+    ) || resolvedValues.length > 1
+    aggregateConflict = aggregateConflict || targetConflict
+    const expectedResolved = targetType === rootType
+      ? record.rootId
+      : !targetConflict && resolvedValues.length === 1
+        ? resolvedValues[0]
+        : null
+    if (record.resolvedLinks[`${targetType}Id`] !== expectedResolved) {
+      failProtocol(`${label}.resolvedLinks.${targetType}Id is inconsistent.`)
+    }
+  }
+  if (record.storedLinkConflict !== aggregateConflict) {
+    failProtocol(`${label}.storedLinkConflict is inconsistent.`)
+  }
+}
+
+function validateOccurrenceEvidenceRecord(record, academyId, scanFamily, label) {
+  const schema = REMEDIATION_EVIDENCE_SCHEMA.records.occurrence
+  assertExactKeys(record, OCCURRENCE_EVIDENCE_FIELDS, label)
+  if (
+    record.kind !== 'occurrence' ||
+    record.rootFamily !== scanFamily ||
+    !['lessons', 'reservations', 'slots'].includes(record.rootFamily)
+  ) {
+    failProtocol(`${label} occurrence family is unsupported.`)
+  }
+  assertRawIdentifier(record.rootId, `${label}.rootId`, { allowEmpty: false })
+  assertRawIdentifier(record.occurrenceKey, `${label}.occurrenceKey`, {
+    allowEmpty: false,
+  })
+  if (typedOccurrenceKey(record.occurrenceKey) !== record.occurrenceKey) {
+    failProtocol(`${label}.occurrenceKey is not canonical.`)
+  }
+  if (record.academyId !== academyId) failProtocol(`${label}.academyId mismatch.`)
+  for (const field of ['lessonId', 'reservationId', 'slotId', 'studentId', 'packageId']) {
+    assertNullableIdentifier(record[field], `${label}.${field}`)
+  }
+  assertCanonicalIdentifierArray(record.studentCandidateIds,
+    `${label}.studentCandidateIds`)
+  assertCanonicalIdentifierArray(record.packageCandidateIds,
+    `${label}.packageCandidateIds`)
+  assertCanonicalIdentifierArray(record.membershipIds, `${label}.membershipIds`)
+  assertCanonicalIdentifierArray(record.creditIds, `${label}.creditIds`)
+  assertExactKeys(record.resolvedLinks, schema.resolvedLinksKeys,
+    `${label}.resolvedLinks`)
+  for (const field of schema.resolvedLinksKeys) {
+    assertNullableIdentifier(record.resolvedLinks[field],
+      `${label}.resolvedLinks.${field}`)
+  }
+  assertExactKeys(record.storedLinks, schema.documentFamilyKeys,
+    `${label}.storedLinks`)
+  for (const family of schema.documentFamilyKeys) {
+    assertExactKeys(record.storedLinks[family], schema.storedLinkKeys,
+      `${label}.storedLinks.${family}`)
+    for (const field of schema.storedLinkKeys) {
+      assertNullableIdentifier(record.storedLinks[family][field],
+        `${label}.storedLinks.${family}.${field}`)
+    }
+  }
+  assertExactKeys(record.documentPresence, schema.documentPresenceKeys,
+    `${label}.documentPresence`)
+  assertExactKeys(record.documentScopes, schema.documentScopesKeys,
+    `${label}.documentScopes`)
+  for (const family of schema.documentScopesKeys) {
+    validateDocumentScope(
+      record.documentScopes[family],
+      academyId,
+      `${label}.documentScopes.${family}`,
+      { requireId: false }
+    )
+    if (
+      record.documentPresence[family] !==
+        record.documentScopes[family].exists ||
+      (family !== 'student' && record[`${family}Id`] !== (
+        record.documentScopes[family].exists
+          ? record.documentScopes[family].id
+          : null
+      ))
+    ) {
+      failProtocol(`${label}.${family} scope and presence disagree.`)
+    }
+  }
+  assertBoolean(record.storedLinkConflict, `${label}.storedLinkConflict`)
+  validateStoredLinkAliases(record, label)
+  for (const field of ['lesson', 'reservation', 'slot', 'student', 'package']) {
+    assertBoolean(record.documentPresence[field],
+      `${label}.documentPresence.${field}`)
+  }
+  for (const field of ['memberships', 'credits', 'packages', 'students']) {
+    validatePresenceEntries(record.documentPresence[field], academyId,
+      `${label}.documentPresence.${field}`)
+  }
+  const studentPresenceIds = record.documentPresence.students.map(
+    (entry) => entry.id
+  )
+  assertSameValue(
+    studentPresenceIds,
+    record.studentCandidateIds,
+    `${label} student presence ids disagree with candidates.`
+  )
+  if (record.studentCandidateIds.length === 1) {
+    const studentPresence = record.documentPresence.students[0]
+    if (
+      record.studentId !== record.studentCandidateIds[0] ||
+      record.documentPresence.student !== studentPresence.exists ||
+      stableStringify(record.documentScopes.student) !==
+        stableStringify(studentPresence)
+    ) {
+      failProtocol(`${label} singular student scope is inconsistent.`)
+    }
+  } else {
+    const missingStudentScope = {
+      academyId: null,
+      academyScoped: null,
+      exists: false,
+      id: null,
+    }
+    if (
+      record.studentId !== null ||
+      record.documentPresence.student !== false ||
+      stableStringify(record.documentScopes.student) !==
+        stableStringify(missingStudentScope)
+    ) {
+      failProtocol(`${label} ambiguous student scope must be explicitly missing.`)
+    }
+  }
+  if (!Array.isArray(record.packageCandidates)) {
+    failProtocol(`${label}.packageCandidates must be an array.`)
+  }
+  record.packageCandidates.forEach((candidate, index) =>
+    validatePackageSummary(candidate, academyId,
+      `${label}.packageCandidates[${index}]`, {
+        candidate: true,
+        allowAcademyMismatch: true,
+      })
+  )
+  assertSameValue(
+    record.documentPresence.packages,
+    record.packageCandidates.map((candidate) => ({
+      academyId: candidate.academyId,
+      academyScoped: candidate.academyScoped,
+      exists: candidate.exists,
+      id: candidate.id,
+    })),
+    `${label} package presence and candidates disagree.`
+  )
+  assertExactKeys(record.teacher, schema.teacherKeys, `${label}.teacher`)
+  for (const family of schema.documentFamilyKeys) {
+    validatePersistedTeacher(record.teacher[family],
+      `${label}.teacher.${family}`)
+  }
+  if (!Array.isArray(record.teacher.matchedMemberships)) {
+    failProtocol(`${label}.teacher.matchedMemberships must be an array.`)
+  }
+  record.teacher.matchedMemberships.forEach((membership, index) =>
+    validateMembershipSummary(
+      membership,
+      academyId,
+      `${label}.teacher.matchedMemberships[${index}]`
+    )
+  )
+  validateOccurrenceProvenance(record.provenance, `${label}.provenance`)
+  validateStatusDeduction(record.statusDeduction, `${label}.statusDeduction`)
+  validateSchedule(record.schedule, `${label}.schedule`)
+  validateLedgerTargeting(record.ledgerTargeting, `${label}.ledgerTargeting`)
+  if (!Array.isArray(record.credits)) failProtocol(`${label}.credits must be an array.`)
+  record.credits.forEach((credit, index) =>
+    validateCreditEvidenceRecord(
+      credit,
+      academyId,
+      `${label}.credits[${index}]`,
+      { allowAcademyMismatch: true }
+    )
+  )
+  const creditPresence = new Map(
+    record.documentPresence.credits.map((entry) => [entry.id, entry])
+  )
+  for (const credit of record.credits) {
+    const presence = creditPresence.get(credit.id)
+    if (
+      !presence?.exists ||
+      presence.academyScoped !== credit.academyScoped ||
+      presence.academyId !== credit.academyId
+    ) {
+      failProtocol(`${label} embedded credit scope disagrees with presence.`)
+    }
+  }
+  if (
+    record.credits.some((credit) => !record.creditIds.includes(credit.id)) ||
+    record.documentPresence.credits.some(
+      (entry) => entry.exists &&
+        !record.credits.some((credit) => credit.id === entry.id)
+    )
+  ) {
+    failProtocol(`${label} embedded credit records are incomplete.`)
+  }
+  assertRecordFingerprint(record, label)
+}
+
+export function validateRemediationEvidenceRecord(record, {
+  academyId,
+  scanFamily,
+  label = 'evidence record',
+}) {
+  assertPlainObject(record, label)
+  if (['lessons', 'reservations', 'slots'].includes(scanFamily)) {
+    validateOccurrenceEvidenceRecord(record, academyId, scanFamily, label)
+  } else if (scanFamily === 'credits') {
+    validateCreditEvidenceRecord(record, academyId, label)
+  } else if (scanFamily === 'memberships') {
+    validateMembershipSummary(record, academyId, label, { fingerprint: true })
+  } else if (scanFamily === 'packages') {
+    validatePackageSummary(record, academyId, label, { fingerprint: true })
+  } else {
+    failProtocol('Evidence scan family is unsupported.')
+  }
+  return record
+}
+
+export function validateRemediationEvidencePage(result, {
+  academyId,
+  scanFamily,
+}) {
+  assertExactKeys(result, EVIDENCE_RESULT_FIELDS, 'evidence result')
+  if (
+    result.evidenceVersion !== REMEDIATION_EVIDENCE_VERSION ||
+    result.academyId !== academyId ||
+    result.scanFamily !== scanFamily ||
+    result.dryRun !== true ||
+    result.previewOnly !== true ||
+    result.commit !== false
+  ) {
+    failProtocol('Evidence callable returned an invalid protocol response.')
+  }
+  const expectedSchemaDigest = remediationEvidenceSchemaDigest()
+  if (result.schemaDigest !== expectedSchemaDigest) {
+    failProtocol('Evidence schema digest mismatch.')
+  }
+  if (!Array.isArray(result.records)) {
+    failProtocol('evidence result.records must be an array.')
+  }
+  result.records.forEach((record, index) =>
+    validateRemediationEvidenceRecord(record, {
+      academyId,
+      scanFamily,
+      label: `evidence result.records[${index}]`,
+    })
+  )
+  assertExactKeys(result.page, EVIDENCE_PAGE_FIELDS, 'evidence page')
+  const page = result.page
+  for (const field of [
+    'pageSize',
+    'returnedCount',
+    'scannedCount',
+    'omittedCount',
+  ]) {
+    assertSafeInteger(page[field], `evidence page.${field}`)
+  }
+  for (const field of ['hasMore', 'complete', 'truncated']) {
+    assertBoolean(page[field], `evidence page.${field}`)
+  }
+  if (
+    page.pageSize < 1 ||
+    page.pageSize > PAGE_LIMIT ||
+    page.returnedCount !== result.records.length ||
+    page.scannedCount !== result.records.length ||
+    page.scannedCount !== page.returnedCount ||
+    page.returnedCount > page.pageSize ||
+    page.omittedCount < 0 ||
+    (page.hasMore && page.complete) ||
+    (page.hasMore && (
+      typeof page.nextCursor !== 'string' ||
+      !page.nextCursor ||
+      page.nextCursor.length > 2048 ||
+      !OPAQUE_CURSOR.test(page.nextCursor)
+    )) ||
+    (!page.hasMore && page.nextCursor !== null)
+  ) {
+    failProtocol('Evidence page metadata is inconsistent.')
+  }
+  assertDigest(result.pageDigest, 'evidence result.pageDigest')
+  if (result.pageDigest !== remediationEvidencePageDigest(result)) {
+    failProtocol('Evidence page digest mismatch.')
+  }
+  if (
+    page.truncated ||
+    page.omittedCount > 0 ||
+    (!page.hasMore && page.complete !== true)
+  ) {
+    throw new RemediationEvidenceIncompleteError(
+      'Evidence scan is incomplete.'
+    )
+  }
+  return result
 }
 
 function emptyCategoryMap(valueFactory) {
@@ -851,7 +1939,20 @@ function mergeOccurrenceRecords(left, right) {
 }
 
 function occurrenceIdentityIds(record) {
-  return uniqueStrings([record?.lessonId, record?.reservationId, record?.slotId])
+  const rootType = rootFamilyDocumentType(record?.rootFamily)
+  return uniqueStrings([
+    typedOccurrenceKey(record?.occurrenceKey),
+    buildTypedDocumentKey(rootType, record?.rootId),
+    record?.lessonId
+      ? buildTypedDocumentKey('lesson', record.lessonId)
+      : null,
+    record?.reservationId
+      ? buildTypedDocumentKey('reservation', record.reservationId)
+      : null,
+    record?.slotId
+      ? buildTypedDocumentKey('slot', record.slotId)
+      : null,
+  ])
 }
 
 function collapseOccurrenceRecords(records) {
@@ -868,7 +1969,10 @@ function collapseOccurrenceRecords(records) {
       ))
       .filter((index) => index >= 0)
     if (matchingIndexes.length === 0) {
-      groups.push({ record, ids: new Set(recordIds) })
+      groups.push({
+        record,
+        ids: new Set(recordIds),
+      })
       continue
     }
     const target = groups[matchingIndexes[0]]
@@ -889,11 +1993,12 @@ function collapseOccurrenceRecords(records) {
 function mergeCreditRecords(records) {
   const result = new Map()
   for (const record of records) {
-    const existing = result.get(record.id)
+    const key = buildTypedDocumentKey('credit', record.id)
+    const existing = result.get(key)
     if (existing && stableStringify(existing) !== stableStringify(record)) {
       failProtocol(`credit record ${record.id} changed within one audit run.`)
     }
-    result.set(record.id, record)
+    result.set(key, record)
   }
   return [...result.values()].sort((left, right) => left.id.localeCompare(right.id))
 }
@@ -916,12 +2021,71 @@ function isDeductionCredit(record) {
     )
 }
 
+function evidenceCreditHasFixedProvenance(record) {
+  return normalizeString(record?.sourceType).toLowerCase() ===
+      'fixedprivatereservation' ||
+    normalizeString(record?.actionType).toLowerCase().startsWith(
+      'fixed_private_'
+    ) ||
+    record?.fixedPrivateDeductionLedger === 'reservation_v1'
+}
+
+function evidenceCreditIsAuditRelevant(record) {
+  return Boolean(
+    evidenceCreditTypedTargets(record).length > 0 ||
+    evidenceCreditHasFixedProvenance(record)
+  )
+}
+
+function isEvidenceDeductionCredit(record) {
+  const actionType = normalizeString(record?.actionType).toLowerCase()
+  return evidenceCreditHasFixedProvenance(record) ||
+    Number(record?.deltaCount) < 0 ||
+    (
+      actionType.includes('deduct') &&
+      !actionType.includes('reversal') &&
+      !actionType.includes('reverse')
+    )
+}
+
+function auditCreditTypedTargets(credit) {
+  return uniqueStrings([
+    credit?.sourceId
+      ? buildTypedDocumentKey('reservation', credit.sourceId)
+      : null,
+    credit?.lessonId
+      ? buildTypedDocumentKey('lesson', credit.lessonId)
+      : null,
+    credit?.slotId
+      ? buildTypedDocumentKey('slot', credit.slotId)
+      : null,
+  ])
+}
+
+function evidenceCreditTypedTargets(credit) {
+  const targeting = credit?.targeting || {}
+  return uniqueStrings([
+    ...['sourceId', 'reservationId', 'linkedReservationId'].map((field) =>
+      targeting[field]
+        ? buildTypedDocumentKey('reservation', targeting[field])
+        : null
+    ),
+    ...['lessonId', 'fixedLessonId', 'linkedLessonId'].map((field) =>
+      targeting[field]
+        ? buildTypedDocumentKey('lesson', targeting[field])
+        : null
+    ),
+    ...['slotId', 'linkedSlotId'].map((field) =>
+      targeting[field]
+        ? buildTypedDocumentKey('slot', targeting[field])
+        : null
+    ),
+  ])
+}
+
 function creditBelongsToOccurrence(credit, occurrence) {
-  const deductionIds = occurrence?.deduction?.ids || []
-  return deductionIds.includes(credit.id) ||
-    (occurrence.reservationId && credit.sourceId === occurrence.reservationId) ||
-    (occurrence.lessonId && credit.lessonId === occurrence.lessonId) ||
-    (occurrence.slotId && credit.slotId === occurrence.slotId)
+  const occurrenceIds = new Set(occurrenceIdentityIds(occurrence))
+  return auditCreditTypedTargets(credit).some((id) => occurrenceIds.has(id))
 }
 
 function creditMatchesOccurrence(credit, occurrence) {
@@ -1022,9 +2186,10 @@ function packageAggregateConflicts(occurrences, ledgerRows) {
   const byPackage = new Map()
   for (const occurrence of occurrences) {
     if (!occurrence.packageId) continue
-    const rows = byPackage.get(occurrence.packageId) || []
+    const packageKey = buildTypedDocumentKey('package', occurrence.packageId)
+    const rows = byPackage.get(packageKey) || []
     rows.push(occurrence)
-    byPackage.set(occurrence.packageId, rows)
+    byPackage.set(packageKey, rows)
   }
   const conflicts = new Set()
   for (const rows of byPackage.values()) {
@@ -1036,7 +2201,11 @@ function packageAggregateConflicts(occurrences, ledgerRows) {
       (row.ledgerContribution?.reservationCountsByEvidence === true ? 1 : 0)
     , 0)
     const supplementalExpectedUsedCount = ledgerRows
-      .filter((row) => row.packageId === rows[0].packageId)
+      .filter((row) =>
+        row.packageId &&
+        buildTypedDocumentKey('package', row.packageId) ===
+          buildTypedDocumentKey('package', rows[0].packageId)
+      )
       .reduce((sum, row) =>
         sum +
         (row.lessonCountsByDate === true ? 1 : 0) +
@@ -1181,11 +2350,15 @@ function aggregateAuditPagesWithEvidence(pagesByFamily) {
         } else if (record.kind === 'credit') {
           creditRecords.push(record)
         } else if (record.kind === 'teacherMembership') {
-          const existing = membershipMap.get(record.membershipKey)
+          const membershipKey = buildTypedDocumentKey(
+            'membership',
+            record.membershipKey
+          )
+          const existing = membershipMap.get(membershipKey)
           if (existing && stableStringify(existing) !== stableStringify(record)) {
             failProtocol(`membership ${record.membershipKey} changed within one audit run.`)
           }
-          membershipMap.set(record.membershipKey, record)
+          membershipMap.set(membershipKey, record)
         } else if (record.kind === 'ledgerRow') {
           ledgerRows.push(record)
         }
@@ -1212,6 +2385,23 @@ function aggregateAuditPagesWithEvidence(pagesByFamily) {
     .sort((left, right) => left.membershipKey.localeCompare(right.membershipKey))
   const credits = mergeCreditRecords(creditRecords)
   const matchedCreditIds = new Set()
+  const creditOwners = new Map()
+  for (const credit of credits.filter(isDeductionCredit)) {
+    const targets = auditCreditTypedTargets(credit)
+    const matches = occurrences.filter((occurrence) => {
+      const identityIds = new Set(occurrenceIdentityIds(occurrence))
+      return targets.some((target) => identityIds.has(target))
+    })
+    if (matches.length > 1) {
+      failProtocol('Credit has ambiguous typed occurrence attribution.')
+    }
+    if (matches.length === 1) {
+      creditOwners.set(
+        buildTypedDocumentKey('credit', credit.id),
+        matches[0].occurrenceKey
+      )
+    }
+  }
   const packageConflicts = packageAggregateConflicts(occurrences, ledgerRows)
 
   const add = (category, occurrence) => {
@@ -1280,10 +2470,14 @@ function aggregateAuditPagesWithEvidence(pagesByFamily) {
       blockers.add(teacherDiagnostic)
     }
 
-    const deductionCredits = credits.filter(
-      (credit) => creditBelongsToOccurrence(credit, occurrence)
+    const deductionCredits = credits.filter((credit) =>
+      isDeductionCredit(credit) &&
+      creditOwners.get(buildTypedDocumentKey('credit', credit.id)) ===
+        occurrence.occurrenceKey
     )
-    deductionCredits.forEach((credit) => matchedCreditIds.add(credit.id))
+    deductionCredits.forEach((credit) =>
+      matchedCreditIds.add(buildTypedDocumentKey('credit', credit.id))
+    )
     if (deductionCredits.length > 1) {
       add('duplicateDeductionCredit', occurrence)
       blockers.add('duplicateDeductionCredit')
@@ -1369,7 +2563,7 @@ function aggregateAuditPagesWithEvidence(pagesByFamily) {
     if (
       !isDeductionCredit(credit) ||
       !creditHasFixedProvenance(credit) ||
-      matchedCreditIds.has(credit.id)
+      matchedCreditIds.has(buildTypedDocumentKey('credit', credit.id))
     ) {
       continue
     }
@@ -1466,6 +2660,14 @@ function aggregateAuditPagesWithEvidence(pagesByFamily) {
           )),
         },
       ])),
+    },
+    rawAuditEvidence: {
+      occurrences,
+      credits,
+      memberships,
+      ledgerRows: [...ledgerRows].sort((left, right) =>
+        stableStringify(left).localeCompare(stableStringify(right))
+      ),
     },
   }
 }
@@ -1886,6 +3088,114 @@ export function validateRedactedArtifactEnvironment(env) {
   }
 }
 
+function pathHasGitSegment(value) {
+  return path.resolve(value).split(path.sep).includes('.git')
+}
+
+function pathIsWithin(candidate, parent) {
+  const relative = path.relative(parent, candidate)
+  return relative === '' || (
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  )
+}
+
+function lstatIfPresent(value) {
+  try {
+    return fs.lstatSync(value)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+function findAncestorRepository(startPath) {
+  let current = startPath
+  while (true) {
+    if (lstatIfPresent(path.join(current, '.git'))) return current
+    const parent = path.dirname(current)
+    if (parent === current) return ''
+    current = parent
+  }
+}
+
+export function validateSensitiveRemediationEnvironment(
+  env,
+  { repositoryRoot = RUNNER_REPOSITORY_ROOT } = {}
+) {
+  const hasSensitiveOutput = Object.prototype.hasOwnProperty.call(
+    env,
+    'AUDIT_SENSITIVE_REMEDIATION_OUTPUT'
+  )
+  const hasSensitiveConfirmation = Object.prototype.hasOwnProperty.call(
+    env,
+    'CONFIRM_SENSITIVE_LOCAL_REMEDIATION_MANIFEST'
+  )
+  if (!hasSensitiveOutput && !hasSensitiveConfirmation) return null
+
+  const outputPath = normalizeString(env.AUDIT_SENSITIVE_REMEDIATION_OUTPUT)
+  const confirmation = env.CONFIRM_SENSITIVE_LOCAL_REMEDIATION_MANIFEST
+  const redactedOutput = normalizeString(env.AUDIT_REDACTED_OUTPUT)
+  const redactionKey = normalizeString(env.AUDIT_REDACTION_KEY)
+  if (
+    !outputPath ||
+    confirmation !== 'YES' ||
+    !redactedOutput ||
+    !redactionKey
+  ) {
+    throw new Error(
+      'Sensitive remediation output requires AUDIT_SENSITIVE_REMEDIATION_OUTPUT, ' +
+      'CONFIRM_SENSITIVE_LOCAL_REMEDIATION_MANIFEST=YES, ' +
+      'AUDIT_REDACTED_OUTPUT, and AUDIT_REDACTION_KEY.'
+    )
+  }
+  if (!path.isAbsolute(outputPath)) {
+    throw new Error('AUDIT_SENSITIVE_REMEDIATION_OUTPUT must be an absolute path.')
+  }
+  const resolvedOutputPath = path.resolve(outputPath)
+  if (pathHasGitSegment(resolvedOutputPath)) {
+    throw new Error('Sensitive remediation output must not target .git.')
+  }
+  if (lstatIfPresent(resolvedOutputPath)) {
+    throw new Error(
+      'AUDIT_SENSITIVE_REMEDIATION_OUTPUT must not already exist or be a symlink.'
+    )
+  }
+  const parent = path.dirname(resolvedOutputPath)
+  const parentStat = lstatIfPresent(parent)
+  if (!parentStat?.isDirectory()) {
+    throw new Error(
+      'AUDIT_SENSITIVE_REMEDIATION_OUTPUT parent directory must exist.'
+    )
+  }
+  const realParent = fs.realpathSync(parent)
+  if (path.resolve(parent) !== realParent || pathHasGitSegment(realParent)) {
+    throw new Error(
+      'Sensitive remediation output parent must not use symlinks or .git.'
+    )
+  }
+  const realCandidate = path.join(realParent, path.basename(resolvedOutputPath))
+  const resolvedRepositoryRoot = path.resolve(repositoryRoot)
+  const realRepositoryRoot = fs.realpathSync(resolvedRepositoryRoot)
+  if (
+    pathIsWithin(resolvedOutputPath, resolvedRepositoryRoot) ||
+    pathIsWithin(realCandidate, realRepositoryRoot) ||
+    findAncestorRepository(realParent)
+  ) {
+    throw new Error(
+      'Sensitive remediation output must be outside every repository or worktree.'
+    )
+  }
+  if (resolvedOutputPath === path.resolve(redactedOutput)) {
+    throw new Error('Sensitive and redacted output paths must be different.')
+  }
+  return {
+    outputPath: resolvedOutputPath,
+    redactionKey,
+  }
+}
+
 export async function writeRedactedCohortArtifact(outputPath, artifact) {
   const parent = path.dirname(outputPath)
   const temporaryPath = path.join(
@@ -1926,10 +3236,13 @@ export function validateProductionAuditEnvironment(env) {
   if (!normalizeString(env.FIREBASE_ID_TOKEN)) {
     throw new Error('FIREBASE_ID_TOKEN is required.')
   }
+  const redactedArtifact = validateRedactedArtifactEnvironment(env)
+  const sensitiveRemediation = validateSensitiveRemediationEnvironment(env)
   return {
     academyId: env.ACADEMY_ID,
     token: env.FIREBASE_ID_TOKEN,
-    redactedArtifact: validateRedactedArtifactEnvironment(env),
+    redactedArtifact,
+    sensitiveRemediation,
   }
 }
 
@@ -2010,6 +3323,1548 @@ async function runSingleAudit({ fetchImpl, token, academyId }) {
   return aggregateAuditPagesWithEvidence(pagesByFamily)
 }
 
+async function callRemediationEvidencePage({
+  fetchImpl,
+  token,
+  academyId,
+  scanFamily,
+  cursor,
+}) {
+  const response = await fetchImpl(REMEDIATION_EVIDENCE_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      data: {
+        evidenceVersion: REMEDIATION_EVIDENCE_VERSION,
+        academyId,
+        scanFamily,
+        limit: PAGE_LIMIT,
+        cursor,
+        purpose: REMEDIATION_EVIDENCE_PURPOSE,
+        dryRun: true,
+        previewOnly: true,
+        commit: false,
+      },
+    }),
+  })
+  if (!response?.ok) {
+    throw new Error(
+      `Evidence callable failed with HTTP ${response?.status || 'unknown'}.`
+    )
+  }
+  let body
+  try {
+    body = await response.json()
+  } catch {
+    failProtocol('Evidence callable returned malformed JSON.')
+  }
+  if (body?.error || !Object.prototype.hasOwnProperty.call(body || {}, 'result')) {
+    failProtocol('Evidence callable returned an error envelope.')
+  }
+  return validateRemediationEvidencePage(body.result, {
+    academyId,
+    scanFamily,
+  })
+}
+
+function evidenceRecordUniqueKey(record) {
+  return record.kind === 'occurrence'
+    ? `${record.kind}:${record.rootId}`
+    : `${record.kind}:${record.id}`
+}
+
+export function evidenceVariantIdentityIds(record) {
+  const identities = [
+    typedOccurrenceKey(record.occurrenceKey),
+    buildTypedDocumentKey(
+      rootFamilyDocumentType(record.rootFamily),
+      record.rootId
+    ),
+  ]
+  for (const targetType of ['lesson', 'reservation', 'slot']) {
+    const resolvedId = record.resolvedLinks?.[`${targetType}Id`]
+    if (resolvedId) {
+      identities.push(buildTypedDocumentKey(targetType, resolvedId))
+    }
+  }
+  return uniqueStrings(identities)
+}
+
+function collapseEvidenceVariantGroups(records) {
+  const groups = []
+  const familyOrder = new Map(
+    ['lessons', 'reservations', 'slots'].map((family, index) => [family, index])
+  )
+  const sorted = [...records].sort((left, right) =>
+    familyOrder.get(left.rootFamily) - familyOrder.get(right.rootFamily) ||
+    left.rootId.localeCompare(right.rootId)
+  )
+  for (const record of sorted) {
+    const ids = evidenceVariantIdentityIds(record)
+    const matchingIndexes = groups
+      .map((group, index) => ids.some((id) => group.ids.has(id)) ? index : -1)
+      .filter((index) => index >= 0)
+    if (matchingIndexes.length === 0) {
+      groups.push({ ids: new Set(ids), variants: [record] })
+      continue
+    }
+    const target = groups[matchingIndexes[0]]
+    target.variants.push(record)
+    ids.forEach((id) => target.ids.add(id))
+    for (const index of matchingIndexes.slice(1).reverse()) {
+      const source = groups[index]
+      target.variants.push(...source.variants)
+      source.ids.forEach((id) => target.ids.add(id))
+      groups.splice(index, 1)
+    }
+  }
+  return groups.map((group) => {
+    const identityIds = [...group.ids].sort()
+    const variants = group.variants.sort((left, right) =>
+      familyOrder.get(left.rootFamily) - familyOrder.get(right.rootFamily) ||
+      left.rootId.localeCompare(right.rootId)
+    )
+    const occurrenceKeys = uniqueStrings(
+      variants.map((variant) => variant.occurrenceKey)
+    )
+    if (
+      occurrenceKeys.length !== 1 ||
+      !identityIds.includes(occurrenceKeys[0])
+    ) {
+      failProtocol('Evidence identity group has an invalid occurrence key.')
+    }
+    return {
+      groupKey: sha256(stableStringify(identityIds)),
+      identityIds,
+      occurrenceKey: occurrenceKeys[0],
+      variants,
+    }
+  }).sort((left, right) => left.groupKey.localeCompare(right.groupKey))
+}
+
+function aggregateRemediationEvidencePages(pagesByFamily) {
+  const recordsByFamily = {}
+  const familyDigests = {}
+  const occurrenceGroups = new Map()
+  let totalRecords = 0
+
+  for (const family of REMEDIATION_EVIDENCE_SCAN_FAMILIES) {
+    const pages = pagesByFamily?.[family]
+    if (!Array.isArray(pages) || pages.length === 0) {
+      failProtocol(`Evidence scan family ${family} has no pages.`)
+    }
+    if (
+      pages.some((page) => page.page.truncated || page.page.omittedCount > 0) ||
+      pages.at(-1).page.complete !== true ||
+      pages.at(-1).page.hasMore !== false
+    ) {
+      failProtocol(`Evidence scan family ${family} is incomplete.`)
+    }
+    const recordMap = new Map()
+    for (const record of pages.flatMap((page) => page.records)) {
+      const key = evidenceRecordUniqueKey(record)
+      const existing = recordMap.get(key)
+      if (existing && existing.auditFingerprint !== record.auditFingerprint) {
+        failProtocol(
+          `Evidence scan family ${family} contains a conflicting duplicate.`
+        )
+      }
+      recordMap.set(key, record)
+    }
+    const records = [...recordMap.values()].sort((left, right) =>
+      evidenceRecordUniqueKey(left).localeCompare(evidenceRecordUniqueKey(right))
+    )
+    totalRecords += records.length
+    if (totalRecords > MAX_RECORDS_PER_RUN) {
+      failProtocol('Evidence exceeded the record safety bound.')
+    }
+    recordsByFamily[family] = records
+    familyDigests[family] = sha256(stableStringify({
+      schemaDigest: remediationEvidenceSchemaDigest(),
+      pages: pages.map((page) => ({
+        page: page.page,
+        pageDigest: page.pageDigest,
+        recordFingerprints: page.records.map((record) =>
+          record.auditFingerprint
+        ),
+      })),
+    }))
+    if (['lessons', 'reservations', 'slots'].includes(family)) {
+      for (const record of records.filter(
+        (candidate) => candidate.provenance.classifier.isFixed === true
+      )) {
+        occurrenceGroups.set(
+          `${record.rootFamily}:${record.rootId}`,
+          record
+        )
+      }
+    }
+  }
+
+  const occurrences = collapseEvidenceVariantGroups(
+    [...occurrenceGroups.values()]
+  )
+  const rawOccurrenceSet = occurrences.map((group) => group.groupKey)
+  const uniqueRecordMap = (records, label, documentType) => {
+    const result = new Map()
+    for (const record of records) {
+      const key = buildTypedDocumentKey(documentType, record.id)
+      if (result.has(key)) {
+        failProtocol(`${label} contains duplicate document ids.`)
+      }
+      result.set(key, record)
+    }
+    return result
+  }
+  const creditMap = uniqueRecordMap(
+    recordsByFamily.credits,
+    'Credit evidence',
+    'credit'
+  )
+  const membershipMap = uniqueRecordMap(
+    recordsByFamily.memberships,
+    'Membership evidence',
+    'membership'
+  )
+  const packageMap = uniqueRecordMap(
+    recordsByFamily.packages,
+    'Package evidence',
+    'package'
+  )
+  const creditOwners = new Map()
+  for (const credit of creditMap.values()) {
+    if (
+      credit.academyScoped !== true ||
+      !isEvidenceDeductionCredit(credit)
+    ) {
+      continue
+    }
+    const targets = evidenceCreditTypedTargets(credit)
+    const matches = occurrences.filter((occurrence) =>
+      targets.some((target) => occurrence.identityIds.includes(target))
+    )
+    if (matches.length > 1) {
+      failProtocol('Credit has ambiguous typed occurrence attribution.')
+    }
+    if (matches.length === 1) {
+      creditOwners.set(
+        buildTypedDocumentKey('credit', credit.id),
+        matches[0].groupKey
+      )
+      const studentIds = uniqueStrings(matches[0].variants.flatMap(
+        (variant) => variant.studentCandidateIds
+      ))
+      const packageIds = uniqueStrings(matches[0].variants.flatMap(
+        (variant) => variant.packageCandidateIds
+      ))
+      if (
+        (credit.studentId && !studentIds.includes(credit.studentId)) ||
+        (credit.packageId && !packageIds.includes(credit.packageId))
+      ) {
+        matches[0].conflictingCreditEvidence = true
+      }
+    }
+  }
+  const joins = new Map()
+  const addJoin = (map, entry, label) => {
+    const existing = map.get(entry.id)
+    if (existing && stableStringify(existing) !== stableStringify(entry)) {
+      failProtocol(`${label} disagrees across evidence variants.`)
+    }
+    map.set(entry.id, entry)
+  }
+  for (const occurrence of occurrences) {
+    const occurrenceLabel = 'Evidence occurrence'
+    const packageIds = new Set()
+    const creditIds = new Set()
+    const membershipIds = new Set()
+    const studentIds = new Set()
+    const joinedPackageMap = new Map()
+    const joinedCreditMap = new Map()
+    const joinedMembershipMap = new Map()
+    for (const variant of occurrence.variants) {
+      if (
+        variant.studentId !==
+          (variant.studentCandidateIds.length === 1
+            ? variant.studentCandidateIds[0]
+            : null) ||
+        variant.packageId !==
+          (variant.packageCandidateIds.length === 1
+            ? variant.packageCandidateIds[0]
+            : null)
+      ) {
+        failProtocol(`${occurrenceLabel} guessed an ambiguous candidate.`)
+      }
+      variant.studentCandidateIds.forEach((id) => studentIds.add(id))
+      variant.packageCandidateIds.forEach((id) => packageIds.add(id))
+      variant.membershipIds.forEach((id) => membershipIds.add(id))
+
+      const packageCandidateIds = variant.packageCandidates.map(
+        (candidate) => candidate.id
+      )
+      if (stableStringify(packageCandidateIds) !==
+          stableStringify(variant.packageCandidateIds)) {
+        failProtocol(`${occurrenceLabel} package candidate ids disagree.`)
+      }
+      const packagePresence = new Map(
+        variant.documentPresence.packages.map(
+          (entry) => [entry.id, entry]
+        )
+      )
+      if (stableStringify([...packagePresence.keys()]) !==
+          stableStringify(variant.packageCandidateIds)) {
+        failProtocol(`${occurrenceLabel} package presence disagrees.`)
+      }
+      for (const candidate of variant.packageCandidates) {
+        const presence = packagePresence.get(candidate.id)
+        if (
+          presence.exists !== candidate.exists ||
+          presence.academyScoped !== candidate.academyScoped ||
+          presence.academyId !== candidate.academyId
+        ) {
+          failProtocol(`${occurrenceLabel} package existence disagrees.`)
+        }
+        const familyRecord = packageMap.get(
+          buildTypedDocumentKey('package', candidate.id)
+        )
+        if (!candidate.exists) {
+          if (familyRecord) {
+            failProtocol('Missing package candidate unexpectedly exists.')
+          }
+          addJoin(joinedPackageMap, {
+            academyScoped: null,
+            evidence: null,
+            exists: false,
+            id: candidate.id,
+          }, 'Missing package join')
+          continue
+        }
+        if (candidate.academyScoped === true) {
+          if (!familyRecord) {
+            failProtocol('Same-academy package family evidence is missing.')
+          }
+          const { kind, auditFingerprint, ...summary } = familyRecord
+          const {
+            academyScoped,
+            exists,
+            sources,
+            ...candidateSummary
+          } = candidate
+          assertSameValue(
+            candidateSummary,
+            summary,
+            'Package candidate and family evidence disagree.'
+          )
+          addJoin(joinedPackageMap, {
+            academyScoped: true,
+            evidence: familyRecord,
+            exists: true,
+            id: candidate.id,
+          }, 'Package join')
+        } else {
+          if (familyRecord) {
+            failProtocol('Foreign package appeared in academy family evidence.')
+          }
+          addJoin(joinedPackageMap, {
+            academyScoped: false,
+            evidence: candidate,
+            exists: true,
+            id: candidate.id,
+          }, 'Package join')
+        }
+      }
+
+      const matchedMembershipIds = variant.teacher.matchedMemberships.map(
+        (membership) => membership.id
+      )
+      if (stableStringify(matchedMembershipIds) !==
+          stableStringify(variant.membershipIds)) {
+        failProtocol(`${occurrenceLabel} membership ids disagree.`)
+      }
+      const membershipPresence = new Map(
+        variant.documentPresence.memberships.map(
+          (entry) => [entry.id, entry.exists]
+        )
+      )
+      if (
+        stableStringify([...membershipPresence.keys()]) !==
+          stableStringify(variant.membershipIds) ||
+        [...membershipPresence.values()].some((exists) => exists !== true)
+      ) {
+        failProtocol(`${occurrenceLabel} membership presence disagrees.`)
+      }
+      for (const membership of variant.teacher.matchedMemberships) {
+        const familyRecord = membershipMap.get(
+          buildTypedDocumentKey('membership', membership.id)
+        )
+        if (!familyRecord) {
+          failProtocol('Referenced membership evidence is missing.')
+        }
+        const { kind, auditFingerprint, ...summary } = familyRecord
+        assertSameValue(
+          membership,
+          summary,
+          'Membership summary and family evidence disagree.'
+        )
+        addJoin(joinedMembershipMap, {
+          academyScoped: true,
+          evidence: familyRecord,
+          exists: true,
+          id: membership.id,
+        }, 'Membership join')
+      }
+
+      const embeddedCreditMap = uniqueRecordMap(
+        variant.credits,
+        'Embedded credit evidence',
+        'credit'
+      )
+      const creditPresence = new Map(
+        variant.documentPresence.credits.map(
+          (entry) => [entry.id, entry]
+        )
+      )
+      if (stableStringify([...creditPresence.keys()]) !==
+          stableStringify(variant.creditIds)) {
+        failProtocol(`${occurrenceLabel} credit presence disagrees.`)
+      }
+      for (const creditId of variant.creditIds) {
+        const presence = creditPresence.get(creditId)
+        const typedCreditId = buildTypedDocumentKey('credit', creditId)
+        const embedded = embeddedCreditMap.get(typedCreditId)
+        const familyRecord = creditMap.get(typedCreditId)
+        if (!presence.exists) {
+          if (embedded || familyRecord) {
+            failProtocol('Declared missing credit unexpectedly exists.')
+          }
+          addJoin(joinedCreditMap, {
+            academyScoped: null,
+            evidence: null,
+            exists: false,
+            id: creditId,
+          }, 'Missing credit join')
+          creditIds.add(creditId)
+          continue
+        }
+        if (!embedded) failProtocol('Embedded credit evidence is missing.')
+        if (
+          embedded.academyScoped !== presence.academyScoped ||
+          embedded.academyId !== presence.academyId
+        ) {
+          failProtocol('Embedded credit scope disagrees with presence.')
+        }
+        if (embedded.academyScoped === true) {
+          if (!familyRecord) {
+            failProtocol('Same-academy credit family evidence is missing.')
+          }
+          assertSameValue(
+            embedded,
+            familyRecord,
+            'Embedded and family credit evidence disagree.'
+          )
+          if (
+            isEvidenceDeductionCredit(familyRecord) &&
+            creditOwners.get(typedCreditId) !== occurrence.groupKey
+          ) {
+            continue
+          }
+          addJoin(joinedCreditMap, {
+            academyScoped: true,
+            evidence: familyRecord,
+            exists: true,
+            id: creditId,
+          }, 'Credit join')
+        } else {
+          if (familyRecord) {
+            failProtocol('Foreign credit appeared in academy family evidence.')
+          }
+          addJoin(joinedCreditMap, {
+            academyScoped: false,
+            evidence: embedded,
+            exists: true,
+            id: creditId,
+          }, 'Credit join')
+        }
+        creditIds.add(creditId)
+      }
+      if (
+        [...embeddedCreditMap.keys()].some((id) =>
+          !variant.creditIds.some(
+            (creditId) => buildTypedDocumentKey('credit', creditId) === id
+          )
+        )
+      ) {
+        failProtocol('Embedded credit evidence contains an unknown record.')
+      }
+    }
+    for (const [typedCreditId, owner] of creditOwners) {
+      if (owner !== occurrence.groupKey) continue
+      const familyRecord = creditMap.get(typedCreditId)
+      if (!familyRecord) {
+        failProtocol('Attributed credit family evidence is missing.')
+      }
+      addJoin(joinedCreditMap, {
+        academyScoped: true,
+        evidence: familyRecord,
+        exists: true,
+        id: familyRecord.id,
+      }, 'Attributed credit join')
+      creditIds.add(familyRecord.id)
+    }
+    occurrence.studentCandidateIds = [...studentIds].sort()
+    occurrence.packageCandidateIds = [...packageIds].sort()
+    occurrence.creditIds = [...creditIds].sort()
+    occurrence.membershipIds = [...membershipIds].sort()
+    occurrence.joins = {
+      credits: [...joinedCreditMap.values()].sort((a, b) =>
+        a.id.localeCompare(b.id)
+      ),
+      memberships: [...joinedMembershipMap.values()].sort((a, b) =>
+        a.id.localeCompare(b.id)
+      ),
+      packages: [...joinedPackageMap.values()].sort((a, b) =>
+        a.id.localeCompare(b.id)
+      ),
+    }
+    joins.set(occurrence.groupKey, occurrence.joins)
+  }
+  const embeddedCredits = occurrences.flatMap((occurrence) =>
+    occurrence.joins.credits
+      .filter((join) => join.exists)
+      .map((join) => join.evidence)
+  )
+  const allCreditMap = new Map()
+  for (const record of [
+    ...recordsByFamily.credits,
+    ...embeddedCredits,
+  ]) {
+    const typedCreditId = buildTypedDocumentKey('credit', record.id)
+    const existing = allCreditMap.get(typedCreditId)
+    if (existing &&
+        stableStringify(existing) !== stableStringify(record)) {
+      failProtocol('Credit evidence disagrees across sources.')
+    }
+    allCreditMap.set(typedCreditId, record)
+  }
+  const relevantCredits = [...allCreditMap.values()]
+    .filter((record) =>
+      record.academyScoped === true &&
+      evidenceCreditIsAuditRelevant(record) &&
+      isEvidenceDeductionCredit(record)
+    )
+    .sort((left, right) => left.id.localeCompare(right.id))
+  const nonOccurrenceCredits = [...allCreditMap.values()].filter(
+    (record) =>
+      !creditOwners.has(buildTypedDocumentKey('credit', record.id)) &&
+      isEvidenceDeductionCredit(record) &&
+      evidenceCreditHasFixedProvenance(record)
+  )
+  const linksStatusProvenanceDigest = sha256(stableStringify(
+    occurrences.map((group) => ({
+      groupKey: group.groupKey,
+      identityIds: group.identityIds,
+      conflictingCreditEvidence: group.conflictingCreditEvidence === true,
+      variants: group.variants.map((record) => ({
+        auditFingerprint: record.auditFingerprint,
+        rootFamily: record.rootFamily,
+        rootId: record.rootId,
+      })),
+    }))
+  ))
+  const runDigest = sha256(stableStringify({
+    familyDigests,
+    rawOccurrenceSet,
+    linksStatusProvenanceDigest,
+    relevantCreditIds: relevantCredits.map((record) => record.id),
+  }))
+  return {
+    recordsByFamily,
+    familyDigests,
+    occurrences,
+    joins,
+    relevantCredits,
+    nonOccurrenceCredits,
+    rawOccurrenceSet,
+    linksStatusProvenanceDigest,
+    totalRecords,
+    runDigest,
+  }
+}
+
+async function runSingleRemediationEvidence({ fetchImpl, token, academyId }) {
+  const pagesByFamily = Object.fromEntries(
+    REMEDIATION_EVIDENCE_SCAN_FAMILIES.map((family) => [family, []])
+  )
+  for (const scanFamily of REMEDIATION_EVIDENCE_SCAN_FAMILIES) {
+    let cursor = null
+    const seenCursors = new Set()
+    while (true) {
+      if (pagesByFamily[scanFamily].length >= MAX_PAGES_PER_FAMILY) {
+        failProtocol(
+          `Evidence scan family ${scanFamily} exceeded the page safety bound.`
+        )
+      }
+      const page = await callRemediationEvidencePage({
+        fetchImpl,
+        token,
+        academyId,
+        scanFamily,
+        cursor,
+      })
+      pagesByFamily[scanFamily].push(page)
+      if (!page.page.hasMore) break
+      const nextCursor = page.page.nextCursor
+      if (nextCursor === cursor || seenCursors.has(nextCursor)) {
+        failProtocol('Evidence pagination cursor did not advance.')
+      }
+      seenCursors.add(nextCursor)
+      cursor = nextCursor
+    }
+  }
+  return aggregateRemediationEvidencePages(pagesByFamily)
+}
+
+function assertSameValue(left, right, message) {
+  if (stableStringify(left) !== stableStringify(right)) failProtocol(message)
+}
+
+function auditOccurrenceClassification(auditRun, occurrenceKey) {
+  const classification = auditRun.occurrenceEvidence.find(
+    (row) => row.occurrenceKey === occurrenceKey
+  )
+  if (!classification) {
+    failProtocol('Audit occurrence classification is missing.')
+  }
+  return classification
+}
+
+export function reconcileAuditAndRemediationEvidence({
+  auditRun,
+  evidenceRun,
+  redactedArtifact,
+  academyId,
+  redactionKey,
+}) {
+  assertPlainObject(auditRun, 'auditRun')
+  assertPlainObject(evidenceRun, 'evidenceRun')
+  assertPlainObject(redactedArtifact, 'redactedArtifact')
+  const auditOccurrences = auditRun.rawAuditEvidence?.occurrences
+  if (!Array.isArray(auditOccurrences)) {
+    failProtocol('Raw audit occurrence evidence is unavailable.')
+  }
+  const auditKeys = auditOccurrences
+    .map((record) => record.occurrenceKey)
+    .sort()
+  if (new Set(auditKeys).size !== auditKeys.length) {
+    failProtocol('Audit occurrence keys contain duplicates.')
+  }
+  if (
+    auditKeys.length !== auditRun.summary.totals.occurrences ||
+    evidenceRun.occurrences.length !== auditKeys.length ||
+    redactedArtifact.occurrences.length !== auditKeys.length
+  ) {
+    failProtocol('Audit and remediation evidence occurrence counts differ.')
+  }
+  const redactedByKey = new Map(
+    redactedArtifact.occurrences.map((row) => [row.cohortKey, row])
+  )
+  const reconciledOccurrences = []
+  const nullableAuditId = (value) => normalizeString(value) || null
+
+  const matchedGroupKeys = new Set()
+  for (const audit of [...auditOccurrences].sort((left, right) =>
+    left.occurrenceKey.localeCompare(right.occurrenceKey)
+  )) {
+    const auditIdentityIds = uniqueStrings([
+      typedOccurrenceKey(audit.occurrenceKey),
+      nullableAuditId(audit.lessonId)
+        ? buildTypedDocumentKey('lesson', audit.lessonId)
+        : null,
+      nullableAuditId(audit.reservationId)
+        ? buildTypedDocumentKey('reservation', audit.reservationId)
+        : null,
+      nullableAuditId(audit.slotId)
+        ? buildTypedDocumentKey('slot', audit.slotId)
+        : null,
+    ])
+    const matches = evidenceRun.occurrences.filter((group) =>
+      auditIdentityIds.some((id) => group.identityIds.includes(id))
+    )
+    if (matches.length !== 1 || matchedGroupKeys.has(matches[0]?.groupKey)) {
+      failProtocol(
+        'Audit occurrence must match exactly one unused evidence identity group.'
+      )
+    }
+    const evidenceGroup = matches[0]
+    if (evidenceGroup.occurrenceKey !== audit.occurrenceKey) {
+      failProtocol('Audit and evidence occurrence keys differ.')
+    }
+    matchedGroupKeys.add(evidenceGroup.groupKey)
+    const evidence = {
+      ...evidenceGroup,
+      occurrenceKey: audit.occurrenceKey,
+    }
+    const classification = auditOccurrenceClassification(
+      auditRun,
+      audit.occurrenceKey
+    )
+    if (
+      evidence.conflictingCreditEvidence === true &&
+      !classification.blockingCategories.includes(
+        'conflictingDeductionEvidence'
+      )
+    ) {
+      failProtocol(
+        'Conflicting credit evidence lacks the matching audit blocker.'
+      )
+    }
+    if (audit.studentId &&
+        !evidence.studentCandidateIds.includes(audit.studentId)) {
+      failProtocol('Audit student id is absent from evidence candidates.')
+    }
+    if (audit.packageId &&
+        !evidence.packageCandidateIds.includes(audit.packageId)) {
+      failProtocol('Audit package id is absent from evidence candidates.')
+    }
+    const classifierParity = evidence.variants.some((variant) =>
+      variant.provenance.ledger.mode === audit.provenance.ledgerMode &&
+      variant.provenance.origin.originMode === audit.provenance.originMode &&
+      variant.provenance.origin.hasLegacyEvidence ===
+        audit.provenance.hasLegacyEvidence &&
+      variant.provenance.origin.legacyEvidenceConsistent ===
+        audit.provenance.legacyEvidenceConsistent
+    )
+    if (!classifierParity) {
+      failProtocol('Audit and evidence ledger/origin classifiers differ.')
+    }
+    if (evidence.variants.some(
+      (variant) => variant.provenance.classifier.isFixed !== true
+    )) {
+      failProtocol('Manifest occurrence is not fixed-private evidence.')
+    }
+    const packageCandidates = evidence.variants
+      .flatMap((variant) => variant.packageCandidates)
+      .filter((candidate) => candidate.id === audit.packageId)
+    const existingPackageCandidates = packageCandidates.filter(
+      (candidate) => candidate.exists
+    )
+    const scopedPackageCandidates = existingPackageCandidates.filter(
+      (candidate) => candidate.academyScoped === true
+    )
+    if (
+      (audit.exists.package === true &&
+        existingPackageCandidates.length === 0) ||
+      (audit.exists.package === false &&
+        existingPackageCandidates.length > 0)
+    ) {
+      failProtocol('Audit and evidence package existence differ.')
+    }
+    if (
+      audit.exists.package === true &&
+      scopedPackageCandidates.length > 0 &&
+      !scopedPackageCandidates.some((candidate) =>
+        stableStringify({
+          remainingCount: candidate.remainingCount,
+          totalCount: candidate.totalCount,
+          usedCount: candidate.usedCount,
+        }) === stableStringify(audit.packageCounts)
+      )
+    ) {
+      failProtocol('Audit and evidence package counts differ.')
+    }
+    const auditCredits = auditRun.rawAuditEvidence.credits
+      .filter((credit) => creditBelongsToOccurrence(credit, audit))
+      .sort((left, right) => left.id.localeCompare(right.id))
+    const requiredCreditIds = uniqueStrings([
+      ...auditCredits.map((credit) => credit.id),
+      ...(audit.deduction?.ids || []),
+    ])
+    if (requiredCreditIds.some((id) => !evidence.creditIds.includes(id))) {
+      failProtocol('Audit credit id is absent from remediation evidence.')
+    }
+    for (const auditCredit of auditCredits) {
+      const joined = evidence.joins.credits.find(
+        (entry) => entry.id === auditCredit.id
+      )
+      const sameAcademy = auditCredit.academyId === academyId
+      if (
+        !joined?.exists ||
+        joined.academyScoped !== sameAcademy ||
+        (sameAcademy && joined.evidence?.academyId !== academyId) ||
+        (!sameAcademy &&
+          joined.evidence?.academyId !== auditCredit.academyId)
+      ) {
+        failProtocol('Audit and evidence declared credit scopes differ.')
+      }
+    }
+    const cohortKey = redactedCohortKey({
+      redactionKey,
+      academyId,
+      occurrenceKey: audit.occurrenceKey,
+    })
+    const redacted = redactedByKey.get(cohortKey)
+    if (!redacted) failProtocol('Redacted cohort parity failed.')
+    if (
+      redacted.currentLedgerMode !== classification.currentLedgerMode ||
+      redacted.originMode !== classification.originMode ||
+      redacted.legacyPartitionState !== classification.legacyPartitionState ||
+      stableStringify(redacted.blockingCategories) !==
+        stableStringify(classification.blockingCategories)
+    ) {
+      failProtocol('Redacted and audit occurrence classifications differ.')
+    }
+    reconciledOccurrences.push({
+      audit,
+      classification,
+      evidence,
+      joins: evidenceGroup.joins,
+      redacted,
+      cohortKey,
+    })
+  }
+  if (matchedGroupKeys.size !== evidenceRun.occurrences.length) {
+    failProtocol('Evidence identity group was not matched by the audit.')
+  }
+
+  const auditRelevantCredits = auditRun.rawAuditEvidence.credits
+    .filter((credit) =>
+      credit.academyId === academyId && isDeductionCredit(credit)
+    )
+    .sort((left, right) => left.id.localeCompare(right.id))
+  const evidenceRelevantCredits = [...evidenceRun.relevantCredits]
+    .sort((left, right) => left.id.localeCompare(right.id))
+  if (stableStringify(auditRelevantCredits.map((credit) => credit.id)) !==
+      stableStringify(evidenceRelevantCredits.map((credit) => credit.id))) {
+    failProtocol('Audit and evidence relevant credit sets differ.')
+  }
+  for (const auditCredit of auditRelevantCredits) {
+    const evidenceCredit = evidenceRelevantCredits.find(
+      (credit) => credit.id === auditCredit.id
+    )
+    if (evidenceCredit.academyScoped !== true) {
+      failProtocol('Same-academy audit credit has foreign evidence scope.')
+    }
+    if (
+      stableStringify(auditCreditTypedTargets(auditCredit)) !==
+      stableStringify(evidenceCreditTypedTargets(evidenceCredit))
+    ) {
+      failProtocol('Audit and evidence relevant credit targets differ.')
+    }
+    const comparisons = [
+      [auditCredit.packageId, evidenceCredit.packageId],
+      [auditCredit.studentId, evidenceCredit.studentId],
+      [auditCredit.sourceType, evidenceCredit.sourceType],
+      [auditCredit.actionType, evidenceCredit.actionType],
+      [auditCredit.ledgerTransition, evidenceCredit.ledgerTransition],
+      [auditCredit.marker, evidenceCredit.fixedPrivateDeductionLedger],
+    ]
+    if (
+      auditCredit.deltaCount !== evidenceCredit.deltaCount ||
+      comparisons.some(([auditValue, evidenceValue]) =>
+        nullableAuditId(auditValue) !== evidenceValue
+      )
+    ) {
+      failProtocol('Audit and evidence relevant credit details differ.')
+    }
+  }
+
+  const redactedNonOccurrenceByKey = new Map(
+    redactedArtifact.nonOccurrenceEvidence.map((row) => [row.cohortKey, row])
+  )
+  const unmatchedByKey = new Map(
+    auditRun.unmatchedEvidence.map((row) => [row.evidenceKey, row])
+  )
+  const nonOccurrenceEvidence = evidenceRun.nonOccurrenceCredits.map((credit) => {
+    const evidenceKey = `credit:${credit.id}`
+    const auditEvidence = unmatchedByKey.get(evidenceKey)
+    if (!auditEvidence) {
+      failProtocol('Relevant non-occurrence credit lacks audit blocker evidence.')
+    }
+    const cohortKey = redactedCohortKey({
+      redactionKey,
+      academyId,
+      occurrenceKey: evidenceKey,
+    })
+    const redacted = redactedNonOccurrenceByKey.get(cohortKey)
+    if (
+      !redacted ||
+      redacted.evidenceType !== auditEvidence.evidenceType ||
+      stableStringify(redacted.blockingCategories) !==
+        stableStringify(auditEvidence.blockingCategories)
+    ) {
+      failProtocol('Redacted non-occurrence credit parity failed.')
+    }
+    return { auditEvidence, cohortKey, credit, evidenceKey, redacted }
+  })
+  if (
+    nonOccurrenceEvidence.length !== auditRun.unmatchedEvidence.length ||
+    nonOccurrenceEvidence.length !== redactedArtifact.nonOccurrenceEvidence.length
+  ) {
+    failProtocol('Non-occurrence credit evidence count differs.')
+  }
+  return {
+    occurrences: reconciledOccurrences.sort((left, right) =>
+      left.cohortKey.localeCompare(right.cohortKey)
+    ),
+    nonOccurrenceEvidence: nonOccurrenceEvidence.sort((left, right) =>
+      left.cohortKey.localeCompare(right.cohortKey)
+    ),
+  }
+}
+
+const MANIFEST_TOP_LEVEL_FIELDS = [
+  'academyId',
+  'auditVersion',
+  'cohortIndexes',
+  'completedRuns',
+  'consistency',
+  'createdAt',
+  'evidenceRunDigests',
+  'evidenceVersion',
+  'generatedForReadOnlyTriage',
+  'manifestVersion',
+  'nonOccurrenceEvidence',
+  'occurrences',
+  'productionWriteAuthorized',
+  'project',
+  'redactedArtifactDigest',
+  'repairPlanApproved',
+  'runDigests',
+  'sensitivity',
+  'summary',
+]
+const MANIFEST_OCCURRENCE_FIELDS = [
+  'blockingCategories',
+  'cohortKey',
+  'creditIds',
+  'currentLedgerMode',
+  'evidenceFlags',
+  'evidenceVariants',
+  'identityIds',
+  'joinEvidence',
+  'legacyPartitionState',
+  'membershipIds',
+  'occurrenceKey',
+  'originMode',
+  'packageCandidateIds',
+  'primaryCohort',
+  'repairability',
+  'secondaryCategories',
+  'studentCandidateIds',
+]
+const MANIFEST_JOIN_FIELDS = ['credits', 'memberships', 'packages']
+const MANIFEST_JOIN_ENTRY_FIELDS = [
+  'academyScoped', 'evidence', 'exists', 'id',
+]
+const MANIFEST_NON_OCCURRENCE_FIELDS = [
+  'blockingCategories',
+  'cohortKey',
+  'creditEvidence',
+  'evidenceKey',
+  'evidenceType',
+  'repairability',
+]
+const MANIFEST_EVIDENCE_FLAG_FIELDS = [
+  'activeLifecycle',
+  'allFixedFamilies',
+  'hasAllLinkedDocuments',
+  'linkageEvidenceComplete',
+  'packageReferencePresent',
+  'singleConsistentDeductionEvidence',
+  'teacherMappingResolved',
+  'terminalLifecycle',
+]
+
+function manifestOccurrenceFromReconciliation(row) {
+  const evidence = row.evidence
+  return {
+    cohortKey: row.cohortKey,
+    occurrenceKey: evidence.occurrenceKey,
+    identityIds: [...evidence.identityIds],
+    evidenceVariants: structuredClone(evidence.variants),
+    studentCandidateIds: [...evidence.studentCandidateIds],
+    packageCandidateIds: [...evidence.packageCandidateIds],
+    membershipIds: [...evidence.membershipIds],
+    creditIds: [...evidence.creditIds],
+    joinEvidence: structuredClone(row.joins),
+    primaryCohort: row.redacted.primaryCohort,
+    secondaryCategories: [...row.redacted.secondaryCategories],
+    blockingCategories: [...row.redacted.blockingCategories],
+    currentLedgerMode: row.redacted.currentLedgerMode,
+    originMode: row.redacted.originMode,
+    legacyPartitionState: row.redacted.legacyPartitionState,
+    repairability: row.redacted.repairability,
+    evidenceFlags: { ...row.redacted.evidenceFlags },
+  }
+}
+
+function manifestNonOccurrenceFromReconciliation(row) {
+  return {
+    cohortKey: row.cohortKey,
+    evidenceKey: row.evidenceKey,
+    evidenceType: row.redacted.evidenceType,
+    blockingCategories: [...row.redacted.blockingCategories],
+    repairability: row.redacted.repairability,
+    creditEvidence: structuredClone(row.credit),
+  }
+}
+
+function buildCohortIndexes(occurrences) {
+  const indexes = {
+    byPrimaryCohort: Object.fromEntries(
+      REDACTED_PRIMARY_COHORTS.map((value) => [value, []])
+    ),
+    byRepairability: Object.fromEntries(
+      REDACTED_REPAIRABILITY_VALUES.map((value) => [value, []])
+    ),
+    byBlockingCategory: Object.fromEntries(
+      AUDIT_BLOCKER_CATEGORIES.map((value) => [value, []])
+    ),
+  }
+  occurrences.forEach((occurrence, index) => {
+    indexes.byPrimaryCohort[occurrence.primaryCohort].push(index)
+    indexes.byRepairability[occurrence.repairability].push(index)
+    for (const category of occurrence.blockingCategories) {
+      indexes.byBlockingCategory[category].push(index)
+    }
+  })
+  return indexes
+}
+
+export function buildSensitiveRemediationManifest({
+  auditSummary,
+  auditRun,
+  evidenceRun,
+  redactedArtifact,
+  academyId,
+  redactionKey,
+  evidenceRunDigests,
+  createdAt = new Date().toISOString(),
+}) {
+  if (
+    auditSummary.consistency !== true ||
+    auditSummary.completedRuns !== 2 ||
+    !Array.isArray(evidenceRunDigests) ||
+    evidenceRunDigests.length !== 2 ||
+    evidenceRunDigests.some((digest) => !HEX_64.test(digest))
+  ) {
+    failProtocol('Sensitive remediation manifest requires two consistent runs.')
+  }
+  const reconciled = reconcileAuditAndRemediationEvidence({
+    auditRun,
+    evidenceRun,
+    redactedArtifact,
+    academyId,
+    redactionKey,
+  })
+  const occurrences = reconciled.occurrences.map(
+    manifestOccurrenceFromReconciliation
+  )
+  const nonOccurrenceEvidence = reconciled.nonOccurrenceEvidence.map(
+    manifestNonOccurrenceFromReconciliation
+  )
+  const evidenceFamilyRecordCounts = Object.fromEntries(
+    REMEDIATION_EVIDENCE_SCAN_FAMILIES.map((family) => [
+      family,
+      evidenceRun.recordsByFamily[family].length,
+    ])
+  )
+  const manifest = {
+    manifestVersion: REMEDIATION_MANIFEST_VERSION,
+    auditVersion: AUDIT_VERSION,
+    evidenceVersion: REMEDIATION_EVIDENCE_VERSION,
+    sensitivity: LOCAL_REMEDIATION_SENSITIVITY,
+    project: PRODUCTION_PROJECT_ID,
+    academyId,
+    createdAt,
+    completedRuns: 2,
+    consistency: true,
+    runDigests: [...auditSummary.runDigests],
+    evidenceRunDigests: [...evidenceRunDigests],
+    redactedArtifactDigest: sha256(stableStringify(redactedArtifact)),
+    summary: {
+      totalOccurrences: redactedArtifact.summary.totalOccurrences,
+      safeOccurrences: redactedArtifact.summary.safeOccurrences,
+      blockedOccurrences: redactedArtifact.summary.blockedOccurrences,
+      rawBlockingCategoryCount:
+        redactedArtifact.summary.rawBlockingCategoryCount,
+      evidenceRecordCount: evidenceRun.totalRecords,
+      reconciledOccurrences: occurrences.length,
+      nonOccurrenceEvidenceCount: nonOccurrenceEvidence.length,
+      evidenceFamilyRecordCounts,
+    },
+    productionWriteAuthorized: false,
+    repairPlanApproved: false,
+    generatedForReadOnlyTriage: true,
+    occurrences,
+    nonOccurrenceEvidence,
+    cohortIndexes: buildCohortIndexes(occurrences),
+  }
+  return validateSensitiveRemediationManifest(manifest)
+}
+
+function validateManifestIndexMap(value, keys, occurrenceCount, label) {
+  assertExactKeys(value, keys, label)
+  for (const key of keys) {
+    const indexes = value[key]
+    if (!Array.isArray(indexes)) failProtocol(`${label}.${key} must be an array.`)
+    if (
+      indexes.some((index) =>
+        !Number.isSafeInteger(index) || index < 0 || index >= occurrenceCount
+      ) ||
+      new Set(indexes).size !== indexes.length ||
+      stableStringify(indexes) !== stableStringify([...indexes].sort((a, b) => a - b))
+    ) {
+      failProtocol(`${label}.${key} contains invalid occurrence indexes.`)
+    }
+  }
+}
+
+function validateManifestClassification(value, label) {
+  assertStringArray(value.blockingCategories, `${label}.blockingCategories`)
+  assertStringArray(value.secondaryCategories, `${label}.secondaryCategories`)
+  if (
+    value.blockingCategories.some((category) =>
+      !AUDIT_BLOCKER_CATEGORIES.includes(category)
+    ) ||
+    stableStringify(value.blockingCategories) !==
+      stableStringify(sortedBlockingCategories(value.blockingCategories))
+  ) {
+    failProtocol(`${label}.blockingCategories are invalid.`)
+  }
+  if (!REDACTED_PRIMARY_COHORTS.includes(value.primaryCohort)) {
+    failProtocol(`${label}.primaryCohort is unsupported.`)
+  }
+  if (!REDACTED_REPAIRABILITY_VALUES.includes(value.repairability)) {
+    failProtocol(`${label}.repairability is unsupported.`)
+  }
+  if (!['canonical', 'legacy', 'inconsistent'].includes(value.currentLedgerMode) ||
+      ![
+        'born_canonical', 'converted_legacy', 'legacy_unconverted', 'unknown',
+      ].includes(value.originMode) ||
+      ![
+        'already_converted', 'terminal_unconverted', 'safely_convertible',
+        'unsafe', 'not_legacy_origin',
+      ].includes(value.legacyPartitionState)) {
+    failProtocol(`${label} classification value is unsupported.`)
+  }
+  assertExactKeys(
+    value.evidenceFlags,
+    MANIFEST_EVIDENCE_FLAG_FIELDS,
+    `${label}.evidenceFlags`
+  )
+  for (const field of MANIFEST_EVIDENCE_FLAG_FIELDS) {
+    assertBoolean(value.evidenceFlags[field], `${label}.evidenceFlags.${field}`)
+  }
+  const expectedPrimary = classifyPrimaryCohort(value)
+  const expectedSecondary = value.blockingCategories.filter(
+    (category) => !expectedPrimary.categories.includes(category)
+  )
+  const expectedRepairability = classifyRepairability(
+    value,
+    expectedPrimary.name
+  )
+  if (
+    value.primaryCohort !== expectedPrimary.name ||
+    stableStringify(value.secondaryCategories) !==
+      stableStringify(expectedSecondary) ||
+    value.repairability !== expectedRepairability
+  ) {
+    failProtocol(`${label} classification is not derivable from its evidence.`)
+  }
+}
+
+function validateManifestOccurrence(value, index, academyId) {
+  const label = `manifest.occurrences[${index}]`
+  assertExactKeys(value, MANIFEST_OCCURRENCE_FIELDS, label)
+  assertDigest(value.cohortKey, `${label}.cohortKey`)
+  assertRawIdentifier(value.occurrenceKey, `${label}.occurrenceKey`, {
+    allowEmpty: false,
+  })
+  for (const field of [
+    'identityIds',
+    'studentCandidateIds',
+    'packageCandidateIds',
+    'membershipIds',
+    'creditIds',
+  ]) {
+    assertCanonicalIdentifierArray(value[field], `${label}.${field}`)
+  }
+  if (!Array.isArray(value.evidenceVariants) ||
+      value.evidenceVariants.length === 0) {
+    failProtocol(`${label}.evidenceVariants must be non-empty.`)
+  }
+  value.evidenceVariants.forEach((variant, variantIndex) =>
+    validateOccurrenceEvidenceRecord(
+      variant,
+      academyId,
+      variant.rootFamily,
+      `${label}.evidenceVariants[${variantIndex}]`
+    )
+  )
+  const familyOrder = new Map(
+    ['lessons', 'reservations', 'slots'].map((family, order) => [family, order])
+  )
+  const sortedVariants = [...value.evidenceVariants].sort((left, right) =>
+    familyOrder.get(left.rootFamily) - familyOrder.get(right.rootFamily) ||
+    left.rootId.localeCompare(right.rootId)
+  )
+  if (
+    stableStringify(sortedVariants) !== stableStringify(value.evidenceVariants) ||
+    new Set(value.evidenceVariants.map((variant) =>
+      `${variant.rootFamily}:${variant.rootId}`
+    )).size !== value.evidenceVariants.length ||
+    value.evidenceVariants.some(
+      (variant) => variant.provenance.classifier.isFixed !== true
+    )
+  ) {
+    failProtocol(`${label}.evidenceVariants are invalid.`)
+  }
+  if (collapseEvidenceVariantGroups(value.evidenceVariants).length !== 1) {
+    failProtocol(`${label}.evidenceVariants are not one transitive group.`)
+  }
+  const expectedIdentityIds = uniqueStrings(
+    value.evidenceVariants.flatMap(evidenceVariantIdentityIds)
+  )
+  const expectedStudentIds = uniqueStrings(
+    value.evidenceVariants.flatMap((variant) => variant.studentCandidateIds)
+  )
+  const expectedPackageIds = uniqueStrings(
+    value.evidenceVariants.flatMap((variant) => variant.packageCandidateIds)
+  )
+  const expectedMembershipIds = uniqueStrings(
+    value.evidenceVariants.flatMap((variant) => variant.membershipIds)
+  )
+  for (const [actual, expected, field] of [
+    [value.identityIds, expectedIdentityIds, 'identityIds'],
+    [value.studentCandidateIds, expectedStudentIds, 'studentCandidateIds'],
+    [value.packageCandidateIds, expectedPackageIds, 'packageCandidateIds'],
+    [value.membershipIds, expectedMembershipIds, 'membershipIds'],
+  ]) {
+    assertSameValue(actual, expected, `${label}.${field} union is invalid.`)
+  }
+  assertExactKeys(value.joinEvidence, MANIFEST_JOIN_FIELDS,
+    `${label}.joinEvidence`)
+  const expectedJoinIds = {
+    credits: value.creditIds,
+    memberships: value.membershipIds,
+    packages: value.packageCandidateIds,
+  }
+  for (const family of MANIFEST_JOIN_FIELDS) {
+    const entries = value.joinEvidence[family]
+    if (!Array.isArray(entries)) {
+      failProtocol(`${label}.joinEvidence.${family} must be an array.`)
+    }
+    entries.forEach((entry, entryIndex) => {
+      const entryLabel = `${label}.joinEvidence.${family}[${entryIndex}]`
+      assertExactKeys(entry, MANIFEST_JOIN_ENTRY_FIELDS, entryLabel)
+      assertRawIdentifier(entry.id, `${entryLabel}.id`, { allowEmpty: false })
+      assertBoolean(entry.exists, `${entryLabel}.exists`)
+      if (entry.academyScoped !== null) {
+        assertBoolean(entry.academyScoped, `${entryLabel}.academyScoped`)
+      }
+      if (!entry.exists) {
+        if (entry.academyScoped !== null || entry.evidence !== null) {
+          failProtocol(`${entryLabel} missing join state is invalid.`)
+        }
+      } else if (entry.academyScoped === null || entry.evidence === null) {
+        failProtocol(`${entryLabel} existing join state is invalid.`)
+      } else if (family === 'credits') {
+        validateCreditEvidenceRecord(entry.evidence, academyId,
+          `${entryLabel}.evidence`, {
+            allowAcademyMismatch: !entry.academyScoped,
+          })
+      } else if (family === 'memberships') {
+        validateMembershipSummary(entry.evidence, academyId,
+          `${entryLabel}.evidence`, { fingerprint: true })
+      } else if (entry.academyScoped) {
+        validatePackageSummary(entry.evidence, academyId,
+          `${entryLabel}.evidence`, { fingerprint: true })
+      } else {
+        validatePackageSummary(entry.evidence, academyId,
+          `${entryLabel}.evidence`, {
+            candidate: true,
+            allowAcademyMismatch: true,
+          })
+      }
+      if (entry.exists && (
+        entry.evidence.id !== entry.id ||
+        (entry.academyScoped && entry.evidence.academyId !== academyId) ||
+        (!entry.academyScoped && entry.evidence.academyId === academyId)
+      )) {
+        failProtocol(`${entryLabel} scope marker is invalid.`)
+      }
+      const embeddedMatches = value.evidenceVariants.some((variant) => {
+        if (family === 'credits') {
+          const presence = variant.documentPresence.credits.find(
+            (candidate) => candidate.id === entry.id
+          )
+          if (!entry.exists) return presence?.exists === false
+          const embeddedMatch = variant.credits.some((credit) =>
+            credit.id === entry.id &&
+            stableStringify(credit) === stableStringify(entry.evidence)
+          )
+          const directTypedMatch = entry.academyScoped === true &&
+            evidenceCreditTypedTargets(entry.evidence).some((target) =>
+              value.identityIds.includes(target)
+            )
+          return embeddedMatch || directTypedMatch
+        }
+        if (family === 'memberships') {
+          if (!entry.exists) return false
+          return variant.teacher.matchedMemberships.some((membership) => {
+            const { kind, auditFingerprint, ...summary } = entry.evidence
+            return membership.id === entry.id &&
+              stableStringify(membership) === stableStringify(summary)
+          })
+        }
+        return variant.packageCandidates.some((candidate) => {
+          if (!entry.exists) {
+            return candidate.id === entry.id && candidate.exists === false
+          }
+          if (!entry.academyScoped) {
+            return candidate.id === entry.id &&
+              stableStringify(candidate) === stableStringify(entry.evidence)
+          }
+          const { kind, auditFingerprint, ...summary } = entry.evidence
+          const {
+            academyScoped,
+            exists,
+            sources,
+            ...candidateSummary
+          } = candidate
+          return candidate.id === entry.id &&
+            stableStringify(candidateSummary) === stableStringify(summary)
+        })
+      })
+      if (!embeddedMatches) {
+        failProtocol(`${entryLabel} does not match embedded evidence.`)
+      }
+    })
+    if (
+      new Set(entries.map((entry) => entry.id)).size !== entries.length ||
+      stableStringify(entries) !== stableStringify([...entries].sort(
+        (left, right) => left.id.localeCompare(right.id)
+      ))
+    ) {
+      failProtocol(`${label}.joinEvidence.${family} is not canonical.`)
+    }
+    assertSameValue(
+      entries.map((entry) => entry.id),
+      expectedJoinIds[family],
+      `${label}.joinEvidence.${family} is incomplete.`
+    )
+  }
+  validateManifestClassification(value, label)
+}
+
+function validateManifestNonOccurrence(value, index, academyId) {
+  const label = `manifest.nonOccurrenceEvidence[${index}]`
+  assertExactKeys(value, MANIFEST_NON_OCCURRENCE_FIELDS, label)
+  assertDigest(value.cohortKey, `${label}.cohortKey`)
+  assertRawIdentifier(value.evidenceKey, `${label}.evidenceKey`, {
+    allowEmpty: false,
+  })
+  if (value.evidenceType !== 'unmatched_fixed_deduction_credit') {
+    failProtocol(`${label}.evidenceType is unsupported.`)
+  }
+  assertStringArray(value.blockingCategories, `${label}.blockingCategories`)
+  if (
+    value.blockingCategories.some((category) =>
+      !AUDIT_BLOCKER_CATEGORIES.includes(category)
+    ) ||
+    stableStringify(value.blockingCategories) !==
+      stableStringify(sortedBlockingCategories(value.blockingCategories))
+  ) {
+    failProtocol(`${label}.blockingCategories are invalid.`)
+  }
+  if (value.repairability !== 'financial_manual_review_only') {
+    failProtocol(`${label}.repairability is unsupported.`)
+  }
+  validateCreditEvidenceRecord(value.creditEvidence, academyId,
+    `${label}.creditEvidence`)
+}
+
+export function validateSensitiveRemediationManifest(manifest) {
+  assertExactKeys(manifest, MANIFEST_TOP_LEVEL_FIELDS, 'manifest')
+  if (
+    manifest.manifestVersion !== REMEDIATION_MANIFEST_VERSION ||
+    manifest.auditVersion !== AUDIT_VERSION ||
+    manifest.evidenceVersion !== REMEDIATION_EVIDENCE_VERSION ||
+    manifest.sensitivity !== LOCAL_REMEDIATION_SENSITIVITY ||
+    manifest.project !== PRODUCTION_PROJECT_ID ||
+    manifest.completedRuns !== 2 ||
+    manifest.consistency !== true ||
+    manifest.productionWriteAuthorized !== false ||
+    manifest.repairPlanApproved !== false ||
+    manifest.generatedForReadOnlyTriage !== true
+  ) {
+    failProtocol('Sensitive remediation manifest metadata is invalid.')
+  }
+  assertRawIdentifier(manifest.academyId, 'manifest.academyId', {
+    allowEmpty: false,
+  })
+  if (
+    typeof manifest.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(manifest.createdAt)) ||
+    new Date(manifest.createdAt).toISOString() !== manifest.createdAt
+  ) {
+    failProtocol('manifest.createdAt must be an ISO timestamp.')
+  }
+  for (const field of ['runDigests', 'evidenceRunDigests']) {
+    if (
+      !Array.isArray(manifest[field]) ||
+      manifest[field].length !== 2 ||
+      manifest[field].some((value) => typeof value !== 'string' || !HEX_64.test(value))
+    ) {
+      failProtocol(`manifest.${field} must contain two digests.`)
+    }
+  }
+  assertDigest(manifest.redactedArtifactDigest, 'manifest.redactedArtifactDigest')
+  assertExactKeys(manifest.summary, [
+    'blockedOccurrences',
+    'evidenceFamilyRecordCounts',
+    'evidenceRecordCount',
+    'nonOccurrenceEvidenceCount',
+    'rawBlockingCategoryCount',
+    'reconciledOccurrences',
+    'safeOccurrences',
+    'totalOccurrences',
+  ], 'manifest.summary')
+  for (const field of [
+    'blockedOccurrences',
+    'evidenceRecordCount',
+    'nonOccurrenceEvidenceCount',
+    'rawBlockingCategoryCount',
+    'reconciledOccurrences',
+    'safeOccurrences',
+    'totalOccurrences',
+  ]) {
+    assertSafeInteger(manifest.summary[field], `manifest.summary.${field}`)
+  }
+  assertExactKeys(
+    manifest.summary.evidenceFamilyRecordCounts,
+    REMEDIATION_EVIDENCE_SCAN_FAMILIES,
+    'manifest.summary.evidenceFamilyRecordCounts'
+  )
+  for (const family of REMEDIATION_EVIDENCE_SCAN_FAMILIES) {
+    assertSafeInteger(
+      manifest.summary.evidenceFamilyRecordCounts[family],
+      `manifest.summary.evidenceFamilyRecordCounts.${family}`
+    )
+  }
+  if (!Array.isArray(manifest.occurrences)) {
+    failProtocol('manifest.occurrences must be an array.')
+  }
+  if (!Array.isArray(manifest.nonOccurrenceEvidence)) {
+    failProtocol('manifest.nonOccurrenceEvidence must be an array.')
+  }
+  manifest.occurrences.forEach((occurrence, index) =>
+    validateManifestOccurrence(occurrence, index, manifest.academyId)
+  )
+  manifest.nonOccurrenceEvidence.forEach((evidence, index) =>
+    validateManifestNonOccurrence(evidence, index, manifest.academyId)
+  )
+  const expectedEvidenceRecordCount =
+    REMEDIATION_EVIDENCE_SCAN_FAMILIES.reduce(
+      (sum, family) =>
+        sum + manifest.summary.evidenceFamilyRecordCounts[family],
+      0
+    )
+  const expectedRawBlockingCategoryCount = [
+    ...manifest.occurrences,
+    ...manifest.nonOccurrenceEvidence,
+  ].reduce((sum, row) => sum + row.blockingCategories.length, 0)
+  const expectedBlockedOccurrences = manifest.occurrences.filter(
+    (row) => row.blockingCategories.length > 0
+  ).length
+  const expectedSafeOccurrences =
+    manifest.occurrences.length - expectedBlockedOccurrences
+  if (
+    manifest.summary.totalOccurrences !== manifest.occurrences.length ||
+    manifest.summary.reconciledOccurrences !== manifest.occurrences.length ||
+    manifest.summary.safeOccurrences + manifest.summary.blockedOccurrences !==
+      manifest.occurrences.length ||
+    manifest.summary.safeOccurrences !== expectedSafeOccurrences ||
+    manifest.summary.blockedOccurrences !== expectedBlockedOccurrences ||
+    manifest.summary.rawBlockingCategoryCount !==
+      expectedRawBlockingCategoryCount ||
+    manifest.summary.evidenceRecordCount !== expectedEvidenceRecordCount ||
+    new Set(manifest.occurrences.map((row) => row.occurrenceKey)).size !==
+      manifest.occurrences.length ||
+    new Set(manifest.occurrences.map((row) => row.cohortKey)).size !==
+      manifest.occurrences.length ||
+    manifest.summary.nonOccurrenceEvidenceCount !==
+      manifest.nonOccurrenceEvidence.length ||
+    new Set(manifest.nonOccurrenceEvidence.map((row) => row.evidenceKey)).size !==
+      manifest.nonOccurrenceEvidence.length ||
+    new Set([
+      ...manifest.occurrences.map((row) => row.cohortKey),
+      ...manifest.nonOccurrenceEvidence.map((row) => row.cohortKey),
+    ]).size !== manifest.occurrences.length + manifest.nonOccurrenceEvidence.length
+  ) {
+    failProtocol('Sensitive remediation manifest occurrence totals are invalid.')
+  }
+  assertExactKeys(manifest.cohortIndexes, [
+    'byBlockingCategory',
+    'byPrimaryCohort',
+    'byRepairability',
+  ], 'manifest.cohortIndexes')
+  validateManifestIndexMap(
+    manifest.cohortIndexes.byBlockingCategory,
+    AUDIT_BLOCKER_CATEGORIES,
+    manifest.occurrences.length,
+    'manifest.cohortIndexes.byBlockingCategory'
+  )
+  validateManifestIndexMap(
+    manifest.cohortIndexes.byPrimaryCohort,
+    REDACTED_PRIMARY_COHORTS,
+    manifest.occurrences.length,
+    'manifest.cohortIndexes.byPrimaryCohort'
+  )
+  validateManifestIndexMap(
+    manifest.cohortIndexes.byRepairability,
+    REDACTED_REPAIRABILITY_VALUES,
+    manifest.occurrences.length,
+    'manifest.cohortIndexes.byRepairability'
+  )
+  const expectedIndexes = buildCohortIndexes(manifest.occurrences)
+  assertSameValue(
+    manifest.cohortIndexes,
+    expectedIndexes,
+    'Sensitive remediation manifest cohort indexes are invalid.'
+  )
+  return manifest
+}
+
+export async function writeSensitiveRemediationManifest(outputPath, manifest) {
+  validateSensitiveRemediationManifest(manifest)
+  const parent = path.dirname(outputPath)
+  const temporaryPath = path.join(
+    parent,
+    `.${path.basename(outputPath)}.${process.pid}.` +
+      `${crypto.randomBytes(12).toString('hex')}.tmp`
+  )
+  let handle
+  try {
+    handle = await fs.promises.open(temporaryPath, 'wx', 0o600)
+    await handle.writeFile(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+    await handle.sync()
+    await handle.close()
+    handle = null
+    await fs.promises.chmod(temporaryPath, 0o600)
+    await fs.promises.link(temporaryPath, outputPath)
+    await fs.promises.unlink(temporaryPath)
+  } catch {
+    if (handle) await handle.close().catch(() => {})
+    await fs.promises.unlink(temporaryPath).catch(() => {})
+    throw new Error('Sensitive remediation manifest write failed.')
+  }
+}
+
 function consistencyPayload(summary) {
   return {
     complete: summary.complete,
@@ -2031,15 +4886,24 @@ export async function runProductionAudit({
   env = process.env,
   fetchImpl = globalThis.fetch,
   artifactWriter = writeRedactedCohortArtifact,
+  sensitiveManifestWriter = writeSensitiveRemediationManifest,
+  now = () => new Date(),
 } = {}) {
   const {
     academyId,
     token,
     redactedArtifact,
+    sensitiveRemediation,
   } = validateProductionAuditEnvironment(env)
   if (typeof fetchImpl !== 'function') throw new Error('fetch is unavailable.')
   const firstRun = await runSingleAudit({ fetchImpl, token, academyId })
+  const firstEvidenceRun = sensitiveRemediation
+    ? await runSingleRemediationEvidence({ fetchImpl, token, academyId })
+    : null
   const secondRun = await runSingleAudit({ fetchImpl, token, academyId })
+  const secondEvidenceRun = sensitiveRemediation
+    ? await runSingleRemediationEvidence({ fetchImpl, token, academyId })
+    : null
   const first = firstRun.summary
   const second = secondRun.summary
   const summaryConsistency = stableStringify(consistencyPayload(first)) ===
@@ -2054,7 +4918,22 @@ export async function runProductionAudit({
       unmatchedEvidence: secondRun.unmatchedEvidence,
       sourceReconciliation: secondRun.sourceReconciliation,
     })
-  const consistency = summaryConsistency && artifactEvidenceConsistency
+  const evidenceConsistency = !sensitiveRemediation ||
+    stableStringify({
+      familyDigests: firstEvidenceRun.familyDigests,
+      rawOccurrenceSet: firstEvidenceRun.rawOccurrenceSet,
+      linksStatusProvenanceDigest:
+        firstEvidenceRun.linksStatusProvenanceDigest,
+      runDigest: firstEvidenceRun.runDigest,
+    }) === stableStringify({
+      familyDigests: secondEvidenceRun.familyDigests,
+      rawOccurrenceSet: secondEvidenceRun.rawOccurrenceSet,
+      linksStatusProvenanceDigest:
+        secondEvidenceRun.linksStatusProvenanceDigest,
+      runDigest: secondEvidenceRun.runDigest,
+    })
+  const consistency =
+    summaryConsistency && artifactEvidenceConsistency && evidenceConsistency
   const result = {
     ...second,
     quietWindowConfirmed: true,
@@ -2064,6 +4943,8 @@ export async function runProductionAudit({
     pass: second.pass && first.pass && consistency,
   }
   validateFinalAuditSummary(result)
+  let redactedCohortArtifact
+  let sensitiveManifest
   if (
     redactedArtifact &&
     result.complete === true &&
@@ -2071,7 +4952,7 @@ export async function runProductionAudit({
     result.omittedCount === 0 &&
     result.consistency === true
   ) {
-    const artifact = buildRedactedCohortArtifact({
+    redactedCohortArtifact = buildRedactedCohortArtifact({
       summary: result,
       occurrenceEvidence: secondRun.occurrenceEvidence,
       unmatchedEvidence: secondRun.unmatchedEvidence,
@@ -2079,7 +4960,35 @@ export async function runProductionAudit({
       academyId,
       redactionKey: redactedArtifact.redactionKey,
     })
-    await artifactWriter(redactedArtifact.outputPath, artifact)
+    if (sensitiveRemediation) {
+      reconcileAuditAndRemediationEvidence({
+        auditRun: firstRun,
+        evidenceRun: firstEvidenceRun,
+        redactedArtifact: redactedCohortArtifact,
+        academyId,
+        redactionKey: redactedArtifact.redactionKey,
+      })
+      sensitiveManifest = buildSensitiveRemediationManifest({
+        auditSummary: result,
+        auditRun: secondRun,
+        evidenceRun: secondEvidenceRun,
+        redactedArtifact: redactedCohortArtifact,
+        academyId,
+        redactionKey: redactedArtifact.redactionKey,
+        evidenceRunDigests: [
+          firstEvidenceRun.runDigest,
+          secondEvidenceRun.runDigest,
+        ],
+        createdAt: now().toISOString(),
+      })
+    }
+    await artifactWriter(redactedArtifact.outputPath, redactedCohortArtifact)
+    if (sensitiveManifest) {
+      await sensitiveManifestWriter(
+        sensitiveRemediation.outputPath,
+        sensitiveManifest
+      )
+    }
   }
   return result
 }
@@ -2271,6 +5180,7 @@ export async function executeAuditCli({
   env = process.env,
   fetchImpl = globalThis.fetch,
   artifactWriter = writeRedactedCohortArtifact,
+  sensitiveManifestWriter = writeSensitiveRemediationManifest,
   writeOutput = (value) => process.stdout.write(`${value}\n`),
   writeError = (value) => process.stderr.write(`${value}\n`),
 } = {}) {
@@ -2279,14 +5189,47 @@ export async function executeAuditCli({
       env,
       fetchImpl,
       artifactWriter,
+      sensitiveManifestWriter,
     })
-    writeOutput(JSON.stringify(summary))
+    const sensitiveMode = Object.prototype.hasOwnProperty.call(
+      env,
+      'AUDIT_SENSITIVE_REMEDIATION_OUTPUT'
+    ) || Object.prototype.hasOwnProperty.call(
+      env,
+      'CONFIRM_SENSITIVE_LOCAL_REMEDIATION_MANIFEST'
+    )
+    writeOutput(JSON.stringify(sensitiveMode
+      ? {
+          auditVersion: summary.auditVersion,
+          completedRuns: summary.completedRuns,
+          complete: summary.complete,
+          truncated: summary.truncated,
+          omittedCount: summary.omittedCount,
+          consistency: summary.consistency,
+          blockerTotal: summary.blockerTotal,
+          pass: summary.pass,
+          datasetDigest: summary.datasetDigest,
+          summaryDigest: summary.summaryDigest,
+          sensitiveRemediationMode: 'LOCAL_ONLY',
+          occurrenceCount: summary.totals.occurrences,
+        }
+      : summary))
     return exitCodeForAuditSummary(summary)
   } catch (error) {
     const token = normalizeString(env.FIREBASE_ID_TOKEN)
     const redactionKey = normalizeString(env.AUDIT_REDACTION_KEY)
-    const rawMessage = normalizeString(error?.message) || 'audit_failed'
-    const safeMessage = [token, redactionKey]
+    const academyId = normalizeString(env.ACADEMY_ID)
+    const sensitiveMode = Object.prototype.hasOwnProperty.call(
+      env,
+      'AUDIT_SENSITIVE_REMEDIATION_OUTPUT'
+    ) || Object.prototype.hasOwnProperty.call(
+      env,
+      'CONFIRM_SENSITIVE_LOCAL_REMEDIATION_MANIFEST'
+    )
+    const rawMessage = sensitiveMode
+      ? 'sensitive_remediation_audit_failed'
+      : normalizeString(error?.message) || 'audit_failed'
+    const safeMessage = [token, redactionKey, academyId]
       .filter(Boolean)
       .reduce(
         (message, secret) => message.split(secret).join('[REDACTED]'),
@@ -2296,7 +5239,7 @@ export async function executeAuditCli({
       auditVersion: AUDIT_VERSION,
       error: safeMessage,
     }))
-    return 1
+    return error instanceof RemediationEvidenceIncompleteError ? 3 : 1
   }
 }
 
