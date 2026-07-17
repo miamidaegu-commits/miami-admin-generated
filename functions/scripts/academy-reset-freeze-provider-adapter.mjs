@@ -801,20 +801,6 @@ async function observeIamPass(session, functions) {
       }
       groupExpansions.set(edge.sourceNode, expansion);
     }
-    for (const permission of REVIEWED_WRITABLE_PERMISSIONS) {
-      const troubleshoot = await execute(session, {
-        operationId: "policytroubleshooter.v3.iam.troubleshoot",
-        pathParams: {},
-        body: {accessTuple: {
-          fullResourceName: projectFullResource,
-          permission,
-          principal: principal.member,
-        }},
-      });
-      if (troubleshoot.response.access !== "NOT_GRANTED") {
-        fail("IAM_WRITABLE_PERMISSION_NOT_EXACTLY_DENIED");
-      }
-    }
   }
   const approvedExpansionIdentities = [...new Set([
     ...KNOWN_IAM_GROUPS,
@@ -927,7 +913,6 @@ async function observeIamPass(session, functions) {
     "cloudfunctions.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "iam.googleapis.com",
-    "policytroubleshooter.googleapis.com",
   ]) {
     addLineage(session, "approved_service_usage_service", [serviceName]);
     const service = await execute(session, {

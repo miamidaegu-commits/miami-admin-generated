@@ -23,17 +23,37 @@ import {
   PROVIDER_AUTH_DEPENDENCY,
   PROVIDER_HTTP_RUNTIME,
   PROVIDER_NO_MUTATION_OPERATION_COUNT,
+  PROVIDER_MANDATORY_OPERATION_COUNT,
+  PROVIDER_MANDATORY_OPERATION_IDS,
+  PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
   PROVIDER_OPERATION_ALLOWLIST_VERSION,
+  PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+  PROVIDER_OPERATION_CLASSIFICATION_VERSION,
   PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
   PROVIDER_OPERATION_IDS,
   PROVIDER_OPERATION_REGISTRY,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
   PROVIDER_TRANSPORT,
+  assertProviderOperationClassification,
   assertProviderOperationRegistry,
 } from "./academy-reset-freeze-provider-operations.mjs";
 import {
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
 } from "./academy-reset-freeze-provider-reviewed-sources.mjs";
+import {
+  EFFECTIVE_MANDATORY_PERMISSION_CONTRACT,
+  EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+  OFFICIAL_EVIDENCE_SET_DIGEST,
+  PERMISSION_RESEARCH_ARTIFACT_SHA256,
+  READONLY_PERMISSION_MANIFEST_DIGEST,
+  READONLY_PERMISSION_MANIFEST_VERSION,
+  REVIEWED_EVIDENCE_SET_DIGEST,
+  assertEffectiveMandatoryPermissionContract,
+  assertReadonlyPermissionManifest,
+} from "./academy-reset-freeze-readonly-permissions.mjs";
 
 export {
   CRITICAL_RUNTIME_SOURCE_PATHS,
@@ -46,13 +66,13 @@ export {
 };
 
 export const WRITE_FREEZE_CONTRACT_VERSION =
-  "academy_reset_write_freeze.v3";
+  "academy_reset_write_freeze.v4";
 export const WRITE_FREEZE_PROOF_VERSION =
-  "academy_reset_write_freeze_proof.v3";
+  "academy_reset_write_freeze_proof.v4";
 export const DEPLOYMENT_APPROVAL_RECEIPT_VERSION =
-  "academy_reset_deployment_approval.v3";
+  "academy_reset_deployment_approval.v4";
 export const PROVIDER_OBSERVATION_VERSION =
-  "academy_reset_provider_observation.v3";
+  "academy_reset_provider_observation.v4";
 export const OBSERVATION_COMPLETENESS_VERSION =
   "academy_reset_observation_completeness.v1";
 export const IAM_FAMILY_COMPLETENESS_VERSION =
@@ -60,7 +80,7 @@ export const IAM_FAMILY_COMPLETENESS_VERSION =
 export const APPROVED_IAM_STATE_CONTRACT_VERSION =
   "academy_reset_approved_iam_state.v1";
 export const PROVIDER_DEPENDENCY_CONTRACT_VERSION =
-  "academy_reset_provider_dependency.v2";
+  "academy_reset_provider_dependency.v4";
 export const WRITABLE_PERMISSION_DERIVATION_VERSION =
   "academy_reset_writable_permission_derivation.v1";
 export const APPROVED_PROVIDER_ADAPTER_ID =
@@ -92,6 +112,35 @@ export const PROVIDER_ADAPTER_METADATA = Object.freeze({
   providerOperationAllowlistVersion: PROVIDER_OPERATION_ALLOWLIST_VERSION,
   providerOperationDescriptorSetDigest:
     PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
+  providerOperationClassificationVersion:
+    PROVIDER_OPERATION_CLASSIFICATION_VERSION,
+  providerOperationClassificationDigest:
+    PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+  providerMandatoryOperationCount: PROVIDER_MANDATORY_OPERATION_COUNT,
+  providerMandatoryOperationIdsDigest:
+    PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+  providerOptionalDiagnosticOperationCount:
+    PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT,
+  providerOptionalDiagnosticOperationIdsDigest:
+    PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
+  readonlyPermissionManifestVersion: READONLY_PERMISSION_MANIFEST_VERSION,
+  readonlyPermissionManifestDigest: READONLY_PERMISSION_MANIFEST_DIGEST,
+  readonlyPermissionOfficialEvidenceSetDigest: OFFICIAL_EVIDENCE_SET_DIGEST,
+  readonlyPermissionReviewedEvidenceSetDigest: REVIEWED_EVIDENCE_SET_DIGEST,
+  readonlyPermissionResearchArtifactSha256:
+    PERMISSION_RESEARCH_ARTIFACT_SHA256,
+  effectiveMandatoryPermissionContractDigest:
+    EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+  mandatoryRequiredIamPermissions:
+    EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions,
+  mandatoryConditionalPermissions:
+    EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.conditionalPermissions,
+  mandatoryAuxiliaryPermissions:
+    EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.auxiliaryPermissions,
+  mandatoryOauthScopes:
+    EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.oauthScopes,
+  mandatoryPermissionSourceOperations:
+    EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.sourceOperations,
   allowedOperations: PROVIDER_READ_ONLY_OPERATIONS,
   transport: PROVIDER_TRANSPORT,
   authDependency: PROVIDER_AUTH_DEPENDENCY,
@@ -1764,7 +1813,6 @@ export const REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS = Object.freeze([
   "iam.v1.projects.serviceAccounts.getIamPolicy",
   "iam.v1.projects.serviceAccounts.list",
   "iam.v2.policies.denypolicies.list",
-  "policytroubleshooter.v3.iam.troubleshoot",
   "run.v2.projects.locations.services.get",
   "run.v2.projects.locations.services.list",
   "run.v2.projects.locations.services.revisions.get",
@@ -1784,6 +1832,25 @@ const CONDITIONAL_PROVIDER_OBSERVATION_OPERATION_GROUPS = Object.freeze([
   ]),
   Object.freeze(["iam.v2.policies.denypolicies.get"]),
 ]);
+
+function assertProviderObservationClassificationInvariant() {
+  const conditionalIds =
+    CONDITIONAL_PROVIDER_OBSERVATION_OPERATION_GROUPS.flat();
+  exactArray(
+      PROVIDER_MANDATORY_OPERATION_IDS,
+      [...REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS, ...conditionalIds],
+      "mandatory provider observation classification",
+  );
+  exactArray(
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+      ["policytroubleshooter.v3.iam.troubleshoot"],
+      "optional diagnostic provider observation classification",
+  );
+  if (PROVIDER_MANDATORY_OPERATION_COUNT !== 28 ||
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT !== 1) {
+    fail("provider observation classification count invariant mismatch");
+  }
+}
 
 function validateProviderOperationExecution(value, label) {
   exactKeys(value, [
@@ -1820,6 +1887,10 @@ function validateProviderOperationExecution(value, label) {
   }
   const conditionalIds =
     CONDITIONAL_PROVIDER_OBSERVATION_OPERATION_GROUPS.flat();
+  if (value.executedOperationIds.some((operationId) =>
+    PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS.includes(operationId))) {
+    fail(`${label} cannot mix optional diagnostics into mandatory evidence`);
+  }
   if (value.executedOperationIds.some((operationId) =>
     !REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS.includes(operationId) &&
     !conditionalIds.includes(operationId))) {
@@ -1879,6 +1950,14 @@ function validateProviderOperationExecution(value, label) {
       value.reviewedSourceRepositoryRootDigest,
       `${label}.reviewedSourceRepositoryRootDigest`,
   );
+  const mandatoryExecutedOperationIds = value.executedOperationIds.filter(
+      (operationId) => PROVIDER_MANDATORY_OPERATION_IDS.includes(operationId),
+  );
+  return Object.freeze({
+    mandatoryExecutedOperationIds:
+      Object.freeze(mandatoryExecutedOperationIds),
+    mandatoryExecutedOperationCount: mandatoryExecutedOperationIds.length,
+  });
 }
 
 function validateMockProviderAdapterResultMetadata(metadata, operationExecution) {
@@ -1972,7 +2051,7 @@ function validateProviderDeploymentVerification(
         Date.parse(observation.observedAt)) {
     fail("provider observation scan envelope mismatch");
   }
-  validateProviderOperationExecution(
+  const operationClassificationBoundary = validateProviderOperationExecution(
       observation.operationExecution,
       "provider observation operation execution",
   );
@@ -2080,6 +2159,7 @@ function validateProviderDeploymentVerification(
     providerAdapterMetadata: PROVIDER_ADAPTER_METADATA,
     providerAdapterResultMetadata: providerResult.metadata,
     providerOperationExecution: observation.operationExecution,
+    operationClassificationBoundary,
     scheduler: observation.scheduler,
     schedulerTiming,
   });
@@ -2442,6 +2522,10 @@ function validateWriteFreezeEvidenceContract(
 ) {
   assertWriteSurfaceRegistry();
   assertProviderOperationRegistry();
+  assertProviderOperationClassification();
+  assertProviderObservationClassificationInvariant();
+  assertReadonlyPermissionManifest();
+  assertEffectiveMandatoryPermissionContract();
   assertNoSecretOrPii(evidence);
   exactKeys(evidence, EXACT_TOP_LEVEL_KEYS, "top-level evidence");
   if (evidence.schemaVersion !== WRITE_FREEZE_CONTRACT_VERSION ||
@@ -2496,6 +2580,40 @@ function validateWriteFreezeEvidenceContract(
       PROVIDER_OPERATION_ALLOWLIST_VERSION,
     providerOperationDescriptorSetDigest:
       PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
+    providerOperationClassificationVersion:
+      PROVIDER_OPERATION_CLASSIFICATION_VERSION,
+    providerOperationClassificationDigest:
+      PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+    providerMandatoryOperationIds: PROVIDER_MANDATORY_OPERATION_IDS,
+    providerMandatoryOperationCount: PROVIDER_MANDATORY_OPERATION_COUNT,
+    providerMandatoryOperationIdsDigest:
+      PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+    providerOptionalDiagnosticOperationIds:
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+    providerOptionalDiagnosticOperationCount:
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT,
+    providerOptionalDiagnosticOperationIdsDigest:
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
+    readonlyPermissionManifestVersion: READONLY_PERMISSION_MANIFEST_VERSION,
+    readonlyPermissionManifestDigest: READONLY_PERMISSION_MANIFEST_DIGEST,
+    readonlyPermissionOfficialEvidenceSetDigest:
+      OFFICIAL_EVIDENCE_SET_DIGEST,
+    readonlyPermissionReviewedEvidenceSetDigest:
+      REVIEWED_EVIDENCE_SET_DIGEST,
+    readonlyPermissionResearchArtifactSha256:
+      PERMISSION_RESEARCH_ARTIFACT_SHA256,
+    effectiveMandatoryPermissionContractDigest:
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+    mandatoryRequiredIamPermissions:
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions,
+    mandatoryConditionalPermissions:
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.conditionalPermissions,
+    mandatoryAuxiliaryPermissions:
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.auxiliaryPermissions,
+    mandatoryOauthScopes:
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.oauthScopes,
+    mandatoryPermissionSourceOperations:
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.sourceOperations,
     approvedProviderOperationIds: PROVIDER_READ_ONLY_OPERATIONS,
     providerTransport: PROVIDER_TRANSPORT,
     providerAuthDependency: PROVIDER_AUTH_DEPENDENCY,
@@ -2514,6 +2632,11 @@ function validateWriteFreezeEvidenceContract(
         .providerOperationExecution.executionTraceCount,
     providerExecutionTraceDigest: deploymentVerification
         .providerOperationExecution.executionTraceDigest,
+    mandatoryExecutedProviderOperationIds: deploymentVerification
+        .operationClassificationBoundary.mandatoryExecutedOperationIds,
+    mandatoryExecutedProviderOperationCount: deploymentVerification
+        .operationClassificationBoundary.mandatoryExecutedOperationCount,
+    policyAnalysisSource: "mandatory_iam_raw_analysis",
     providerReviewedSourceIdentityDigest: deploymentVerification
         .providerAdapterResultMetadata.reviewedSourceDigest,
     providerReviewedSourceRepositoryRootDigest: deploymentVerification
@@ -2580,6 +2703,43 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
       validation.providerOperationAllowlistVersion,
     providerOperationDescriptorSetDigest:
       validation.providerOperationDescriptorSetDigest,
+    providerOperationClassificationVersion:
+      validation.providerOperationClassificationVersion,
+    providerOperationClassificationDigest:
+      validation.providerOperationClassificationDigest,
+    providerMandatoryOperationIds:
+      validation.providerMandatoryOperationIds,
+    providerMandatoryOperationCount:
+      validation.providerMandatoryOperationCount,
+    providerMandatoryOperationIdsDigest:
+      validation.providerMandatoryOperationIdsDigest,
+    providerOptionalDiagnosticOperationIds:
+      validation.providerOptionalDiagnosticOperationIds,
+    providerOptionalDiagnosticOperationCount:
+      validation.providerOptionalDiagnosticOperationCount,
+    providerOptionalDiagnosticOperationIdsDigest:
+      validation.providerOptionalDiagnosticOperationIdsDigest,
+    readonlyPermissionManifestVersion:
+      validation.readonlyPermissionManifestVersion,
+    readonlyPermissionManifestDigest:
+      validation.readonlyPermissionManifestDigest,
+    readonlyPermissionOfficialEvidenceSetDigest:
+      validation.readonlyPermissionOfficialEvidenceSetDigest,
+    readonlyPermissionReviewedEvidenceSetDigest:
+      validation.readonlyPermissionReviewedEvidenceSetDigest,
+    readonlyPermissionResearchArtifactSha256:
+      validation.readonlyPermissionResearchArtifactSha256,
+    effectiveMandatoryPermissionContractDigest:
+      validation.effectiveMandatoryPermissionContractDigest,
+    mandatoryRequiredIamPermissions:
+      validation.mandatoryRequiredIamPermissions,
+    mandatoryConditionalPermissions:
+      validation.mandatoryConditionalPermissions,
+    mandatoryAuxiliaryPermissions:
+      validation.mandatoryAuxiliaryPermissions,
+    mandatoryOauthScopes: validation.mandatoryOauthScopes,
+    mandatoryPermissionSourceOperations:
+      validation.mandatoryPermissionSourceOperations,
     approvedProviderOperationIds:
       validation.approvedProviderOperationIds,
     providerTransport: validation.providerTransport,
@@ -2592,6 +2752,11 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
     executedProviderOperationCount: validation.executedProviderOperationCount,
     providerExecutionTraceCount: validation.providerExecutionTraceCount,
     providerExecutionTraceDigest: validation.providerExecutionTraceDigest,
+    mandatoryExecutedProviderOperationIds:
+      validation.mandatoryExecutedProviderOperationIds,
+    mandatoryExecutedProviderOperationCount:
+      validation.mandatoryExecutedProviderOperationCount,
+    policyAnalysisSource: validation.policyAnalysisSource,
     providerReviewedSourceIdentityDigest:
       validation.providerReviewedSourceIdentityDigest,
     runtimeGitTreeSha: options.providerRuntimeContext.treeSha,
@@ -2640,6 +2805,7 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
     actualMutations: 0,
     actualWrites: 0,
     executorImplemented: false,
+    executionEligible: false,
     advisoryOnly: true,
     advisoryPlanWriteFreezeVerifiedUnchanged: true,
     comparisonBaselineDigest: REQUIRED_COMPARISON_BASELINE_DIGEST,

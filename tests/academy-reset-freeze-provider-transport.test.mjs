@@ -993,6 +993,7 @@ test("approval lineage binds the exact reviewed Stage B source path set", () => 
     "functions/scripts/academy-reset-freeze-provider-attestation.mjs",
     "functions/scripts/academy-reset-freeze-provider-operations.mjs",
     "functions/scripts/academy-reset-freeze-provider-transport.mjs",
+    "functions/scripts/academy-reset-freeze-readonly-permissions.mjs",
     "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
     "functions/scripts/academy-reset-write-freeze-contract.mjs",
     "functions/scripts/verify-academy-reset-write-freeze.mjs",

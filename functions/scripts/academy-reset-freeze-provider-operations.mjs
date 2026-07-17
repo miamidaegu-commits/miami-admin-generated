@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 
 export const PROVIDER_OPERATION_ALLOWLIST_VERSION =
-  "academy_reset_freeze_provider_operations.v4";
+  "academy_reset_freeze_provider_operations.v5";
 export const PROVIDER_ADAPTER_CONTRACT_VERSION =
-  "academy_reset_freeze_provider_adapter.v4";
+  "academy_reset_freeze_provider_adapter.v5";
+export const PROVIDER_OPERATION_CLASSIFICATION_VERSION =
+  "academy_reset_freeze_operation_classification.v1";
 export const PROVIDER_TRANSPORT = "google_auth_library_native_fetch_v1";
 export const PROVIDER_AUTH_DEPENDENCY = "google-auth-library@10.6.2";
 export const PROVIDER_HTTP_RUNTIME = "node24_native_fetch";
@@ -50,6 +52,7 @@ const DESCRIPTOR_KEYS = Object.freeze([
   "host",
   "maxResponseBytes",
   "method",
+  "observationRequirement",
   "officialTranscodingTemplate",
   "operationId",
   "pagination",
@@ -279,6 +282,7 @@ function descriptor({
   apiVersion,
   host,
   method = "GET",
+  observationRequirement = "mandatory",
   pathTemplate,
   officialTranscodingTemplate = pathTemplate,
   pathParams: pathParamSchema,
@@ -301,6 +305,7 @@ function descriptor({
     host,
     apiVersion,
     method,
+    observationRequirement,
     pathTemplate,
     officialTranscodingTemplate,
     pathParams: pathParamSchema,
@@ -717,6 +722,7 @@ const operations = [
     apiVersion: "v3",
     host: "https://policytroubleshooter.googleapis.com",
     method: "POST",
+    observationRequirement: "optional_diagnostic",
     pathTemplate: "/v3/iam:troubleshoot",
     pathParams: pathParams({}),
     requestBody: semanticBody(objectSchema({
@@ -934,6 +940,17 @@ export const PROVIDER_OPERATION_IDS = deepFreeze(
     operations.map(({operationId}) => operationId),
 );
 export const PROVIDER_OPERATION_COUNT = PROVIDER_OPERATION_IDS.length;
+export const PROVIDER_MANDATORY_OPERATION_IDS = deepFreeze(
+    PROVIDER_OPERATION_IDS.filter((operationId) =>
+      operationId !== "policytroubleshooter.v3.iam.troubleshoot"),
+);
+export const PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS = deepFreeze([
+  "policytroubleshooter.v3.iam.troubleshoot",
+]);
+export const PROVIDER_MANDATORY_OPERATION_COUNT =
+  PROVIDER_MANDATORY_OPERATION_IDS.length;
+export const PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT =
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS.length;
 
 const operationMap = Object.create(null);
 for (const operation of operations) operationMap[operation.operationId] = operation;
@@ -996,6 +1013,138 @@ function canonical(value) {
     `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
 }
 
+function sha256Canonical(value) {
+  return crypto.createHash("sha256").update(canonical(value)).digest("hex");
+}
+
+export function computeProviderOperationIdSetDigest(operationIds) {
+  if (!Array.isArray(operationIds)) {
+    throw new Error("provider operation ID set must be an array");
+  }
+  return sha256Canonical([...operationIds].sort());
+}
+
+export const EXPECTED_PROVIDER_MANDATORY_OPERATION_IDS_DIGEST =
+  "e139a1144665acc246298b358a3bfbb98e0acbee0c509e3a8f2a93f2a01ba8f4";
+export const EXPECTED_PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST =
+  "4b152b183bd0cde66744b0d58dda6af4672d3eeb8208fe0346ffb90f9ccdbad3";
+export const PROVIDER_MANDATORY_OPERATION_IDS_DIGEST =
+  computeProviderOperationIdSetDigest(PROVIDER_MANDATORY_OPERATION_IDS);
+export const PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST =
+  computeProviderOperationIdSetDigest(
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+  );
+
+export const PROVIDER_OPERATION_CLASSIFICATION = deepFreeze({
+  version: PROVIDER_OPERATION_CLASSIFICATION_VERSION,
+  operationCount: PROVIDER_OPERATION_COUNT,
+  mandatoryOperationIds: PROVIDER_MANDATORY_OPERATION_IDS,
+  mandatoryOperationCount: PROVIDER_MANDATORY_OPERATION_COUNT,
+  mandatoryOperationIdsDigest: PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+  optionalDiagnosticOperationIds: PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+  optionalDiagnosticOperationCount:
+    PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT,
+  optionalDiagnosticOperationIdsDigest:
+    PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
+});
+
+const CLASSIFICATION_KEYS = Object.freeze([
+  "mandatoryOperationCount",
+  "mandatoryOperationIds",
+  "mandatoryOperationIdsDigest",
+  "operationCount",
+  "optionalDiagnosticOperationCount",
+  "optionalDiagnosticOperationIds",
+  "optionalDiagnosticOperationIdsDigest",
+  "version",
+].sort());
+
+export function computeProviderOperationClassificationDigest(
+    classification = PROVIDER_OPERATION_CLASSIFICATION,
+) {
+  return sha256Canonical(classification);
+}
+
+export const EXPECTED_PROVIDER_OPERATION_CLASSIFICATION_DIGEST =
+  "d1dbc846912482625f6d3bfb405b26013a4bcd7bd0bac3c1bab877a6db9647da";
+export const PROVIDER_OPERATION_CLASSIFICATION_DIGEST =
+  computeProviderOperationClassificationDigest();
+
+function assertFrozenSortedOperationIds(operationIds, label) {
+  assertFrozenCanonicalShape(operationIds, label);
+  if (!Array.isArray(operationIds) ||
+      operationIds.some((operationId) =>
+        typeof operationId !== "string" || operationId.length === 0) ||
+      operationIds.some((operationId, index) =>
+        index > 0 && operationIds[index - 1] >= operationId)) {
+    throw new Error(`${label} must be a frozen sorted unique ID array`);
+  }
+}
+
+export function assertProviderOperationClassification(
+    classification = PROVIDER_OPERATION_CLASSIFICATION,
+    registry = PROVIDER_OPERATION_REGISTRY,
+) {
+  const keys = assertOwnEnumerableDataProperties(
+      classification,
+      "provider operation classification",
+      Object.prototype,
+  );
+  if (!Object.isFrozen(classification) ||
+      JSON.stringify([...keys].sort()) !== JSON.stringify(CLASSIFICATION_KEYS)) {
+    throw new Error("provider operation classification exact frozen shape mismatch");
+  }
+  assertFrozenSortedOperationIds(
+      classification.mandatoryOperationIds,
+      "mandatory provider operation IDs",
+  );
+  assertFrozenSortedOperationIds(
+      classification.optionalDiagnosticOperationIds,
+      "optional diagnostic provider operation IDs",
+  );
+  const mandatoryIds = classification.mandatoryOperationIds;
+  const optionalIds = classification.optionalDiagnosticOperationIds;
+  const combinedIds = [...mandatoryIds, ...optionalIds].sort();
+  const descriptorMandatoryIds = PROVIDER_OPERATION_IDS.filter((operationId) =>
+    registry[operationId]?.observationRequirement === "mandatory");
+  const descriptorOptionalIds = PROVIDER_OPERATION_IDS.filter((operationId) =>
+    registry[operationId]?.observationRequirement === "optional_diagnostic");
+  if (classification.version !==
+        PROVIDER_OPERATION_CLASSIFICATION_VERSION ||
+      classification.operationCount !== PROVIDER_OPERATION_COUNT ||
+      classification.mandatoryOperationCount !== mandatoryIds.length ||
+      classification.optionalDiagnosticOperationCount !== optionalIds.length ||
+      classification.mandatoryOperationCount !== 28 ||
+      classification.optionalDiagnosticOperationCount !== 1 ||
+      JSON.stringify(combinedIds) !== JSON.stringify(PROVIDER_OPERATION_IDS) ||
+      JSON.stringify(mandatoryIds) !==
+        JSON.stringify(PROVIDER_MANDATORY_OPERATION_IDS) ||
+      JSON.stringify(optionalIds) !==
+        JSON.stringify(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS) ||
+      JSON.stringify(descriptorMandatoryIds) !== JSON.stringify(mandatoryIds) ||
+      JSON.stringify(descriptorOptionalIds) !== JSON.stringify(optionalIds)) {
+    throw new Error("provider operation classification membership mismatch");
+  }
+  const mandatoryDigest =
+    computeProviderOperationIdSetDigest(mandatoryIds);
+  const optionalDigest =
+    computeProviderOperationIdSetDigest(optionalIds);
+  if (classification.mandatoryOperationIdsDigest !== mandatoryDigest ||
+      mandatoryDigest !== EXPECTED_PROVIDER_MANDATORY_OPERATION_IDS_DIGEST ||
+      classification.optionalDiagnosticOperationIdsDigest !== optionalDigest ||
+      optionalDigest !==
+        EXPECTED_PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST) {
+    throw new Error("provider operation classification set digest mismatch");
+  }
+  const classificationDigest =
+    computeProviderOperationClassificationDigest(classification);
+  if (classificationDigest !==
+      EXPECTED_PROVIDER_OPERATION_CLASSIFICATION_DIGEST) {
+    throw new Error("provider operation classification digest mismatch");
+  }
+  return true;
+}
+
 function assertSemanticBodySchema(schema, label) {
   if (schema?.type === "object") {
     const expectedSchemaKeys = [
@@ -1026,20 +1175,24 @@ function assertSemanticBodySchema(schema, label) {
 
 export function computeProviderOperationDescriptorSetDigest(
     registry = PROVIDER_OPERATION_REGISTRY,
+    classification = PROVIDER_OPERATION_CLASSIFICATION,
 ) {
-  return crypto.createHash("sha256").update(canonical({
+  return sha256Canonical({
     version: PROVIDER_OPERATION_ALLOWLIST_VERSION,
+    classificationDigest:
+      computeProviderOperationClassificationDigest(classification),
     operations: PROVIDER_OPERATION_IDS.map((operationId) => registry[operationId]),
-  })).digest("hex");
+  });
 }
 
 export const EXPECTED_PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST =
-  "2bc2dd2e27252549c3aa7382790ed4e49dc1752a7162bca36b7f0601a7b947e9";
+  "3598e2bbb141497d2cfe21a867b58ad5794401fc5bf599a81d4a5bcbdd09b47d";
 export const PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST =
   computeProviderOperationDescriptorSetDigest();
 
 export function assertProviderOperationRegistry(
     registry = PROVIDER_OPERATION_REGISTRY,
+    classification = PROVIDER_OPERATION_CLASSIFICATION,
 ) {
   const keys =
     assertOwnEnumerableDataProperties(registry, "provider operation map", null);
@@ -1050,6 +1203,7 @@ export function assertProviderOperationRegistry(
       JSON.stringify(PROVIDER_OPERATION_IDS)) {
     throw new Error("provider operation exact keyset mismatch");
   }
+  assertProviderOperationClassification(classification, registry);
   for (const operationId of PROVIDER_OPERATION_IDS) {
     const operation = registry[operationId];
     assertFrozenCanonicalShape(operation, `provider operation ${operationId}`);
@@ -1061,7 +1215,10 @@ export function assertProviderOperationRegistry(
     if (!operation.host.startsWith("https://") ||
         operation.host.slice(8).includes("/") ||
         operation.redirects !== "disallow" ||
-        operation.readOnlySemantic !== true) {
+        operation.readOnlySemantic !== true ||
+        !["mandatory", "optional_diagnostic"].includes(
+            operation.observationRequirement,
+        )) {
       throw new Error(`provider operation network boundary mismatch: ${operationId}`);
     }
     const placeholders = [
@@ -1195,6 +1352,21 @@ export function assertProviderOperationRegistry(
           queryKeys.some((key) => key.startsWith("analysisQuery.options."))) {
         throw new Error("Cloud Asset transcoding/query contract mismatch");
       }
+    }
+    if (operationId === "storage.v1.objects.getMetadata" &&
+        (JSON.stringify(Object.keys(operation.query.properties).sort()) !==
+          JSON.stringify(["generation"]) ||
+          JSON.stringify(operation.query.required) !==
+            JSON.stringify(["generation"]))) {
+      throw new Error("Storage metadata query contract mismatch");
+    }
+    if (operationId === "storage.v1.objects.getMedia" &&
+        (JSON.stringify(Object.keys(operation.query.properties).sort()) !==
+          JSON.stringify(["alt", "generation"]) ||
+          JSON.stringify(operation.query.required) !==
+            JSON.stringify(["alt", "generation"]) ||
+          operation.query.properties.alt.const !== "media")) {
+      throw new Error("Storage media query contract mismatch");
     }
     if (!["GET", "POST"].includes(operation.method) ||
         ["PUT", "PATCH", "DELETE"].includes(operation.method)) {
@@ -1330,7 +1502,8 @@ export function assertProviderOperationRegistry(
       }
     }
   }
-  const digest = computeProviderOperationDescriptorSetDigest(registry);
+  const digest =
+    computeProviderOperationDescriptorSetDigest(registry, classification);
   if (digest !== EXPECTED_PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST) {
     throw new Error("provider operation descriptor-set digest mismatch");
   }

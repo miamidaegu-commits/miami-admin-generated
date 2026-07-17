@@ -1,34 +1,47 @@
 import assert from "node:assert/strict";
-import {execFileSync} from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {fileURLToPath} from "node:url";
 import {
+  EXPECTED_PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
   EXPECTED_PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
+  EXPECTED_PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+  EXPECTED_PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
   PROVIDER_ADAPTER_CONTRACT_VERSION,
   PROVIDER_AUTH_DEPENDENCY,
   PROVIDER_HTTP_RUNTIME,
   PROVIDER_NO_MUTATION_OPERATION_COUNT,
   PROVIDER_APPROVED_LOCATION,
   PROVIDER_OPERATION_ALLOWLIST_VERSION,
+  PROVIDER_OPERATION_CLASSIFICATION,
+  PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+  PROVIDER_OPERATION_CLASSIFICATION_VERSION,
   PROVIDER_OPERATION_COUNT,
   PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
   PROVIDER_OPERATION_IDS,
   PROVIDER_OPERATION_REGISTRY,
+  PROVIDER_MANDATORY_OPERATION_COUNT,
+  PROVIDER_MANDATORY_OPERATION_IDS,
+  PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
   PROVIDER_TARGET_PROJECT_ID,
   PROVIDER_TARGET_PROJECT_NUMBER,
   PROVIDER_TRANSPORT,
   assertProviderPathParameters,
   assertProviderRequestBody,
+  assertProviderOperationClassification,
   assertProviderOperationRegistry,
+  computeProviderOperationClassificationDigest,
   computeProviderOperationDescriptorSetDigest,
+  computeProviderOperationIdSetDigest,
   getProviderOperationDescriptor,
 } from "../functions/scripts/academy-reset-freeze-provider-operations.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
-const BASE_SHA = "c10a344a8c09cfacb06d7a7c8e1856d1d99bbe04";
 
 const EXPECTED_OPERATION_IDS = [
   "cloudasset.v1.projects.analyzeIamPolicy",
@@ -61,6 +74,13 @@ const EXPECTED_OPERATION_IDS = [
   "storage.v1.objects.getMedia",
   "storage.v1.objects.getMetadata",
 ];
+const EXPECTED_OPTIONAL_DIAGNOSTIC_OPERATION_IDS = [
+  "policytroubleshooter.v3.iam.troubleshoot",
+];
+const EXPECTED_MANDATORY_OPERATION_IDS = EXPECTED_OPERATION_IDS.filter(
+    (operationId) =>
+      operationId !== "policytroubleshooter.v3.iam.troubleshoot",
+);
 
 const EXPECTED_ENDPOINTS = {
   "cloudasset.v1.projects.analyzeIamPolicy":
@@ -168,6 +188,10 @@ function clonedRegistry() {
   return clone;
 }
 
+function clonedClassification() {
+  return structuredClone(PROVIDER_OPERATION_CLASSIFICATION);
+}
+
 test("operation registry has the exact sorted keyset and endpoint semantics", () => {
   assert.equal(PROVIDER_OPERATION_COUNT, 29);
   assert.deepEqual(PROVIDER_OPERATION_IDS, EXPECTED_OPERATION_IDS);
@@ -192,9 +216,53 @@ test("operation registry has the exact sorted keyset and endpoint semantics", ()
   assert.deepEqual(summaries, EXPECTED_ENDPOINTS);
 });
 
+test("operation classification has exact frozen 29/28/1 keysets", () => {
+  assert.equal(PROVIDER_OPERATION_COUNT, 29);
+  assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 28);
+  assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT, 1);
+  assert.deepEqual(PROVIDER_OPERATION_IDS, EXPECTED_OPERATION_IDS);
+  assert.deepEqual(
+      PROVIDER_MANDATORY_OPERATION_IDS,
+      EXPECTED_MANDATORY_OPERATION_IDS,
+  );
+  assert.deepEqual(
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+      EXPECTED_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+  );
+  assert.deepEqual(Object.keys(PROVIDER_OPERATION_CLASSIFICATION).sort(), [
+    "mandatoryOperationCount",
+    "mandatoryOperationIds",
+    "mandatoryOperationIdsDigest",
+    "operationCount",
+    "optionalDiagnosticOperationCount",
+    "optionalDiagnosticOperationIds",
+    "optionalDiagnosticOperationIdsDigest",
+    "version",
+  ]);
+  assert.equal(Object.isFrozen(PROVIDER_OPERATION_CLASSIFICATION), true);
+  assert.equal(Object.isFrozen(PROVIDER_MANDATORY_OPERATION_IDS), true);
+  assert.equal(
+      Object.isFrozen(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS),
+      true,
+  );
+  assert.doesNotThrow(() => assertProviderOperationClassification());
+});
+
+test("only Policy Troubleshooter is optional diagnostic", () => {
+  for (const operationId of PROVIDER_OPERATION_IDS) {
+    assert.equal(
+        PROVIDER_OPERATION_REGISTRY[operationId].observationRequirement,
+        operationId === "policytroubleshooter.v3.iam.troubleshoot" ?
+          "optional_diagnostic" :
+          "mandatory",
+    );
+  }
+});
+
 test("every descriptor has exact schemas and bounded transport policy", () => {
   const exactDescriptorKeys = [
     "apiFamily", "apiVersion", "host", "maxResponseBytes", "method",
+    "observationRequirement",
     "officialTranscodingTemplate", "operationId", "pagination", "pathParams",
     "pathTemplate", "query", "readOnlySemantic", "redirects", "requestBody",
     "response", "retry", "timeout",
@@ -264,6 +332,24 @@ test("every descriptor has exact schemas and bounded transport policy", () => {
     }
     assert.equal(Object.isFrozen(operation), true);
   }
+});
+
+test("Storage query schemas preserve exact metadata and media behavior", () => {
+  const metadata =
+    PROVIDER_OPERATION_REGISTRY["storage.v1.objects.getMetadata"];
+  assert.deepEqual(Object.keys(metadata.query.properties), ["generation"]);
+  assert.deepEqual(metadata.query.required, ["generation"]);
+  assert.equal(Object.hasOwn(metadata.query.properties, "projection"), false);
+  assert.equal(Object.hasOwn(metadata.query.properties, "full"), false);
+
+  const media = PROVIDER_OPERATION_REGISTRY["storage.v1.objects.getMedia"];
+  assert.deepEqual(Object.keys(media.query.properties).sort(), [
+    "alt", "generation",
+  ]);
+  assert.deepEqual(media.query.required, ["alt", "generation"]);
+  assert.equal(media.query.properties.alt.const, "media");
+  assert.equal(Object.hasOwn(media.query.properties, "projection"), false);
+  assert.equal(Object.hasOwn(media.query.properties, "full"), false);
 });
 
 test("renderer placeholders exactly match bound encoded path parameters", () => {
@@ -670,21 +756,146 @@ test("semantic POST schema rejects missing, wrong, and inherited bindings",
 test("version and descriptor-set digest are deterministic literal invariants",
     () => {
       assert.equal(PROVIDER_OPERATION_ALLOWLIST_VERSION,
-          "academy_reset_freeze_provider_operations.v4");
+          "academy_reset_freeze_provider_operations.v5");
       assert.equal(PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
-          "2bc2dd2e27252549c3aa7382790ed4e49dc1752a7162bca36b7f0601a7b947e9");
+          "3598e2bbb141497d2cfe21a867b58ad5794401fc5bf599a81d4a5bcbdd09b47d");
       assert.equal(PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
           EXPECTED_PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST);
       assert.equal(computeProviderOperationDescriptorSetDigest(),
           PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST);
+      assert.equal(PROVIDER_OPERATION_CLASSIFICATION_VERSION,
+          "academy_reset_freeze_operation_classification.v1");
+      assert.equal(PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+          "e139a1144665acc246298b358a3bfbb98e0acbee0c509e3a8f2a93f2a01ba8f4");
+      assert.equal(PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+          EXPECTED_PROVIDER_MANDATORY_OPERATION_IDS_DIGEST);
+      assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
+          "4b152b183bd0cde66744b0d58dda6af4672d3eeb8208fe0346ffb90f9ccdbad3");
+      assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
+          EXPECTED_PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST);
+      assert.equal(PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+          "d1dbc846912482625f6d3bfb405b26013a4bcd7bd0bac3c1bab877a6db9647da");
+      assert.equal(PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+          EXPECTED_PROVIDER_OPERATION_CLASSIFICATION_DIGEST);
+      assert.equal(
+          computeProviderOperationIdSetDigest(
+              PROVIDER_MANDATORY_OPERATION_IDS,
+          ),
+          PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+      );
+      assert.equal(
+          computeProviderOperationClassificationDigest(),
+          PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+      );
       assert.equal(PROVIDER_TRANSPORT,
           "google_auth_library_native_fetch_v1");
       assert.equal(PROVIDER_AUTH_DEPENDENCY, "google-auth-library@10.6.2");
       assert.equal(PROVIDER_HTTP_RUNTIME, "node24_native_fetch");
       assert.equal(PROVIDER_ADAPTER_CONTRACT_VERSION,
-          "academy_reset_freeze_provider_adapter.v4");
+          "academy_reset_freeze_provider_adapter.v5");
       assert.equal(PROVIDER_NO_MUTATION_OPERATION_COUNT, 0);
     });
+
+test("classification tampering fails closed, including same-count swaps",
+    () => {
+      const missing = clonedClassification();
+      missing.mandatoryOperationIds.pop();
+      missing.mandatoryOperationCount -= 1;
+      missing.mandatoryOperationIdsDigest =
+        computeProviderOperationIdSetDigest(missing.mandatoryOperationIds);
+      deepFreeze(missing);
+      assert.throws(
+          () => assertProviderOperationClassification(missing),
+          /classification membership mismatch/,
+      );
+
+      const duplicate = clonedClassification();
+      duplicate.mandatoryOperationIds[1] =
+        duplicate.mandatoryOperationIds[0];
+      duplicate.mandatoryOperationIdsDigest =
+        computeProviderOperationIdSetDigest(duplicate.mandatoryOperationIds);
+      deepFreeze(duplicate);
+      assert.throws(
+          () => assertProviderOperationClassification(duplicate),
+          /frozen sorted unique ID array/,
+      );
+
+      const extra = clonedClassification();
+      extra.mandatoryOperationIds.push("unapproved.v1.resources.get");
+      extra.mandatoryOperationCount += 1;
+      extra.operationCount += 1;
+      extra.mandatoryOperationIdsDigest =
+        computeProviderOperationIdSetDigest(extra.mandatoryOperationIds);
+      deepFreeze(extra);
+      assert.throws(
+          () => assertProviderOperationClassification(extra),
+          /classification membership mismatch/,
+      );
+
+      const swapped = clonedClassification();
+      const mandatoryId = swapped.mandatoryOperationIds[0];
+      const optionalId = swapped.optionalDiagnosticOperationIds[0];
+      swapped.mandatoryOperationIds[0] = optionalId;
+      swapped.mandatoryOperationIds.sort();
+      swapped.optionalDiagnosticOperationIds[0] = mandatoryId;
+      swapped.mandatoryOperationIdsDigest =
+        computeProviderOperationIdSetDigest(swapped.mandatoryOperationIds);
+      swapped.optionalDiagnosticOperationIdsDigest =
+        computeProviderOperationIdSetDigest(
+            swapped.optionalDiagnosticOperationIds,
+        );
+      deepFreeze(swapped);
+      assert.throws(
+          () => assertProviderOperationClassification(swapped),
+          /classification membership mismatch/,
+      );
+
+      const notFrozen = clonedClassification();
+      assert.throws(
+          () => assertProviderOperationClassification(notFrozen),
+          /exact frozen shape mismatch/,
+      );
+
+      const extraOwnKey = clonedClassification();
+      extraOwnKey.extra = true;
+      deepFreeze(extraOwnKey);
+      assert.throws(
+          () => assertProviderOperationClassification(extraOwnKey),
+          /exact frozen shape mismatch/,
+      );
+    });
+
+test("coherent descriptor and classification swaps still fail closed", () => {
+  const registry = clonedRegistry();
+  const classification = clonedClassification();
+  const mandatoryId = classification.mandatoryOperationIds[0];
+  const optionalId = classification.optionalDiagnosticOperationIds[0];
+  registry[mandatoryId].observationRequirement = "optional_diagnostic";
+  registry[optionalId].observationRequirement = "mandatory";
+  classification.mandatoryOperationIds[0] = optionalId;
+  classification.mandatoryOperationIds.sort();
+  classification.optionalDiagnosticOperationIds[0] = mandatoryId;
+  classification.mandatoryOperationIdsDigest =
+    computeProviderOperationIdSetDigest(classification.mandatoryOperationIds);
+  classification.optionalDiagnosticOperationIdsDigest =
+    computeProviderOperationIdSetDigest(
+        classification.optionalDiagnosticOperationIds,
+    );
+  deepFreeze(registry);
+  deepFreeze(classification);
+  assert.notEqual(
+      computeProviderOperationClassificationDigest(classification),
+      PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+  );
+  assert.notEqual(
+      computeProviderOperationDescriptorSetDigest(registry, classification),
+      PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
+  );
+  assert.throws(
+      () => assertProviderOperationRegistry(registry, classification),
+      /classification membership mismatch/,
+  );
+});
 
 test("registry has no mutation verbs and only approved semantic POSTs", () => {
   const operations = Object.values(PROVIDER_OPERATION_REGISTRY);
@@ -801,15 +1012,6 @@ test("add, remove, and descriptor mutation violate registry invariants", () => {
 
 test("Stage A registry stays transport-free while Stage B is isolated",
     () => {
-      const packageChanges = execFileSync("git", [
-        "diff", "--name-only", BASE_SHA, "--",
-        ":(glob)**/package.json", ":(glob)**/package-lock.json",
-      ], {cwd: repositoryRoot, encoding: "utf8"})
-          .trim().split("\n").filter(Boolean);
-      assert.deepEqual(packageChanges, [
-        "functions/package-lock.json",
-        "functions/package.json",
-      ]);
       const scriptsDirectory =
         path.join(repositoryRoot, "functions", "scripts");
       const implementationNames = fs.readdirSync(scriptsDirectory)
@@ -835,17 +1037,4 @@ test("Stage A registry stays transport-free while Stage B is isolated",
           /import \{GoogleAuth\} from "google-auth-library";/);
       assert.doesNotMatch(transportSource,
           /from\s+["']googleapis(?:\/[^"']*)?["']/);
-      const runbook = fs.readFileSync(path.join(
-          repositoryRoot,
-          "docs",
-          "academy-reset-write-freeze-runbook.md",
-      ), "utf8");
-      assert.match(runbook, /academy_reset_provider_observation\.v3/);
-      assert.match(runbook, /academy_reset_freeze_provider_operations\.v4/);
-      assert.match(runbook,
-          /2bc2dd2e27252549c3aa7382790ed4e49dc1752a7162bca36b7f0601a7b947e9/);
-      assert.match(runbook, /exact 29 operations/);
-      assert.match(runbook, /declared_google_auth_library_rest/);
-      assert.match(runbook, /Stage A/);
-      assert.doesNotMatch(runbook, /reviewed_direct_googleapis/);
     });

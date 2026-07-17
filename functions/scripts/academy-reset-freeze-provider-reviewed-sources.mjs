@@ -9,7 +9,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-adapter.mjs",
-    sha256: "7c4842e7585dda42f9a6d536ea3d5593d4c47ac578d98818eead1e8bd248e1d1",
+    sha256: "cb00626f68bc39a615b7c752ce703a7f4bf30bf416c466d19cc334887d676426",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-attestation.mjs",
@@ -17,11 +17,15 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-operations.mjs",
-    sha256: "f3e2c4e843af2b3d6145e8db46859dcfefc89e9789ada0f1df70f86e52274521",
+    sha256: "eec4fe77d2d58a36f59151b21efeb4191770bdf3db0ea4e21d03892a466b3272",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-transport.mjs",
     sha256: "0c6e04044c29476e2880df6308b909b69b6b917cb84995a4239dc9b2f92c1412",
+  }),
+  Object.freeze({
+    path: "functions/scripts/academy-reset-freeze-readonly-permissions.mjs",
+    sha256: "7910396d6a8c51b6a8f1f8825a41f931a414b82d42e6d0932976d7c4944f0eeb",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
@@ -29,7 +33,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-write-freeze-contract.mjs",
-    sha256: "9be1a6adb03c3c7f07e94cfe81b57d8b6c2f7c33f122edf8cd8eabb0b369c8c4",
+    sha256: "29e88b44b3a80412fd423210437be3c83dec13fb7f735ed7c98bdc57c2476d41",
   }),
   Object.freeze({
     path: "functions/scripts/verify-academy-reset-write-freeze.mjs",
@@ -38,4 +42,4 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
 ]);
 
 export const EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST =
-  "3cb8033621888f366db9485d82441d365aa2a4d9f2cb171bc239ada3dbcf44d8";
+  "100c47766c28eb8266a51d3f95118402d40d6db8d63b3e1ce4ae2f0e70cca18a";

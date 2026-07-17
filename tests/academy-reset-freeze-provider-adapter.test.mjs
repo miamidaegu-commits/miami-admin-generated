@@ -197,6 +197,28 @@ function rawIam(functions = functionRecords()) {
   return policy;
 }
 
+function assertRawIamWritableDenial(iamPolicy) {
+  const roleByName = new Map(
+      iamPolicy.roleDefinitions.map((role) => [role.role, role]),
+  );
+  for (const binding of iamPolicy.bindings) {
+    const role = roleByName.get(binding.role);
+    assert.ok(role, `missing raw role definition for ${binding.role}`);
+    assert.equal(binding.condition, null);
+    assert.equal(role.permissions.some((permission) =>
+      REVIEWED_WRITABLE_PERMISSIONS.includes(permission)), false);
+  }
+  assert.deepEqual(
+      iamPolicy.writablePermissionDerivation.writablePermissions,
+      REVIEWED_WRITABLE_PERMISSIONS,
+  );
+  assert.equal(iamPolicy.groupExpansions.every(({complete}) => complete), true);
+  assert.deepEqual(iamPolicy.conditionEvaluations, []);
+  assert.deepEqual(iamPolicy.denyPolicies, []);
+  assert.deepEqual(iamPolicy.denyEvaluations, []);
+  assert.deepEqual(iamPolicy.impersonationEvidence, []);
+}
+
 function fullApprovalReceipt() {
   const functions = functionRecords();
   const iam = rawIam(functions);
@@ -284,6 +306,7 @@ function operationInputFromRequest(urlValue, method) {
 }
 
 const mutationCounts = new WeakMap();
+const operationInputs = new WeakMap();
 
 function responseAtUrl(response, requestUrl) {
   Object.defineProperty(response, "url", {
@@ -305,11 +328,13 @@ function jsonResponse(requestUrl, value) {
 function providerExecutor(receipt, mutate = (operationId, value) => value) {
   let execution = 0;
   let mutationCount = 0;
+  const inputs = [];
   const functions = functionRecords();
   const byName = new Map(functions.map((item) => [item.name, item]));
   const serviceAccounts = [computeEmail, firebaseEmail, futureEmail];
   const rawExecutor = async ({operationId, pathParams, query}) => {
     execution += 1;
+    inputs.push(structuredClone({operationId, pathParams, query}));
     if (!PROVIDER_OPERATION_IDS.includes(operationId)) {
       throw new Error("unknown operation");
     }
@@ -586,6 +611,7 @@ function providerExecutor(receipt, mutate = (operationId, value) => value) {
     return jsonResponse(url, result.response);
   });
   mutationCounts.set(executor, () => mutationCount);
+  operationInputs.set(executor, () => structuredClone(inputs));
   return executor;
 }
 
@@ -828,12 +854,76 @@ test("mock adapter derives all families and a canonical zero-mutation trace",
       );
       assert.equal(result.metadata.executedOperationIds.every((operationId) =>
         PROVIDER_OPERATION_IDS.includes(operationId)), true);
+      const troubleshooterOperationId =
+        "policytroubleshooter.v3.iam.troubleshoot";
+      assert.equal(PROVIDER_OPERATION_IDS.includes(
+          troubleshooterOperationId,
+      ), true);
+      assert.equal(
+          PROVIDER_OPERATION_REGISTRY[troubleshooterOperationId]
+              .observationRequirement,
+          "optional_diagnostic",
+      );
+      assert.equal(result.metadata.executedOperationIds.includes(
+          troubleshooterOperationId,
+      ), false);
+      assert.equal(
+          result.observation.operationExecution.executionTrace.some(
+              ({operationId}) => operationId === troubleshooterOperationId,
+          ),
+          false,
+      );
+      const inputs = operationInputs.get(executor)();
+      assert.equal(inputs.some(({operationId}) =>
+        operationId === troubleshooterOperationId), false);
+      assert.equal(inputs.some(({operationId, pathParams}) =>
+        operationId === "serviceusage.v1.projects.services.get" &&
+        pathParams.serviceName ===
+          "policytroubleshooter.googleapis.com"), false);
       assert.deepEqual(
           result.metadata.executedOperationIds,
           REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS,
       );
+      assertRawIamWritableDenial(result.observation.iamPolicy);
       await assert.rejects(adapter.observeDeployment(),
           /ADAPTER_SESSION_ALREADY_OBSERVED/);
+    });
+
+test("optional Troubleshooter responses do not control mock observation",
+    async () => {
+      for (const optionalResponse of [
+        {access: "UNKNOWN"},
+        {access: "ACCESS_STATE_UNSPECIFIED"},
+        {},
+      ]) {
+        let optionalResponseConsumed = false;
+        const receipt = fullApprovalReceipt();
+        const executor = providerExecutor(receipt, (operationId, value) => {
+          if (operationId !==
+              "policytroubleshooter.v3.iam.troubleshoot") return value;
+          optionalResponseConsumed = true;
+          return structuredClone(optionalResponse);
+        });
+        const adapter = createMockAcademyResetFreezeProviderAdapter(
+            deepFreeze({
+              approvalReceipt: receipt,
+              repositoryRoot,
+              reviewedSourceIdentities:
+                PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+              transportExecutor: executor,
+            }),
+        );
+        const result = await adapter.observeDeployment();
+        assert.equal(optionalResponseConsumed, false);
+        assert.equal(operationInputs.get(executor)().some(({operationId}) =>
+          operationId ===
+            "policytroubleshooter.v3.iam.troubleshoot"), false);
+        assert.deepEqual(
+            result.metadata.executedOperationIds,
+            REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS,
+        );
+        assertRawIamWritableDenial(result.observation.iamPolicy);
+      }
     });
 
 test("foreign Rules and stale Run revision fail without mutations", async () => {
@@ -918,7 +1008,7 @@ test("independent Function Run Build and Storage boundaries fail closed",
       }
     });
 
-test("IAM double pass groups and service-account inventory fail closed",
+test("IAM raw role group and service-account evidence fail closed",
     async () => {
       const roleGetCalls = new Map();
       for (const mutate of [
@@ -985,18 +1075,6 @@ test("IAM double pass groups and service-account inventory fail closed",
               "datastore.entities.delete",
             ],
           } : value;
-        },
-        (operationId, value) => operationId ===
-          "policytroubleshooter.v3.iam.troubleshoot" ?
-          {...value, access: "UNKNOWN"} : value,
-        (operationId, value) => operationId ===
-          "policytroubleshooter.v3.iam.troubleshoot" ?
-          {...value, access: "ACCESS_STATE_UNSPECIFIED"} : value,
-        (operationId, value) => {
-          if (operationId !==
-              "policytroubleshooter.v3.iam.troubleshoot") return value;
-          delete value.access;
-          return value;
         },
       ]) {
         const receipt = fullApprovalReceipt();
