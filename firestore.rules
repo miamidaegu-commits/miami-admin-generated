@@ -18,6 +18,54 @@ service cloud.firestore {
       return signedIn() && currentUid() == uid;
     }
 
+    // Schema v1 is exact and fail-closed. Every present sentinel, active or
+    // inactive, must have the complete known keyset and exact field types.
+    //
+    // Firestore Security Rules do not govern trusted Admin SDK/server writes.
+    // The reset executor must independently enforce its own maintenance gate.
+    function exactTargetResetWriteFreezeSentinel(active) {
+      return {
+        "active": active,
+        "schemaVersion": "academy_reset_write_freeze.v1",
+        "mode": "academy_test_data_reset",
+        "academyId": "academy_daegumiami",
+        "projectId": "daegu-miami-production"
+      };
+    }
+
+    function validTargetResetWriteFreezeSentinel(sentinel) {
+      return sentinel == exactTargetResetWriteFreezeSentinel(true) ||
+        sentinel == exactTargetResetWriteFreezeSentinel(false);
+    }
+
+    function targetAcademyWriteFreezeAllowsClientWrites() {
+      let academyPath =
+        /databases/$(database)/documents/academies/academy_daegumiami;
+      let academySnapshot = get(academyPath);
+      return !exists(academyPath) ? false : (
+        !("resetWriteFreeze" in academySnapshot.data.keys()) ? true : (
+          academySnapshot.data.resetWriteFreeze ==
+            exactTargetResetWriteFreezeSentinel(false)
+        )
+      );
+    }
+
+    function resetWriteFreezeAllowsAcademyWrite(academyId) {
+      return academyId is string &&
+        (
+          academyId != "academy_daegumiami" ||
+          targetAcademyWriteFreezeAllowsClientWrites()
+        );
+    }
+
+    function resetWriteFreezeAllowsAcademyDocumentWrite(academyId) {
+      return resetWriteFreezeAllowsAcademyWrite(academyId);
+    }
+
+    function resetWriteFreezeAllowsGlobalWrite() {
+      return targetAcademyWriteFreezeAllowsClientWrites();
+    }
+
     function membershipPath(academyId) {
       return /databases/$(database)/documents/academyMemberships/$(academyId + "_" + currentUid());
     }
@@ -51,18 +99,37 @@ service cloud.firestore {
 
     function sameAcademyOnCreate() {
       return request.resource.data.academyId is string &&
-        isAcademyMember(request.resource.data.academyId);
+        isAcademyMember(request.resource.data.academyId) &&
+        resetWriteFreezeAllowsAcademyWrite(request.resource.data.academyId);
     }
 
     function sameAcademyOnUpdate() {
       return resource.data.academyId is string &&
         request.resource.data.academyId == resource.data.academyId &&
-        isAcademyMember(resource.data.academyId);
+        isAcademyMember(resource.data.academyId) &&
+        resetWriteFreezeAllowsAcademyWrite(resource.data.academyId);
     }
 
     function sameAcademyOnRead() {
       return resource.data.academyId is string &&
         isAcademyMember(resource.data.academyId);
+    }
+
+    function sameAcademyOnDelete() {
+      return sameAcademyOnRead() &&
+        resetWriteFreezeAllowsAcademyWrite(resource.data.academyId);
+    }
+
+    function sameAcademyOnCompositeCreate() {
+      return sameAcademyOnCreate();
+    }
+
+    function sameAcademyOnCompositeUpdate() {
+      return sameAcademyOnUpdate();
+    }
+
+    function sameAcademyOnCompositeDelete() {
+      return sameAcademyOnDelete();
     }
 
     function lessonBelongsToTeacher(data) {
@@ -349,6 +416,7 @@ service cloud.firestore {
     function validTeacherPermissionUpdate() {
       return resource.data.academyId is string &&
         request.resource.data.academyId == resource.data.academyId &&
+        resetWriteFreezeAllowsAcademyWrite(resource.data.academyId) &&
         isAcademyAdmin(resource.data.academyId) &&
         resource.data.role == "teacher" &&
         request.resource.data.role == resource.data.role &&
@@ -1821,14 +1889,18 @@ service cloud.firestore {
     match /users/{uid} {
       allow get: if isMe(uid) || hasAdminClaim();
       allow list: if hasAdminClaim();
-      allow create: if isMe(uid) || hasAdminClaim();
-      allow update: if isMe(uid) || hasAdminClaim();
-      allow delete: if hasAdminClaim();
+      allow create: if resetWriteFreezeAllowsGlobalWrite() &&
+        (isMe(uid) || hasAdminClaim());
+      allow update: if resetWriteFreezeAllowsGlobalWrite() &&
+        (isMe(uid) || hasAdminClaim());
+      allow delete: if resetWriteFreezeAllowsGlobalWrite() &&
+        hasAdminClaim();
     }
 
     match /academies/{academyId} {
       allow read: if isAcademyMember(academyId);
-      allow create, update, delete: if false;
+      allow create, update, delete: if false &&
+        resetWriteFreezeAllowsAcademyDocumentWrite(academyId);
     }
 
     match /academyMemberships/{membershipId} {
@@ -1844,7 +1916,7 @@ service cloud.firestore {
       allow update: if sameAcademyOnUpdate() &&
         request.resource.data.academyId == resource.data.academyId &&
         isAcademyAdmin(resource.data.academyId);
-      allow delete: if sameAcademyOnRead() &&
+      allow delete: if sameAcademyOnDelete() &&
         isAcademyAdmin(resource.data.academyId);
     }
 
@@ -1865,7 +1937,7 @@ service cloud.firestore {
         isAcademyAdmin(resource.data.academyId)
       );
       allow delete: if isFixedLessonData(resource.data) ? false : (
-        sameAcademyOnRead() &&
+        sameAcademyOnDelete() &&
         isAcademyAdmin(resource.data.academyId)
       );
     }
@@ -1896,7 +1968,7 @@ service cloud.firestore {
         isAcademyAdmin(request.resource.data.academyId);
       allow update: if sameAcademyOnUpdate() &&
         isAcademyAdmin(resource.data.academyId);
-      allow delete: if sameAcademyOnRead() &&
+      allow delete: if sameAcademyOnDelete() &&
         isAcademyAdmin(resource.data.academyId);
     }
 
@@ -1909,7 +1981,7 @@ service cloud.firestore {
         isAcademyAdmin(request.resource.data.academyId);
       allow update: if sameAcademyOnUpdate() &&
         isAcademyAdmin(resource.data.academyId);
-      allow delete: if sameAcademyOnRead() &&
+      allow delete: if sameAcademyOnDelete() &&
         isAcademyAdmin(resource.data.academyId);
     }
 
@@ -1931,7 +2003,7 @@ service cloud.firestore {
       allow update: if sameAcademyOnUpdate() &&
         isAcademyAdmin(resource.data.academyId);
 
-      allow delete: if sameAcademyOnRead() &&
+      allow delete: if sameAcademyOnDelete() &&
         isAcademyAdmin(resource.data.academyId);
     }
 
@@ -1948,7 +2020,7 @@ service cloud.firestore {
         )
       );
 
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if sameAcademyOnCompositeCreate() &&
         accessId ==
           request.resource.data.academyId + "__" +
           request.resource.data.groupClassId + "__" +
@@ -1956,7 +2028,7 @@ service cloud.firestore {
         validStudentGroupAccessShape(request.resource.data) &&
         isAcademyAdmin(request.resource.data.academyId);
 
-      allow update: if sameAcademyOnUpdate() &&
+      allow update: if sameAcademyOnCompositeUpdate() &&
         accessId ==
           resource.data.academyId + "__" +
           resource.data.groupClassId + "__" +
@@ -1966,7 +2038,7 @@ service cloud.firestore {
         validStudentGroupAccessShape(request.resource.data) &&
         isAcademyAdmin(resource.data.academyId);
 
-      allow delete: if sameAcademyOnRead() &&
+      allow delete: if sameAcademyOnCompositeDelete() &&
         accessId ==
           resource.data.academyId + "__" +
           resource.data.groupClassId + "__" +
@@ -1986,14 +2058,14 @@ service cloud.firestore {
         )
       );
 
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if sameAcademyOnCompositeCreate() &&
         summaryId ==
           request.resource.data.academyId + "__" +
           request.resource.data.studentId &&
         validStudentGroupAccessSummaryShape(request.resource.data) &&
         isAcademyAdmin(request.resource.data.academyId);
 
-      allow update: if sameAcademyOnUpdate() &&
+      allow update: if sameAcademyOnCompositeUpdate() &&
         summaryId ==
           resource.data.academyId + "__" +
           resource.data.studentId &&
@@ -2016,14 +2088,14 @@ service cloud.firestore {
         )
       );
 
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if sameAcademyOnCompositeCreate() &&
         isAcademyAdmin(request.resource.data.academyId) &&
         summaryId ==
           request.resource.data.academyId + "__" +
           request.resource.data.studentId &&
         validStudentPrivateAccessSummaryShape(request.resource.data);
 
-      allow update: if sameAcademyOnUpdate() &&
+      allow update: if sameAcademyOnCompositeUpdate() &&
         isAcademyAdmin(resource.data.academyId) &&
         summaryId ==
           resource.data.academyId + "__" +
@@ -2143,7 +2215,7 @@ service cloud.firestore {
       );
 
       allow create: if !isFixedPrivateReservationData(request.resource.data) &&
-        sameAcademyOnCreate() &&
+        sameAcademyOnCompositeCreate() &&
         request.resource.data.source == "student" &&
         validPrivateReservationStudentCreate(reservationId);
 
@@ -2151,7 +2223,7 @@ service cloud.firestore {
         isFixedPrivateReservationData(resource.data) ||
         isFixedPrivateReservationData(request.resource.data)
       ) ? false : (
-        sameAcademyOnUpdate() && (
+        sameAcademyOnCompositeUpdate() && (
           myMembership(resource.data.academyId).role == "student" ? (
             resource.data.studentId == myStudentId(resource.data.academyId) &&
             (
@@ -2171,12 +2243,12 @@ service cloud.firestore {
     match /dailyMaterials/{materialId} {
       allow read: if canReadDailyMaterial(resource.data);
 
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if sameAcademyOnCompositeCreate() &&
         materialId == request.resource.data.academyId + "__" + request.resource.data.date &&
         isAcademyAdmin(request.resource.data.academyId) &&
         validDailyMaterialCreate();
 
-      allow update: if sameAcademyOnUpdate() &&
+      allow update: if sameAcademyOnCompositeUpdate() &&
         materialId == resource.data.academyId + "__" + resource.data.date &&
         request.resource.data.date == resource.data.date &&
         isAcademyAdmin(resource.data.academyId) &&
@@ -2224,7 +2296,7 @@ service cloud.firestore {
         )
       );
 
-      allow delete: if sameAcademyOnRead() &&
+      allow delete: if sameAcademyOnDelete() &&
         isAcademyAdmin(resource.data.academyId);
     }
 
@@ -2248,7 +2320,7 @@ service cloud.firestore {
           )
       );
 
-      allow create: if sameAcademyOnCreate() &&
+      allow create: if sameAcademyOnCompositeCreate() &&
         reservationId ==
           request.resource.data.academyId + "__" +
           request.resource.data.lessonId + "__" +
@@ -2267,7 +2339,7 @@ service cloud.firestore {
           )
         );
 
-      allow update: if sameAcademyOnUpdate() &&
+      allow update: if sameAcademyOnCompositeUpdate() &&
         reservationId ==
           resource.data.academyId + "__" +
           resource.data.lessonId + "__" +
@@ -2342,7 +2414,7 @@ service cloud.firestore {
         isAcademyAdmin(request.resource.data.academyId);
       allow update: if sameAcademyOnUpdate() &&
         isAcademyAdmin(resource.data.academyId);
-      allow delete: if sameAcademyOnRead() &&
+      allow delete: if sameAcademyOnDelete() &&
         isAcademyAdmin(resource.data.academyId);
     }
 
@@ -2362,6 +2434,37 @@ service cloud.firestore {
         notificationEventBelongsToTeacher(resource.data)
       );
       allow create, update, delete: if false;
+    }
+
+    // These registry surfaces have no direct client policy. Explicit matches
+    // pin their existing catch-all-denied behavior during and outside reset
+    // maintenance; trusted Admin SDK writes remain outside Rules scope.
+    match /fixedPrivateRenewalBatches/{batchId} {
+      allow read, write: if false;
+    }
+
+    match /fixedPrivateAssignmentBatches/{batchId} {
+      allow read, write: if false;
+    }
+
+    match /fixedPrivateRescheduleBatches/{batchId} {
+      allow read, write: if false;
+    }
+
+    match /fixedPrivateLessonOutcomeActionBatches/{batchId} {
+      allow read, write: if false;
+    }
+
+    match /privateLessonStatusActionBatches/{batchId} {
+      allow read, write: if false;
+    }
+
+    match /privateLessonOutcomeActionBatches/{batchId} {
+      allow read, write: if false;
+    }
+
+    match /accountProvisioningLogs/{logId} {
+      allow read, write: if false;
     }
 
     match /{document=**} {

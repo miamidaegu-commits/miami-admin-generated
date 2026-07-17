@@ -13,6 +13,12 @@ const {
   normalizeId,
   validateAcademyId,
 } = require("./linkStudentAccountSafety.cjs");
+const {
+  assertAcademyResetWriteAllowed,
+  assertGlobalResetWriteAllowed,
+  assertRegisteredWriteSurface,
+  createGlobalFreezeGuardedHandler,
+} = require("./academy-reset-write-freeze.js");
 
 admin.initializeApp();
 
@@ -87,6 +93,55 @@ function getRuntimeProjectId() {
     normalizeHostedAppUrl(process.env.GOOGLE_CLOUD_PROJECT) ||
     getProjectIdFromFirebaseConfig()
   );
+}
+
+function requireWriteGuardRuntimeProjectId() {
+  const projectId = getRuntimeProjectId();
+  if (projectId !== PRODUCTION_PROJECT_ID && projectId !== E2E_PROJECT_ID) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Backend writes are blocked because the runtime project is unknown.",
+        {reason: "unknown_runtime_project"},
+    );
+  }
+  return projectId;
+}
+
+async function guardAcademyWrite({
+  db,
+  transaction = null,
+  academyId,
+  writeSurfaceId,
+}) {
+  try {
+    return await assertAcademyResetWriteAllowed({
+      db,
+      transaction,
+      academyId,
+      projectId: requireWriteGuardRuntimeProjectId(),
+      writeSurfaceId,
+    });
+  } catch (error) {
+    if (error && error.code === "failed-precondition") {
+      throw new HttpsError("failed-precondition", error.message, error.details);
+    }
+    throw error;
+  }
+}
+
+async function guardGlobalWrite({db, writeSurfaceId}) {
+  try {
+    return await assertGlobalResetWriteAllowed({
+      db,
+      projectId: requireWriteGuardRuntimeProjectId(),
+      writeSurfaceId,
+    });
+  } catch (error) {
+    if (error && error.code === "failed-precondition") {
+      throw new HttpsError("failed-precondition", error.message, error.details);
+    }
+    throw error;
+  }
 }
 
 function isProductionProject() {
@@ -216,6 +271,14 @@ const TEACHER_PASSWORD_SETUP_ACTION_SETTINGS = {
 
 function asHttpsError(error) {
   if (error instanceof HttpsError) return error;
+  if (
+    error &&
+    error.code === "failed-precondition" &&
+    error.details &&
+    error.details.inventoryVersion
+  ) {
+    return new HttpsError("failed-precondition", error.message, error.details);
+  }
   if (/^Invalid email$/.test(error.message)) {
     return new HttpsError("invalid-argument", "Invalid email.");
   }
@@ -1454,6 +1517,12 @@ async function runFixedPrivateRenewalWriteTransaction({
   const actor = buildAdminActorContext(auth, membership);
   return db.runTransaction(async (transaction) => {
     const plan = validation.normalizedPlan;
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      writeSurfaceId: "createFixedPrivateLessonRenewal",
+    });
     const batchRef = db.collection("fixedPrivateRenewalBatches")
         .doc(ids.batchId);
     const studentRef = db.collection("privateStudents").doc(plan.studentId);
@@ -1923,6 +1992,12 @@ async function runFixedPrivateAssignmentWriteTransaction({
   const payloadHash = fixedPrivateAssignmentPayloadHash(validation);
   const actor = buildAdminActorContext(auth, membership);
   return db.runTransaction(async (transaction) => {
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      writeSurfaceId: "createFixedPrivateLessonAssignment",
+    });
     const batchRef = db.collection("fixedPrivateAssignmentBatches")
         .doc(ids.batchId);
     const studentRef = db.collection("privateStudents")
@@ -4684,6 +4759,12 @@ async function runFixedPrivateRescheduleWriteTransaction({
   const batchRef = db.collection("fixedPrivateRescheduleBatches")
       .doc(validation.batchId);
   return db.runTransaction(async (transaction) => {
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      writeSurfaceId: "updateFixedPrivateLessonScheduleScope",
+    });
     const batchSnap = await transaction.get(batchRef);
     if (batchSnap.exists) {
       const checkpoint = batchSnap.data() || {};
@@ -6825,6 +6906,12 @@ async function commitPrivateLessonStatusAction({db, auth, data}) {
       .collection(PRIVATE_LESSON_STATUS_ACTION_BATCH_COLLECTION)
       .doc(batchId);
   return await db.runTransaction(async (transaction) => {
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      writeSurfaceId: "commitPrivateLessonStatusAction",
+    });
     const batchSnap = await transaction.get(batchRef);
     if (batchSnap.exists) {
       const replayTarget = await resolvePrivateLessonStatusTargetInTransaction({
@@ -9525,6 +9612,12 @@ async function autoDeductPrivateReservation({
   const summary = createDeductionSummary();
   summary.checked = 1;
   return await db.runTransaction(async (transaction) => {
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId,
+      writeSurfaceId: "autoDeductPrivateReservation",
+    });
     const reservationRef = db
         .collection("privateLessonReservations")
         .doc(reservationId);
@@ -9725,6 +9818,12 @@ async function autoDeductGroupStudent({
   const summary = createDeductionSummary();
   summary.checked = 1;
   return await db.runTransaction(async (transaction) => {
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId,
+      writeSurfaceId: "autoDeductGroupStudent",
+    });
     const lessonRef = db.collection("groupLessons").doc(lessonId);
     const lessonSnap = await transaction.get(lessonRef);
     if (!lessonSnap.exists) {
@@ -11612,6 +11711,12 @@ exports.reserveGroupLessonSeat = onCall(
         const lessonRef = db.collection("groupLessons").doc(lessonId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "reserveGroupLessonSeat",
+          });
           const [membershipSnap, lessonSnap] = await Promise.all([
             transaction.get(membershipRef),
             transaction.get(lessonRef),
@@ -11853,6 +11958,12 @@ exports.cancelGroupLessonSeat = onCall(
         const lessonRef = db.collection("groupLessons").doc(lessonId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "cancelGroupLessonSeat",
+          });
           const [membershipSnap, lessonSnap] = await Promise.all([
             transaction.get(membershipRef),
             transaction.get(lessonRef),
@@ -12021,6 +12132,12 @@ exports.releaseGroupLessonFixedSeat = onCall(
             .doc(groupStudentId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "releaseGroupLessonFixedSeat",
+          });
           const [membershipSnap, lessonSnap, groupStudentSnap] =
             await Promise.all([
               transaction.get(membershipRef),
@@ -12090,6 +12207,12 @@ exports.restoreGroupLessonFixedSeat = onCall(
             .doc(groupStudentId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "restoreGroupLessonFixedSeat",
+          });
           const [membershipSnap, lessonSnap, groupStudentSnap] =
             await Promise.all([
               transaction.get(membershipRef),
@@ -12620,6 +12743,12 @@ exports.reservePrivateLessonSlot = onCall(
         const slotRef = db.collection("privateLessonSlots").doc(slotId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "reservePrivateLessonSlot",
+          });
           const [membershipSnap, slotSnap] = await Promise.all([
             transaction.get(membershipRef),
             transaction.get(slotRef),
@@ -13102,6 +13231,12 @@ exports.cancelPrivateLessonReservation = onCall(
         const slotRef = db.collection("privateLessonSlots").doc(slotId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "cancelPrivateLessonReservation",
+          });
           const membershipSnap = await transaction.get(membershipRef);
           const membership = requireActiveStudentMembership(membershipSnap);
           const studentId = membership.studentId;
@@ -13336,6 +13471,12 @@ exports.cancelFixedPrivateLessonOccurrence = onCall(
         const lessonRef = db.collection("lessons").doc(lessonId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "cancelFixedPrivateLessonOccurrence",
+          });
           const [membershipSnap, lessonSnap] = await Promise.all([
             transaction.get(membershipRef),
             transaction.get(lessonRef),
@@ -13708,6 +13849,12 @@ exports.adminClosePrivateLessonSlot = onCall(
         const slotRef = db.collection("privateLessonSlots").doc(slotId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "adminClosePrivateLessonSlot",
+          });
           const slotSnap = await transaction.get(slotRef);
           const now = admin.firestore.FieldValue.serverTimestamp();
           let slot = null;
@@ -13910,6 +14057,12 @@ exports.adminReopenPrivateLessonSlot = onCall(
         const slotRef = db.collection("privateLessonSlots").doc(slotId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "adminReopenPrivateLessonSlot",
+          });
           const slotSnap = await transaction.get(slotRef);
           if (!slotSnap.exists) {
             throw new HttpsError(
@@ -14028,6 +14181,12 @@ exports.adminCancelPrivateLessonReservation = onCall(
             .doc(reservationId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "adminCancelPrivateLessonReservation",
+          });
           const [slotSnap, reservationSnap] = await Promise.all([
             transaction.get(slotRef),
             transaction.get(reservationRef),
@@ -14360,6 +14519,11 @@ exports.updateStudentPrivateCancelAllowance = onCall(
         const db = admin.firestore();
         const uid = request.auth.uid;
         await requireAcademyAdmin(db, academyId, uid);
+        await guardAcademyWrite({
+          db,
+          academyId,
+          writeSurfaceId: "updateStudentPrivateCancelAllowance",
+        });
 
         const studentSnap = await db
             .collection("privateStudents")
@@ -14417,23 +14581,32 @@ exports.updateStudentPrivateCancelAllowance = onCall(
     },
 );
 
+const autoDeductPendingLessonsHandler = createGlobalFreezeGuardedHandler({
+  getDb: () => admin.firestore(),
+  guardGlobalWrite,
+  isEnabled: () =>
+    isEnabledFlag(process.env.AUTO_DEDUCT_LESSONS_ENABLED),
+  onDisabled: () => {
+    console.log("autoDeductPendingLessons disabled");
+    return {disabled: true};
+  },
+  runner: async () => {
+    const summary = await runAutoDeductPendingLessons({
+      lookbackDays: Number(process.env.AUTO_DEDUCT_LOOKBACK_DAYS || 3),
+    });
+    console.log("autoDeductPendingLessons summary", summary);
+    return summary;
+  },
+  writeSurfaceId: "autoDeductPendingLessons",
+});
+
 exports.autoDeductPendingLessons = onSchedule(
     {
       region: REGION,
       schedule: "30 0 * * *",
       timeZone: "Asia/Seoul",
     },
-    async () => {
-      if (!isEnabledFlag(process.env.AUTO_DEDUCT_LESSONS_ENABLED)) {
-        console.log("autoDeductPendingLessons disabled");
-        return {disabled: true};
-      }
-      const summary = await runAutoDeductPendingLessons({
-        lookbackDays: Number(process.env.AUTO_DEDUCT_LOOKBACK_DAYS || 3),
-      });
-      console.log("autoDeductPendingLessons summary", summary);
-      return summary;
-    },
+    autoDeductPendingLessonsHandler,
 );
 
 exports.runAutoDeductPendingLessonsForTest = onCall(
@@ -14443,6 +14616,7 @@ exports.runAutoDeductPendingLessonsForTest = onCall(
         if (!request.auth) {
           throw new HttpsError("unauthenticated", "Login required.");
         }
+        assertRegisteredWriteSurface("runAutoDeductPendingLessonsForTest");
         requireE2eTestProject();
         const data = request.data || {};
         const academyId = requireString(data, "academyId");
@@ -19416,6 +19590,12 @@ async function commitPrivateLessonOutcomeAction({db, auth, data}) {
       .collection(PRIVATE_LESSON_OUTCOME_ACTION_BATCH_COLLECTION)
       .doc(batchId);
   return await db.runTransaction(async (transaction) => {
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      writeSurfaceId: "commitPrivateLessonOutcomeAction",
+    });
     const batchSnap = await transaction.get(batchRef);
     if (batchSnap.exists) {
       const checkpoint = batchSnap.data() || {};
@@ -20244,6 +20424,12 @@ async function commitFixedPrivateLessonOutcomeAction({db, auth, data}) {
       .collection(FIXED_PRIVATE_OUTCOME_BATCH_COLLECTION)
       .doc(batchId);
   return await db.runTransaction(async (transaction) => {
+    await guardAcademyWrite({
+      db,
+      transaction,
+      academyId: validation.academyId,
+      writeSurfaceId: "commitFixedPrivateLessonOutcomeAction",
+    });
     const batchSnap = await transaction.get(batchRef);
     if (batchSnap.exists) {
       const checkpoint = batchSnap.data() || {};
@@ -20947,6 +21133,12 @@ exports.markPrivateReservationOutcome = onCall(
           await canMarkPrivateReservationOutcome(db, academyId, request.auth);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "markPrivateReservationOutcome",
+          });
           return await applyPrivateReservationOutcomeWithDeductionInTransaction(
               transaction,
               {
@@ -20982,6 +21174,11 @@ exports.updateTeacherStudentPackageCounts = onCall(
         const db = admin.firestore();
         const uid = request.auth.uid;
         const adminMembership = await requireAcademyAdmin(db, academyId, uid);
+        await guardAcademyWrite({
+          db,
+          academyId,
+          writeSurfaceId: "updateTeacherStudentPackageCounts",
+        });
         const actor = buildAdminActorContext(request.auth, adminMembership);
         const packageRef = db.collection("studentPackages").doc(packageId);
         const packageSnap = await packageRef.get();
@@ -21151,6 +21348,12 @@ exports.reversePrivateReservationOutcome = onCall(
             .doc(reservationId);
 
         return await db.runTransaction(async (transaction) => {
+          await guardAcademyWrite({
+            db,
+            transaction,
+            academyId,
+            writeSurfaceId: "reversePrivateReservationOutcome",
+          });
           const reservationSnap = await transaction.get(reservationRef);
           if (!reservationSnap.exists) {
             throw new HttpsError(
@@ -21365,18 +21568,23 @@ exports.bootstrapAdmin = onCall(
 
       const callerUid = request.auth.uid;
       const callerEmail = request.auth.token.email || "";
+      const db = admin.firestore();
 
       requireProductionBootstrapAdminAllowed(callerEmail);
 
       if (callerEmail !== OWNER_EMAIL) {
         throw new HttpsError("permission-denied", "Not allowed.");
       }
+      await guardGlobalWrite({
+        db,
+        writeSurfaceId: "bootstrapAdmin",
+      });
 
       await admin.auth().setCustomUserClaims(callerUid, {
         role: "admin",
       });
 
-      await admin.firestore().collection("users").doc(callerUid).set(
+      await db.collection("users").doc(callerUid).set(
           {
             email: callerEmail,
             role: "admin",
@@ -21433,6 +21641,10 @@ exports.setUserRole = onCall(
 
       const auth = admin.auth();
       const db = admin.firestore();
+      await guardGlobalWrite({
+        db,
+        writeSurfaceId: "setUserRole",
+      });
       await requireAcademyOwner(db, academyId, callerUid);
       requireProductionSetUserRoleAllowed(request.auth);
 
@@ -21503,6 +21715,10 @@ exports.linkStudentAccount = onCall(
         const auth = admin.auth();
         const db = admin.firestore();
         const actorUid = request.auth.uid;
+        await guardGlobalWrite({
+          db,
+          writeSurfaceId: "linkStudentAccount",
+        });
         await requireAcademyAdmin(db, academyId, actorUid);
 
         const academySnap = await db
@@ -21697,6 +21913,10 @@ exports.linkTeacherAccount = onCall(
         const auth = admin.auth();
         const db = admin.firestore();
         const actorUid = request.auth.uid;
+        await guardGlobalWrite({
+          db,
+          writeSurfaceId: "linkTeacherAccount",
+        });
         await requireAcademyAdmin(db, academyId, actorUid);
 
         const teacherSnap = teacherId ?
