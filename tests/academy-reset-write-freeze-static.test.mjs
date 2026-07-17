@@ -23,6 +23,17 @@ import {
   UNFREEZE_ORDER,
   TARGET_PROJECT_IDENTITY,
 } from "../functions/scripts/academy-reset-write-freeze-contract.mjs";
+import {
+  PROVIDER_MANDATORY_OPERATION_COUNT,
+  PROVIDER_MANDATORY_OPERATION_IDS,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+} from "../functions/scripts/academy-reset-freeze-provider-operations.mjs";
+import {
+  EFFECTIVE_MANDATORY_PERMISSION_CONTRACT,
+  READONLY_PERMISSION_MANIFEST_DIGEST,
+  READONLY_PERMISSION_MANIFEST_VERSION,
+} from "../functions/scripts/academy-reset-freeze-readonly-permissions.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -65,6 +76,23 @@ const contractSource = fs.readFileSync(
         "functions",
         "scripts",
         "academy-reset-write-freeze-contract.mjs",
+    ),
+    "utf8",
+);
+const permissionManifestSource = fs.readFileSync(
+    path.join(
+        repositoryRoot,
+        "functions",
+        "scripts",
+        "academy-reset-freeze-readonly-permissions.mjs",
+    ),
+    "utf8",
+);
+const runbookSource = fs.readFileSync(
+    path.join(
+        repositoryRoot,
+        "docs",
+        "academy-reset-write-freeze-runbook.md",
     ),
     "utf8",
 );
@@ -345,5 +373,115 @@ test("no freeze activation, IAM mutation, or reset executor is implemented", () 
         false,
         `Forbidden implementation matched ${forbidden}`,
     );
+  }
+});
+
+test("permission manifest preserves mandatory 28 plus optional diagnostic", () => {
+  assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 28);
+  assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT, 1);
+  assert.equal(PROVIDER_MANDATORY_OPERATION_IDS.length, 28);
+  assert.deepEqual(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS, [
+    "policytroubleshooter.v3.iam.troubleshoot",
+  ]);
+  assert.equal(
+      PROVIDER_MANDATORY_OPERATION_IDS.includes(
+          "policytroubleshooter.v3.iam.troubleshoot",
+      ),
+      false,
+  );
+  assert.match(
+      contractSource,
+      /cannot mix optional diagnostics into mandatory evidence/,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.mandatoryOperationCount,
+      28,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT
+          .optionalDiagnosticOperationCount,
+      1,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions
+          .includes("storage.objects.get"),
+      true,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions
+          .includes("storage.objects.getIamPolicy"),
+      false,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.conditionalPermissions
+          .includes("storage.objects.getIamPolicy"),
+      true,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.conditionalPermissions
+          .includes("iam.roles.get"),
+      true,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.auxiliaryPermissions
+          .includes("serviceusage.services.use"),
+      true,
+  );
+  assert.equal(
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.oauthScopes
+          .includes("https://www.googleapis.com/auth/cloud-platform"),
+      true,
+  );
+});
+
+test("permission integration adds no Production observer or mutation path", () => {
+  const combined = `${contractSource}\n${permissionManifestSource}`;
+  for (const forbidden of [
+    /\bGoogleAuth\s*\(/,
+    /\bgetClient\s*\(/,
+    /\bAuthorization\s*:/,
+    /\bfetch\s*\(/,
+    /\bwriteFile(?:Sync)?\s*\(/,
+    /\bsetIamPolicy\s*\(/,
+    /\bcreateProduction[A-Za-z]*Observer\b/,
+    /\bcredentialProvider\s*\(/,
+  ]) {
+    assert.equal(
+        forbidden.test(combined),
+        false,
+        `Forbidden permission integration capability matched ${forbidden}`,
+    );
+  }
+  for (const forbiddenPath of [
+    "functions/package.json",
+    "functions/package-lock.json",
+    "functions/index.js",
+    "firestore.rules",
+    "plan-academy-scoped-test-data-reset.mjs",
+  ]) {
+    assert.equal(
+        permissionManifestSource.includes(forbiddenPath),
+        false,
+        forbiddenPath,
+    );
+  }
+});
+
+test("runbook binds manifest and 28 plus 1 non-proof semantics", () => {
+  for (const required of [
+    "필수 28개",
+    "선택 진단 1개",
+    "Policy Troubleshooter",
+    "proof 입력이 아니다",
+    READONLY_PERMISSION_MANIFEST_VERSION,
+    READONLY_PERMISSION_MANIFEST_DIGEST,
+    "OAuth scope",
+    "IAM permission",
+    "noAcl",
+    "iam.roles.get",
+    "Production observer",
+    "actualWrites: 0",
+  ]) {
+    assert.equal(runbookSource.includes(required), true, required);
   }
 });

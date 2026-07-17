@@ -29,6 +29,7 @@ import {
   PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
   PROVIDER_DEPENDENCY_CONTRACT_VERSION,
+  WRITE_FREEZE_PROOF_VERSION,
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
   PROJECT_IDENTITY_CONTRACT_VERSION,
   PROVIDER_OBSERVATION_VERSION,
@@ -60,7 +61,42 @@ import {
   stableStringify,
   validateWriteFreezeEvidence,
   validateProviderAdapterReviewedSources,
+  validateProviderDependencyContract,
 } from "../functions/scripts/academy-reset-write-freeze-contract.mjs";
+import {
+  PROVIDER_MANDATORY_OPERATION_COUNT,
+  PROVIDER_MANDATORY_OPERATION_IDS,
+  PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+  PROVIDER_OPERATION_CLASSIFICATION,
+  PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+  PROVIDER_OPERATION_CLASSIFICATION_VERSION,
+  PROVIDER_OPERATION_IDS,
+  PROVIDER_OPERATION_REGISTRY,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+  PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
+  assertProviderOperationClassification,
+  computeProviderOperationClassificationDigest,
+  computeProviderOperationIdSetDigest,
+} from "../functions/scripts/academy-reset-freeze-provider-operations.mjs";
+import {
+  EFFECTIVE_MANDATORY_PERMISSION_CONTRACT,
+  EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+  OFFICIAL_EVIDENCE_SET_DIGEST,
+  PERMISSION_RESEARCH_ARTIFACT_SHA256,
+  READONLY_PERMISSION_MANIFEST_DIGEST,
+  READONLY_PERMISSION_MANIFEST_VERSION,
+  READONLY_PERMISSION_OPERATION_IDS,
+  READONLY_PERMISSION_RECORDS,
+  READONLY_PERMISSION_REGISTRY,
+  REVIEWED_EVIDENCE_SET_DIGEST,
+  assertEffectiveMandatoryPermissionContract,
+  assertReadonlyPermissionManifest,
+  computeEffectiveMandatoryPermissionContract,
+  computeReadonlyPermissionManifestDigest,
+  convertPermissionRecordToReviewedEvidence,
+  evaluateOptionalDiagnostic,
+} from "../functions/scripts/academy-reset-freeze-readonly-permissions.mjs";
 import {
   createValidatedProviderRuntimeContext,
 } from "../functions/scripts/academy-reset-freeze-provider-attestation.mjs";
@@ -763,6 +799,149 @@ function assertDeepFrozen(value, seen = new Set()) {
   }
 }
 
+function deepFreezeFixture(value, seen = new Set()) {
+  if (!value || typeof value !== "object" || seen.has(value)) return value;
+  seen.add(value);
+  for (const key of Reflect.ownKeys(value)) {
+    deepFreezeFixture(value[key], seen);
+  }
+  return Object.freeze(value);
+}
+
+test("operation classification and permission manifest bind exact 28+1 sets",
+    () => {
+      assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 28);
+      assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT, 1);
+      assert.deepEqual(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS, [
+        "policytroubleshooter.v3.iam.troubleshoot",
+      ]);
+      assert.deepEqual(
+          [...PROVIDER_MANDATORY_OPERATION_IDS,
+            ...PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS].sort(),
+          PROVIDER_OPERATION_IDS,
+      );
+      assert.deepEqual(
+          READONLY_PERMISSION_OPERATION_IDS,
+          PROVIDER_OPERATION_IDS,
+      );
+      assert.deepEqual(
+          Object.keys(READONLY_PERMISSION_REGISTRY).sort(),
+          Object.keys(PROVIDER_OPERATION_REGISTRY).sort(),
+      );
+      assert.equal(
+          computeProviderOperationIdSetDigest(
+              PROVIDER_MANDATORY_OPERATION_IDS,
+          ),
+          PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
+      );
+      assert.equal(
+          computeProviderOperationIdSetDigest(
+              PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS,
+          ),
+          PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
+      );
+      assert.equal(
+          computeProviderOperationClassificationDigest(),
+          PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+      );
+      assert.equal(
+          computeReadonlyPermissionManifestDigest(),
+          READONLY_PERMISSION_MANIFEST_DIGEST,
+      );
+      assert.equal(READONLY_PERMISSION_RECORDS.length, 29);
+      assert.doesNotThrow(() => assertProviderOperationClassification());
+      assert.doesNotThrow(() => assertReadonlyPermissionManifest());
+      assert.doesNotThrow(() =>
+        assertEffectiveMandatoryPermissionContract());
+      assert.deepEqual(
+          computeEffectiveMandatoryPermissionContract(),
+          EFFECTIVE_MANDATORY_PERMISSION_CONTRACT,
+      );
+      assert.equal(
+          EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.contractDigest,
+          EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+      );
+      assert.equal(
+          EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.mandatoryOperationCount,
+          28,
+      );
+      assert.equal(
+          EFFECTIVE_MANDATORY_PERMISSION_CONTRACT
+              .optionalDiagnosticOperationCount,
+          1,
+      );
+    });
+
+test("coherent reclassification and manifest record tamper fail closed", () => {
+  const removedMandatory = PROVIDER_MANDATORY_OPERATION_IDS[0];
+  const optionalId = PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS[0];
+  const reclassifiedMandatory = [
+    ...PROVIDER_MANDATORY_OPERATION_IDS.slice(1),
+    optionalId,
+  ].sort();
+  const reclassifiedOptional = [removedMandatory];
+  const reclassified = deepFreezeFixture({
+    ...structuredClone(PROVIDER_OPERATION_CLASSIFICATION),
+    mandatoryOperationIds: reclassifiedMandatory,
+    mandatoryOperationIdsDigest:
+      computeProviderOperationIdSetDigest(reclassifiedMandatory),
+    optionalDiagnosticOperationIds: reclassifiedOptional,
+    optionalDiagnosticOperationIdsDigest:
+      computeProviderOperationIdSetDigest(reclassifiedOptional),
+  });
+  assert.equal(reclassified.mandatoryOperationCount, 28);
+  assert.equal(reclassified.optionalDiagnosticOperationCount, 1);
+  assert.notEqual(
+      computeProviderOperationClassificationDigest(reclassified),
+      PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
+  );
+  assert.throws(
+      () => assertProviderOperationClassification(reclassified),
+      /classification|digest|membership/,
+  );
+
+  const tamperedRecords = structuredClone(READONLY_PERMISSION_RECORDS);
+  const storage = tamperedRecords.find(
+      ({operationId}) => operationId === "storage.v1.objects.getMetadata",
+  );
+  storage.requiredIamPermissions = ["storage.objects.list"];
+  storage.reviewedContentDigest = sha256Canonical(
+      convertPermissionRecordToReviewedEvidence(storage),
+  );
+  const tamperedRegistry = Object.create(null);
+  for (const record of tamperedRecords) {
+    tamperedRegistry[record.operationId] = deepFreezeFixture(record);
+  }
+  deepFreezeFixture(tamperedRegistry);
+  const tamperedManifestDigest =
+    computeReadonlyPermissionManifestDigest(tamperedRegistry);
+  assert.notEqual(tamperedManifestDigest, READONLY_PERMISSION_MANIFEST_DIGEST);
+  assert.throws(
+      () => assertReadonlyPermissionManifest(
+          tamperedRegistry,
+          PROVIDER_OPERATION_REGISTRY,
+          {manifestDigest: tamperedManifestDigest},
+      ),
+      /manifest|evidence|permission/,
+  );
+});
+
+test("optional diagnostic absence and success cannot establish gates", () => {
+  assert.equal(
+      REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS.includes(
+          PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS[0],
+      ),
+      false,
+  );
+  for (const status of ["omitted", "success"]) {
+    const evaluation = evaluateOptionalDiagnostic({status});
+    assert.equal(evaluation.mandatoryCompletenessUnaffected, true);
+    assert.equal(evaluation.policyAnalysisComplete, false);
+    assert.equal(evaluation.writeFreezeVerified, false);
+    assert.equal(evaluation.executionEligible, false);
+  }
+});
+
 test("public proof boundary requires the attested provider result reference",
     () => {
       const evidence = evidenceFixture();
@@ -900,6 +1079,7 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
   );
   assert.deepEqual(first, second);
   assert.equal(first.writeFreezeVerified, true);
+  assert.equal(first.schemaVersion, WRITE_FREEZE_PROOF_VERSION);
   assert.deepEqual(first.unfreezeOrder, UNFREEZE_ORDER);
   assert.deepEqual(first.rollbackUnfreezeOrder, ROLLBACK_UNFREEZE_ORDER);
   assert.match(first.providerObservationDigest, /^[a-f0-9]{64}$/);
@@ -937,6 +1117,57 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
       PROVIDER_ADAPTER_METADATA.providerOperationAllowlistVersion);
   assert.equal(first.providerOperationDescriptorSetDigest,
       PROVIDER_ADAPTER_METADATA.providerOperationDescriptorSetDigest);
+  assert.equal(first.providerOperationClassificationVersion,
+      PROVIDER_OPERATION_CLASSIFICATION_VERSION);
+  assert.equal(first.providerOperationClassificationDigest,
+      PROVIDER_OPERATION_CLASSIFICATION_DIGEST);
+  assert.equal(first.providerMandatoryOperationCount, 28);
+  assert.equal(first.providerOptionalDiagnosticOperationCount, 1);
+  assert.equal(first.providerMandatoryOperationIdsDigest,
+      PROVIDER_MANDATORY_OPERATION_IDS_DIGEST);
+  assert.equal(first.providerOptionalDiagnosticOperationIdsDigest,
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST);
+  assert.deepEqual(first.providerMandatoryOperationIds,
+      PROVIDER_MANDATORY_OPERATION_IDS);
+  assert.deepEqual(first.providerOptionalDiagnosticOperationIds,
+      PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS);
+  assert.equal(first.readonlyPermissionManifestVersion,
+      READONLY_PERMISSION_MANIFEST_VERSION);
+  assert.equal(first.readonlyPermissionManifestDigest,
+      READONLY_PERMISSION_MANIFEST_DIGEST);
+  assert.equal(first.readonlyPermissionOfficialEvidenceSetDigest,
+      OFFICIAL_EVIDENCE_SET_DIGEST);
+  assert.equal(first.readonlyPermissionReviewedEvidenceSetDigest,
+      REVIEWED_EVIDENCE_SET_DIGEST);
+  assert.equal(first.readonlyPermissionResearchArtifactSha256,
+      PERMISSION_RESEARCH_ARTIFACT_SHA256);
+  assert.equal(first.effectiveMandatoryPermissionContractDigest,
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST);
+  assert.deepEqual(first.mandatoryRequiredIamPermissions,
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions);
+  assert.deepEqual(first.mandatoryConditionalPermissions,
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.conditionalPermissions);
+  assert.deepEqual(first.mandatoryAuxiliaryPermissions,
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.auxiliaryPermissions);
+  assert.deepEqual(first.mandatoryOauthScopes,
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.oauthScopes);
+  assert.deepEqual(first.mandatoryPermissionSourceOperations,
+      EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.sourceOperations);
+  for (const runtimeKey of [
+    "optionalDiagnosticExecutedOperationIds",
+    "optionalDiagnosticExecutedOperationCount",
+    "optionalDiagnosticCanEstablishWriteFreezeVerified",
+    "optionalDiagnosticExecutionEligible",
+    "optionalDiagnosticEvaluation",
+  ]) {
+    assert.equal(
+        Object.hasOwn(first, runtimeKey),
+        false,
+        `${runtimeKey} must not enter mandatory proof bytes`,
+    );
+  }
+  assert.equal(first.policyAnalysisSource, "mandatory_iam_raw_analysis");
+  assert.equal(first.executionEligible, false);
   assert.deepEqual(first.approvedProviderOperationIds,
       PROVIDER_ADAPTER_METADATA.allowedOperations);
   assert.equal(first.providerTransport, PROVIDER_ADAPTER_METADATA.transport);
@@ -954,8 +1185,8 @@ test("provider approval, observation metadata, result, and proof have parity",
     async () => {
       const evidence = evidenceFixture();
       const providerResult = providerResultFor(evidence);
-      const approval =
-        evidence.deploymentApprovalReceipt.providerDependencyApproval;
+      const approvalReceipt = evidence.deploymentApprovalReceipt;
+      const approval = approvalReceipt.providerDependencyApproval;
       const observationMetadata =
         providerResult.observation.providerAdapterMetadata;
       const dependency = providerResult.observation.dependencyContract;
@@ -964,6 +1195,55 @@ test("provider approval, observation metadata, result, and proof have parity",
           Object.entries(PROVIDER_ADAPTER_METADATA)) {
           assert.deepEqual(metadata[key], expected, key);
         }
+      }
+      assert.equal(
+          approval.providerOperationClassificationVersion,
+          PROVIDER_OPERATION_CLASSIFICATION_VERSION,
+      );
+      assert.equal(approval.providerMandatoryOperationCount, 28);
+      assert.equal(approval.providerOptionalDiagnosticOperationCount, 1);
+      assert.equal(
+          approval.readonlyPermissionManifestDigest,
+          READONLY_PERMISSION_MANIFEST_DIGEST,
+      );
+      assert.deepEqual(
+          approval.mandatoryPermissionSourceOperations,
+          EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.sourceOperations,
+      );
+      assert.doesNotThrow(() =>
+        validateProviderDependencyContract(dependency, approvalReceipt));
+
+      for (const mutateDependency of [
+        (candidate) => {
+          delete candidate.providerOperationClassificationVersion;
+        },
+        (candidate) => {
+          candidate.providerOperationClassificationDigest = DIGEST_B;
+        },
+        (candidate) => {
+          candidate.readonlyPermissionManifestDigest = DIGEST_B;
+        },
+        (candidate) => {
+          candidate.readonlyPermissionResearchArtifactSha256 = DIGEST_B;
+        },
+        (candidate) => {
+          candidate.mandatoryRequiredIamPermissions[0] =
+            "cloudasset.assets.sameCountTamper";
+        },
+        (candidate) => {
+          candidate.mandatoryPermissionSourceOperations
+              .requiredIamPermissions = {};
+        },
+      ]) {
+        const candidate = structuredClone(dependency);
+        mutateDependency(candidate);
+        assert.throws(
+            () => validateProviderDependencyContract(
+                candidate,
+                approvalReceipt,
+            ),
+            /provider|dependency|operation contract|unknown or missing fields/,
+        );
       }
       const validation = validate(evidence);
       assert.deepEqual(

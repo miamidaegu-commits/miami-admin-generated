@@ -8,27 +8,54 @@ sentinel 활성화, probe, planner, reset, unfreeze를 실행하거나 구현하
 
 ## Fail-closed 고정값
 
-- contract/proof: `academy_reset_write_freeze.v3` /
-  `academy_reset_write_freeze_proof.v3`
-- Observation Contract: `academy_reset_provider_observation.v3`
+- contract/proof: `academy_reset_write_freeze.v4` /
+  `academy_reset_write_freeze_proof.v4`
+- Observation Contract: `academy_reset_provider_observation.v4`
 - deployment approval/provider dependency:
-  `academy_reset_deployment_approval.v3` /
-  `academy_reset_provider_dependency.v2`
+  `academy_reset_deployment_approval.v4` /
+  `academy_reset_provider_dependency.v4`
 - project/academy: `daegu-miami-production` / `academy_daegumiami`
 - Functions: `us-central1`, `GEN_2`, 35개 exact deployed function set과 별도의
   26개 exact guarded export set
 - provider adapter ID/contract:
   `gcp_immutable_resource_observer.v1` /
-  `academy_reset_freeze_provider_adapter.v4`
+  `academy_reset_freeze_provider_adapter.v5`
 - Stage A provider operation registry:
-  `academy_reset_freeze_provider_operations.v4`, exact 29 operations,
+  `academy_reset_freeze_provider_operations.v5`, exact 29 operations,
   descriptor-set SHA-256
-  `2bc2dd2e27252549c3aa7382790ed4e49dc1752a7162bca36b7f0601a7b947e9`
+  `3598e2bbb141497d2cfe21a867b58ad5794401fc5bf599a81d4a5bcbdd09b47d`
+- operation classification:
+  `academy_reset_freeze_operation_classification.v1`; 필수 28개와 선택 진단 1개,
+  mandatory-set SHA-256
+  `e139a1144665acc246298b358a3bfbb98e0acbee0c509e3a8f2a93f2a01ba8f4`,
+  optional-set SHA-256
+  `4b152b183bd0cde66744b0d58dda6af4672d3eeb8208fe0346ffb90f9ccdbad3`,
+  classification SHA-256
+  `d1dbc846912482625f6d3bfb405b26013a4bcd7bd0bac3c1bab877a6db9647da`
+- read-only permission manifest:
+  `academy_reset_freeze_readonly_permissions.v1`, SHA-256
+  `02d0f6591b804d37e2681a710a3f7877d9ab7fc0bd98fa4c0a9a028609dafb0d`;
+  reviewed-evidence SHA-256
+  `85499a91b7b132ba35d50f4c2c24b828f1c45dc432b02d72c4bc636621e520df`,
+  official-evidence SHA-256
+  `430121569a9a4711ecb51461fa387fdb547993f0b7bd55eac527081470b44e37`,
+  research-artifact SHA-256
+  `92c38c6007050d5427fafb8a4d09c8963592f492e7bc29345281055ed64be704`,
+  effective mandatory permission contract SHA-256
+  `a2d077f153d7696f1351ce74db21a2d898c094fb6772bb61d8b920110d88e01d`
 - freeze window: 최대 3600초
 - writer source: registry의 literal SHA-256 pin 21개
 - reset collection: 29개
 - 누락, extra, duplicate, stale, unknown, target mismatch는 상태가 disabled 또는
   read-only처럼 보여도 거부한다.
+
+29개 registry operation은 실행 완전성에서 동일한 지위를 갖지 않는다.
+필수 28개만 provider observation과 IAM raw analysis의 근거다. Policy
+Troubleshooter `iam:troubleshoot`는 선택 진단 1개이며 누락돼도
+`providerObservationComplete`에 실패하지 않는다. 실행되더라도 mandatory operation을
+대체할 수 없고 policy analysis 또는 write-freeze proof 입력이 아니다.
+따라서 선택 진단만 성공해도 `policyAnalysisComplete`,
+`writeFreezeVerified`, `executionEligible`은 모두 false다.
 
 ## 1. Release와 local Git 고정
 
@@ -290,20 +317,23 @@ dependency provenance는 다음 단일 전략만 승인한다.
 - transport: `google_auth_library_native_fetch_v1`
 - auth dependency: `google-auth-library@10.6.2`
 - HTTP runtime: `node24_native_fetch`
-- adapter contract: `academy_reset_freeze_provider_adapter.v4`
+- adapter contract: `academy_reset_freeze_provider_adapter.v5`
 - no-mutation operation count: `0`
 
 `firebase_cli_private`, transitive-only dependency, private API, unknown 전략은
-거부한다. Stage B transport는 v4 registry의 exact 29개 public
+거부한다. Stage B transport는 v5 registry의 exact 29개 public
 read/semantic-read operation
 allowlist만 사용할 수 있다. renderer-ready path placeholder, target project/region,
 lineage binding, path encoding, query serialization을 임의 caller 값으로 우회할 수
-없다. Policy Troubleshooter의 target 없는 `iam:troubleshoot` POST는
+없다. 이 29개는 필수 28개와 선택 진단 1개의 immutable classification partition으로
+검증한다. Policy Troubleshooter의 target 없는 `iam:troubleshoot` POST는
 `fullResourceName`을 승인/관찰 resource inventory에, `principal`을 승인 IAM
 principal/group lineage에, `permission`을 검토된 permission universe에 각각
-결합해야 한다. adapter source digest, lock digest,
-strategy/module/operation set/version/digest는 approval receipt에 먼저 승인되고
-provider dependency observation과 exact 결합되어야 한다.
+결합해야 하지만 선택 진단일 뿐이다. adapter source digest, lock digest,
+strategy/module/operation set/version/digest, classification version/digest/28+1
+count와 permission manifest version/digest/evidence/research SHA/effective set/source
+linkage는 approval receipt에 먼저 승인되고 provider dependency observation과 exact
+결합되어야 한다.
 mock adapter는 호출자가 path/query/body 계획이나 binding 배열을 넘기는 표면을
 제공하지 않는다. immutable approval receipt, literal reviewed-source identities,
 `metadata.mockOnly === true`인 transport executor만 받으며 executor session
@@ -331,21 +361,34 @@ family adapter가 이 stable pair를 approval inventory와 결합하기 전에�
 completeness를 주장할 수 없다.
 
 별도 reviewed-source contract는 package/lock, operation registry, transport,
-mock adapter, attestation, runtime Git identity resolver, write-freeze contract,
-verifier의 exact 9개 path와 각 파일의 literal
+mock adapter, attestation, read-only permission manifest, runtime Git identity
+resolver, write-freeze contract, verifier의 exact 10개 path와 각 파일의 literal
 SHA-256 및 canonical aggregate digest를 approval metadata/session/observation/proof에
 결합한다. 이 local adapter source set은 기존 deployed runtime Git critical source
 목록에 추가하지 않는다. adapter/verifier는 이 registry 자체는 hash set에서
-제외하고, exact 9개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
+제외하고, exact 10개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
 확인한 뒤 bytes SHA-256와 literal pin 및 aggregate를 다시 계산한다.
 현재 reviewed-source aggregate는
-`3cb8033621888f366db9485d82441d365aa2a4d9f2cb171bc239ada3dbcf44d8`이다.
+`100c47766c28eb8266a51d3f95118402d40d6db8d63b3e1ce4ae2f0e70cca18a`이다.
 
 증명용 runtime context는 동일한 canonical repository root에서 genuine mock
 adapter/result와 reviewed-source identity를 검증한 뒤, clean Git HEAD/tree,
 tracked regular HEAD blobs, 안전한 index flags, runtime bytes와 HEAD bytes의
 동일성까지 직접 재검증한다. 호출자가 전달한 SHA나 Git identity 객체는 context
 생성 입력으로 받지 않는다.
+
+permission manifest는 OAuth scope와 IAM permission을 구분한다. OAuth scope는 token이
+API를 호출할 수 있는 범위일 뿐 resource authorization을 증명하지 않으므로,
+mandatory operation은 공식 IAM 근거와 exact `requiredIamPermissions`가 있어야 한다.
+필수 28개의 effective contract는 required/conditional/auxiliary/OAuth exact set,
+각 값에서 source operation으로 가는 linkage, official/reviewed evidence digest,
+research artifact SHA를 모두 결합한다.
+
+Cloud Storage metadata는 registry가 `projection` query를 노출하지 않아 공식 기본값
+`noAcl`로 동작한다. 따라서 `storage.objects.get`은 required이고
+`storage.objects.getIamPolicy`는 ACL 반환 시에만 conditional이며 현재 mandatory
+required set에는 포함되지 않는다. Cloud Asset `analyzeIamPolicy`의
+`iam.roles.get`도 custom-role expansion이 실제 필요한 경우에만 conditional이다.
 
 mock observation에 필요한 read-only 권한은 operation family별로 다음과 같다.
 
@@ -357,17 +400,23 @@ mock observation에 필요한 read-only 권한은 operation family별로 다음�
   일치해야 한다.
 - Resource Manager/IAM: project 및 발견된 folder/org get/getIamPolicy, role 및
   service account list/get/getIamPolicy, deny policy list/get
-- IAM analysis: Cloud Asset analyzeIamPolicy, Policy Troubleshooter troubleshoot
+- IAM analysis: 필수 Cloud Asset analyzeIamPolicy; 선택 진단 Policy Troubleshooter
+  troubleshoot
 - Scheduler/Service Usage: jobs list/get, services get
 
-IAM은 Resource Manager, bindings, roles, service accounts, Cloud Asset,
-Troubleshooter, deny policy, Service Usage를 포함한 전체 pass를 두 번 새로 실행한다.
+IAM mandatory pass는 Resource Manager, bindings, roles, service accounts,
+Cloud Asset, deny policy, Service Usage를 포함한 전체 pass를 두 번 새로 실행한다.
 service-account inventory는 승인 principal/runtime set과 exact해야 하며 각 account의
 get/getIamPolicy를 두 pass 모두 수행한다. 승인 group/domain도 각각 별도
 `fullyExplored` Cloud Asset 분석과 raw `analysisResults`/`groupEdges` 증거가 있어야
 하며, 빈 결과를 synthetic completeness로 대체하지 않는다. Scheduler도 list와 모든
 job get을 시작/종료에 각각 실행해 full canonical snapshot을 비교한다.
-Policy Troubleshooter의 expected non-write 결과는 exact `NOT_GRANTED`만 허용한다.
+Policy Troubleshooter를 선택 실행한다면 mandatory observation과 분리된 out-of-band
+진단 채널을 사용해야 한다. mandatory provider result의 operation ID, trace,
+observation digest 또는 proof bytes에 Troubleshooter 결과를 섞으면 contract가
+거부한다. 누락·실패·불완전은 mandatory completeness를 바꾸지 않으며, 어떤
+Troubleshooter 결과도 proof gate를 true로 만들거나 mandatory proof input이 될 수
+없다.
 Service Account list/get의 full resource name과 Scheduler get의 full job name도
 요청한 target project/location/email/job allowlist와 exact 일치해야 한다.
 
@@ -375,6 +424,8 @@ Service Account list/get의 full resource name과 Scheduler get의 full job name
 artifact는 adapter input/output/proof에 포함하지 않는다. Production observation은
 별도 구현·source review·권한 승인·approval receipt가 필요하며 이 mock approval을
 재사용할 수 없다.
+Production observer는 아직 구현되지 않았고 향후 독립 source review와 새 권한
+승인·approval receipt 없이는 실행하거나 proof를 만들 수 없다.
 
 evidence는 저장소 밖 canonical regular file, mode `0600`으로 보관한다. output
 parent는 `0700`이며 output은 새 파일만 atomic no-clobber로 `0600` 생성한다.
