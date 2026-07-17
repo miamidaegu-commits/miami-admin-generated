@@ -1,5 +1,16 @@
 import crypto from "node:crypto";
 import {
+  assertValidatedProviderRuntimeContext,
+} from "./academy-reset-freeze-provider-attestation.mjs";
+import {
+  CRITICAL_RUNTIME_SOURCE_PATHS,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS,
+  assertRuntimeGitEvidence,
+  validateProviderAdapterReviewedSources,
+} from "./academy-reset-freeze-runtime-identity.mjs";
+import {
   ACADEMY_RESET_WRITE_SURFACE_REGISTRY,
   EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST,
   RESET_COLLECTIONS,
@@ -7,15 +18,41 @@ import {
   WRITE_SURFACE_REGISTRY_VERSION,
   assertWriteSurfaceRegistry,
 } from "./academy-reset-write-surface-registry.mjs";
+import {
+  PROVIDER_ADAPTER_CONTRACT_VERSION,
+  PROVIDER_AUTH_DEPENDENCY,
+  PROVIDER_HTTP_RUNTIME,
+  PROVIDER_NO_MUTATION_OPERATION_COUNT,
+  PROVIDER_OPERATION_ALLOWLIST_VERSION,
+  PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
+  PROVIDER_OPERATION_IDS,
+  PROVIDER_OPERATION_REGISTRY,
+  PROVIDER_TRANSPORT,
+  assertProviderOperationRegistry,
+} from "./academy-reset-freeze-provider-operations.mjs";
+import {
+  EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+} from "./academy-reset-freeze-provider-reviewed-sources.mjs";
+
+export {
+  CRITICAL_RUNTIME_SOURCE_PATHS,
+  EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS,
+  validateProviderAdapterReviewedSources,
+};
 
 export const WRITE_FREEZE_CONTRACT_VERSION =
-  "academy_reset_write_freeze.v2";
+  "academy_reset_write_freeze.v3";
 export const WRITE_FREEZE_PROOF_VERSION =
-  "academy_reset_write_freeze_proof.v2";
+  "academy_reset_write_freeze_proof.v3";
 export const DEPLOYMENT_APPROVAL_RECEIPT_VERSION =
-  "academy_reset_deployment_approval.v2";
+  "academy_reset_deployment_approval.v3";
 export const PROVIDER_OBSERVATION_VERSION =
-  "academy_reset_provider_observation.v2";
+  "academy_reset_provider_observation.v3";
 export const OBSERVATION_COMPLETENESS_VERSION =
   "academy_reset_observation_completeness.v1";
 export const IAM_FAMILY_COMPLETENESS_VERSION =
@@ -23,7 +60,7 @@ export const IAM_FAMILY_COMPLETENESS_VERSION =
 export const APPROVED_IAM_STATE_CONTRACT_VERSION =
   "academy_reset_approved_iam_state.v1";
 export const PROVIDER_DEPENDENCY_CONTRACT_VERSION =
-  "academy_reset_provider_dependency.v1";
+  "academy_reset_provider_dependency.v2";
 export const WRITABLE_PERMISSION_DERIVATION_VERSION =
   "academy_reset_writable_permission_derivation.v1";
 export const APPROVED_PROVIDER_ADAPTER_ID =
@@ -48,17 +85,29 @@ export const MAX_FREEZE_WINDOW_SECONDS = 3600;
 export const MIN_DRAIN_QUIET_WINDOW_SECONDS = 120;
 export const MAX_DRAIN_QUIET_WINDOW_SECONDS = 900;
 export const PROVIDER_DEPENDENCY_STRATEGIES = Object.freeze([
-  "reviewed_direct_googleapis",
   "declared_google_auth_library_rest",
 ]);
-export const PROVIDER_READ_ONLY_OPERATIONS = Object.freeze([
-  "cloudfunctions.functions.list",
-  "cloudscheduler.jobs.list",
-  "iam.policies.get",
-  "serviceusage.services.get",
-  "firebaserules.releases.get",
-  "firebaserules.rulesets.get",
-]);
+export const PROVIDER_READ_ONLY_OPERATIONS = PROVIDER_OPERATION_IDS;
+export const PROVIDER_ADAPTER_METADATA = Object.freeze({
+  providerOperationAllowlistVersion: PROVIDER_OPERATION_ALLOWLIST_VERSION,
+  providerOperationDescriptorSetDigest:
+    PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
+  allowedOperations: PROVIDER_READ_ONLY_OPERATIONS,
+  transport: PROVIDER_TRANSPORT,
+  authDependency: PROVIDER_AUTH_DEPENDENCY,
+  httpRuntime: PROVIDER_HTTP_RUNTIME,
+  providerAdapterContractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
+  noMutationOperationCount: PROVIDER_NO_MUTATION_OPERATION_COUNT,
+  reviewedSourceContractVersion:
+    PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
+  reviewedSourcePaths: PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS,
+  reviewedSourceDigestAlgorithm:
+    PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM,
+  reviewedSourceIdentityPinStatus: "literal_sha256_pinned",
+  reviewedSourceIdentities: PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+  reviewedSourceIdentityDigest:
+    EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+});
 export const IAM_EVIDENCE_FAMILY_NAMES = Object.freeze([
   "bindings",
   "conditionEvaluations",
@@ -83,21 +132,6 @@ export const WRITER_DRAIN_CLASSES = Object.freeze([
   "auth_writer",
   "backend_writer",
 ]);
-
-const INFRASTRUCTURE_RUNTIME_SOURCE_PATHS = Object.freeze([
-  "firestore.rules",
-  "functions/academy-reset-write-freeze.js",
-  "functions/linkStudentAccountSafety.cjs",
-  "functions/scripts/academy-reset-write-freeze-contract.mjs",
-  "functions/scripts/academy-reset-write-surface-registry.mjs",
-  "functions/scripts/verify-academy-reset-write-freeze.mjs",
-]);
-export const CRITICAL_RUNTIME_SOURCE_PATHS = Object.freeze([
-  ...new Set([
-    ...INFRASTRUCTURE_RUNTIME_SOURCE_PATHS,
-    ...WRITE_SOURCE_SHA256_ALLOWLIST.map(({sourceFile}) => sourceFile),
-  ]),
-].sort());
 
 export const EXPECTED_DEPLOYED_FUNCTION_NAMES = Object.freeze([
   "adminCancelPrivateLessonReservation",
@@ -502,6 +536,37 @@ function stableStringifyCanonical(value) {
 export function sha256Canonical(value) {
   return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
 }
+export function computeProviderAdapterReviewedSourceIdentityDigest(
+    identities,
+) {
+  if (!Array.isArray(identities) ||
+      identities.length !== PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS.length) {
+    fail("provider reviewed source identities exact count mismatch");
+  }
+  identities.forEach((identity, index) => {
+    exactKeys(identity, ["path", "sha256"],
+        `provider reviewed source identities[${index}]`);
+    requireDigest(
+        identity.sha256,
+        `provider reviewed source identities[${index}].sha256`,
+    );
+  });
+  const sorted = identities
+      .map(({path, sha256}) => ({path, sha256}))
+      .sort((left, right) =>
+        left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  if (new Set(sorted.map(({path}) => path)).size !== sorted.length ||
+      stableStringify(sorted.map(({path}) => path)) !==
+        stableStringify(PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS)) {
+    fail("provider reviewed source identities exact path mismatch");
+  }
+  return sha256Canonical({
+    algorithm: PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM,
+    identities: sorted,
+    schemaVersion: PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
+  });
+}
+
 export function assertNoSecretOrPii(value, path = "$") {
   if (path === "$") assertCanonicalJsonShape(value);
   if (Array.isArray(value)) {
@@ -539,10 +604,20 @@ function validateRelease(release) {
   exactKeys(release, ["runtimeGit", "sha"], "release");
   requireGitSha(release.sha, "release.sha");
   exactKeys(release.runtimeGit,
-      ["clean", "criticalSources", "headSha", "treeSha"],
+      [
+        "clean", "criticalSources", "criticalSourceSetDigest", "headSha",
+        "reviewedSourceIdentityDigest", "reviewedSourceSetDigest",
+        "reviewedSources", "treeSha",
+      ],
       "release.runtimeGit");
   requireGitSha(release.runtimeGit.headSha, "release.runtimeGit.headSha");
   requireGitSha(release.runtimeGit.treeSha, "release.runtimeGit.treeSha");
+  requireDigest(release.runtimeGit.criticalSourceSetDigest,
+      "release.runtimeGit.criticalSourceSetDigest");
+  requireDigest(release.runtimeGit.reviewedSourceIdentityDigest,
+      "release.runtimeGit.reviewedSourceIdentityDigest");
+  requireDigest(release.runtimeGit.reviewedSourceSetDigest,
+      "release.runtimeGit.reviewedSourceSetDigest");
   if (release.runtimeGit.headSha !== release.sha ||
       release.runtimeGit.clean !== true) {
     fail("runtime Git HEAD is stale or tree is not clean");
@@ -577,6 +652,44 @@ function validateRelease(release) {
   }
   exactArray(paths, CRITICAL_RUNTIME_SOURCE_PATHS,
       "critical runtime source coverage");
+  if (release.runtimeGit.criticalSourceSetDigest !==
+      sha256Canonical(release.runtimeGit.criticalSources)) {
+    fail("critical runtime source set digest mismatch");
+  }
+  if (!Array.isArray(release.runtimeGit.reviewedSources)) {
+    fail("reviewed runtime source list is missing");
+  }
+  const reviewedPins = new Map(
+      PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES.map(({path: sourcePath,
+        sha256}) => [sourcePath, sha256]),
+  );
+  const reviewedPaths = [];
+  for (const source of release.runtimeGit.reviewedSources) {
+    exactKeys(source, [
+      "fileMode", "gitBlobOid", "headSha256", "indexFlags", "path",
+      "runtimeSha256",
+    ], "reviewed runtime source");
+    requireString(source.path, "reviewed source path");
+    requireGitSha(source.gitBlobOid, `${source.path}.gitBlobOid`);
+    requireDigest(source.headSha256, `${source.path}.headSha256`);
+    requireDigest(source.runtimeSha256, `${source.path}.runtimeSha256`);
+    if (!["100644", "100755"].includes(source.fileMode) ||
+        source.indexFlags !== "H" ||
+        source.runtimeSha256 !== source.headSha256 ||
+        reviewedPins.get(source.path) !== source.runtimeSha256) {
+      fail(`reviewed source is not an exact pinned regular HEAD blob: ${
+        source.path}`);
+    }
+    reviewedPaths.push(source.path);
+  }
+  exactArray(reviewedPaths, PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS,
+      "reviewed runtime source coverage");
+  if (release.runtimeGit.reviewedSourceIdentityDigest !==
+        EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST ||
+      release.runtimeGit.reviewedSourceSetDigest !==
+        sha256Canonical(release.runtimeGit.reviewedSources)) {
+    fail("reviewed runtime source identity digest mismatch");
+  }
 }
 
 function canonicalObservedSet(items) {
@@ -638,12 +751,24 @@ export function validateObservationCompleteness(
 }
 
 function validateProviderSourceIdentity(sourceIdentity, label) {
-  exactKeys(sourceIdentity, ["type", "value"], label);
+  exactKeys(sourceIdentity, [
+    "generation", "md5Hash", "sha256", "size", "type", "value",
+  ], label);
   if (!["storage_source", "repository_source", "build_source"]
       .includes(sourceIdentity.type)) {
     fail(`${label}.type is unknown`);
   }
   requireString(sourceIdentity.value, `${label}.value`);
+  requireString(sourceIdentity.generation, `${label}.generation`);
+  requireString(sourceIdentity.md5Hash, `${label}.md5Hash`);
+  requireDigest(sourceIdentity.sha256, `${label}.sha256`);
+  requireString(sourceIdentity.size, `${label}.size`);
+  if (!/^[A-Za-z0-9+/]{22}==$/.test(sourceIdentity.md5Hash) ||
+      !/^(?:0|[1-9][0-9]*)$/.test(sourceIdentity.size) ||
+      !/^(?:0|[1-9][0-9]*)$/.test(sourceIdentity.generation) ||
+      !sourceIdentity.value.endsWith(`/${sourceIdentity.generation}`)) {
+    fail(`${label} immutable storage checksum lineage is malformed`);
+  }
 }
 
 export function parseRulesResourceIdentity(rules, label = "rules") {
@@ -928,39 +1053,58 @@ function validateApprovalReceipt(receipt, release) {
   );
 }
 
+const PROVIDER_ADAPTER_METADATA_KEYS =
+  Object.freeze(Object.keys(PROVIDER_ADAPTER_METADATA).sort());
+
+function providerAdapterMetadataFrom(value) {
+  return Object.fromEntries(
+      PROVIDER_ADAPTER_METADATA_KEYS.map((key) => [key, value[key]]),
+  );
+}
+
+function validateProviderAdapterMetadata(metadata, label) {
+  exactKeys(metadata, PROVIDER_ADAPTER_METADATA_KEYS, label);
+  if (stableStringify(metadata) !== stableStringify(PROVIDER_ADAPTER_METADATA)) {
+    fail(`${label} does not match the exact provider operation contract`);
+  }
+}
+
+function validateProviderLineageFields(value, label) {
+  validateProviderAdapterMetadata(providerAdapterMetadataFrom(value), label);
+  if (value.strategy !== "declared_google_auth_library_rest" ||
+      value.module !== "google-auth-library") {
+    fail(`${label} strategy or module mismatch`);
+  }
+  requireDigest(value.reviewedSourceDigest, `${label}.reviewedSourceDigest`);
+  requireDigest(
+      value.reviewedSourceRepositoryRootDigest,
+      `${label}.reviewedSourceRepositoryRootDigest`,
+  );
+  requireDigest(value.reviewedLockDigest, `${label}.reviewedLockDigest`);
+  if (value.reviewedSourceDigest !==
+      EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST) {
+    fail(`${label} reviewed source digest differs from literal source pins`);
+  }
+}
+
 function validateProviderDependencyApproval(approval) {
   exactKeys(approval, [
-    "allowedOperations", "module", "reviewedLockDigest",
-    "reviewedSourceDigest", "strategy",
+    ...PROVIDER_ADAPTER_METADATA_KEYS,
+    "module", "reviewedLockDigest", "reviewedSourceDigest",
+    "reviewedSourceRepositoryRootDigest", "strategy",
   ], "provider dependency approval");
   if (!PROVIDER_DEPENDENCY_STRATEGIES.includes(approval.strategy)) {
     fail("provider dependency approval strategy is unknown");
   }
-  const expectedModule = approval.strategy === "reviewed_direct_googleapis" ?
-    "googleapis" :
-    "google-auth-library";
-  if (approval.module !== expectedModule) {
-    fail("provider dependency approval module mismatch");
-  }
-  exactArray(
-      approval.allowedOperations,
-      PROVIDER_READ_ONLY_OPERATIONS,
-      "provider dependency approved operation",
-  );
-  requireDigest(
-      approval.reviewedSourceDigest,
-      "provider dependency approval reviewedSourceDigest",
-  );
-  requireDigest(
-      approval.reviewedLockDigest,
-      "provider dependency approval reviewedLockDigest",
-  );
+  validateProviderLineageFields(approval, "provider dependency approval");
 }
 
 export function validateProviderDependencyContract(dependency, approvalReceipt) {
   exactKeys(dependency, [
-    "allowedOperations", "approvalLineageDigest", "directDependencyReviewed",
-    "module", "publicApiOnly", "reviewedLockDigest", "reviewedSourceDigest",
+    ...PROVIDER_ADAPTER_METADATA_KEYS,
+    "approvalLineageDigest", "directDependencyReviewed", "module",
+    "publicApiOnly", "reviewedLockDigest", "reviewedSourceDigest",
+    "reviewedSourceRepositoryRootDigest",
     "schemaVersion", "strategy",
   ], "provider dependency contract");
   if (dependency.schemaVersion !== PROVIDER_DEPENDENCY_CONTRACT_VERSION ||
@@ -969,17 +1113,10 @@ export function validateProviderDependencyContract(dependency, approvalReceipt) 
       dependency.publicApiOnly !== true) {
     fail("provider dependency strategy is unreviewed, transitive, or private");
   }
-  const expectedModule = dependency.strategy === "reviewed_direct_googleapis" ?
-    "googleapis" :
-    "google-auth-library";
-  if (dependency.module !== expectedModule) {
+  if (dependency.module !== "google-auth-library") {
     fail("provider dependency module does not match reviewed strategy");
   }
-  exactArray(
-      dependency.allowedOperations,
-      PROVIDER_READ_ONLY_OPERATIONS,
-      "provider dependency operation",
-  );
+  validateProviderLineageFields(dependency, "provider dependency contract");
   requireDigest(
       dependency.approvalLineageDigest,
       "provider dependency approvalLineageDigest",
@@ -995,10 +1132,12 @@ export function validateProviderDependencyContract(dependency, approvalReceipt) 
   if (!approvalReceipt ||
       dependency.approvalLineageDigest !== sha256Canonical(approvalReceipt) ||
       stableStringify({
-        allowedOperations: dependency.allowedOperations,
+        ...providerAdapterMetadataFrom(dependency),
         module: dependency.module,
         reviewedLockDigest: dependency.reviewedLockDigest,
         reviewedSourceDigest: dependency.reviewedSourceDigest,
+        reviewedSourceRepositoryRootDigest:
+          dependency.reviewedSourceRepositoryRootDigest,
         strategy: dependency.strategy,
       }) !== stableStringify(approvalReceipt.providerDependencyApproval)) {
     fail("provider dependency is not bound to approved source/lock lineage");
@@ -1604,13 +1743,195 @@ function validateSchedulerProviderObservation(scheduler) {
   });
 }
 
-export function validateProviderDeploymentVerification(
+const PROVIDER_EXECUTION_TRACE_KEYS = Object.freeze([
+  "mockOnly", "operationId", "pageCount", "paginationComplete",
+  "recordCount", "transportExecutionId",
+]);
+export const REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS = Object.freeze([
+  "cloudasset.v1.projects.analyzeIamPolicy",
+  "cloudbuild.v1.projects.locations.builds.get",
+  "cloudfunctions.v2.projects.locations.functions.get",
+  "cloudfunctions.v2.projects.locations.functions.list",
+  "cloudresourcemanager.v3.projects.get",
+  "cloudresourcemanager.v3.projects.getIamPolicy",
+  "cloudscheduler.v1.projects.locations.jobs.get",
+  "cloudscheduler.v1.projects.locations.jobs.list",
+  "firebaserules.v1.projects.releases.get",
+  "firebaserules.v1.projects.rulesets.get",
+  "iam.v1.projects.roles.get",
+  "iam.v1.projects.roles.list",
+  "iam.v1.projects.serviceAccounts.get",
+  "iam.v1.projects.serviceAccounts.getIamPolicy",
+  "iam.v1.projects.serviceAccounts.list",
+  "iam.v2.policies.denypolicies.list",
+  "policytroubleshooter.v3.iam.troubleshoot",
+  "run.v2.projects.locations.services.get",
+  "run.v2.projects.locations.services.list",
+  "run.v2.projects.locations.services.revisions.get",
+  "run.v2.projects.locations.services.revisions.list",
+  "serviceusage.v1.projects.services.get",
+  "storage.v1.objects.getMedia",
+  "storage.v1.objects.getMetadata",
+]);
+const CONDITIONAL_PROVIDER_OBSERVATION_OPERATION_GROUPS = Object.freeze([
+  Object.freeze([
+    "cloudresourcemanager.v3.folders.get",
+    "cloudresourcemanager.v3.folders.getIamPolicy",
+  ]),
+  Object.freeze([
+    "cloudresourcemanager.v3.organizations.get",
+    "cloudresourcemanager.v3.organizations.getIamPolicy",
+  ]),
+  Object.freeze(["iam.v2.policies.denypolicies.get"]),
+]);
+
+function validateProviderOperationExecution(value, label) {
+  exactKeys(value, [
+    "actualMutations", "executedOperationCount", "executedOperationIds",
+    "executionTrace", "executionTraceCount", "executionTraceDigest",
+    "mutationOperationCount",
+    "providerOperationAllowlistVersion",
+    "providerOperationDescriptorSetDigest",
+    "reviewedSourceRepositoryRootDigest", "unknownOperationCount",
+  ], label);
+  if (value.providerOperationAllowlistVersion !==
+        PROVIDER_OPERATION_ALLOWLIST_VERSION ||
+      value.providerOperationDescriptorSetDigest !==
+        PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST ||
+      value.unknownOperationCount !== 0 ||
+      value.actualMutations !== 0 ||
+      value.mutationOperationCount !== 0 ||
+      !Array.isArray(value.executedOperationIds) ||
+      !Array.isArray(value.executionTrace)) {
+    fail(`${label} operation contract, unknown count, or mutation mismatch`);
+  }
+  exactArray(
+      value.executedOperationIds,
+      [...new Set(value.executedOperationIds)],
+      `${label}.executedOperationIds`,
+  );
+  if (value.executedOperationIds.some((operationId) =>
+    !PROVIDER_OPERATION_IDS.includes(operationId))) {
+    fail(`${label} contains an unknown operation ID`);
+  }
+  if (REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS.some((operationId) =>
+    !value.executedOperationIds.includes(operationId))) {
+    fail(`${label} is missing a required provider family operation`);
+  }
+  const conditionalIds =
+    CONDITIONAL_PROVIDER_OBSERVATION_OPERATION_GROUPS.flat();
+  if (value.executedOperationIds.some((operationId) =>
+    !REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS.includes(operationId) &&
+    !conditionalIds.includes(operationId))) {
+    fail(`${label} contains an operation outside the exact observation subset`);
+  }
+  for (const group of CONDITIONAL_PROVIDER_OBSERVATION_OPERATION_GROUPS
+      .filter((candidate) => candidate.length > 1)) {
+    const observedCount = group.filter((operationId) =>
+      value.executedOperationIds.includes(operationId)).length;
+    if (observedCount !== 0 && observedCount !== group.length) {
+      fail(`${label} has incomplete conditional parent observation operations`);
+    }
+  }
+  const traceIds = [];
+  const executionIds = [];
+  let derivedMutationOperationCount = 0;
+  for (const [index, trace] of value.executionTrace.entries()) {
+    exactKeys(
+        trace,
+        PROVIDER_EXECUTION_TRACE_KEYS,
+        `${label}.executionTrace[${index}]`,
+    );
+    if (!PROVIDER_OPERATION_IDS.includes(trace.operationId) ||
+        trace.mockOnly !== true ||
+        trace.paginationComplete !== true ||
+        typeof trace.transportExecutionId !== "string" ||
+        !trace.transportExecutionId ||
+        !Number.isSafeInteger(trace.pageCount) || trace.pageCount < 1 ||
+        !Number.isSafeInteger(trace.recordCount) || trace.recordCount < 0) {
+      fail(`${label} has an invalid or incomplete execution trace`);
+    }
+    traceIds.push(trace.operationId);
+    executionIds.push(trace.transportExecutionId);
+    const descriptor = PROVIDER_OPERATION_REGISTRY[trace.operationId];
+    if (descriptor.readOnlySemantic !== true ||
+        !["GET", "POST"].includes(descriptor.method)) {
+      derivedMutationOperationCount += 1;
+    }
+  }
+  if (new Set(executionIds).size !== executionIds.length) {
+    fail(`${label} contains a duplicate transport execution ID`);
+  }
+  exactArray(
+      value.executedOperationIds,
+      [...new Set(traceIds)],
+      `${label} trace operation coverage`,
+  );
+  if (value.executedOperationCount !== value.executedOperationIds.length ||
+      value.executionTraceCount !== value.executionTrace.length ||
+      value.mutationOperationCount !== derivedMutationOperationCount ||
+      value.actualMutations !== derivedMutationOperationCount ||
+      value.executionTraceDigest !== sha256Canonical(value.executionTrace)) {
+    fail(`${label} execution counts or canonical trace digest mismatch`);
+  }
+  requireDigest(value.executionTraceDigest, `${label}.executionTraceDigest`);
+  requireDigest(
+      value.reviewedSourceRepositoryRootDigest,
+      `${label}.reviewedSourceRepositoryRootDigest`,
+  );
+}
+
+function validateMockProviderAdapterResultMetadata(metadata, operationExecution) {
+  exactKeys(metadata, [
+    "actualMutations", "adapterContractVersion", "adapterId",
+    "executedOperationCount", "executedOperationIds", "executionTraceCount",
+    "executionTraceDigest", "mockOnly", "mutationOperationCount",
+    "providerOperationAllowlistVersion",
+    "providerOperationDescriptorSetDigest", "reviewedSourceDigest",
+    "reviewedSourceIdentities", "reviewedSourceRepositoryRootDigest",
+    "unknownOperationCount",
+  ], "provider result metadata");
+  if (metadata.adapterId !== APPROVED_PROVIDER_ADAPTER_ID ||
+      metadata.adapterContractVersion !== PROVIDER_ADAPTER_CONTRACT_VERSION ||
+      metadata.mockOnly !== true ||
+      metadata.actualMutations !== 0 ||
+      metadata.mutationOperationCount !==
+        operationExecution.mutationOperationCount ||
+      metadata.unknownOperationCount !== 0 ||
+      metadata.providerOperationAllowlistVersion !==
+        operationExecution.providerOperationAllowlistVersion ||
+      metadata.providerOperationDescriptorSetDigest !==
+        operationExecution.providerOperationDescriptorSetDigest ||
+      metadata.executedOperationCount !==
+        operationExecution.executedOperationCount ||
+      metadata.executionTraceCount !== operationExecution.executionTraceCount ||
+      metadata.executionTraceDigest !== operationExecution.executionTraceDigest ||
+      stableStringify(metadata.executedOperationIds) !==
+        stableStringify(operationExecution.executedOperationIds) ||
+      stableStringify(metadata.reviewedSourceIdentities) !==
+        stableStringify(PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES) ||
+      metadata.reviewedSourceDigest !==
+        EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST ||
+      metadata.reviewedSourceRepositoryRootDigest !==
+        operationExecution.reviewedSourceRepositoryRootDigest ||
+      computeProviderAdapterReviewedSourceIdentityDigest(
+          metadata.reviewedSourceIdentities,
+      ) !== metadata.reviewedSourceDigest) {
+    fail("provider result metadata parity mismatch");
+  }
+}
+
+function validateProviderDeploymentVerification(
     evidence,
     providerResult,
 ) {
-  exactKeys(providerResult,
-      ["adapterId", "approvalReceipt", "observation"], "provider result");
-  if (providerResult.adapterId !== APPROVED_PROVIDER_ADAPTER_ID) {
+  exactKeys(providerResult, [
+    "adapterContractVersion", "adapterId", "approvalReceipt", "metadata",
+    "observation",
+  ], "provider result");
+  if (providerResult.adapterId !== APPROVED_PROVIDER_ADAPTER_ID ||
+      providerResult.adapterContractVersion !==
+        PROVIDER_ADAPTER_CONTRACT_VERSION) {
     fail("provider adapter is not approved");
   }
   if (stableStringify(providerResult.approvalReceipt) !==
@@ -1619,20 +1940,67 @@ export function validateProviderDeploymentVerification(
   }
   const observation = providerResult.observation;
   exactKeys(observation, [
-    "adapterId", "dependencyContract", "functions", "iamPolicy", "observedAt",
-    "projectId", "projectIdentityContractVersion", "projectNumber", "rules",
-    "scheduler", "schemaVersion",
+    "actualMutations", "adapterContractVersion", "adapterId",
+    "adapterMetadata", "dependencyContract", "functions", "iamPolicy",
+    "mockOnly", "mutationOperationCount", "observedAt", "operationExecution",
+    "projectId",
+    "projectIdentityContractVersion", "projectNumber",
+    "providerAdapterMetadata", "providerObservationVersion", "rules",
+    "scanCompletedAt", "scanStartedAt", "scheduler", "schemaVersion",
+    "unknownOperationCount",
   ], "provider observation");
   if (observation.schemaVersion !== PROVIDER_OBSERVATION_VERSION ||
-      observation.adapterId !== APPROVED_PROVIDER_ADAPTER_ID) {
+      observation.providerObservationVersion !== PROVIDER_OBSERVATION_VERSION ||
+      observation.adapterId !== APPROVED_PROVIDER_ADAPTER_ID ||
+      observation.adapterContractVersion !==
+        PROVIDER_ADAPTER_CONTRACT_VERSION ||
+      observation.mockOnly !== true ||
+      observation.actualMutations !== 0 ||
+      observation.mutationOperationCount !==
+        observation.operationExecution?.mutationOperationCount ||
+      observation.unknownOperationCount !== 0) {
     fail("provider observation target or adapter mismatch");
   }
   validatePinnedProjectIdentity(observation, "provider observation");
+  requireUtc(observation.scanStartedAt, "provider observation scanStartedAt");
+  requireUtc(observation.scanCompletedAt,
+      "provider observation scanCompletedAt");
   requireUtc(observation.observedAt, "provider observation observedAt");
+  if (Date.parse(observation.scanStartedAt) >
+        Date.parse(observation.scanCompletedAt) ||
+      Date.parse(observation.scanCompletedAt) >
+        Date.parse(observation.observedAt)) {
+    fail("provider observation scan envelope mismatch");
+  }
+  validateProviderOperationExecution(
+      observation.operationExecution,
+      "provider observation operation execution",
+  );
+  validateMockProviderAdapterResultMetadata(
+      providerResult.metadata,
+      observation.operationExecution,
+  );
+  if (stableStringify(observation.adapterMetadata) !==
+      stableStringify(providerResult.metadata)) {
+    fail("provider observation/result adapter metadata mismatch");
+  }
+  validateProviderAdapterMetadata(
+      observation.providerAdapterMetadata,
+      "provider observation adapter metadata",
+  );
   validateProviderDependencyContract(
       observation.dependencyContract,
       providerResult.approvalReceipt,
   );
+  if (providerResult.metadata.reviewedSourceRepositoryRootDigest !==
+        observation.operationExecution.reviewedSourceRepositoryRootDigest ||
+      providerResult.metadata.reviewedSourceRepositoryRootDigest !==
+        observation.dependencyContract.reviewedSourceRepositoryRootDigest ||
+      providerResult.metadata.reviewedSourceRepositoryRootDigest !==
+        providerResult.approvalReceipt.providerDependencyApproval
+            .reviewedSourceRepositoryRootDigest) {
+    fail("provider reviewed source repository root parity mismatch");
+  }
   const rulesResourceIdentity =
     parseRulesResourceIdentity(observation.rules, "provider observation.rules");
   const approvedRules = evidence.deploymentApprovalReceipt.resources.rules;
@@ -1709,6 +2077,9 @@ export function validateProviderDeploymentVerification(
     iamPolicy: observation.iamPolicy,
     approvedIamExpectedStateDigest: iamPolicy.approvedExpectedStateDigest,
     approvedIamFamilyExpectations: iamPolicy.approvedFamilyExpectations,
+    providerAdapterMetadata: PROVIDER_ADAPTER_METADATA,
+    providerAdapterResultMetadata: providerResult.metadata,
+    providerOperationExecution: observation.operationExecution,
     scheduler: observation.scheduler,
     schedulerTiming,
   });
@@ -2065,11 +2436,12 @@ function validateFreezeTimeline(evidence, deploymentVerification, currentTimeMs)
   });
 }
 
-export function validateWriteFreezeEvidence(
+function validateWriteFreezeEvidenceContract(
     evidence,
     {currentTimeMs = Date.now(), providerResult} = {},
 ) {
   assertWriteSurfaceRegistry();
+  assertProviderOperationRegistry();
   assertNoSecretOrPii(evidence);
   exactKeys(evidence, EXACT_TOP_LEVEL_KEYS, "top-level evidence");
   if (evidence.schemaVersion !== WRITE_FREEZE_CONTRACT_VERSION ||
@@ -2120,10 +2492,74 @@ export function validateWriteFreezeEvidence(
     schedulerCount: evidence.scheduler.jobs.length,
     principalCount: evidence.iamPolicy.principals.length,
     negativeProbeCount: evidence.negativeProbes.length,
+    providerOperationAllowlistVersion:
+      PROVIDER_OPERATION_ALLOWLIST_VERSION,
+    providerOperationDescriptorSetDigest:
+      PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
+    approvedProviderOperationIds: PROVIDER_READ_ONLY_OPERATIONS,
+    providerTransport: PROVIDER_TRANSPORT,
+    providerAuthDependency: PROVIDER_AUTH_DEPENDENCY,
+    providerHttpRuntime: PROVIDER_HTTP_RUNTIME,
+    providerAdapterContractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
+    noMutationOperationCount: PROVIDER_NO_MUTATION_OPERATION_COUNT,
+    providerMockOnly: deploymentVerification
+        .providerAdapterResultMetadata.mockOnly,
+    actualProviderMutations: deploymentVerification
+        .providerAdapterResultMetadata.actualMutations,
+    executedProviderOperationIds: deploymentVerification
+        .providerOperationExecution.executedOperationIds,
+    executedProviderOperationCount: deploymentVerification
+        .providerOperationExecution.executedOperationCount,
+    providerExecutionTraceCount: deploymentVerification
+        .providerOperationExecution.executionTraceCount,
+    providerExecutionTraceDigest: deploymentVerification
+        .providerOperationExecution.executionTraceDigest,
+    providerReviewedSourceIdentityDigest: deploymentVerification
+        .providerAdapterResultMetadata.reviewedSourceDigest,
+    providerReviewedSourceRepositoryRootDigest: deploymentVerification
+        .providerAdapterResultMetadata.reviewedSourceRepositoryRootDigest,
     activationChronology,
     proofGateStates,
     ...iamVerification,
     ...deploymentVerification,
+  });
+}
+
+export function validateWriteFreezeEvidence(
+    evidence,
+    options = {},
+) {
+  exactKeys(options, [
+    ...(Object.hasOwn(options, "currentTimeMs") ? ["currentTimeMs"] : []),
+    "providerRuntimeContext",
+  ], "write-freeze validation options");
+  const currentTimeMs = options.currentTimeMs ?? Date.now();
+  const providerRuntimeContext = options.providerRuntimeContext;
+  try {
+    assertValidatedProviderRuntimeContext(providerRuntimeContext);
+  } catch {
+    fail("genuine provider runtime context is required");
+  }
+  try {
+    assertRuntimeGitEvidence(evidence, providerRuntimeContext.runtimeGit);
+  } catch (error) {
+    fail(error.message);
+  }
+  if (providerRuntimeContext.headSha !==
+        providerRuntimeContext.runtimeGit.headSha ||
+      providerRuntimeContext.treeSha !==
+        providerRuntimeContext.runtimeGit.treeSha ||
+      providerRuntimeContext.criticalSourceSetDigest !==
+        providerRuntimeContext.runtimeGit.criticalSourceSetDigest ||
+      providerRuntimeContext.reviewedSourceDigest !==
+        providerRuntimeContext.runtimeGit.reviewedSourceIdentityDigest ||
+      providerRuntimeContext.reviewedSourceSetDigest !==
+        providerRuntimeContext.runtimeGit.reviewedSourceSetDigest) {
+    fail("provider runtime context Git/source identity mismatch");
+  }
+  return validateWriteFreezeEvidenceContract(evidence, {
+    currentTimeMs,
+    providerResult: providerRuntimeContext.providerResult,
   });
 }
 
@@ -2138,6 +2574,31 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
     releaseSha: validation.releaseSha,
     evidenceArtifactDigest: validation.artifactDigest,
     providerAdapterId: APPROVED_PROVIDER_ADAPTER_ID,
+    providerAdapterContractVersion:
+      validation.providerAdapterContractVersion,
+    providerOperationAllowlistVersion:
+      validation.providerOperationAllowlistVersion,
+    providerOperationDescriptorSetDigest:
+      validation.providerOperationDescriptorSetDigest,
+    approvedProviderOperationIds:
+      validation.approvedProviderOperationIds,
+    providerTransport: validation.providerTransport,
+    providerAuthDependency: validation.providerAuthDependency,
+    providerHttpRuntime: validation.providerHttpRuntime,
+    noMutationOperationCount: validation.noMutationOperationCount,
+    providerMockOnly: validation.providerMockOnly,
+    actualProviderMutations: validation.actualProviderMutations,
+    executedProviderOperationIds: validation.executedProviderOperationIds,
+    executedProviderOperationCount: validation.executedProviderOperationCount,
+    providerExecutionTraceCount: validation.providerExecutionTraceCount,
+    providerExecutionTraceDigest: validation.providerExecutionTraceDigest,
+    providerReviewedSourceIdentityDigest:
+      validation.providerReviewedSourceIdentityDigest,
+    runtimeGitTreeSha: options.providerRuntimeContext.treeSha,
+    runtimeCriticalSourceSetDigest:
+      options.providerRuntimeContext.criticalSourceSetDigest,
+    runtimeReviewedSourceSetDigest:
+      options.providerRuntimeContext.reviewedSourceSetDigest,
     providerObservationDigest: validation.observationDigest,
     deploymentApprovalReceiptDigest: validation.approvalReceiptDigest,
     rulesResourceIdentity: validation.rulesResourceIdentity,
