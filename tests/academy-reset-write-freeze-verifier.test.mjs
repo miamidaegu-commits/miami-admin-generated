@@ -16,24 +16,42 @@ import {
   DEPLOYMENT_APPROVAL_RECEIPT_VERSION,
   EXPECTED_ACADEMY_ID,
   EXPECTED_DEPLOYED_FUNCTION_NAMES,
+  EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES,
   EXPECTED_FUNCTION_GENERATION,
   EXPECTED_FUNCTION_REGION,
   EXPECTED_PROJECT_ID,
   EXPECTED_PROJECT_NUMBER,
   IAM_PRINCIPAL_POLICY_VERSION,
   IAM_PRINCIPAL_POLICY_SCHEMA,
+  IAM_EVIDENCE_FAMILY_NAMES,
+  OBSERVATION_COMPLETENESS_VERSION,
+  PROVIDER_DEPENDENCY_CONTRACT_VERSION,
+  PROVIDER_READ_ONLY_OPERATIONS,
   PROJECT_IDENTITY_CONTRACT_VERSION,
   PROVIDER_OBSERVATION_VERSION,
+  PROOF_GATE_KEYS,
+  REVIEWED_IAM_ROLE_DEFINITIONS,
+  REVIEWED_PERMISSION_UNIVERSE,
+  REVIEWED_WRITABLE_PERMISSIONS,
   REQUIRED_COMPARISON_BASELINE_DIGEST,
   REQUIRED_NEGATIVE_PROBES,
   ROLLBACK_UNFREEZE_ORDER,
   SCHEDULER_JOB_ALLOWLIST,
   UNFREEZE_ORDER,
+  WRITABLE_PERMISSION_DERIVATION_VERSION,
+  WRITER_DRAIN_CLASSES,
   WRITE_FREEZE_CONTRACT_VERSION,
   TARGET_PROJECT_IDENTITY,
   assertCanonicalJsonShape,
+  buildApprovedIamExpectedState,
+  buildIamFamilyCompleteness,
   buildDeterministicWriteFreezeProof,
+  computeDrainTelemetryDigest,
   computeEvidenceArtifactDigest,
+  computeIamPolicyDigest,
+  computeNegativeProbeEvidenceDigest,
+  computeObservedSetDigest,
+  computeSentinelSnapshotDigest,
   sha256Canonical,
   stableStringify,
   validateWriteFreezeEvidence,
@@ -60,9 +78,14 @@ const APPROVED_AT = atOffsetMinutes(-11);
 const DEPLOYMENT_AT = atOffsetMinutes(-10);
 const ACTIVATED_AT = atOffsetMinutes(-9);
 const SENTINEL_AT = atOffsetMinutes(-8);
-const SCHEDULER_STOPPED_AT = atOffsetMinutes(-7);
-const DRAINED_AT = atOffsetMinutes(-6);
-const IAM_READ_ONLY_AT = atOffsetMinutes(-5);
+const SCHEDULER_UPDATE_AT = atOffsetMinutes(-7);
+const SCHEDULER_STOPPED_AT = atOffsetMinutes(-6.75);
+const LAST_INGRESS_AT = atOffsetMinutes(-6.75);
+const LAST_COMPLETION_AT = atOffsetMinutes(-6.5);
+const QUIET_STARTED_AT = atOffsetMinutes(-6);
+const QUIET_ENDED_AT = atOffsetMinutes(-4);
+const IAM_READ_ONLY_AT = atOffsetMinutes(-3.5);
+const PROVIDER_OBSERVED_AT = atOffsetMinutes(-3.25);
 const PROBE_AT = atOffsetMinutes(-3);
 const VERIFIED_AT = atOffsetMinutes(-2);
 const EXPIRES_AT = atOffsetMinutes(20);
@@ -118,42 +141,211 @@ function runtimeGitFixture() {
   };
 }
 
-function sourceBundle(name) {
+const RUNTIME_SERVICE_ACCOUNT =
+  `serviceAccount:${EXPECTED_PROJECT_NUMBER}-compute@` +
+  "developer.gserviceaccount.com";
+
+function completeness(observedItems, {
+  expectedCount = observedItems.length,
+  scanStartedAt = RESOURCE_AT,
+  scanCompletedAt = DEPLOYMENT_AT,
+  pageCount = 1,
+} = {}) {
+  const digest = computeObservedSetDigest(observedItems);
   return {
-    bucket: "immutable-deployment-artifacts",
-    object: `releases/${SHA}/${name}.tgz`,
-    generation: "987654321",
-    sha256: name === "rules" ? DIGEST_A : DIGEST_B,
+    schemaVersion: OBSERVATION_COMPLETENESS_VERSION,
+    scanStartedAt,
+    scanCompletedAt,
+    pageCount,
+    nextPageTokenExhausted: true,
+    unreachableResources: [],
+    observedCount: observedItems.length,
+    expectedCount,
+    startSetDigest: digest,
+    endSetDigest: digest,
+    observedSetDigest: digest,
+    stable: true,
   };
 }
 
-function deploymentResources() {
+function refreshIamObservation(iam, approvedExpectedState) {
+  iam.policyDigest = computeIamPolicyDigest(iam);
+  iam.familyCompleteness =
+    buildIamFamilyCompleteness(iam, approvedExpectedState);
+  const observedItems = IAM_EVIDENCE_FAMILY_NAMES.flatMap((family) =>
+    iam[family].map((value) => ({family, value})));
+  iam.completeness = completeness(observedItems, {
+    scanStartedAt: iam.completeness.scanStartedAt,
+    scanCompletedAt: iam.completeness.scanCompletedAt,
+    pageCount: iam.completeness.pageCount,
+  });
+  return iam;
+}
+
+function functionRecords() {
+  return EXPECTED_DEPLOYED_FUNCTION_NAMES.map((name, index) => ({
+    name,
+    projectId: EXPECTED_PROJECT_ID,
+    region: EXPECTED_FUNCTION_REGION,
+    runtime: "nodejs24",
+    generation: EXPECTED_FUNCTION_GENERATION,
+    revisionId: `${name}-00001-abc`,
+    buildId: `build-${String(index).padStart(2, "0")}`,
+    updateTime: RESOURCE_AT,
+    providerSourceIdentity: {
+      type: "storage_source",
+      value: `gs://immutable/functions/${name}/987654321`,
+    },
+    runtimeServiceAccount: RUNTIME_SERVICE_ACCOUNT,
+  }));
+}
+
+function approvedDeploymentResources(iamExpectedState) {
   return {
     projectIdentityContractVersion: PROJECT_IDENTITY_CONTRACT_VERSION,
     projectId: EXPECTED_PROJECT_ID,
     projectNumber: EXPECTED_PROJECT_NUMBER,
+    iamExpectedState: structuredClone(iamExpectedState),
     rules: {
-      rulesetId: "projects/daegu-miami-production/rulesets/ruleset-123",
-      deploymentId:
+      rulesetName: "projects/daegu-miami-production/rulesets/ruleset-123",
+      releaseName:
         "projects/daegu-miami-production/releases/cloud.firestore",
-      updateTime: RESOURCE_AT,
-      sourceBundle: sourceBundle("rules"),
+      approvedArtifactDigest: DIGEST_A,
+      approvedSourceDigest: DIGEST_B,
     },
-    functions: EXPECTED_DEPLOYED_FUNCTION_NAMES.map((name, index) => ({
-      name,
-      projectId: EXPECTED_PROJECT_ID,
-      region: EXPECTED_FUNCTION_REGION,
-      generation: EXPECTED_FUNCTION_GENERATION,
-      revisionId: `${name}-00001-abc`,
-      buildId: `build-${String(index).padStart(2, "0")}`,
-      updateTime: RESOURCE_AT,
-      sourceBundle: sourceBundle(`functions-${name}`),
-    })),
+    functions: functionRecords(),
+  };
+}
+
+function rulesObservation() {
+  const rules = {
+    projectId: EXPECTED_PROJECT_ID,
+    projectNumber: EXPECTED_PROJECT_NUMBER,
+    releaseName:
+      "projects/daegu-miami-production/releases/cloud.firestore",
+    rulesetName: "projects/daegu-miami-production/rulesets/ruleset-123",
+    releaseCreateTime: RESOURCE_AT,
+    releaseUpdateTime: RESOURCE_AT,
+    rulesetCreateTime: RESOURCE_AT,
+    rulesetUpdateTime: RESOURCE_AT,
+  };
+  return {...rules, completeness: completeness([rules])};
+}
+
+function functionsObservation() {
+  const records = functionRecords();
+  return {
+    records,
+    guardedExportNames: [...EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES],
+    completeness: completeness(records, {
+      expectedCount: EXPECTED_DEPLOYED_FUNCTION_NAMES.length,
+      pageCount: 2,
+    }),
+  };
+}
+
+function principalWithSnapshot(principal) {
+  const snapshot = {
+    id: principal.id,
+    member: principal.member,
+    semanticRole: principal.semanticRole,
+    disposition: principal.disposition,
+    effectivePermissions: [...principal.effectivePermissions],
+    authPermissions: [...principal.authPermissions],
+  };
+  return {...snapshot, snapshotDigest: sha256Canonical(snapshot)};
+}
+
+function iamObservation(
+    functions = functionRecords(),
+    approvedExpectedState = null,
+) {
+  const readOnlyRole = REVIEWED_IAM_ROLE_DEFINITIONS[0].role;
+  const bindings = FIXTURE_IAM_PRINCIPAL_ALLOWLIST
+      .filter(({disposition}) => disposition === "ACTIVE_READ_ONLY")
+      .map(({member}) => ({
+        attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+        inherited: false,
+        member,
+        role: readOnlyRole,
+        condition: null,
+      }));
+  const principals =
+    FIXTURE_IAM_PRINCIPAL_ALLOWLIST.map(principalWithSnapshot);
+  const roleDefinitions =
+    REVIEWED_IAM_ROLE_DEFINITIONS.map((role) => ({
+      ...role,
+      permissions: [...role.permissions],
+    }));
+  const runtimeServiceAccounts = functions.map((item) => ({
+    functionName: item.name,
+    member: item.runtimeServiceAccount,
+  }));
+  const iam = {
+    observedAt: IAM_READ_ONLY_AT,
+    bindings,
+    conditionEvaluations: [],
+    denyPolicies: [],
+    denyEvaluations: [],
+    groupExpansions: [{
+      group: "group:academy-backend-readers@daegu-miami.com",
+      complete: true,
+      members: [],
+      paths: [],
+    }],
+    impersonationEvidence: [],
+    runtimeServiceAccounts,
+    roleDefinitions,
+    permissionUniverse: [...REVIEWED_PERMISSION_UNIVERSE],
+    writablePermissionDerivation: {
+      schemaVersion: WRITABLE_PERMISSION_DERIVATION_VERSION,
+      permissionUniverseDigest:
+        sha256Canonical([...REVIEWED_PERMISSION_UNIVERSE].sort()),
+      writablePermissions: [...REVIEWED_WRITABLE_PERMISSIONS],
+      readOnlyPermissions: REVIEWED_PERMISSION_UNIVERSE.filter((permission) =>
+        !REVIEWED_WRITABLE_PERMISSIONS.includes(permission)),
+    },
+    principals,
+    policyDigest: "",
+    completeness: null,
+    familyCompleteness: null,
+  };
+  iam.policyDigest = computeIamPolicyDigest(iam);
+  const expectedState =
+    approvedExpectedState ?? buildApprovedIamExpectedState(iam);
+  iam.familyCompleteness =
+    buildIamFamilyCompleteness(iam, expectedState);
+  const observedItems = IAM_EVIDENCE_FAMILY_NAMES.flatMap((family) =>
+    iam[family].map((value) => ({family, value})));
+  iam.completeness = completeness(observedItems, {
+    scanStartedAt: atOffsetMinutes(-5),
+    scanCompletedAt: IAM_READ_ONLY_AT,
+    pageCount: 4,
+  });
+  return iam;
+}
+
+function schedulerObservation() {
+  const jobs = SCHEDULER_JOB_ALLOWLIST.map((job) => ({
+    ...job,
+    state: "DISABLED",
+    updateTime: SCHEDULER_UPDATE_AT,
+  }));
+  return {
+    jobs,
+    completeness: completeness(jobs, {
+      scanStartedAt: atOffsetMinutes(-7.2),
+      scanCompletedAt: atOffsetMinutes(-6.9),
+    }),
   };
 }
 
 function evidenceFixture() {
   const runtimeGit = runtimeGitFixture();
+  const approvedIamSnapshot = iamObservation();
+  const iamExpectedState =
+    buildApprovedIamExpectedState(approvedIamSnapshot);
+  const iamPolicy = iamObservation(functionRecords(), iamExpectedState);
   const byPath = new Map(
       runtimeGit.criticalSources.map((source) => [source.path, source]),
   );
@@ -183,8 +375,17 @@ function evidenceFixture() {
         functionsSha256: byPath.get("functions/index.js").headSha256,
         writerSourceIdentityDigest:
           EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST,
+        approvedRulesArtifactDigest: DIGEST_A,
+        approvedRulesSourceDigest: DIGEST_B,
       },
-      resources: deploymentResources(),
+      resources: approvedDeploymentResources(iamExpectedState),
+      providerDependencyApproval: {
+        strategy: "declared_google_auth_library_rest",
+        module: "google-auth-library",
+        allowedOperations: [...PROVIDER_READ_ONLY_OPERATIONS],
+        reviewedSourceDigest: DIGEST_A,
+        reviewedLockDigest: DIGEST_B,
+      },
       iamPrincipalAllowlist: FIXTURE_IAM_PRINCIPAL_ALLOWLIST.map(
           (principal) => ({
             ...principal,
@@ -205,48 +406,50 @@ function evidenceFixture() {
       generation: SENTINEL_GENERATION,
       version: SENTINEL_VERSION,
       capturedAt: SENTINEL_AT,
-      snapshotDigest: DIGEST_A,
+      snapshotDigest: "",
       writerRegistryDigest:
         sha256Canonical(ACADEMY_RESET_WRITE_SURFACE_REGISTRY),
     },
-    scheduler: {
-      stoppedAt: SCHEDULER_STOPPED_AT,
-      drainedAt: DRAINED_AT,
-      drainEvidenceDigest: DIGEST_B,
-      inventoryComplete: true,
-      callableIngressBlocked: true,
-      callableInFlightExecutions: 0,
-      authProvisioningIngressBlocked: true,
-      authProvisioningInFlightExecutions: 0,
-      jobs: SCHEDULER_JOB_ALLOWLIST.map((job) => ({
-        ...job,
-        state: "DISABLED",
-        inFlightExecutions: 0,
-        evidenceDigest: DIGEST_A,
-      })),
-    },
-    iamPolicy: {
-      readOnlyObservedAt: IAM_READ_ONLY_AT,
-      inventoryComplete: true,
-      policyDigest: DIGEST_B,
-      principals: FIXTURE_IAM_PRINCIPAL_ALLOWLIST.map((principal, index) => ({
-        id: principal.id,
-        member: principal.member,
-        semanticRole: principal.semanticRole,
-        disposition: principal.disposition,
-        effectivePermissions: [...principal.effectivePermissions],
-        authPermissions: [...principal.authPermissions],
-        snapshotDigest: index % 2 ? DIGEST_B : DIGEST_A,
-      })),
-    },
-    negativeProbes: REQUIRED_NEGATIVE_PROBES.map((required) => ({
-      ...required,
+    scheduler: schedulerObservation(),
+    iamPolicy,
+    drainTelemetry: {
+      schedulerStoppedAt: SCHEDULER_STOPPED_AT,
       sentinelGeneration: SENTINEL_GENERATION,
-      sentinelVersion: SENTINEL_VERSION,
-      denied: true,
-      observedAt: PROBE_AT,
-      evidenceDigest: DIGEST_B,
-    })),
+      lastWriterIngressAt: LAST_INGRESS_AT,
+      lastWriterCompletionAt: LAST_COMPLETION_AT,
+      quietWindowStartedAt: QUIET_STARTED_AT,
+      quietWindowEndedAt: QUIET_ENDED_AT,
+      checkpoints: WRITER_DRAIN_CLASSES.map((writerClass) => ({
+        writerClass,
+        sentinelGeneration: SENTINEL_GENERATION,
+        ingressBlocked: true,
+        inFlightExecutions: 0,
+        ingressCountDuringQuietWindow: 0,
+        completionCountDuringQuietWindow: 0,
+        checkpointAt: IAM_READ_ONLY_AT,
+      })),
+      telemetryDigest: "",
+    },
+    gateStates: Object.fromEntries(PROOF_GATE_KEYS.map((key) => [key, true])),
+    operationalSafety: {
+      actualMutations: 0,
+      actualWrites: 0,
+      advisoryOnly: true,
+      executorImplemented: false,
+    },
+    negativeProbes: REQUIRED_NEGATIVE_PROBES.map((required) => {
+      const probeEvidence = {
+        ...required,
+        sentinelGeneration: SENTINEL_GENERATION,
+        sentinelVersion: SENTINEL_VERSION,
+        denied: true,
+        observedAt: PROBE_AT,
+        evidenceDigest: "",
+      };
+      probeEvidence.evidenceDigest =
+        computeNegativeProbeEvidenceDigest(probeEvidence);
+      return probeEvidence;
+    }),
     baselineComparison: {
       comparisonOnly: true,
       digest: REQUIRED_COMPARISON_BASELINE_DIGEST,
@@ -254,31 +457,42 @@ function evidenceFixture() {
     },
     artifactDigest: "",
   };
+  evidence.sentinel.snapshotDigest =
+    computeSentinelSnapshotDigest(evidence.sentinel);
+  evidence.drainTelemetry.telemetryDigest =
+    computeDrainTelemetryDigest(evidence.drainTelemetry);
   evidence.artifactDigest = computeEvidenceArtifactDigest(evidence);
   return evidence;
 }
 
 function providerResultFor(evidence) {
+  const approvalReceipt = structuredClone(evidence.deploymentApprovalReceipt);
+  const dependencyApproval = approvalReceipt.providerDependencyApproval;
   return {
     adapterId: APPROVED_PROVIDER_ADAPTER_ID,
-    approvalReceipt: structuredClone(evidence.deploymentApprovalReceipt),
+    approvalReceipt,
     observation: {
       schemaVersion: PROVIDER_OBSERVATION_VERSION,
       adapterId: APPROVED_PROVIDER_ADAPTER_ID,
-      observedAt: DEPLOYMENT_AT,
+      observedAt: PROVIDER_OBSERVED_AT,
       projectIdentityContractVersion: PROJECT_IDENTITY_CONTRACT_VERSION,
       projectId: EXPECTED_PROJECT_ID,
       projectNumber: EXPECTED_PROJECT_NUMBER,
-      rules: structuredClone(evidence.deploymentApprovalReceipt.resources.rules),
-      functions: structuredClone(
-          evidence.deploymentApprovalReceipt.resources.functions,
-      ),
-      iamPolicy: {
-        observedAt: evidence.iamPolicy.readOnlyObservedAt,
-        inventoryComplete: evidence.iamPolicy.inventoryComplete,
-        policyDigest: evidence.iamPolicy.policyDigest,
-        principals: structuredClone(evidence.iamPolicy.principals),
+      dependencyContract: {
+        schemaVersion: PROVIDER_DEPENDENCY_CONTRACT_VERSION,
+        strategy: "declared_google_auth_library_rest",
+        module: "google-auth-library",
+        directDependencyReviewed: true,
+        publicApiOnly: true,
+        allowedOperations: [...dependencyApproval.allowedOperations],
+        reviewedSourceDigest: dependencyApproval.reviewedSourceDigest,
+        reviewedLockDigest: dependencyApproval.reviewedLockDigest,
+        approvalLineageDigest: sha256Canonical(approvalReceipt),
       },
+      rules: rulesObservation(),
+      functions: functionsObservation(),
+      iamPolicy: structuredClone(evidence.iamPolicy),
+      scheduler: structuredClone(evidence.scheduler),
     },
   };
 }
@@ -373,6 +587,31 @@ test("valid provider-bound evidence produces deterministic proof", () => {
   assert.deepEqual(first.unfreezeOrder, UNFREEZE_ORDER);
   assert.deepEqual(first.rollbackUnfreezeOrder, ROLLBACK_UNFREEZE_ORDER);
   assert.match(first.providerObservationDigest, /^[a-f0-9]{64}$/);
+  assert.equal(first.providerObservationCompletedAt, PROVIDER_OBSERVED_AT);
+  assert.equal(first.latestDeploymentObservedAt, RESOURCE_AT);
+  assert.equal(first.latestDeploymentScanCompletedAt, DEPLOYMENT_AT);
+  assert.equal(
+      first.approvedIamExpectedStateDigest,
+      evidence.deploymentApprovalReceipt.resources
+          .iamExpectedState.expectedStateDigest,
+  );
+  assert.deepEqual(
+      first.approvedIamFamilyExpectations,
+      evidence.deploymentApprovalReceipt.resources.iamExpectedState.families,
+  );
+  assert.equal(
+      first.approvedIamExpectedItemCount,
+      first.approvedIamFamilyExpectations.reduce(
+          (total, family) => total + family.expectedCount,
+          0,
+      ),
+  );
+  assert.equal(first.deployedFunctionCount, 35);
+  assert.equal(first.guardedFunctionExportCount, 26);
+  assert.equal(first.actualMutations, 0);
+  assert.equal(first.actualWrites, 0);
+  assert.equal(first.executorImplemented, false);
+  for (const gate of PROOF_GATE_KEYS) assert.equal(first[gate], true);
 });
 
 test("provider adapter and immutable resource receipt comparison fail closed", () => {
@@ -388,17 +627,17 @@ test("provider adapter and immutable resource receipt comparison fail closed", (
       result.approvalReceipt.receiptId = DIGEST_B;
     },
     (result) => {
-      result.observation.rules.rulesetId += "-stale";
+      result.observation.rules.rulesetName += "-stale";
     },
     (result) => {
-      result.observation.functions[0].revisionId += "-stale";
+      result.observation.functions.records[0].revisionId += "-stale";
     },
     (result) => {
-      result.observation.functions.pop();
+      result.observation.functions.records.pop();
     },
     (result) => {
-      result.observation.functions.push(
-          {...result.observation.functions[0], name: "unknownFunction"},
+      result.observation.functions.records.push(
+          {...result.observation.functions.records[0], name: "unknownFunction"},
       );
     },
   ]) {
@@ -407,17 +646,468 @@ test("provider adapter and immutable resource receipt comparison fail closed", (
     mutate(providerResult);
     assert.throws(
         () => validate(evidence, providerResult),
-        /adapter|receipt|resources|function|deployed/,
+        /adapter|receipt|resources|function|deployed|Rules|observed set/,
     );
   }
 
   const digestOnly = evidenceFixture();
   const result = providerResultFor(digestOnly);
-  result.observation.rules.rulesetId = "arbitrary";
-  result.observation.rules.sourceBundle.sha256 =
-    digestOnly.deploymentApprovalReceipt.resources.rules.sourceBundle.sha256;
-  assert.throws(() => validate(digestOnly, result), /resources/);
+  result.observation.rules.rulesetName = "arbitrary";
+  assert.throws(() => validate(digestOnly, result), /Rules resource/);
 });
+
+test("provider completeness, dependency, lineage, and proof gates fail closed",
+    () => {
+      for (const [mutate, pattern] of [
+        [(result) => {
+          result.observation.functions.completeness
+              .nextPageTokenExhausted = false;
+        }, /partial/],
+        [(result) => {
+          result.observation.rules.completeness.unreachableResources =
+            ["projects/daegu-miami-production/rulesets/unreachable"];
+        }, /unreachable/],
+        [(result) => {
+          result.observation.scheduler.completeness.stable = false;
+        }, /unstable/],
+        [(result) => {
+          result.observation.functions.completeness.observedSetDigest =
+            DIGEST_A;
+        }, /canonical observed set/],
+        [(result) => {
+          result.observation.dependencyContract.strategy =
+            "firebase_cli_private";
+        }, /dependency strategy/],
+        [(result) => {
+          result.observation.dependencyContract.directDependencyReviewed =
+            false;
+        }, /transitive/],
+        [(result) => {
+          result.observation.dependencyContract.reviewedSourceDigest =
+            DIGEST_B;
+        }, /source\/lock lineage/],
+        [(result) => {
+          result.observation.dependencyContract.allowedOperations.push(
+              "cloudfunctions.functions.call",
+          );
+        }, /operation exact set mismatch/],
+      ]) {
+        const evidence = evidenceFixture();
+        const result = providerResultFor(evidence);
+        mutate(result);
+        assert.throws(() => validate(evidence, result), pattern);
+      }
+
+      const missingLineage = evidenceFixture();
+      delete missingLineage.deploymentApprovalReceipt
+          .localSources.approvedRulesSourceDigest;
+      resign(missingLineage);
+      assert.throws(
+          () => validate(missingLineage),
+          /unknown or missing fields/,
+      );
+
+      for (const gate of PROOF_GATE_KEYS) {
+        const rejected = evidenceFixture();
+        rejected.gateStates[gate] = false;
+        resign(rejected);
+        assert.throws(
+            () => buildDeterministicWriteFreezeProof(rejected, {
+              providerResult: providerResultFor(rejected),
+            }),
+            /self-reported proof gates differ/,
+        );
+      }
+      const unknownGate = evidenceFixture();
+      unknownGate.gateStates.unknown = true;
+      resign(unknownGate);
+      assert.throws(() => validate(unknownGate), /unknown or missing fields/);
+    });
+
+test("raw IAM rejects unknown identities, expansion, deny, and condition gaps",
+    () => {
+      const mutations = [
+        [(iam) => {
+          iam.bindings.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            inherited: false,
+            member: "group:unknown@example.com",
+            role: REVIEWED_IAM_ROLE_DEFINITIONS[0].role,
+            condition: null,
+          });
+        }, /unknown group/],
+        [(iam) => {
+          iam.bindings.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            inherited: false,
+            member: "domain:unknown.example",
+            role: REVIEWED_IAM_ROLE_DEFINITIONS[0].role,
+            condition: null,
+          });
+        }, /unknown user\/domain/],
+        [(iam) => {
+          iam.groupExpansions = [];
+          iam.bindings.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            inherited: false,
+            member:
+              "group:academy-backend-readers@daegu-miami.com",
+            role: REVIEWED_IAM_ROLE_DEFINITIONS[0].role,
+            condition: null,
+          });
+        }, /incomplete expansion/],
+        [(iam) => {
+          iam.bindings.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            inherited: false,
+            member: "allUsers",
+            role: REVIEWED_IAM_ROLE_DEFINITIONS[1].role,
+            condition: null,
+          });
+        }, /write-capable binding/],
+        [(iam) => {
+          iam.roleDefinitions[0].permissionsComplete = false;
+        }, /definition\/expansion is incomplete/],
+        [(iam) => {
+          iam.bindings[0].role =
+            `projects/${EXPECTED_PROJECT_ID}/roles/unknown`;
+        }, /unknown role/],
+        [(iam) => {
+          iam.roleDefinitions[0].permissions.push(
+              "datastore.entities.unknown",
+          );
+        }, /unknown permission/],
+        [(iam) => {
+          iam.denyPolicies.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            policyName: "policies/deny-writes",
+            updateTime: IAM_READ_ONLY_AT,
+            rules: [{
+              condition: null,
+              deniedPermissions: ["datastore.entities.delete"],
+              deniedPrincipals: [],
+              exceptionPermissions: [],
+              exceptionPrincipals: [],
+            }],
+          });
+        }, /deny evaluation exact set mismatch/],
+        [(iam) => {
+          iam.bindings[0].condition = {
+            title: "freeze",
+            description: "must be evaluated",
+            expression: "request.time < timestamp('2030-01-01T00:00:00Z')",
+          };
+        }, /unapproved conditional binding/],
+      ];
+      for (const [mutate, pattern] of mutations) {
+        const evidence = evidenceFixture();
+        const result = providerResultFor(evidence);
+        mutate(result.observation.iamPolicy);
+        assert.throws(() => validate(evidence, result), pattern);
+      }
+    });
+
+test("Functions runtime identities require approved active read-only members",
+    () => {
+      const evidence = evidenceFixture();
+      const arbitrary =
+        "serviceAccount:arbitrary-runtime@" +
+        "daegu-miami-production.iam.gserviceaccount.com";
+      evidence.deploymentApprovalReceipt.resources.functions.forEach((item) => {
+        item.runtimeServiceAccount = arbitrary;
+      });
+      evidence.iamPolicy.runtimeServiceAccounts.forEach((item) => {
+        item.member = arbitrary;
+      });
+      refreshIamObservation(
+          evidence.iamPolicy,
+          evidence.deploymentApprovalReceipt.resources.iamExpectedState,
+      );
+      resign(evidence);
+      const result = providerResultFor(evidence);
+      result.observation.functions.records.forEach((item) => {
+        item.runtimeServiceAccount = arbitrary;
+      });
+      result.observation.functions.completeness = completeness(
+          result.observation.functions.records,
+          {
+            expectedCount: EXPECTED_DEPLOYED_FUNCTION_NAMES.length,
+            pageCount: 2,
+          },
+      );
+      assert.throws(
+          () => validate(evidence, result),
+          /runtime service account is not approved/,
+      );
+    });
+
+test("IAM rejects every write role, condition, and unapproved attachment scope",
+    () => {
+      const cases = [
+        [(iam) => {
+          iam.bindings.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            inherited: false,
+            member: FIXTURE_IAM_PRINCIPAL_ALLOWLIST[0].member,
+            role: REVIEWED_IAM_ROLE_DEFINITIONS[1].role,
+            condition: null,
+          });
+        }, /active or conditional write-capable/],
+        [(iam) => {
+          iam.bindings.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            inherited: false,
+            member: FIXTURE_IAM_PRINCIPAL_ALLOWLIST[0].member,
+            role: REVIEWED_IAM_ROLE_DEFINITIONS[1].role,
+            condition: {
+              title: "write-condition",
+              description: "must not make writes acceptable",
+              expression: "false",
+            },
+          });
+        }, /unapproved conditional binding/],
+        [(iam) => {
+          iam.bindings.push({
+            attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+            inherited: false,
+            member: "group:academy-backend-readers@daegu-miami.com",
+            role: REVIEWED_IAM_ROLE_DEFINITIONS[1].role,
+            condition: null,
+          });
+        }, /active or conditional write-capable/],
+        [(iam) => {
+          iam.bindings[0].condition = {
+            title: "read-condition",
+            description: "snapshot is insufficient",
+            expression: "true",
+          };
+        }, /unapproved conditional binding/],
+        [(iam) => {
+          iam.bindings[0].inherited = true;
+        }, /inherited or foreign attachment scope/],
+        [(iam) => {
+          iam.bindings[0].attachmentPoint = "folders/123456";
+        }, /inherited or foreign attachment scope/],
+      ];
+      for (const [mutate, pattern] of cases) {
+        const evidence = evidenceFixture();
+        const result = providerResultFor(evidence);
+        mutate(result.observation.iamPolicy);
+        assert.throws(() => validate(evidence, result), pattern);
+      }
+    });
+
+test("IAM family completeness requires exact family counts and digests", () => {
+  for (const [mutate, pattern] of [
+    [(coverage) => {
+      coverage.families.find(({name}) => name === "bindings")
+          .expectedCount += 1;
+    }, /family completeness mismatch/],
+    [(coverage) => {
+      coverage.families.pop();
+    }, /evidence family exact set mismatch/],
+    [(coverage) => {
+      coverage.familyDigest = DIGEST_A;
+    }, /canonical digest mismatch/],
+  ]) {
+    const evidence = evidenceFixture();
+    const result = providerResultFor(evidence);
+    mutate(result.observation.iamPolicy.familyCompleteness);
+    assert.throws(() => validate(evidence, result), pattern);
+  }
+});
+
+test("provider and scheduler scan chronology fail closed", () => {
+  for (const [mutate, pattern] of [
+    [(evidence, result) => {
+      result.observation.rules.completeness.scanCompletedAt =
+        atOffsetMinutes(-8.5);
+    }, /deployment<=activatedAt/],
+    [(evidence, result) => {
+      result.observation.functions.completeness.scanCompletedAt =
+        atOffsetMinutes(-8.5);
+    }, /deployment<=activatedAt/],
+    [(evidence, result) => {
+      result.observation.observedAt = atOffsetMinutes(-4);
+    }, /sub-observation scan completion/],
+    [(evidence, result) => {
+      result.observation.observedAt = atOffsetMinutes(-1);
+    }, /provider observation/],
+    [(evidence, result) => {
+      result.observation.iamPolicy.observedAt = atOffsetMinutes(-3.6);
+    }, /must equal completed exhaustive scan time/],
+    [(evidence, result) => {
+      result.observation.scheduler.jobs[0].updateTime =
+        atOffsetMinutes(-6.5);
+      result.observation.scheduler.completeness = completeness(
+          result.observation.scheduler.jobs,
+          {
+            scanStartedAt: atOffsetMinutes(-7.2),
+            scanCompletedAt: atOffsetMinutes(-6.4),
+          },
+      );
+      evidence.scheduler =
+        structuredClone(result.observation.scheduler);
+      resign(evidence);
+    }, /schedulerStoppedAt predates/],
+    [(evidence, result) => {
+      result.observation.scheduler.completeness.scanCompletedAt =
+        atOffsetMinutes(-5.9);
+      evidence.scheduler =
+        structuredClone(result.observation.scheduler);
+      resign(evidence);
+    }, /schedulerStoppedAt predates|canonical observed set/],
+    [(evidence) => {
+      evidence.drainTelemetry.quietWindowStartedAt =
+        atOffsetMinutes(-7);
+      evidence.drainTelemetry.telemetryDigest =
+        computeDrainTelemetryDigest(evidence.drainTelemetry);
+      resign(evidence);
+    }, /quiet window starts before scheduler scan/],
+  ]) {
+    const evidence = evidenceFixture();
+    const result = providerResultFor(evidence);
+    mutate(evidence, result);
+    assert.throws(() => validate(evidence, result), pattern);
+  }
+});
+
+test("inactive executor binding and coherent IAM family omission are rejected",
+    () => {
+      const inactiveBinding = evidenceFixture();
+      inactiveBinding.iamPolicy.bindings.push({
+        attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+        inherited: false,
+        member: FIXTURE_IAM_PRINCIPAL_ALLOWLIST.find(
+            ({id}) => id === "future_reset_executor",
+        ).member,
+        role: REVIEWED_IAM_ROLE_DEFINITIONS[0].role,
+        condition: null,
+      });
+      refreshIamObservation(
+          inactiveBinding.iamPolicy,
+          inactiveBinding.deploymentApprovalReceipt.resources.iamExpectedState,
+      );
+      resign(inactiveBinding);
+      assert.throws(
+          () => validate(inactiveBinding),
+          /inactive future reset executor has an active IAM binding/,
+      );
+
+      const groupDerivedBinding = evidenceFixture();
+      const futureMember = FIXTURE_IAM_PRINCIPAL_ALLOWLIST.find(
+          ({id}) => id === "future_reset_executor",
+      ).member;
+      const approvedGroup =
+        groupDerivedBinding.iamPolicy.groupExpansions[0];
+      approvedGroup.members = [futureMember];
+      approvedGroup.paths = [{
+        member: futureMember,
+        path: [approvedGroup.group, futureMember],
+      }];
+      groupDerivedBinding.iamPolicy.bindings.push({
+        attachmentPoint: `projects/${EXPECTED_PROJECT_ID}`,
+        inherited: false,
+        member: approvedGroup.group,
+        role: REVIEWED_IAM_ROLE_DEFINITIONS[0].role,
+        condition: null,
+      });
+      refreshIamObservation(
+          groupDerivedBinding.iamPolicy,
+          groupDerivedBinding.deploymentApprovalReceipt
+              .resources.iamExpectedState,
+      );
+      resign(groupDerivedBinding);
+      assert.throws(
+          () => validate(groupDerivedBinding),
+          /inactive future reset executor has an active IAM binding/,
+      );
+
+      const omittedFamilyItem = evidenceFixture();
+      omittedFamilyItem.iamPolicy.groupExpansions.pop();
+      refreshIamObservation(
+          omittedFamilyItem.iamPolicy,
+          omittedFamilyItem.deploymentApprovalReceipt
+              .resources.iamExpectedState,
+      );
+      resign(omittedFamilyItem);
+      assert.throws(
+          () => validate(omittedFamilyItem),
+          /IAM family completeness mismatch: groupExpansions/,
+      );
+    });
+
+test("sentinel, probes, and future drain checkpoints use canonical timing",
+    () => {
+      const futureSentinel = evidenceFixture();
+      const futureVersion = atOffsetMinutes(-1);
+      futureSentinel.sentinel.capturedAt = futureVersion;
+      futureSentinel.sentinel.version = futureVersion;
+      futureSentinel.sentinel.snapshotDigest =
+        computeSentinelSnapshotDigest(futureSentinel.sentinel);
+      futureSentinel.negativeProbes.forEach((probe) => {
+        probe.sentinelVersion = futureVersion;
+        probe.evidenceDigest = computeNegativeProbeEvidenceDigest(probe);
+      });
+      resign(futureSentinel);
+      assert.throws(
+          () => validate(futureSentinel),
+          /future or self-inconsistent/,
+      );
+
+      const sentinel = evidenceFixture();
+      sentinel.sentinel.capturedAt = atOffsetMinutes(-7.9);
+      sentinel.sentinel.version = sentinel.sentinel.capturedAt;
+      resign(sentinel);
+      assert.throws(() => validate(sentinel), /sentinel canonical snapshot/);
+
+      const probe = evidenceFixture();
+      probe.negativeProbes[0].observedAt = atOffsetMinutes(-2.9);
+      resign(probe);
+      assert.throws(() => validate(probe), /canonical evidence digest/);
+
+      const futureCheckpoint = evidenceFixture();
+      futureCheckpoint.drainTelemetry.checkpoints[0].checkpointAt =
+        atOffsetMinutes(10);
+      futureCheckpoint.drainTelemetry.telemetryDigest =
+        computeDrainTelemetryDigest(futureCheckpoint.drainTelemetry);
+      resign(futureCheckpoint);
+      assert.throws(
+          () => validate(futureCheckpoint),
+          /nonzero, stale, or incomplete/,
+      );
+    });
+
+test("drain telemetry rejects short, active, stale, and missing-class windows",
+    () => {
+      for (const [mutate, pattern] of [
+        [(telemetry) => {
+          telemetry.quietWindowEndedAt = atOffsetMinutes(-5);
+        }, /quiet window/],
+        [(telemetry) => {
+          telemetry.quietWindowEndedAt = atOffsetMinutes(-1);
+        }, /quiet window/],
+        [(telemetry) => {
+          telemetry.lastWriterIngressAt = atOffsetMinutes(-5);
+        }, /ingress\/completion occurred/],
+        [(telemetry) => {
+          telemetry.checkpoints[0].ingressCountDuringQuietWindow = 1;
+        }, /nonzero/],
+        [(telemetry) => {
+          telemetry.sentinelGeneration += 1;
+        }, /stale sentinel generation/],
+        [(telemetry) => {
+          telemetry.checkpoints.pop();
+        }, /writer class exact set mismatch/],
+      ]) {
+        const evidence = evidenceFixture();
+        mutate(evidence.drainTelemetry);
+        evidence.drainTelemetry.telemetryDigest =
+          computeDrainTelemetryDigest(evidence.drainTelemetry);
+        resign(evidence);
+        assert.throws(() => validate(evidence), pattern);
+      }
+    });
 
 test("Rules resources bind the exact pinned project and proof identity", () => {
   const accepted = evidenceFixture();
@@ -431,11 +1121,11 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
       EXPECTED_PROJECT_NUMBER);
   assert.equal(
       acceptedProof.rulesResourceIdentity.rulesetResourceName,
-      accepted.deploymentApprovalReceipt.resources.rules.rulesetId,
+      accepted.deploymentApprovalReceipt.resources.rules.rulesetName,
   );
   assert.equal(
       acceptedProof.rulesResourceIdentity.releaseResourceName,
-      accepted.deploymentApprovalReceipt.resources.rules.deploymentId,
+      accepted.deploymentApprovalReceipt.resources.rules.releaseName,
   );
 
   for (const projectId of [
@@ -444,21 +1134,21 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
     EXPECTED_PROJECT_NUMBER,
   ]) {
     const coherentForeign = evidenceFixture();
-    coherentForeign.deploymentApprovalReceipt.resources.rules.rulesetId =
+    coherentForeign.deploymentApprovalReceipt.resources.rules.rulesetName =
       `projects/${projectId}/rulesets/ruleset-123`;
-    coherentForeign.deploymentApprovalReceipt.resources.rules.deploymentId =
+    coherentForeign.deploymentApprovalReceipt.resources.rules.releaseName =
       `projects/${projectId}/releases/cloud.firestore`;
     resign(coherentForeign);
     const coherentProvider = providerResultFor(coherentForeign);
     assert.throws(
         () => validate(coherentForeign, coherentProvider),
-        /Rules resources do not match the pinned project identity/,
+        /Rules approval lineage/,
     );
   }
 
   const oneSurface = evidenceFixture();
   const oneSurfaceProvider = providerResultFor(oneSurface);
-  oneSurfaceProvider.observation.rules.rulesetId =
+  oneSurfaceProvider.observation.rules.rulesetName =
     "projects/other-production-project/rulesets/ruleset-123";
   assert.throws(
       () => validate(oneSurface, oneSurfaceProvider),
@@ -476,16 +1166,16 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
 
   for (const mutate of [
     (rules) => {
-      rules.rulesetId = "";
+      rules.rulesetName = "";
     },
     (rules) => {
-      delete rules.deploymentId;
+      delete rules.releaseName;
     },
     (rules) => {
-      rules.rulesetId = "rulesets/ruleset-123";
+      rules.rulesetName = "rulesets/ruleset-123";
     },
     (rules) => {
-      rules.deploymentId =
+      rules.releaseName =
         `projects/${EXPECTED_PROJECT_ID}/releases/other-release`;
     },
   ]) {
@@ -494,25 +1184,32 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
     resign(malformed);
     assert.throws(
         () => validate(malformed, providerResultFor(malformed)),
-        /must be a string|unknown or missing fields|malformed Rules resource/,
+        /must be a string|unknown or missing fields|Rules approval lineage/,
     );
   }
 
   const resourceMismatch = evidenceFixture();
   const mismatchedProvider = providerResultFor(resourceMismatch);
-  mismatchedProvider.observation.rules.rulesetId =
+  mismatchedProvider.observation.rules.rulesetName =
     `projects/${EXPECTED_PROJECT_ID}/rulesets/ruleset-456`;
   assert.throws(
       () => validate(resourceMismatch, mismatchedProvider),
-      /immutable deployed resources differ/,
+      /approval lineage|observed set/,
   );
 
   const changedIdentity = evidenceFixture();
-  changedIdentity.deploymentApprovalReceipt.resources.rules.rulesetId =
+  changedIdentity.deploymentApprovalReceipt.resources.rules.rulesetName =
     `projects/${EXPECTED_PROJECT_ID}/rulesets/ruleset-456`;
   resign(changedIdentity);
+  const changedProvider = providerResultFor(changedIdentity);
+  changedProvider.observation.rules.rulesetName =
+    `projects/${EXPECTED_PROJECT_ID}/rulesets/ruleset-456`;
+  const changedRulesItem = {...changedProvider.observation.rules};
+  delete changedRulesItem.completeness;
+  changedProvider.observation.rules.completeness =
+    completeness([changedRulesItem]);
   const changedProof = buildDeterministicWriteFreezeProof(changedIdentity, {
-    providerResult: providerResultFor(changedIdentity),
+    providerResult: changedProvider,
   });
   assert.notEqual(changedProof.proofDigest, acceptedProof.proofDigest);
   assert.equal(changedProof.rulesResourceIdentity.rulesetId, "ruleset-456");
@@ -540,13 +1237,19 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
     const evidence = evidenceFixture();
     mutate(evidence.iamPolicy.principals[0]);
     resign(evidence);
-    assert.throws(() => validate(evidence), /IAM principal|exact set/);
+    assert.throws(
+        () => validate(evidence),
+        /IAM principal|exact set|snapshot digest|policy digest/,
+    );
   }
   const duplicate = evidenceFixture();
   duplicate.iamPolicy.principals[1] =
     structuredClone(duplicate.iamPolicy.principals[0]);
   resign(duplicate);
-  assert.throws(() => validate(duplicate), /IAM principal exact set mismatch/);
+  assert.throws(
+      () => validate(duplicate),
+      /IAM principal exact set mismatch|snapshot digest/,
+  );
 
   const unknown = evidenceFixture();
   unknown.iamPolicy.principals[0].id = "unknown_backend";
@@ -557,7 +1260,10 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
   duplicateMember.iamPolicy.principals[1].member =
     duplicateMember.iamPolicy.principals[0].member;
   resign(duplicateMember);
-  assert.throws(() => validate(duplicateMember), /duplicate full members/);
+  assert.throws(
+      () => validate(duplicateMember),
+      /duplicate full members|snapshot digest/,
+  );
 
   const receiptMemberMismatch = evidenceFixture();
   const receiptProviderResult = providerResultFor(receiptMemberMismatch);
@@ -578,7 +1284,7 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
     "developer.gserviceaccount.com";
   assert.throws(
       () => validate(providerMemberMismatch, mismatchedProviderResult),
-      /provider IAM principals differ|pinned project number/,
+      /provider IAM principals differ|pinned project number|snapshot digest/,
   );
 });
 
@@ -668,7 +1374,7 @@ test("pinned Production project identity rejects every IAM substitution", () => 
       "datastore.entities.update",
   );
   resign(writable);
-  assert.throws(() => validate(writable), /exact set/);
+  assert.throws(() => validate(writable), /exact set|snapshot digest/);
 
   const proof = buildDeterministicWriteFreezeProof(accepted, {
     providerResult: acceptedProvider,
@@ -707,24 +1413,40 @@ test("scheduler allowlist rejects unknown disabled jobs and wrong targets", () =
     assert.throws(() => validate(wrong), /unknown scheduler job or target/);
   }
   const inFlight = evidenceFixture();
-  inFlight.scheduler.jobs[0].inFlightExecutions = 1;
+  inFlight.drainTelemetry.checkpoints[0].inFlightExecutions = 1;
+  inFlight.drainTelemetry.telemetryDigest =
+    computeDrainTelemetryDigest(inFlight.drainTelemetry);
   resign(inFlight);
-  assert.throws(() => validate(inFlight), /not drained/);
+  assert.throws(() => validate(inFlight), /nonzero/);
 });
 
 test("activation order is deployment through probes and verifiedAt", () => {
   const cases = [
     (evidence) => {
-      evidence.scheduler.stoppedAt = atOffsetMinutes(-9);
+      evidence.drainTelemetry.schedulerStoppedAt = atOffsetMinutes(-9);
+      evidence.drainTelemetry.telemetryDigest =
+        computeDrainTelemetryDigest(evidence.drainTelemetry);
     },
     (evidence) => {
-      evidence.scheduler.drainedAt = atOffsetMinutes(-8);
+      evidence.drainTelemetry.quietWindowEndedAt = atOffsetMinutes(-5.5);
+      evidence.drainTelemetry.telemetryDigest =
+        computeDrainTelemetryDigest(evidence.drainTelemetry);
     },
     (evidence) => {
-      evidence.iamPolicy.readOnlyObservedAt = atOffsetMinutes(-7);
+      evidence.iamPolicy.observedAt = atOffsetMinutes(-7);
+      evidence.iamPolicy.completeness.scanStartedAt =
+        atOffsetMinutes(-7.5);
+      evidence.iamPolicy.completeness.scanCompletedAt =
+        atOffsetMinutes(-7);
+      refreshIamObservation(
+          evidence.iamPolicy,
+          evidence.deploymentApprovalReceipt.resources.iamExpectedState,
+      );
     },
     (evidence) => {
       evidence.negativeProbes[0].observedAt = atOffsetMinutes(-6);
+      evidence.negativeProbes[0].evidenceDigest =
+        computeNegativeProbeEvidenceDigest(evidence.negativeProbes[0]);
     },
   ];
   for (const mutate of cases) {
@@ -733,7 +1455,7 @@ test("activation order is deployment through probes and verifiedAt", () => {
     resign(evidence);
     assert.throws(
         () => validate(evidence),
-        /activation order|stoppedAt must precede drainedAt/,
+        /activation order|quiet window|schedulerStoppedAt/,
     );
   }
   const staleDeployment = evidenceFixture();
@@ -741,14 +1463,14 @@ test("activation order is deployment through probes and verifiedAt", () => {
   providerResult.observation.observedAt = atOffsetMinutes(-7);
   assert.throws(
       () => validate(staleDeployment, providerResult),
-      /activation order/,
+      /sub-observation scan completion/,
   );
   const oldObservation = evidenceFixture();
   const oldProviderResult = providerResultFor(oldObservation);
   oldProviderResult.observation.observedAt = atOffsetMinutes(-70);
   assert.throws(
       () => validate(oldObservation, oldProviderResult),
-      /observation is stale|provider observation predates|receipt is not valid/,
+      /sub-observation scan completion|provider observation predates/,
   );
 });
 
@@ -760,7 +1482,7 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
   });
   assert.equal(
       acceptedProof.latestDeploymentObservedAt,
-      acceptedProvider.observation.observedAt,
+      RESOURCE_AT,
   );
   assert.equal(
       acceptedProof.activationChronology.activatedAt,
@@ -768,7 +1490,7 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
   );
 
   const activationBeforeDeployment = evidenceFixture();
-  activationBeforeDeployment.freezeWindow.activatedAt = atOffsetMinutes(-11);
+  activationBeforeDeployment.freezeWindow.activatedAt = atOffsetMinutes(-13);
   resign(activationBeforeDeployment);
   assert.throws(
       () => validate(
@@ -783,7 +1505,16 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
       .resources.functions[0].updateTime = atOffsetMinutes(-8.5);
   resign(laterFunctionDeployment);
   const laterFunctionProvider = providerResultFor(laterFunctionDeployment);
-  laterFunctionProvider.observation.observedAt = atOffsetMinutes(-8.5);
+  laterFunctionProvider.observation.functions.records[0].updateTime =
+    atOffsetMinutes(-8.5);
+  laterFunctionProvider.observation.functions.completeness = completeness(
+      laterFunctionProvider.observation.functions.records,
+      {
+        expectedCount: EXPECTED_DEPLOYED_FUNCTION_NAMES.length,
+        pageCount: 2,
+        scanCompletedAt: atOffsetMinutes(-8.4),
+      },
+  );
   assert.throws(
       () => validate(laterFunctionDeployment, laterFunctionProvider),
       /deployment<=activatedAt/,
@@ -799,22 +1530,6 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
       ),
       /deployment<=activatedAt/,
   );
-
-  const equalBoundary = evidenceFixture();
-  const equalAt = atOffsetMinutes(-5);
-  equalBoundary.freezeWindow.activatedAt = equalAt;
-  equalBoundary.sentinel.capturedAt = equalAt;
-  equalBoundary.scheduler.stoppedAt = equalAt;
-  equalBoundary.scheduler.drainedAt = equalAt;
-  equalBoundary.iamPolicy.readOnlyObservedAt = equalAt;
-  equalBoundary.negativeProbes.forEach((probe) => {
-    probe.observedAt = equalAt;
-  });
-  equalBoundary.verifiedAt = equalAt;
-  resign(equalBoundary);
-  const equalProvider = providerResultFor(equalBoundary);
-  equalProvider.observation.observedAt = equalAt;
-  assert.doesNotThrow(() => validate(equalBoundary, equalProvider));
 
   for (const mutate of [
     (evidence) => {
@@ -835,10 +1550,9 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
 
   const providerLaterThanActivation = evidenceFixture();
   const laterProvider = providerResultFor(providerLaterThanActivation);
-  laterProvider.observation.observedAt = atOffsetMinutes(-8.5);
-  assert.throws(
+  laterProvider.observation.observedAt = atOffsetMinutes(-2.5);
+  assert.doesNotThrow(
       () => validate(providerLaterThanActivation, laterProvider),
-      /deployment<=activatedAt/,
   );
 
   const shiftedActivation = evidenceFixture();

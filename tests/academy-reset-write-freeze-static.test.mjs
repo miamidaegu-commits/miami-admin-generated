@@ -11,6 +11,7 @@ import {
 } from "../functions/scripts/academy-reset-write-surface-registry.mjs";
 import {
   EXPECTED_DEPLOYED_FUNCTION_NAMES,
+  EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES,
   EXPECTED_PROJECT_ID,
   EXPECTED_PROJECT_NUMBER,
   IAM_PRINCIPAL_POLICY_SCHEMA,
@@ -152,6 +153,8 @@ test("actual exported backend source scan exactly matches public writers", () =>
       .map(({entryHelper}) => entryHelper)
       .sort();
   assert.deepEqual(scanned, registered);
+  assert.deepEqual(scanned, EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES);
+  assert.equal(scanned.length, 26);
 });
 
 test("deployed functions, IAM, scheduler, and unfreeze use central exact sets",
@@ -162,6 +165,7 @@ test("deployed functions, IAM, scheduler, and unfreeze use central exact sets",
         ),
       ].map((match) => match[1]).sort();
       assert.deepEqual(deployed, EXPECTED_DEPLOYED_FUNCTION_NAMES);
+      assert.equal(deployed.length, 35);
       assert.equal(new Set(deployed).size, deployed.length);
       assert.equal(IAM_PRINCIPAL_POLICY_SCHEMA.length, 3);
       assert.deepEqual(TARGET_PROJECT_IDENTITY, {
@@ -210,6 +214,9 @@ test("deployed functions, IAM, scheduler, and unfreeze use central exact sets",
           contractSource,
           /123456789012|firebase-adminsdk-ab123/,
       );
+      assert.doesNotMatch(contractSource, /rules\.sourceBundle/);
+      assert.match(contractSource, /reviewed_direct_googleapis/);
+      assert.match(contractSource, /declared_google_auth_library_rest/);
     });
 
 test("every registered transaction helper is present and mutating", () => {
