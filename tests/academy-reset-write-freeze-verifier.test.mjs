@@ -25,8 +25,11 @@ import {
   IAM_PRINCIPAL_POLICY_SCHEMA,
   IAM_EVIDENCE_FAMILY_NAMES,
   OBSERVATION_COMPLETENESS_VERSION,
+  PROVIDER_ADAPTER_METADATA,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
+  PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
   PROVIDER_DEPENDENCY_CONTRACT_VERSION,
-  PROVIDER_READ_ONLY_OPERATIONS,
+  EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
   PROJECT_IDENTITY_CONTRACT_VERSION,
   PROVIDER_OBSERVATION_VERSION,
   PROOF_GATE_KEYS,
@@ -35,6 +38,7 @@ import {
   REVIEWED_WRITABLE_PERMISSIONS,
   REQUIRED_COMPARISON_BASELINE_DIGEST,
   REQUIRED_NEGATIVE_PROBES,
+  REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS,
   ROLLBACK_UNFREEZE_ORDER,
   SCHEDULER_JOB_ALLOWLIST,
   UNFREEZE_ORDER,
@@ -55,17 +59,30 @@ import {
   sha256Canonical,
   stableStringify,
   validateWriteFreezeEvidence,
+  validateProviderAdapterReviewedSources,
 } from "../functions/scripts/academy-reset-write-freeze-contract.mjs";
+import {
+  createValidatedProviderRuntimeContext,
+} from "../functions/scripts/academy-reset-freeze-provider-attestation.mjs";
 import {
   DEFAULT_REPOSITORY_ROOT,
   executeVerifierCli,
-  resolveRuntimeGitSourceIdentity,
   verifyLocalWriteFreezeEvidence,
   writeProofAtomicNoClobber,
 } from "../functions/scripts/verify-academy-reset-write-freeze.mjs";
+import {
+  resolveRuntimeGitSourceIdentity,
+} from "../functions/scripts/academy-reset-freeze-runtime-identity.mjs";
+import {
+  createGenuineAdapterForEvidence,
+} from "./helpers/academy-reset-freeze-genuine-adapter.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const sourceRepositoryRoot = path.resolve(__dirname, "..");
+const sourceRepositoryRootDigest = sha256Canonical({
+  repositoryRoot: fs.realpathSync(sourceRepositoryRoot),
+  schemaVersion: PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
+});
 const SHA = "1234567890abcdef1234567890abcdef12345678";
 const TREE_SHA = "abcdef1234567890abcdef1234567890abcdef12";
 const DIGEST_A = "a".repeat(64);
@@ -123,21 +140,37 @@ function runtimeGitFixture() {
       WRITE_SOURCE_SHA256_ALLOWLIST.map(({sourceFile, sha256}) =>
         [sourceFile, sha256]),
   );
-  return {
-    headSha: SHA,
-    treeSha: TREE_SHA,
-    clean: true,
-    criticalSources: CRITICAL_RUNTIME_SOURCE_PATHS.map((sourcePath) => {
-      const digest = pins.get(sourcePath) ?? DIGEST_A;
-      return {
+  const criticalSources = CRITICAL_RUNTIME_SOURCE_PATHS.map((sourcePath) => {
+    const digest = pins.get(sourcePath) ?? DIGEST_A;
+    return {
+      path: sourcePath,
+      fileMode: "100644",
+      gitBlobOid: SHA,
+      indexFlags: "H",
+      runtimeSha256: digest,
+      headSha256: digest,
+    };
+  });
+  const reviewedSources = PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES.map(
+      ({path: sourcePath, sha256}) => ({
         path: sourcePath,
         fileMode: "100644",
         gitBlobOid: SHA,
         indexFlags: "H",
-        runtimeSha256: digest,
-        headSha256: digest,
-      };
-    }),
+        runtimeSha256: sha256,
+        headSha256: sha256,
+      }),
+  );
+  return {
+    headSha: SHA,
+    treeSha: TREE_SHA,
+    clean: true,
+    criticalSources,
+    criticalSourceSetDigest: sha256Canonical(criticalSources),
+    reviewedSources,
+    reviewedSourceIdentityDigest:
+      EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+    reviewedSourceSetDigest: sha256Canonical(reviewedSources),
   };
 }
 
@@ -190,11 +223,17 @@ function functionRecords() {
     runtime: "nodejs24",
     generation: EXPECTED_FUNCTION_GENERATION,
     revisionId: `${name}-00001-abc`,
-    buildId: `build-${String(index).padStart(2, "0")}`,
+    buildId:
+      `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
     updateTime: RESOURCE_AT,
     providerSourceIdentity: {
       type: "storage_source",
       value: `gs://immutable/functions/${name}/987654321`,
+      generation: "987654321",
+      md5Hash: "VaVACK0bpYmqIQ0mKcHfQQ==",
+      sha256:
+        "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
+      size: "1",
     },
     runtimeServiceAccount: RUNTIME_SERVICE_ACCOUNT,
   }));
@@ -340,7 +379,7 @@ function schedulerObservation() {
   };
 }
 
-function evidenceFixture() {
+function unboundEvidenceFixture() {
   const runtimeGit = runtimeGitFixture();
   const approvedIamSnapshot = iamObservation();
   const iamExpectedState =
@@ -380,10 +419,12 @@ function evidenceFixture() {
       },
       resources: approvedDeploymentResources(iamExpectedState),
       providerDependencyApproval: {
+        ...structuredClone(PROVIDER_ADAPTER_METADATA),
         strategy: "declared_google_auth_library_rest",
         module: "google-auth-library",
-        allowedOperations: [...PROVIDER_READ_ONLY_OPERATIONS],
-        reviewedSourceDigest: DIGEST_A,
+        reviewedSourceDigest:
+          EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+        reviewedSourceRepositoryRootDigest: sourceRepositoryRootDigest,
         reviewedLockDigest: DIGEST_B,
       },
       iamPrincipalAllowlist: FIXTURE_IAM_PRINCIPAL_ALLOWLIST.map(
@@ -468,24 +509,89 @@ function evidenceFixture() {
 function providerResultFor(evidence) {
   const approvalReceipt = structuredClone(evidence.deploymentApprovalReceipt);
   const dependencyApproval = approvalReceipt.providerDependencyApproval;
+  const executionTrace = REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS
+      .map((operationId, index) => ({
+        operationId,
+        transportExecutionId: `synthetic-execution-${index}`,
+        pageCount: 1,
+        recordCount: 1,
+        paginationComplete: true,
+        mockOnly: true,
+      }));
+  const operationExecution = {
+    providerOperationAllowlistVersion:
+      PROVIDER_ADAPTER_METADATA.providerOperationAllowlistVersion,
+    providerOperationDescriptorSetDigest:
+      PROVIDER_ADAPTER_METADATA.providerOperationDescriptorSetDigest,
+    executedOperationIds: [...REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS],
+    executedOperationCount: REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS.length,
+    executionTrace,
+    executionTraceCount: executionTrace.length,
+    executionTraceDigest: sha256Canonical(executionTrace),
+    unknownOperationCount: 0,
+    actualMutations: 0,
+    mutationOperationCount: 0,
+    reviewedSourceRepositoryRootDigest:
+      dependencyApproval.reviewedSourceRepositoryRootDigest,
+  };
+  const metadata = {
+    adapterId: APPROVED_PROVIDER_ADAPTER_ID,
+    adapterContractVersion:
+      PROVIDER_ADAPTER_METADATA.providerAdapterContractVersion,
+    mockOnly: true,
+    actualMutations: 0,
+    mutationOperationCount: 0,
+    unknownOperationCount: 0,
+    providerOperationAllowlistVersion:
+      operationExecution.providerOperationAllowlistVersion,
+    providerOperationDescriptorSetDigest:
+      operationExecution.providerOperationDescriptorSetDigest,
+    executedOperationIds: [...operationExecution.executedOperationIds],
+    executedOperationCount: operationExecution.executedOperationCount,
+    executionTraceCount: operationExecution.executionTraceCount,
+    executionTraceDigest: operationExecution.executionTraceDigest,
+    reviewedSourceDigest:
+      EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+    reviewedSourceRepositoryRootDigest:
+      dependencyApproval.reviewedSourceRepositoryRootDigest,
+    reviewedSourceIdentities:
+      structuredClone(PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES),
+  };
   return {
     adapterId: APPROVED_PROVIDER_ADAPTER_ID,
+    adapterContractVersion:
+      PROVIDER_ADAPTER_METADATA.providerAdapterContractVersion,
     approvalReceipt,
+    metadata,
     observation: {
       schemaVersion: PROVIDER_OBSERVATION_VERSION,
+      providerObservationVersion: PROVIDER_OBSERVATION_VERSION,
       adapterId: APPROVED_PROVIDER_ADAPTER_ID,
+      adapterContractVersion:
+        PROVIDER_ADAPTER_METADATA.providerAdapterContractVersion,
+      mockOnly: true,
+      actualMutations: 0,
+      mutationOperationCount: 0,
+      unknownOperationCount: 0,
+      scanStartedAt: RESOURCE_AT,
+      scanCompletedAt: PROVIDER_OBSERVED_AT,
       observedAt: PROVIDER_OBSERVED_AT,
       projectIdentityContractVersion: PROJECT_IDENTITY_CONTRACT_VERSION,
       projectId: EXPECTED_PROJECT_ID,
       projectNumber: EXPECTED_PROJECT_NUMBER,
+      providerAdapterMetadata: structuredClone(PROVIDER_ADAPTER_METADATA),
+      adapterMetadata: structuredClone(metadata),
+      operationExecution,
       dependencyContract: {
+        ...structuredClone(PROVIDER_ADAPTER_METADATA),
         schemaVersion: PROVIDER_DEPENDENCY_CONTRACT_VERSION,
         strategy: "declared_google_auth_library_rest",
         module: "google-auth-library",
         directDependencyReviewed: true,
         publicApiOnly: true,
-        allowedOperations: [...dependencyApproval.allowedOperations],
         reviewedSourceDigest: dependencyApproval.reviewedSourceDigest,
+      reviewedSourceRepositoryRootDigest:
+        dependencyApproval.reviewedSourceRepositoryRootDigest,
         reviewedLockDigest: dependencyApproval.reviewedLockDigest,
         approvalLineageDigest: sha256Canonical(approvalReceipt),
       },
@@ -502,6 +608,9 @@ function mockProviderAdapter(evidence, mutate = () => {}) {
   mutate(result);
   return {
     adapterId: APPROVED_PROVIDER_ADAPTER_ID,
+    adapterContractVersion:
+      PROVIDER_ADAPTER_METADATA.providerAdapterContractVersion,
+    mockOnly: true,
     async observeDeployment() {
       await Promise.resolve();
       return result;
@@ -514,8 +623,59 @@ function resign(evidence) {
   return evidence;
 }
 
-function validate(evidence, providerResult = providerResultFor(evidence)) {
-  return validateWriteFreezeEvidence(evidence, {providerResult});
+let sharedProviderRuntimeContext;
+function validate(evidence, callerSuppliedProviderResult) {
+  if (callerSuppliedProviderResult !== undefined) {
+    return validateWriteFreezeEvidence(evidence, {
+      providerRuntimeContext: {
+        ...sharedProviderRuntimeContext,
+        providerResult: callerSuppliedProviderResult,
+      },
+    });
+  }
+  return validateWriteFreezeEvidence(evidence, {
+    providerRuntimeContext: sharedProviderRuntimeContext,
+  });
+}
+
+let sharedSyntheticRepositoryRoot;
+function getSharedSyntheticRepository() {
+  if (sharedSyntheticRepositoryRoot) return sharedSyntheticRepositoryRoot;
+  sharedSyntheticRepositoryRoot = createSyntheticGitRepository({
+    after() {},
+  });
+  process.once("exit", () => fs.rmSync(sharedSyntheticRepositoryRoot, {
+    recursive: true,
+    force: true,
+  }));
+  return sharedSyntheticRepositoryRoot;
+}
+
+async function genuineRuntimeFor(evidence, repositoryRoot) {
+  repositoryRoot ??= getSharedSyntheticRepository();
+  bindEvidenceToRepository(evidence, repositoryRoot);
+  const providerAdapter =
+    createGenuineAdapterForEvidence(evidence, repositoryRoot);
+  const providerResult = await providerAdapter.observeDeployment();
+  evidence.iamPolicy = structuredClone(providerResult.observation.iamPolicy);
+  evidence.scheduler = structuredClone(providerResult.observation.scheduler);
+  resign(evidence);
+  const providerRuntimeContext = await createValidatedProviderRuntimeContext({
+    providerAdapter,
+    providerResult,
+    repositoryRoot,
+  });
+  return {providerAdapter, providerResult, providerRuntimeContext};
+}
+
+async function genuineAdapterForVerifier(evidence, repositoryRoot) {
+  const observationAdapter =
+    createGenuineAdapterForEvidence(evidence, repositoryRoot);
+  const observation = await observationAdapter.observeDeployment();
+  evidence.iamPolicy = structuredClone(observation.observation.iamPolicy);
+  evidence.scheduler = structuredClone(observation.observation.scheduler);
+  resign(evidence);
+  return createGenuineAdapterForEvidence(evidence, repositoryRoot);
 }
 
 function runGit(repositoryRoot, args) {
@@ -536,13 +696,17 @@ function createSyntheticGitRepository(context) {
   runGit(repositoryRoot, ["init"]);
   runGit(repositoryRoot, ["config", "user.name", "Freeze Test"]);
   runGit(repositoryRoot, ["config", "user.email", "freeze@example.invalid"]);
-  for (const relativePath of CRITICAL_RUNTIME_SOURCE_PATHS) {
+  const fixturePaths = [...new Set([
+    ...CRITICAL_RUNTIME_SOURCE_PATHS,
+    ...PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES.map(({path}) => path),
+  ])];
+  for (const relativePath of fixturePaths) {
     const source = path.join(sourceRepositoryRoot, relativePath);
     const destination = path.join(repositoryRoot, relativePath);
     fs.mkdirSync(path.dirname(destination), {recursive: true, mode: 0o700});
     fs.copyFileSync(source, destination);
   }
-  runGit(repositoryRoot, ["add", "--", ...CRITICAL_RUNTIME_SOURCE_PATHS]);
+  runGit(repositoryRoot, ["add", "--", ...fixturePaths]);
   runGit(repositoryRoot, ["commit", "-m", "fixture"]);
   return repositoryRoot;
 }
@@ -569,27 +733,185 @@ function bindEvidenceToRepository(evidence, repositoryRoot) {
     byPath.get("firestore.rules").headSha256;
   evidence.deploymentApprovalReceipt.localSources.functionsSha256 =
     byPath.get("functions/index.js").headSha256;
+  evidence.deploymentApprovalReceipt.providerDependencyApproval
+      .reviewedSourceRepositoryRootDigest = sha256Canonical({
+        repositoryRoot: fs.realpathSync(repositoryRoot),
+        schemaVersion: PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
+      });
   return resign(evidence);
 }
 
-test("valid provider-bound evidence produces deterministic proof", () => {
+const sharedAttestedEvidence = unboundEvidenceFixture();
+const sharedAttestedRuntime = await genuineRuntimeFor(sharedAttestedEvidence);
+sharedProviderRuntimeContext =
+  sharedAttestedRuntime.providerRuntimeContext;
+function evidenceFixture() {
+  return structuredClone(sharedAttestedEvidence);
+}
+
+function assertDeepFrozen(value, seen = new Set()) {
+  if (!value ||
+      typeof value !== "object" && typeof value !== "function" ||
+      seen.has(value)) return;
+  seen.add(value);
+  assert.equal(Object.isFrozen(value), true);
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && Object.hasOwn(descriptor, "value")) {
+      assertDeepFrozen(descriptor.value, seen);
+    }
+  }
+}
+
+test("public proof boundary requires the attested provider result reference",
+    () => {
+      const evidence = evidenceFixture();
+      const genuineResult = sharedAttestedRuntime.providerResult;
+      const genuineContext = sharedAttestedRuntime.providerRuntimeContext;
+      assert.equal(genuineContext.providerResult, genuineResult);
+      assertDeepFrozen(genuineResult);
+
+      const claimedDigest = genuineResult.metadata.executionTraceDigest;
+      assert.throws(() => {
+        genuineResult.metadata.executionTraceDigest = DIGEST_B;
+      }, TypeError);
+      assert.throws(() => {
+        genuineResult.observation.operationExecution.executionTrace.pop();
+      }, TypeError);
+      assert.equal(genuineResult.metadata.executionTraceDigest, claimedDigest);
+
+      const coherentRedigestedForge = providerResultFor(evidence);
+      const forgedExecution =
+        coherentRedigestedForge.observation.operationExecution;
+      forgedExecution.executionTrace[0].transportExecutionId =
+        "coherently-redigested-forge";
+      forgedExecution.executionTraceDigest =
+        sha256Canonical(forgedExecution.executionTrace);
+      coherentRedigestedForge.metadata.executionTraceDigest =
+        forgedExecution.executionTraceDigest;
+      coherentRedigestedForge.observation.adapterMetadata.executionTraceDigest =
+        forgedExecution.executionTraceDigest;
+
+      const claimedDigestTamper = structuredClone(genuineResult);
+      claimedDigestTamper.metadata.executionTraceDigest = DIGEST_B;
+      claimedDigestTamper.observation.adapterMetadata.executionTraceDigest =
+        DIGEST_B;
+      const rejectedResults = [
+        ["plain coherent forge", providerResultFor(evidence)],
+        ["structured clone", structuredClone(genuineResult)],
+        ["spread clone", {...genuineResult}],
+        ["JSON round trip", JSON.parse(JSON.stringify(genuineResult))],
+        ["coherently re-digested forge", coherentRedigestedForge],
+        ["claimed digest tamper", claimedDigestTamper],
+      ];
+      let rejectedProofCount = 0;
+      for (const [label, providerResult] of rejectedResults) {
+        assert.throws(
+            () => validateWriteFreezeEvidence(evidence, {providerResult}),
+            /validation options has unknown or missing fields/,
+            label,
+        );
+        assert.throws(
+            () => validateWriteFreezeEvidence(evidence, {
+              providerRuntimeContext: {
+                ...genuineContext,
+                providerResult,
+              },
+            }),
+            /genuine provider runtime context/,
+            label,
+        );
+        assert.throws(
+            () => {
+              buildDeterministicWriteFreezeProof(evidence, {providerResult});
+              rejectedProofCount += 1;
+            },
+            /validation options has unknown or missing fields/,
+            label,
+        );
+      }
+
+      for (const options of [
+        {providerRuntimeContext: genuineContext,
+          observation: genuineResult.observation},
+        {providerRuntimeContext: genuineContext, genuine: true},
+        {providerRuntimeContext: genuineContext, mockOnly: true},
+      ]) {
+        assert.throws(
+            () => validateWriteFreezeEvidence(evidence, options),
+            /validation options has unknown or missing fields/,
+        );
+        assert.throws(
+            () => {
+              buildDeterministicWriteFreezeProof(evidence, options);
+              rejectedProofCount += 1;
+            },
+            /validation options has unknown or missing fields/,
+        );
+      }
+
+      const calls = {credential: 0, mutation: 0, provider: 0};
+      const capabilityShapedOptions = {
+        credentialProvider() {
+          calls.credential += 1;
+        },
+        mutation() {
+          calls.mutation += 1;
+        },
+        providerAdapter: {
+          observeDeployment() {
+            calls.provider += 1;
+            return providerResultFor(evidence);
+          },
+        },
+        providerRuntimeContext: genuineContext,
+      };
+      assert.throws(
+          () => buildDeterministicWriteFreezeProof(
+              evidence,
+              capabilityShapedOptions,
+          ),
+          /validation options has unknown or missing fields/,
+      );
+      assert.deepEqual(calls, {credential: 0, mutation: 0, provider: 0});
+      assert.equal(rejectedProofCount, 0);
+
+      assert.doesNotThrow(() => validateWriteFreezeEvidence(evidence, {
+        providerRuntimeContext: genuineContext,
+      }));
+      const acceptedProof = buildDeterministicWriteFreezeProof(evidence, {
+        providerRuntimeContext: genuineContext,
+      });
+      assert.equal(acceptedProof.writeFreezeVerified, true);
+    });
+
+test("valid provider-bound evidence produces deterministic proof", async () => {
   const evidence = evidenceFixture();
-  const providerResult = providerResultFor(evidence);
-  const validation = validate(evidence, providerResult);
+  const validation = validate(evidence);
+  const {providerResult: genuineProviderResult, providerRuntimeContext} =
+    await genuineRuntimeFor(evidence);
   assert.equal(validation.writerCount, 58);
-  const first = buildDeterministicWriteFreezeProof(evidence, {providerResult});
+  const first = buildDeterministicWriteFreezeProof(evidence, {
+    providerRuntimeContext,
+  });
   const second = buildDeterministicWriteFreezeProof(
       structuredClone(evidence),
-      {providerResult: structuredClone(providerResult)},
+      {providerRuntimeContext},
   );
   assert.deepEqual(first, second);
   assert.equal(first.writeFreezeVerified, true);
   assert.deepEqual(first.unfreezeOrder, UNFREEZE_ORDER);
   assert.deepEqual(first.rollbackUnfreezeOrder, ROLLBACK_UNFREEZE_ORDER);
   assert.match(first.providerObservationDigest, /^[a-f0-9]{64}$/);
-  assert.equal(first.providerObservationCompletedAt, PROVIDER_OBSERVED_AT);
+  assert.equal(
+      first.providerObservationCompletedAt,
+      genuineProviderResult.observation.observedAt,
+  );
   assert.equal(first.latestDeploymentObservedAt, RESOURCE_AT);
-  assert.equal(first.latestDeploymentScanCompletedAt, DEPLOYMENT_AT);
+  assert.equal(
+      first.latestDeploymentScanCompletedAt,
+      genuineProviderResult.observation.functions.completeness.scanCompletedAt,
+  );
   assert.equal(
       first.approvedIamExpectedStateDigest,
       evidence.deploymentApprovalReceipt.resources
@@ -611,13 +933,97 @@ test("valid provider-bound evidence produces deterministic proof", () => {
   assert.equal(first.actualMutations, 0);
   assert.equal(first.actualWrites, 0);
   assert.equal(first.executorImplemented, false);
+  assert.equal(first.providerOperationAllowlistVersion,
+      PROVIDER_ADAPTER_METADATA.providerOperationAllowlistVersion);
+  assert.equal(first.providerOperationDescriptorSetDigest,
+      PROVIDER_ADAPTER_METADATA.providerOperationDescriptorSetDigest);
+  assert.deepEqual(first.approvedProviderOperationIds,
+      PROVIDER_ADAPTER_METADATA.allowedOperations);
+  assert.equal(first.providerTransport, PROVIDER_ADAPTER_METADATA.transport);
+  assert.equal(first.providerAuthDependency,
+      PROVIDER_ADAPTER_METADATA.authDependency);
+  assert.equal(first.providerHttpRuntime,
+      PROVIDER_ADAPTER_METADATA.httpRuntime);
+  assert.equal(first.providerAdapterContractVersion,
+      PROVIDER_ADAPTER_METADATA.providerAdapterContractVersion);
+  assert.equal(first.noMutationOperationCount, 0);
   for (const gate of PROOF_GATE_KEYS) assert.equal(first[gate], true);
 });
+
+test("provider approval, observation metadata, result, and proof have parity",
+    async () => {
+      const evidence = evidenceFixture();
+      const providerResult = providerResultFor(evidence);
+      const approval =
+        evidence.deploymentApprovalReceipt.providerDependencyApproval;
+      const observationMetadata =
+        providerResult.observation.providerAdapterMetadata;
+      const dependency = providerResult.observation.dependencyContract;
+      for (const metadata of [approval, observationMetadata, dependency]) {
+        for (const [key, expected] of
+          Object.entries(PROVIDER_ADAPTER_METADATA)) {
+          assert.deepEqual(metadata[key], expected, key);
+        }
+      }
+      const validation = validate(evidence);
+      assert.deepEqual(
+          validation.providerAdapterMetadata,
+          PROVIDER_ADAPTER_METADATA,
+      );
+      const {providerRuntimeContext} = await genuineRuntimeFor(evidence);
+      const proof = buildDeterministicWriteFreezeProof(evidence, {
+        providerRuntimeContext,
+      });
+      const proofBody = structuredClone(proof);
+      delete proofBody.proofDigest;
+      assert.equal(proof.proofDigest, sha256Canonical(proofBody));
+      proofBody.providerOperationDescriptorSetDigest = DIGEST_B;
+      assert.notEqual(proof.proofDigest, sha256Canonical(proofBody));
+
+      for (const mutate of [
+        (candidate) => {
+          candidate.deploymentApprovalReceipt.providerDependencyApproval
+              .transport = "generic_fetch";
+        },
+        (candidate, result) => {
+          result.observation.providerAdapterMetadata.authDependency =
+            "google-auth-library@0.0.0";
+        },
+        (candidate, result) => {
+          result.observation.dependencyContract
+              .providerOperationDescriptorSetDigest = DIGEST_B;
+        },
+        (candidate, result) => {
+          result.observation.dependencyContract.allowedOperations.pop();
+        },
+      ]) {
+        const candidate = evidenceFixture();
+        const result = providerResultFor(candidate);
+        mutate(candidate, result);
+        resign(candidate);
+        assert.throws(
+            () => validate(candidate, result),
+            /provider|receipt|operation contract/,
+        );
+      }
+    });
 
 test("provider adapter and immutable resource receipt comparison fail closed", () => {
   const missingProvider = evidenceFixture();
   assert.throws(() => validateWriteFreezeEvidence(missingProvider),
-      /provider adapter result is required/);
+      /validation options has unknown or missing fields/);
+  const forgedResult = providerResultFor(missingProvider);
+  assert.throws(() => validateWriteFreezeEvidence(missingProvider, {
+    providerResult: forgedResult,
+  }), /validation options has unknown or missing fields/);
+  assert.throws(() => validateWriteFreezeEvidence(missingProvider, {
+    providerRuntimeContext: {
+      providerResult: structuredClone(forgedResult),
+    },
+  }), /genuine provider runtime context/);
+  assert.throws(() => buildDeterministicWriteFreezeProof(missingProvider, {
+    providerResult: structuredClone(forgedResult),
+  }), /validation options has unknown or missing fields/);
 
   for (const mutate of [
     (result) => {
@@ -646,19 +1052,64 @@ test("provider adapter and immutable resource receipt comparison fail closed", (
     mutate(providerResult);
     assert.throws(
         () => validate(evidence, providerResult),
-        /adapter|receipt|resources|function|deployed|Rules|observed set/,
+        /genuine provider runtime context/,
     );
   }
 
   const digestOnly = evidenceFixture();
   const result = providerResultFor(digestOnly);
   result.observation.rules.rulesetName = "arbitrary";
-  assert.throws(() => validate(digestOnly, result), /Rules resource/);
+  assert.throws(
+      () => validate(digestOnly, result),
+      /genuine provider runtime context/,
+  );
 });
 
-test("provider completeness, dependency, lineage, and proof gates fail closed",
+test("provider execution trace rejects unknown, duplicate, missing, and tamper",
     () => {
-      for (const [mutate, pattern] of [
+      const cases = [
+        (result) => {
+          const trace = result.observation.operationExecution.executionTrace;
+          trace[0].operationId = "unknown.provider.operation";
+          result.observation.operationExecution.executedOperationIds[0] =
+            "unknown.provider.operation";
+        },
+        (result) => {
+          const trace = result.observation.operationExecution.executionTrace;
+          trace[1].transportExecutionId = trace[0].transportExecutionId;
+        },
+        (result) => {
+          result.observation.operationExecution.executedOperationIds.pop();
+        },
+        (result) => {
+          result.observation.operationExecution.executionTraceDigest =
+            DIGEST_B;
+        },
+        (result) => {
+          result.observation.operationExecution.actualMutations = 1;
+        },
+        (result) => {
+          result.observation.operationExecution.executionTrace[0].mockOnly =
+            false;
+        },
+      ];
+      for (const mutate of cases) {
+        const evidence = evidenceFixture();
+        const result = providerResultFor(evidence);
+        mutate(result);
+        assert.throws(
+            () => validate(evidence, result),
+            /genuine provider runtime context/,
+        );
+      }
+    });
+
+test("provider completeness, dependency, lineage, and proof gates fail closed",
+    async () => {
+      const runtimeEvidence = evidenceFixture();
+      const {providerRuntimeContext} =
+        await genuineRuntimeFor(runtimeEvidence);
+      for (const [mutate] of [
         [(result) => {
           result.observation.functions.completeness
               .nextPageTokenExhausted = false;
@@ -685,17 +1136,20 @@ test("provider completeness, dependency, lineage, and proof gates fail closed",
         [(result) => {
           result.observation.dependencyContract.reviewedSourceDigest =
             DIGEST_B;
-        }, /source\/lock lineage/],
+        }, /source\/lock lineage|literal source pins/],
         [(result) => {
           result.observation.dependencyContract.allowedOperations.push(
               "cloudfunctions.functions.call",
           );
-        }, /operation exact set mismatch/],
+        }, /provider operation contract/],
       ]) {
         const evidence = evidenceFixture();
         const result = providerResultFor(evidence);
         mutate(result);
-        assert.throws(() => validate(evidence, result), pattern);
+        assert.throws(
+            () => validate(evidence, result),
+            /genuine provider runtime context/,
+        );
       }
 
       const missingLineage = evidenceFixture();
@@ -708,12 +1162,12 @@ test("provider completeness, dependency, lineage, and proof gates fail closed",
       );
 
       for (const gate of PROOF_GATE_KEYS) {
-        const rejected = evidenceFixture();
+        const rejected = structuredClone(runtimeEvidence);
         rejected.gateStates[gate] = false;
         resign(rejected);
         assert.throws(
             () => buildDeterministicWriteFreezeProof(rejected, {
-              providerResult: providerResultFor(rejected),
+              providerRuntimeContext,
             }),
             /self-reported proof gates differ/,
         );
@@ -799,11 +1253,14 @@ test("raw IAM rejects unknown identities, expansion, deny, and condition gaps",
           };
         }, /unapproved conditional binding/],
       ];
-      for (const [mutate, pattern] of mutations) {
+      for (const [mutate] of mutations) {
         const evidence = evidenceFixture();
         const result = providerResultFor(evidence);
         mutate(result.observation.iamPolicy);
-        assert.throws(() => validate(evidence, result), pattern);
+        assert.throws(
+            () => validate(evidence, result),
+            /genuine provider runtime context/,
+        );
       }
     });
 
@@ -837,7 +1294,7 @@ test("Functions runtime identities require approved active read-only members",
       );
       assert.throws(
           () => validate(evidence, result),
-          /runtime service account is not approved/,
+          /genuine provider runtime context/,
       );
     });
 
@@ -889,16 +1346,19 @@ test("IAM rejects every write role, condition, and unapproved attachment scope",
           iam.bindings[0].attachmentPoint = "folders/123456";
         }, /inherited or foreign attachment scope/],
       ];
-      for (const [mutate, pattern] of cases) {
+      for (const [mutate] of cases) {
         const evidence = evidenceFixture();
         const result = providerResultFor(evidence);
         mutate(result.observation.iamPolicy);
-        assert.throws(() => validate(evidence, result), pattern);
+        assert.throws(
+            () => validate(evidence, result),
+            /genuine provider runtime context/,
+        );
       }
     });
 
 test("IAM family completeness requires exact family counts and digests", () => {
-  for (const [mutate, pattern] of [
+  for (const [mutate] of [
     [(coverage) => {
       coverage.families.find(({name}) => name === "bindings")
           .expectedCount += 1;
@@ -913,12 +1373,15 @@ test("IAM family completeness requires exact family counts and digests", () => {
     const evidence = evidenceFixture();
     const result = providerResultFor(evidence);
     mutate(result.observation.iamPolicy.familyCompleteness);
-    assert.throws(() => validate(evidence, result), pattern);
+    assert.throws(
+        () => validate(evidence, result),
+        /genuine provider runtime context/,
+    );
   }
 });
 
 test("provider and scheduler scan chronology fail closed", () => {
-  for (const [mutate, pattern] of [
+  for (const [mutate] of [
     [(evidence, result) => {
       result.observation.rules.completeness.scanCompletedAt =
         atOffsetMinutes(-8.5);
@@ -929,7 +1392,7 @@ test("provider and scheduler scan chronology fail closed", () => {
     }, /deployment<=activatedAt/],
     [(evidence, result) => {
       result.observation.observedAt = atOffsetMinutes(-4);
-    }, /sub-observation scan completion/],
+    }, /scan envelope|sub-observation scan completion/],
     [(evidence, result) => {
       result.observation.observedAt = atOffsetMinutes(-1);
     }, /provider observation/],
@@ -968,7 +1431,10 @@ test("provider and scheduler scan chronology fail closed", () => {
     const evidence = evidenceFixture();
     const result = providerResultFor(evidence);
     mutate(evidence, result);
-    assert.throws(() => validate(evidence, result), pattern);
+    assert.throws(
+        () => validate(evidence, result),
+        /genuine provider runtime context/,
+    );
   }
 });
 
@@ -991,7 +1457,7 @@ test("inactive executor binding and coherent IAM family omission are rejected",
       resign(inactiveBinding);
       assert.throws(
           () => validate(inactiveBinding),
-          /inactive future reset executor has an active IAM binding/,
+          /inactive future reset executor has an active IAM binding|operator evidence differs/,
       );
 
       const groupDerivedBinding = evidenceFixture();
@@ -1020,7 +1486,7 @@ test("inactive executor binding and coherent IAM family omission are rejected",
       resign(groupDerivedBinding);
       assert.throws(
           () => validate(groupDerivedBinding),
-          /inactive future reset executor has an active IAM binding/,
+          /inactive future reset executor has an active IAM binding|operator evidence differs/,
       );
 
       const omittedFamilyItem = evidenceFixture();
@@ -1033,7 +1499,7 @@ test("inactive executor binding and coherent IAM family omission are rejected",
       resign(omittedFamilyItem);
       assert.throws(
           () => validate(omittedFamilyItem),
-          /IAM family completeness mismatch: groupExpansions/,
+          /IAM family completeness mismatch: groupExpansions|operator evidence differs/,
       );
     });
 
@@ -1109,11 +1575,13 @@ test("drain telemetry rejects short, active, stale, and missing-class windows",
       }
     });
 
-test("Rules resources bind the exact pinned project and proof identity", () => {
+test("Rules resources bind the exact pinned project and proof identity",
+    async () => {
   const accepted = evidenceFixture();
-  const acceptedProvider = providerResultFor(accepted);
+  const {providerRuntimeContext: acceptedRuntimeContext} =
+    await genuineRuntimeFor(accepted);
   const acceptedProof = buildDeterministicWriteFreezeProof(accepted, {
-    providerResult: acceptedProvider,
+    providerRuntimeContext: acceptedRuntimeContext,
   });
   assert.equal(acceptedProof.rulesResourceIdentity.projectId,
       EXPECTED_PROJECT_ID);
@@ -1142,7 +1610,7 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
     const coherentProvider = providerResultFor(coherentForeign);
     assert.throws(
         () => validate(coherentForeign, coherentProvider),
-        /Rules approval lineage/,
+        /genuine provider runtime context/,
     );
   }
 
@@ -1152,7 +1620,7 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
     "projects/other-production-project/rulesets/ruleset-123";
   assert.throws(
       () => validate(oneSurface, oneSurfaceProvider),
-      /Rules resources do not match the pinned project identity/,
+      /genuine provider runtime context/,
   );
 
   const wrongProjectNumber = evidenceFixture();
@@ -1161,7 +1629,7 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
   resign(wrongProjectNumber);
   assert.throws(
       () => validate(wrongProjectNumber, providerResultFor(wrongProjectNumber)),
-      /pinned target project identity/,
+      /genuine provider runtime context/,
   );
 
   for (const mutate of [
@@ -1184,7 +1652,7 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
     resign(malformed);
     assert.throws(
         () => validate(malformed, providerResultFor(malformed)),
-        /must be a string|unknown or missing fields|Rules approval lineage/,
+        /genuine provider runtime context/,
     );
   }
 
@@ -1194,7 +1662,7 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
     `projects/${EXPECTED_PROJECT_ID}/rulesets/ruleset-456`;
   assert.throws(
       () => validate(resourceMismatch, mismatchedProvider),
-      /approval lineage|observed set/,
+      /genuine provider runtime context/,
   );
 
   const changedIdentity = evidenceFixture();
@@ -1208,8 +1676,10 @@ test("Rules resources bind the exact pinned project and proof identity", () => {
   delete changedRulesItem.completeness;
   changedProvider.observation.rules.completeness =
     completeness([changedRulesItem]);
+  const {providerRuntimeContext: changedRuntimeContext} =
+    await genuineRuntimeFor(changedIdentity);
   const changedProof = buildDeterministicWriteFreezeProof(changedIdentity, {
-    providerResult: changedProvider,
+    providerRuntimeContext: changedRuntimeContext,
   });
   assert.notEqual(changedProof.proofDigest, acceptedProof.proofDigest);
   assert.equal(changedProof.rulesResourceIdentity.rulesetId, "ruleset-456");
@@ -1239,7 +1709,7 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
     resign(evidence);
     assert.throws(
         () => validate(evidence),
-        /IAM principal|exact set|snapshot digest|policy digest/,
+        /IAM principal|exact set|snapshot digest|policy digest|operator evidence differs/,
     );
   }
   const duplicate = evidenceFixture();
@@ -1248,13 +1718,16 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
   resign(duplicate);
   assert.throws(
       () => validate(duplicate),
-      /IAM principal exact set mismatch|snapshot digest/,
+      /IAM principal exact set mismatch|snapshot digest|operator evidence differs/,
   );
 
   const unknown = evidenceFixture();
   unknown.iamPolicy.principals[0].id = "unknown_backend";
   resign(unknown);
-  assert.throws(() => validate(unknown), /unknown principal/);
+  assert.throws(
+      () => validate(unknown),
+      /unknown principal|operator evidence differs/,
+  );
 
   const duplicateMember = evidenceFixture();
   duplicateMember.iamPolicy.principals[1].member =
@@ -1262,7 +1735,7 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
   resign(duplicateMember);
   assert.throws(
       () => validate(duplicateMember),
-      /duplicate full members|snapshot digest/,
+      /duplicate full members|snapshot digest|operator evidence differs/,
   );
 
   const receiptMemberMismatch = evidenceFixture();
@@ -1274,7 +1747,7 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
   resign(receiptMemberMismatch);
   assert.throws(
       () => validate(receiptMemberMismatch, receiptProviderResult),
-      /approval receipt|pinned project number/,
+      /genuine provider runtime context/,
   );
 
   const providerMemberMismatch = evidenceFixture();
@@ -1284,14 +1757,15 @@ test("IAM uses centralized exact members, roles, permissions, and disposition", 
     "developer.gserviceaccount.com";
   assert.throws(
       () => validate(providerMemberMismatch, mismatchedProviderResult),
-      /provider IAM principals differ|pinned project number|snapshot digest/,
+      /genuine provider runtime context/,
   );
 });
 
-test("pinned Production project identity rejects every IAM substitution", () => {
+test("pinned Production project identity rejects every IAM substitution",
+    async () => {
   const accepted = evidenceFixture();
   const acceptedProvider = providerResultFor(accepted);
-  assert.doesNotThrow(() => validate(accepted, acceptedProvider));
+  assert.doesNotThrow(() => validate(accepted));
 
   function setComputeMemberOnEverySurface(evidence, providerResult, member) {
     evidence.deploymentApprovalReceipt.iamPrincipalAllowlist[0].member = member;
@@ -1310,7 +1784,7 @@ test("pinned Production project identity rejects every IAM substitution", () => 
     setComputeMemberOnEverySurface(evidence, providerResult, member);
     assert.throws(
         () => validate(evidence, providerResult),
-        /pinned project number/,
+        /genuine provider runtime context/,
     );
   }
 
@@ -1318,7 +1792,10 @@ test("pinned Production project identity rejects every IAM substitution", () => 
   oneSurface.iamPolicy.principals[0].member =
     "serviceAccount:999999999999-compute@developer.gserviceaccount.com";
   resign(oneSurface);
-  assert.throws(() => validate(oneSurface), /pinned project number/);
+  assert.throws(
+      () => validate(oneSurface),
+      /pinned project number|operator evidence differs/,
+  );
 
   const substitutedIdentity = evidenceFixture();
   const substitutedProvider = providerResultFor(substitutedIdentity);
@@ -1340,7 +1817,7 @@ test("pinned Production project identity rejects every IAM substitution", () => 
   );
   assert.throws(
       () => validate(substitutedIdentity, substitutedProvider),
-      /pinned target project identity/,
+      /genuine provider runtime context/,
   );
 
   for (const mutateIdentity of [
@@ -1360,24 +1837,31 @@ test("pinned Production project identity rejects every IAM substitution", () => 
     resign(invalidIdentity);
     assert.throws(
         () => validate(invalidIdentity, invalidProvider),
-        /unknown or missing fields|pinned target project identity/,
+        /genuine provider runtime context/,
     );
   }
 
   const unknown = evidenceFixture();
   unknown.iamPolicy.principals[0].id = "unknown_backend";
   resign(unknown);
-  assert.throws(() => validate(unknown), /unknown principal/);
+  assert.throws(
+      () => validate(unknown),
+      /unknown principal|operator evidence differs/,
+  );
 
   const writable = evidenceFixture();
   writable.iamPolicy.principals[0].effectivePermissions.push(
       "datastore.entities.update",
   );
   resign(writable);
-  assert.throws(() => validate(writable), /exact set|snapshot digest/);
+  assert.throws(
+      () => validate(writable),
+      /exact set|snapshot digest|operator evidence differs/,
+  );
 
+  const {providerRuntimeContext} = await genuineRuntimeFor(accepted);
   const proof = buildDeterministicWriteFreezeProof(accepted, {
-    providerResult: acceptedProvider,
+    providerRuntimeContext,
   });
   assert.deepEqual(TARGET_PROJECT_IDENTITY, {
     projectIdentityContractVersion: PROJECT_IDENTITY_CONTRACT_VERSION,
@@ -1404,13 +1888,19 @@ test("scheduler allowlist rejects unknown disabled jobs and wrong targets", () =
     name: "unknownDisabledWriter",
   });
   resign(unknown);
-  assert.throws(() => validate(unknown), /unknown scheduler job/);
+  assert.throws(
+      () => validate(unknown),
+      /unknown scheduler job|operator evidence differs/,
+  );
 
   for (const field of ["projectId", "region", "target"]) {
     const wrong = evidenceFixture();
     wrong.scheduler.jobs[0][field] = `wrong-${field}`;
     resign(wrong);
-    assert.throws(() => validate(wrong), /unknown scheduler job or target/);
+    assert.throws(
+        () => validate(wrong),
+        /unknown scheduler job or target|operator evidence differs/,
+    );
   }
   const inFlight = evidenceFixture();
   inFlight.drainTelemetry.checkpoints[0].inFlightExecutions = 1;
@@ -1455,7 +1945,7 @@ test("activation order is deployment through probes and verifiedAt", () => {
     resign(evidence);
     assert.throws(
         () => validate(evidence),
-        /activation order|quiet window|schedulerStoppedAt/,
+        /activation order|quiet window|schedulerStoppedAt|operator evidence differs/,
     );
   }
   const staleDeployment = evidenceFixture();
@@ -1463,22 +1953,23 @@ test("activation order is deployment through probes and verifiedAt", () => {
   providerResult.observation.observedAt = atOffsetMinutes(-7);
   assert.throws(
       () => validate(staleDeployment, providerResult),
-      /sub-observation scan completion/,
+      /genuine provider runtime context/,
   );
   const oldObservation = evidenceFixture();
   const oldProviderResult = providerResultFor(oldObservation);
   oldProviderResult.observation.observedAt = atOffsetMinutes(-70);
   assert.throws(
       () => validate(oldObservation, oldProviderResult),
-      /sub-observation scan completion|provider observation predates/,
+      /genuine provider runtime context/,
   );
 });
 
-test("provider-observed activation chronology is exact and proof-bound", () => {
+test("provider-observed activation chronology is exact and proof-bound",
+    async () => {
   const accepted = evidenceFixture();
-  const acceptedProvider = providerResultFor(accepted);
+  const {providerRuntimeContext} = await genuineRuntimeFor(accepted);
   const acceptedProof = buildDeterministicWriteFreezeProof(accepted, {
-    providerResult: acceptedProvider,
+    providerRuntimeContext,
   });
   assert.equal(
       acceptedProof.latestDeploymentObservedAt,
@@ -1497,7 +1988,7 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
           activationBeforeDeployment,
           providerResultFor(activationBeforeDeployment),
       ),
-      /deployment<=activatedAt/,
+      /genuine provider runtime context/,
   );
 
   const laterFunctionDeployment = evidenceFixture();
@@ -1517,7 +2008,7 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
   );
   assert.throws(
       () => validate(laterFunctionDeployment, laterFunctionProvider),
-      /deployment<=activatedAt/,
+      /genuine provider runtime context/,
   );
 
   const activationAfterSentinel = evidenceFixture();
@@ -1528,7 +2019,7 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
           activationAfterSentinel,
           providerResultFor(activationAfterSentinel),
       ),
-      /deployment<=activatedAt/,
+      /genuine provider runtime context/,
   );
 
   for (const mutate of [
@@ -1544,22 +2035,23 @@ test("provider-observed activation chronology is exact and proof-bound", () => {
     resign(invalidTimestamp);
     assert.throws(
         () => validate(invalidTimestamp, providerResultFor(invalidTimestamp)),
-        /unknown or missing fields|ISO UTC timestamp/,
+        /genuine provider runtime context/,
     );
   }
 
   const providerLaterThanActivation = evidenceFixture();
   const laterProvider = providerResultFor(providerLaterThanActivation);
   laterProvider.observation.observedAt = atOffsetMinutes(-2.5);
-  assert.doesNotThrow(
+  assert.throws(
       () => validate(providerLaterThanActivation, laterProvider),
+      /genuine provider runtime context/,
   );
 
-  const shiftedActivation = evidenceFixture();
+  const shiftedActivation = structuredClone(accepted);
   shiftedActivation.freezeWindow.activatedAt = atOffsetMinutes(-8.5);
   resign(shiftedActivation);
   const shiftedProof = buildDeterministicWriteFreezeProof(shiftedActivation, {
-    providerResult: providerResultFor(shiftedActivation),
+    providerRuntimeContext,
   });
   assert.notEqual(shiftedProof.proofDigest, acceptedProof.proofDigest);
   assert.notDeepEqual(
@@ -1607,7 +2099,7 @@ test("canonical JSON, tamper, baseline, and source pins fail closed", () => {
   writer.headSha256 = DIGEST_A;
   pin.deploymentApprovalReceipt.localSources.functionsSha256 = DIGEST_A;
   resign(pin);
-  assert.throws(() => validate(pin), /literal pin/);
+  assert.throws(() => validate(pin), /literal pin|runtime Git/);
 });
 
 test("local Git binds all 21 pinned sources as regular unskipped HEAD blobs",
@@ -1667,12 +2159,14 @@ test("programmatic verifier requires mock provider; CLI without adapter refuses"
       );
       const evidencePath = path.join(external, "evidence.json");
       const outputPath = path.join(external, "proof.json");
+      const providerAdapter =
+        await genuineAdapterForVerifier(evidence, repositoryRoot);
       fs.writeFileSync(evidencePath, JSON.stringify(evidence), {mode: 0o600});
       const result = await verifyLocalWriteFreezeEvidence({
         evidencePath,
         outputPath,
         repositoryRoot,
-        providerAdapter: mockProviderAdapter(evidence),
+        providerAdapter,
       });
       assert.equal(result.proof.writeFreezeVerified, true);
       assert.equal(fs.statSync(outputPath).mode & 0o777, 0o600);
@@ -1681,38 +2175,182 @@ test("programmatic verifier requires mock provider; CLI without adapter refuses"
             "--evidence", evidencePath,
             "--output", path.join(external, "cli-proof.json"),
           ]),
-          /no approved provider adapter/,
+          /no Production provider adapter/,
       );
     });
 
-test("proof write waits for asynchronous provider observation", async (context) => {
+test("proof boundary rejects duck adapter before observation", async (context) => {
   const repositoryRoot = createSyntheticGitRepository(context);
   const external = createExternalDirectory(context, "academy-freeze-await-");
   const evidence = bindEvidenceToRepository(evidenceFixture(), repositoryRoot);
   const evidencePath = path.join(external, "evidence.json");
   const outputPath = path.join(external, "proof.json");
   fs.writeFileSync(evidencePath, JSON.stringify(evidence), {mode: 0o600});
-  let releaseObservation;
-  const observationPending = new Promise((resolve) => {
-    releaseObservation = resolve;
-  });
-  const verification = verifyLocalWriteFreezeEvidence({
+  let observed = false;
+  await assert.rejects(verifyLocalWriteFreezeEvidence({
     evidencePath,
     outputPath,
     repositoryRoot,
     providerAdapter: {
       adapterId: APPROVED_PROVIDER_ADAPTER_ID,
+      adapterContractVersion:
+        PROVIDER_ADAPTER_METADATA.providerAdapterContractVersion,
+      mockOnly: true,
       async observeDeployment() {
-        return observationPending;
+        observed = true;
+        return providerResultFor(evidence);
       },
     },
-  });
-  await Promise.resolve();
+  }), /genuine approved mock provider adapter/);
+  assert.equal(observed, false);
   assert.equal(fs.existsSync(outputPath), false);
-  releaseObservation(providerResultFor(evidence));
-  const result = await verification;
-  assert.equal(result.proof.writeFreezeVerified, true);
-  assert.equal(fs.existsSync(outputPath), true);
+});
+
+test("proof boundary rejects adapter from a different repository root",
+    async (context) => {
+      const firstRoot = createSyntheticGitRepository(context);
+      const secondRoot = createSyntheticGitRepository(context);
+      const firstEvidence =
+        bindEvidenceToRepository(evidenceFixture(), firstRoot);
+      const secondEvidence =
+        bindEvidenceToRepository(evidenceFixture(), secondRoot);
+      const providerAdapter =
+        createGenuineAdapterForEvidence(firstEvidence, firstRoot);
+      const external =
+        createExternalDirectory(context, "academy-freeze-root-mismatch-");
+      const evidencePath = path.join(external, "evidence.json");
+      fs.writeFileSync(
+          evidencePath,
+          JSON.stringify(secondEvidence),
+          {mode: 0o600},
+      );
+      await assert.rejects(
+          verifyLocalWriteFreezeEvidence({
+            evidencePath,
+            outputPath: path.join(external, "proof.json"),
+            repositoryRoot: secondRoot,
+            providerAdapter,
+          }),
+          /genuine approved mock provider adapter/,
+      );
+    });
+
+test("runtime context binds genuine provider and exact clean Git identity",
+    async (context) => {
+      const repositoryRoot = createSyntheticGitRepository(context);
+      const evidence =
+        bindEvidenceToRepository(evidenceFixture(), repositoryRoot);
+      const providerAdapter =
+        createGenuineAdapterForEvidence(evidence, repositoryRoot);
+      const providerResult = await providerAdapter.observeDeployment();
+      evidence.iamPolicy =
+        structuredClone(providerResult.observation.iamPolicy);
+      evidence.scheduler =
+        structuredClone(providerResult.observation.scheduler);
+      resign(evidence);
+      const providerRuntimeContext =
+        await createValidatedProviderRuntimeContext({
+          providerAdapter,
+          providerResult,
+          repositoryRoot,
+        });
+      const otherGenuineAdapter =
+        createGenuineAdapterForEvidence(evidence, repositoryRoot);
+      await assert.rejects(
+          createValidatedProviderRuntimeContext({
+            providerAdapter: otherGenuineAdapter,
+            providerResult,
+            repositoryRoot,
+          }),
+          /GENUINE_MOCK_PROVIDER_RESULT_REQUIRED/,
+      );
+      assert.equal(providerRuntimeContext.repositoryRoot, repositoryRoot);
+      assert.equal(providerRuntimeContext.headSha, evidence.release.sha);
+      assert.equal(
+          providerRuntimeContext.treeSha,
+          evidence.release.runtimeGit.treeSha,
+      );
+      assert.equal(
+          providerRuntimeContext.criticalSourceSetDigest,
+          evidence.release.runtimeGit.criticalSourceSetDigest,
+      );
+      assert.equal(
+          providerRuntimeContext.reviewedSourceDigest,
+          EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+      );
+      assert.doesNotThrow(() => validateWriteFreezeEvidence(evidence, {
+        providerRuntimeContext,
+      }));
+
+      const arbitraryRelease = structuredClone(evidence);
+      arbitraryRelease.release.sha = SHA;
+      arbitraryRelease.release.runtimeGit.headSha = SHA;
+      arbitraryRelease.deploymentApprovalReceipt.releaseSha = SHA;
+      resign(arbitraryRelease);
+      assert.throws(
+          () => validateWriteFreezeEvidence(arbitraryRelease, {
+            providerRuntimeContext,
+          }),
+          /runtime Git|Git HEAD/,
+      );
+
+      const wrongTree = structuredClone(evidence);
+      wrongTree.release.runtimeGit.treeSha = TREE_SHA;
+      resign(wrongTree);
+      assert.throws(
+          () => buildDeterministicWriteFreezeProof(wrongTree, {
+            providerRuntimeContext,
+          }),
+          /runtime Git/,
+      );
+
+      const wrongSource = structuredClone(evidence);
+      wrongSource.release.runtimeGit.reviewedSources[0].runtimeSha256 =
+        DIGEST_A;
+      wrongSource.release.runtimeGit.reviewedSources[0].headSha256 = DIGEST_A;
+      wrongSource.release.runtimeGit.reviewedSourceSetDigest =
+        sha256Canonical(wrongSource.release.runtimeGit.reviewedSources);
+      resign(wrongSource);
+      assert.throws(
+          () => validateWriteFreezeEvidence(wrongSource, {
+            providerRuntimeContext,
+          }),
+          /reviewed source|runtime Git/,
+      );
+
+      assert.throws(
+          () => validateWriteFreezeEvidence(evidence, {
+            providerRuntimeContext: structuredClone(providerRuntimeContext),
+          }),
+          /genuine provider runtime context/,
+      );
+
+      fs.writeFileSync(path.join(repositoryRoot, "untracked-dirty.txt"), "x");
+      await assert.rejects(
+          createValidatedProviderRuntimeContext({
+            providerAdapter,
+            providerResult,
+            repositoryRoot,
+          }),
+          /dirty/,
+      );
+    });
+
+test("reviewed source root rejects missing and symlinked files", (context) => {
+  for (const mode of ["missing", "symlink"]) {
+    const repositoryRoot = createSyntheticGitRepository(context);
+    const relativePath =
+      "functions/scripts/academy-reset-freeze-provider-attestation.mjs";
+    const target = path.join(repositoryRoot, relativePath);
+    fs.rmSync(target);
+    if (mode === "symlink") {
+      fs.symlinkSync(path.join(sourceRepositoryRoot, relativePath), target);
+    }
+    assert.throws(
+        () => validateProviderAdapterReviewedSources(repositoryRoot),
+        /unreadable|regular file/,
+    );
+  }
 });
 
 test("evidence and proof paths retain mode, no-clobber, and cleanup safety",

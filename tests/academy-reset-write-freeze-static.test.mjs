@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import {fileURLToPath} from "node:url";
+import * as writeFreezeContract from
+  "../functions/scripts/academy-reset-write-freeze-contract.mjs";
 import {
   ACADEMY_RESET_WRITE_SURFACE_REGISTRY,
   EXPECTED_WRITE_SOURCE_COUNT,
@@ -30,6 +32,24 @@ const backendFreezeSource = fs.readFileSync(
     path.join(repositoryRoot, "functions", "academy-reset-write-freeze.js"),
     "utf8",
 );
+
+test("write-freeze validate verify and build exports match exact allowlist", () => {
+  const publicValidationFunctions = Object.keys(writeFreezeContract)
+      .filter((key) =>
+        /^(?:build|validate|verify)/.test(key) &&
+        typeof writeFreezeContract[key] === "function")
+      .sort();
+  assert.deepEqual(publicValidationFunctions, [
+    "buildApprovedIamExpectedState",
+    "buildDeterministicWriteFreezeProof",
+    "buildEvidenceDigestInput",
+    "buildIamFamilyCompleteness",
+    "validateObservationCompleteness",
+    "validateProviderAdapterReviewedSources",
+    "validateProviderDependencyContract",
+    "validateWriteFreezeEvidence",
+  ]);
+});
 const verifierSource = fs.readFileSync(
     path.join(
         repositoryRoot,
@@ -215,8 +235,8 @@ test("deployed functions, IAM, scheduler, and unfreeze use central exact sets",
           /123456789012|firebase-adminsdk-ab123/,
       );
       assert.doesNotMatch(contractSource, /rules\.sourceBundle/);
-      assert.match(contractSource, /reviewed_direct_googleapis/);
       assert.match(contractSource, /declared_google_auth_library_rest/);
+      assert.doesNotMatch(contractSource, /reviewed_direct_googleapis/);
     });
 
 test("every registered transaction helper is present and mutating", () => {
@@ -255,7 +275,15 @@ test("backend callable, scheduler, and helper inventories have exact coverage", 
 });
 
 test("verifier and contract are local-only and mutation-incapable", () => {
-  const combined = `${verifierSource}\n${contractSource}`;
+  const runtimeIdentitySource = fs.readFileSync(
+      path.join(
+          repositoryRoot,
+          "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
+      ),
+      "utf8",
+  );
+  const combined =
+    `${verifierSource}\n${contractSource}\n${runtimeIdentitySource}`;
   for (const forbidden of [
     /\bfirebase-admin\b/,
     /\bfirebase\/(?:firestore|auth)\b/,
@@ -281,7 +309,7 @@ test("verifier and contract are local-only and mutation-incapable", () => {
     'result.GIT_CONFIG_NOSYSTEM = "1"',
     'result.GIT_CONFIG_GLOBAL = "/dev/null"',
   ]) {
-    assert.equal(verifierSource.includes(required), true, required);
+    assert.equal(runtimeIdentitySource.includes(required), true, required);
   }
 });
 

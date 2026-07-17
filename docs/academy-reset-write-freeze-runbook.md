@@ -8,12 +8,22 @@ sentinel 활성화, probe, planner, reset, unfreeze를 실행하거나 구현하
 
 ## Fail-closed 고정값
 
-- contract/proof: `academy_reset_write_freeze.v2` /
-  `academy_reset_write_freeze_proof.v2`
+- contract/proof: `academy_reset_write_freeze.v3` /
+  `academy_reset_write_freeze_proof.v3`
+- Observation Contract: `academy_reset_provider_observation.v3`
+- deployment approval/provider dependency:
+  `academy_reset_deployment_approval.v3` /
+  `academy_reset_provider_dependency.v2`
 - project/academy: `daegu-miami-production` / `academy_daegumiami`
 - Functions: `us-central1`, `GEN_2`, 35개 exact deployed function set과 별도의
   26개 exact guarded export set
-- provider adapter: `gcp_immutable_resource_observer.v1`
+- provider adapter ID/contract:
+  `gcp_immutable_resource_observer.v1` /
+  `academy_reset_freeze_provider_adapter.v4`
+- Stage A provider operation registry:
+  `academy_reset_freeze_provider_operations.v4`, exact 29 operations,
+  descriptor-set SHA-256
+  `2bc2dd2e27252549c3aa7382790ed4e49dc1752a7162bca36b7f0601a7b947e9`
 - freeze window: 최대 3600초
 - writer source: registry의 literal SHA-256 pin 21개
 - reset collection: 29개
@@ -268,21 +278,103 @@ freeze activation 전에 승인되어 `verifiedAt`까지 유효해야 한다. se
 
 ## 9. Dependency와 local verifier/proof
 
-provider adapter 구현은 이 변경 범위에 없다. 향후 adapter dependency provenance는
-다음 두 전략 중 정확히 하나여야 한다.
+현재 범위는 Stage A의 declarative operation registry/approval binding, Stage B의
+generic read-only HTTP transport, 그리고 mock-only family adapter/verifier
+통합까지다. direct `google-auth-library@10.6.2`는 functions package/lock에
+고정하지만 adapter는 production transport/auth factory를 호출하지 않는다.
+실제 provider observation, credential/token 취득, standalone Production CLI,
+배포 및 mutation은 구현하지 않았다.
+dependency provenance는 다음 단일 전략만 승인한다.
 
-- `reviewed_direct_googleapis`: 직접 검토·고정한 public `googleapis`
-- `declared_google_auth_library_rest`: 선언한 `google-auth-library`로 public REST만
-  호출
+- strategy: `declared_google_auth_library_rest`
+- transport: `google_auth_library_native_fetch_v1`
+- auth dependency: `google-auth-library@10.6.2`
+- HTTP runtime: `node24_native_fetch`
+- adapter contract: `academy_reset_freeze_provider_adapter.v4`
+- no-mutation operation count: `0`
 
 `firebase_cli_private`, transitive-only dependency, private API, unknown 전략은
-거부한다. 이 계약 변경은 dependency를 설치하거나 lock/package 파일을 바꾸지
-않는다.
-future adapter는 contract의 exact public read/list operation allowlist만 사용할 수
-있다. adapter source digest, lock digest, strategy/module/operation set은 approval
-receipt에 먼저 승인되고 provider dependency observation과 exact 결합되어야 한다.
-이 필드는 adapter가 존재할 때 필요한 검토 prerequisite이며 현재 adapter 구현을
-대체하지 않는다.
+거부한다. Stage B transport는 v4 registry의 exact 29개 public
+read/semantic-read operation
+allowlist만 사용할 수 있다. renderer-ready path placeholder, target project/region,
+lineage binding, path encoding, query serialization을 임의 caller 값으로 우회할 수
+없다. Policy Troubleshooter의 target 없는 `iam:troubleshoot` POST는
+`fullResourceName`을 승인/관찰 resource inventory에, `principal`을 승인 IAM
+principal/group lineage에, `permission`을 검토된 permission universe에 각각
+결합해야 한다. adapter source digest, lock digest,
+strategy/module/operation set/version/digest는 approval receipt에 먼저 승인되고
+provider dependency observation과 exact 결합되어야 한다.
+mock adapter는 호출자가 path/query/body 계획이나 binding 배열을 넘기는 표면을
+제공하지 않는다. immutable approval receipt, literal reviewed-source identities,
+`metadata.mockOnly === true`인 transport executor만 받으며 executor session
+receipt와 approval receipt를 canonical exact 비교한다. operation 순서와 동적
+resource lineage는 adapter의 private `WeakMap` session이 소유한다.
+adapter와 그 결과는 각각 private `WeakSet` attestation을 통과해야 하며 clone,
+duck-typed adapter, 같은 필드를 coherent하게 재작성한 result/context는 public
+validation 및 proof API에서 거부한다. verifier가 사용하는 canonical
+`repositoryRoot`와 adapter source root가 다르면 observation 전에 거부한다.
+
+production executor factory는 호출별 `bindingContext`, fetch, auth, clock, sleep,
+timeout 주입을 받지 않는다. 고정 Production identity와 lazy GoogleAuth/native
+fetch만 캡처한다. 동적 resource lineage는 향후 family adapter가 검증된 provider
+응답에서 파생해야 하며 현재 production transport에 caller 문자열로 주입할 수 없다.
+테스트 factory만 immutable canonical mock receipt를 받고 모든 결과에
+`mockOnly: true`를 표시한다. mock family adapter 결과도 `actualMutations: 0`,
+`mutationOperationCount: 0`, `unknownOperationCount: 0`, central descriptor에서
+재계산한 exact executed-operation subset/count와 canonical execution-trace
+digest를 포함한다. read-only semantic POST는 mutation으로 세지 않는다.
+
+단일 exhaustive pagination 결과의 `paginationComplete: true`는 page token 소진만
+뜻하며 provider observation의 `complete`가 아니다. stable inventory helper는 서로
+다른 `transportExecutionId`를 가진 두 번의 독립 exhaustive 실행 결과만 비교한다.
+family adapter가 이 stable pair를 approval inventory와 결합하기 전에는 observation
+completeness를 주장할 수 없다.
+
+별도 reviewed-source contract는 package/lock, operation registry, transport,
+mock adapter, attestation, runtime Git identity resolver, write-freeze contract,
+verifier의 exact 9개 path와 각 파일의 literal
+SHA-256 및 canonical aggregate digest를 approval metadata/session/observation/proof에
+결합한다. 이 local adapter source set은 기존 deployed runtime Git critical source
+목록에 추가하지 않는다. adapter/verifier는 이 registry 자체는 hash set에서
+제외하고, exact 9개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
+확인한 뒤 bytes SHA-256와 literal pin 및 aggregate를 다시 계산한다.
+현재 reviewed-source aggregate는
+`3cb8033621888f366db9485d82441d365aa2a4d9f2cb171bc239ada3dbcf44d8`이다.
+
+증명용 runtime context는 동일한 canonical repository root에서 genuine mock
+adapter/result와 reviewed-source identity를 검증한 뒤, clean Git HEAD/tree,
+tracked regular HEAD blobs, 안전한 index flags, runtime bytes와 HEAD bytes의
+동일성까지 직접 재검증한다. 호출자가 전달한 SHA나 Git identity 객체는 context
+생성 입력으로 받지 않는다.
+
+mock observation에 필요한 read-only 권한은 operation family별로 다음과 같다.
+
+- Rules: release/ruleset get
+- Functions/Run/Build/Storage: 시작/종료 Functions list와 각 Function get,
+  시작/종료 Run services list 및 서비스별 revisions list/get, terminal
+  `SUCCESS` Build get, generation-pinned Storage metadata/media get. metadata의
+  MD5/size와 transport가 media bytes에서 계산한 MD5/SHA-256/byte length가 exact
+  일치해야 한다.
+- Resource Manager/IAM: project 및 발견된 folder/org get/getIamPolicy, role 및
+  service account list/get/getIamPolicy, deny policy list/get
+- IAM analysis: Cloud Asset analyzeIamPolicy, Policy Troubleshooter troubleshoot
+- Scheduler/Service Usage: jobs list/get, services get
+
+IAM은 Resource Manager, bindings, roles, service accounts, Cloud Asset,
+Troubleshooter, deny policy, Service Usage를 포함한 전체 pass를 두 번 새로 실행한다.
+service-account inventory는 승인 principal/runtime set과 exact해야 하며 각 account의
+get/getIamPolicy를 두 pass 모두 수행한다. 승인 group/domain도 각각 별도
+`fullyExplored` Cloud Asset 분석과 raw `analysisResults`/`groupEdges` 증거가 있어야
+하며, 빈 결과를 synthetic completeness로 대체하지 않는다. Scheduler도 list와 모든
+job get을 시작/종료에 각각 실행해 full canonical snapshot을 비교한다.
+Policy Troubleshooter의 expected non-write 결과는 exact `NOT_GRANTED`만 허용한다.
+Service Account list/get의 full resource name과 Scheduler get의 full job name도
+요청한 target project/location/email/job allowlist와 exact 일치해야 한다.
+
+실제 token, Authorization header, service-account key, ADC path 또는 credential
+artifact는 adapter input/output/proof에 포함하지 않는다. Production observation은
+별도 구현·source review·권한 승인·approval receipt가 필요하며 이 mock approval을
+재사용할 수 없다.
 
 evidence는 저장소 밖 canonical regular file, mode `0600`으로 보관한다. output
 parent는 `0700`이며 output은 새 파일만 atomic no-clobber로 `0600` 생성한다.
@@ -297,9 +389,10 @@ node functions/scripts/verify-academy-reset-write-freeze.mjs \
   --output /absolute/external/write-freeze-proof.json
 ```
 
-실제 proof 생성은 승인 adapter를 주입하는 별도 검토된 wrapper가
-`verifyLocalWriteFreezeEvidence`를 호출해야 한다. 테스트는 network 없는 mock
-adapter만 사용한다.
+Production CLI는 존재하지 않으며 mock adapter를 주입해도 CLI 경로는 거부한다.
+programmatic 테스트만 network 없는 mock adapter와 완전한 synthetic sentinel/IAM/
+drain/probe evidence를 결합할 수 있다. mock adapter 단독 결과는 proof가 아니고
+기존 다섯 proof gate를 우회하거나 `writeFreezeVerified: true`를 만들 수 없다.
 
 성공 proof의 `providerObservationComplete`, `policyAnalysisComplete`,
 `drainTelemetryComplete`, `deploymentLineageApproved`, `writeFreezeVerified`는
