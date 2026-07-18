@@ -2,7 +2,7 @@
 
 const assert = require("node:assert/strict");
 
-const PROJECT_ID = "demo-fixed-private-outcome";
+const PROJECT_ID = "miami-e2e";
 const ACADEMY_ID = "fixed-private-outcome-academy";
 const ADMIN_UID = "fixed-private-outcome-admin";
 const TEACHER_UID = "fixed-private-outcome-teacher";
@@ -13,8 +13,8 @@ const MARKER = "reservation_v1";
 if (!process.env.FIRESTORE_EMULATOR_HOST) {
   throw new Error("FIRESTORE_EMULATOR_HOST is required.");
 }
-if (!PROJECT_ID.startsWith("demo-")) {
-  throw new Error("Fixed private outcome tests require a demo project.");
+if (PROJECT_ID !== "miami-e2e") {
+  throw new Error("Fixed private outcome tests require the E2E project ID.");
 }
 
 process.env.GCLOUD_PROJECT = PROJECT_ID;
