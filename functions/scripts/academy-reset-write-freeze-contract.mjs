@@ -47,32 +47,44 @@ import {
   EFFECTIVE_MANDATORY_PERMISSION_CONTRACT,
   EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
   OFFICIAL_EVIDENCE_SET_DIGEST,
+  OBSERVER_PRINCIPAL_POLICY,
   PERMISSION_RESEARCH_ARTIFACT_SHA256,
+  PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
   READONLY_PERMISSION_MANIFEST_DIGEST,
   READONLY_PERMISSION_MANIFEST_VERSION,
   REVIEWED_EVIDENCE_SET_DIGEST,
+  STANDALONE_PROJECT_OBSERVER_PROFILE,
   assertEffectiveMandatoryPermissionContract,
+  assertObserverPrincipalPolicy,
   assertReadonlyPermissionManifest,
+  assertStandaloneProjectObserverProfile,
+  deriveStandaloneProjectObserverProfile,
 } from "./academy-reset-freeze-readonly-permissions.mjs";
 
 export {
   CRITICAL_RUNTIME_SOURCE_PATHS,
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+  OBSERVER_PRINCIPAL_POLICY,
+  PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS,
+  STANDALONE_PROJECT_OBSERVER_PROFILE,
+  assertObserverPrincipalPolicy,
+  assertStandaloneProjectObserverProfile,
+  deriveStandaloneProjectObserverProfile,
   validateProviderAdapterReviewedSources,
 };
 
 export const WRITE_FREEZE_CONTRACT_VERSION =
-  "academy_reset_write_freeze.v4";
+  "academy_reset_write_freeze.v5";
 export const WRITE_FREEZE_PROOF_VERSION =
-  "academy_reset_write_freeze_proof.v4";
+  "academy_reset_write_freeze_proof.v5";
 export const DEPLOYMENT_APPROVAL_RECEIPT_VERSION =
-  "academy_reset_deployment_approval.v4";
+  "academy_reset_deployment_approval.v5";
 export const PROVIDER_OBSERVATION_VERSION =
-  "academy_reset_provider_observation.v4";
+  "academy_reset_provider_observation.v5";
 export const OBSERVATION_COMPLETENESS_VERSION =
   "academy_reset_observation_completeness.v1";
 export const IAM_FAMILY_COMPLETENESS_VERSION =
@@ -80,7 +92,7 @@ export const IAM_FAMILY_COMPLETENESS_VERSION =
 export const APPROVED_IAM_STATE_CONTRACT_VERSION =
   "academy_reset_approved_iam_state.v1";
 export const PROVIDER_DEPENDENCY_CONTRACT_VERSION =
-  "academy_reset_provider_dependency.v4";
+  "academy_reset_provider_dependency.v5";
 export const WRITABLE_PERMISSION_DERIVATION_VERSION =
   "academy_reset_writable_permission_derivation.v1";
 export const APPROVED_PROVIDER_ADAPTER_ID =
@@ -131,6 +143,51 @@ export const PROVIDER_ADAPTER_METADATA = Object.freeze({
     PERMISSION_RESEARCH_ARTIFACT_SHA256,
   effectiveMandatoryPermissionContractDigest:
     EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+  topologyProfileVersion:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileVersion,
+  topologyProfileId:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileId,
+  topologyEvidenceDigest:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.topologyEvidenceDigest,
+  topologyProfileDigest:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.profileDigest,
+  operationExecutionProfileVersion:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        .operationExecutionProfileVersion,
+  executedMandatoryOperationCount:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        .executedMandatoryOperationCount,
+  executedMandatoryOperationSetDigest:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        .executedMandatoryOperationSetDigest,
+  notApplicableMandatoryOperationCount:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        .notApplicableMandatoryOperationCount,
+  notApplicableMandatoryOperationSetDigest:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        .notApplicableMandatoryOperationSetDigest,
+  effectiveRequiredPermissionCount:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        .effectiveRequiredPermissionCount,
+  effectivePermissionProfileVersion:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        .permissionProfileVersion,
+  effectiveRequiredPermissionSetDigest:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        .effectiveRequiredPermissionSetDigest,
+  effectiveAuxiliaryPermissionCount:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        .effectiveAuxiliaryPermissionCount,
+  effectiveAuxiliaryPermissionSetDigest:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        .effectiveAuxiliaryPermissionSetDigest,
+  effectiveRolePermissionCount:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        .effectiveRolePermissionCount,
+  effectiveRolePermissionSetDigest:
+    STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        .effectiveRolePermissionSetDigest,
+  observerPrincipalPolicy: OBSERVER_PRINCIPAL_POLICY,
   mandatoryRequiredIamPermissions:
     EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions,
   mandatoryConditionalPermissions:
@@ -1818,6 +1875,7 @@ export const REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS = Object.freeze([
   "run.v2.projects.locations.services.revisions.get",
   "run.v2.projects.locations.services.revisions.list",
   "serviceusage.v1.projects.services.get",
+  "storage.v1.buckets.get",
   "storage.v1.objects.getMedia",
   "storage.v1.objects.getMetadata",
 ]);
@@ -1846,7 +1904,7 @@ function assertProviderObservationClassificationInvariant() {
       ["policytroubleshooter.v3.iam.troubleshoot"],
       "optional diagnostic provider observation classification",
   );
-  if (PROVIDER_MANDATORY_OPERATION_COUNT !== 28 ||
+  if (PROVIDER_MANDATORY_OPERATION_COUNT !== 29 ||
       PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT !== 1) {
     fail("provider observation classification count invariant mismatch");
   }
@@ -2526,6 +2584,10 @@ function validateWriteFreezeEvidenceContract(
   assertProviderObservationClassificationInvariant();
   assertReadonlyPermissionManifest();
   assertEffectiveMandatoryPermissionContract();
+  assertObserverPrincipalPolicy();
+  assertStandaloneProjectObserverProfile(
+      STANDALONE_PROJECT_OBSERVER_PROFILE,
+  );
   assertNoSecretOrPii(evidence);
   exactKeys(evidence, EXACT_TOP_LEVEL_KEYS, "top-level evidence");
   if (evidence.schemaVersion !== WRITE_FREEZE_CONTRACT_VERSION ||
@@ -2604,6 +2666,25 @@ function validateWriteFreezeEvidenceContract(
       PERMISSION_RESEARCH_ARTIFACT_SHA256,
     effectiveMandatoryPermissionContractDigest:
       EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+    topologyProfileVersion:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileVersion,
+    topologyProfileId:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileId,
+    topologyEvidence:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.topologyEvidence,
+    topologyEvidenceDigest:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.topologyEvidenceDigest,
+    topologyProfileDigest:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.profileDigest,
+    standaloneOperationExecution:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution,
+    standaloneOperationExecutionDigest:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecutionDigest,
+    standaloneEffectivePermissions:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions,
+    standaloneEffectivePermissionProfileDigest:
+      STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissionProfileDigest,
+    observerPrincipalPolicy: OBSERVER_PRINCIPAL_POLICY,
     mandatoryRequiredIamPermissions:
       EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions,
     mandatoryConditionalPermissions:
@@ -2731,6 +2812,20 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
       validation.readonlyPermissionResearchArtifactSha256,
     effectiveMandatoryPermissionContractDigest:
       validation.effectiveMandatoryPermissionContractDigest,
+    topologyProfileVersion: validation.topologyProfileVersion,
+    topologyProfileId: validation.topologyProfileId,
+    topologyEvidence: validation.topologyEvidence,
+    topologyEvidenceDigest: validation.topologyEvidenceDigest,
+    topologyProfileDigest: validation.topologyProfileDigest,
+    standaloneOperationExecution:
+      validation.standaloneOperationExecution,
+    standaloneOperationExecutionDigest:
+      validation.standaloneOperationExecutionDigest,
+    standaloneEffectivePermissions:
+      validation.standaloneEffectivePermissions,
+    standaloneEffectivePermissionProfileDigest:
+      validation.standaloneEffectivePermissionProfileDigest,
+    observerPrincipalPolicy: validation.observerPrincipalPolicy,
     mandatoryRequiredIamPermissions:
       validation.mandatoryRequiredIamPermissions,
     mandatoryConditionalPermissions:

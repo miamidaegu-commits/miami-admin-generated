@@ -9,7 +9,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-adapter.mjs",
-    sha256: "cb00626f68bc39a615b7c752ce703a7f4bf30bf416c466d19cc334887d676426",
+    sha256: "5f7373d8a0584880e1b5d34d32c5f570c133552e5cdf606c4bac5fa727144dd3",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-attestation.mjs",
@@ -17,7 +17,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-operations.mjs",
-    sha256: "eec4fe77d2d58a36f59151b21efeb4191770bdf3db0ea4e21d03892a466b3272",
+    sha256: "33440c6e25694814417bebbc568f205eba65f2a0c08d52f6f3e53b74f822f03d",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-transport.mjs",
@@ -25,7 +25,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-readonly-permissions.mjs",
-    sha256: "7910396d6a8c51b6a8f1f8825a41f931a414b82d42e6d0932976d7c4944f0eeb",
+    sha256: "280b95dec5096a16a44c5a8ff8677025f6fb94bbe80dd7e25acc4250c5c3ab84",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
@@ -33,11 +33,11 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-write-freeze-contract.mjs",
-    sha256: "29e88b44b3a80412fd423210437be3c83dec13fb7f735ed7c98bdc57c2476d41",
+    sha256: "21409833e5281ac304ed1046fb954fa006d69140f874798e5caf93e373c7e504",
   }),
   Object.freeze({
     path: "functions/scripts/observe-academy-reset-freeze-production.mjs",
-    sha256: "8aa5057ae413c2098dc2526aca7ea883afe45d8cb7b4ac68530f67bb1fd5069a",
+    sha256: "a641394850aa416602afff644d069ba3eb43b5f2e6229e8e9b30ce966551a1b8",
   }),
   Object.freeze({
     path: "functions/scripts/verify-academy-reset-write-freeze.mjs",
@@ -46,4 +46,4 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
 ]);
 
 export const EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST =
-  "03f08247262a309df62368d65defe7a0b6551fe6bb2db8e8a16b97a4162aea9c";
+  "92a7e7e6a2d78542c31a40c608b58a5fce0be1b52d9bdfea9b039c3bd481fe82";

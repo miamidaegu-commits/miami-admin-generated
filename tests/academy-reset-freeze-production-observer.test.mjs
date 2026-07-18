@@ -33,6 +33,11 @@ import {
 import {
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
 } from "../functions/scripts/academy-reset-freeze-provider-reviewed-sources.mjs";
+import {
+  OBSERVER_PRINCIPAL_POLICY,
+  STANDALONE_PROJECT_OBSERVER_PROFILE,
+  STANDALONE_SOURCE_BUCKET_NAME,
+} from "../functions/scripts/academy-reset-freeze-readonly-permissions.mjs";
 
 const repositoryRoot =
   fs.realpathSync.native(path.resolve(
@@ -50,8 +55,7 @@ const SECRET_KEY = [
   "in-memory-observer-test-only",
   "-----END PRIVATE KEY-----",
 ].join("\n");
-const SECRET_EMAIL =
-  `observer-test@${PROVIDER_TARGET_PROJECT_ID}.iam.gserviceaccount.com`;
+const SECRET_EMAIL = OBSERVER_PRINCIPAL_POLICY.email;
 const SECRET_CLIENT_ID = "123456789012345678901";
 
 function canonical(value) {
@@ -67,6 +71,80 @@ function canonical(value) {
 
 function sha256Canonical(value) {
   return crypto.createHash("sha256").update(canonical(value)).digest("hex");
+}
+
+function fixtureOperationTraceSummary(operationTrace) {
+  const counts = new Map();
+  for (const {operationId} of operationTrace) {
+    counts.set(operationId, (counts.get(operationId) ?? 0) + 1);
+  }
+  const operationIds = [...counts.keys()].sort();
+  const executedMandatoryOperationIds = operationIds.filter((operationId) =>
+    PROVIDER_MANDATORY_OPERATION_IDS.includes(operationId));
+  const optionalDiagnosticOperationIds = operationIds.filter((operationId) =>
+    !PROVIDER_MANDATORY_OPERATION_IDS.includes(operationId));
+  const perOperationTraceCounts = operationIds.map((operationId) => ({
+    operationId,
+    traceCount: counts.get(operationId),
+  }));
+  return {
+    traceEventCount: operationTrace.length,
+    uniqueOperationCount: operationIds.length,
+    operationIds,
+    operationIdSetDigest: sha256Canonical(operationIds),
+    executedMandatoryOperationCount: executedMandatoryOperationIds.length,
+    executedMandatoryOperationIds,
+    executedMandatoryOperationSetDigest:
+      sha256Canonical(executedMandatoryOperationIds),
+    optionalDiagnosticOperationCount:
+      optionalDiagnosticOperationIds.length,
+    optionalDiagnosticOperationIds,
+    optionalDiagnosticOperationSetDigest:
+      sha256Canonical(optionalDiagnosticOperationIds),
+    perOperationTraceCounts,
+    perOperationTraceCountDigest: sha256Canonical(perOperationTraceCounts),
+  };
+}
+
+function fixtureSourceBucketIdentity(functionRecords, {
+  bucketName = STANDALONE_SOURCE_BUCKET_NAME,
+  projectNumber = PROVIDER_TARGET_PROJECT_NUMBER,
+  location = "US-CENTRAL1",
+  storageClass = "STANDARD",
+} = {}) {
+  const functionIds = functionRecords
+      .filter(({source}) => source.bucket === bucketName)
+      .map(({functionId}) => functionId)
+      .sort();
+  const response = {
+    name: bucketName,
+    projectNumber,
+    location,
+    storageClass,
+  };
+  const functionSourceProvenance = {
+    functionCount: functionIds.length,
+    functionIds,
+    functionIdSetDigest: sha256Canonical(functionIds),
+  };
+  const identity = {
+    bucketName,
+    projectNumber,
+    location,
+    storageClass,
+    observationOperationId: "storage.v1.buckets.get",
+    observationResponseDigest: sha256Canonical(response),
+    functionSourceProvenance,
+  };
+  return {
+    ...identity,
+    bucketIdentityDigest: sha256Canonical(identity),
+  };
+}
+
+function fixtureSourceBucketIdentitySetDigest(sourceBucketIdentities) {
+  return sha256Canonical([...sourceBucketIdentities]
+      .sort((left, right) => left.bucketName.localeCompare(right.bucketName)));
 }
 
 function fixtureHierarchyIdentityProjection({
@@ -441,21 +519,35 @@ function completeObservation(overrides = {}) {
     actualMutations: 0,
     mutationOperationCount: 0,
     mutationPermissionCount: 0,
-    executedMandatoryOperationIds: [...PROVIDER_MANDATORY_OPERATION_IDS],
-    notApplicableMandatoryOperationIds: [],
+    executedMandatoryOperationIds: [
+      ...STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+          .executedMandatoryOperationIds,
+    ],
+    notApplicableMandatoryOperationIds: [
+      ...STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+          .notApplicableMandatoryOperationIds,
+    ],
     blockers: [],
     counts: {
       denyPolicyCount: 0,
       executedMandatoryOperationCount:
-        PROVIDER_MANDATORY_OPERATION_IDS.length,
+        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .executedMandatoryOperationCount,
       functionCount: EXPECTED_DEPLOYED_FUNCTION_NAMES.length,
       guardedFunctionCount: EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES.length,
       iamBindingCount: 2,
       iamConditionCount: 0,
       iamRoleCount: 2,
       mandatoryOperationCount: PROVIDER_MANDATORY_OPERATION_IDS.length,
-      notApplicableMandatoryOperationCount: 0,
-      operationExecutionCount: PROVIDER_MANDATORY_OPERATION_IDS.length,
+      notApplicableMandatoryOperationCount:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .notApplicableMandatoryOperationCount,
+      operationExecutionCount:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .executedMandatoryOperationCount,
+      operationUniqueOperationCount:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .executedMandatoryOperationCount,
       schedulerJobCount: SCHEDULER_JOB_ALLOWLIST.length,
       serviceAccountCount: 3,
       unknownIamPrincipalCount: 0,
@@ -547,7 +639,11 @@ function completeObservation(overrides = {}) {
   }];
   const functionRecords = Array.from(
       {length: observation.counts.functionCount},
-      (_, index) => ({name: `function-${index + 1}`}),
+      (_, index) => ({
+        functionId: `function-${index + 1}`,
+        name: `function-${index + 1}`,
+        source: {bucket: STANDALONE_SOURCE_BUCKET_NAME},
+      }),
   );
   const roles = REVIEWED_IAM_ROLE_DEFINITIONS.map((definition) => ({
     name: definition.role,
@@ -577,11 +673,22 @@ function completeObservation(overrides = {}) {
       providerRulesetPayloadDigest: "1".repeat(64),
     },
   };
+  const bucketIdentities = [
+    fixtureSourceBucketIdentity(functionRecords),
+  ];
+  const sourceBucketIdentitySetDigest =
+    fixtureSourceBucketIdentitySetDigest(bucketIdentities);
   const functions = {
+    bucketIdentities,
     functionCount: observation.functionCount,
     guardedFunctionCount: observation.guardedFunctionCount,
-    inventoryDigest: sha256Canonical(functionRecords),
+    inventoryDigest: sha256Canonical({
+      bucketIdentities,
+      records: functionRecords,
+      sourceBucketIdentitySetDigest,
+    }),
     records: functionRecords,
+    sourceBucketIdentitySetDigest,
   };
   const iam = {
     policyAnalysisComplete: observation.policyAnalysisComplete,
@@ -627,27 +734,47 @@ function completeObservation(overrides = {}) {
       {length: observation.counts.operationExecutionCount},
       (_, index) => ({
         operationId:
-          PROVIDER_MANDATORY_OPERATION_IDS[
-              index % PROVIDER_MANDATORY_OPERATION_IDS.length
+          STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+              .executedMandatoryOperationIds[
+                  index %
+                    STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+                        .executedMandatoryOperationIds.length
           ],
       }),
+  );
+  const operationTraceSummary =
+    fixtureOperationTraceSummary(operationTrace);
+  const notApplicableEvidence = Object.fromEntries(
+      observation.notApplicableMandatoryOperationIds.map((operationId) => [
+        operationId,
+        "DERIVED_FROM_STANDALONE_PROJECT_TOPOLOGY",
+      ]),
   );
   observation.rawObservation = {
     rules,
     functions,
     iam,
     scheduler,
+    topologyProfile: STANDALONE_PROJECT_OBSERVER_PROFILE,
     operationTrace,
-    notApplicableEvidence: {},
+    operationTraceSummary,
+    notApplicableEvidence,
   };
+  observation.topologyProfile = STANDALONE_PROJECT_OBSERVER_PROFILE;
+  observation.operationTraceSummary = operationTraceSummary;
   observation.digests = {
     functionsDigest: functions.inventoryDigest,
     iamBindingSetDigest: "",
     iamDigest: "",
+    operationTraceCountDigest:
+      operationTraceSummary.perOperationTraceCountDigest,
     operationTraceDigest: sha256Canonical(operationTrace),
+    operationTraceOperationSetDigest:
+      operationTraceSummary.operationIdSetDigest,
     rawObservationDigest: "",
     rulesDigest: sha256Canonical(rules),
     schedulerDigest: scheduler.digest,
+    topologyProfileDigest: STANDALONE_PROJECT_OBSERVER_PROFILE.profileDigest,
   };
   synchronizeMockIamClaims(observation);
   return deepFreeze(observation);
@@ -697,6 +824,22 @@ function synchronizeMockIamClaims(observation) {
 
 function refreshMockObservationDigests(observation) {
   const raw = observation.rawObservation;
+  raw.functions.bucketIdentities.sort((left, right) =>
+    left.bucketName.localeCompare(right.bucketName));
+  raw.functions.sourceBucketIdentitySetDigest =
+    fixtureSourceBucketIdentitySetDigest(raw.functions.bucketIdentities);
+  raw.functions.inventoryDigest = sha256Canonical({
+    bucketIdentities: raw.functions.bucketIdentities,
+    records: raw.functions.records,
+    sourceBucketIdentitySetDigest:
+      raw.functions.sourceBucketIdentitySetDigest,
+  });
+  raw.operationTraceSummary =
+    fixtureOperationTraceSummary(raw.operationTrace);
+  observation.operationTraceSummary = raw.operationTraceSummary;
+  observation.counts.operationExecutionCount = raw.operationTrace.length;
+  observation.counts.operationUniqueOperationCount =
+    raw.operationTraceSummary.uniqueOperationCount;
   raw.iam.digest = sha256Canonical({
     resources: raw.iam.hierarchy,
     policies: raw.iam.policies,
@@ -715,8 +858,14 @@ function refreshMockObservationDigests(observation) {
   observation.digests.iamDigest = raw.iam.digest;
   observation.digests.operationTraceDigest =
     sha256Canonical(raw.operationTrace);
+  observation.digests.operationTraceOperationSetDigest =
+    raw.operationTraceSummary.operationIdSetDigest;
+  observation.digests.operationTraceCountDigest =
+    raw.operationTraceSummary.perOperationTraceCountDigest;
   observation.digests.rulesDigest = sha256Canonical(raw.rules);
   observation.digests.schedulerDigest = raw.scheduler.digest;
+  observation.digests.topologyProfileDigest =
+    raw.topologyProfile.profileDigest;
   observation.digests.rawObservationDigest = sha256Canonical(raw);
   return deepFreeze(observation);
 }
@@ -868,11 +1017,15 @@ async function runHarness(t, {
   return {dependencies, request, result, root, state};
 }
 
-function assertNoCredentialMaterial(value, credentialPath) {
+function assertNoCredentialMaterial(
+    value,
+    credentialPath,
+    {allowPinnedIdentity = false} = {},
+) {
   const serialized = typeof value === "string" ? value : JSON.stringify(value);
   for (const forbidden of [
     SECRET_KEY,
-    SECRET_EMAIL,
+    ...(allowPinnedIdentity ? [] : [SECRET_EMAIL]),
     SECRET_CLIENT_ID,
     "in-memory-key-id",
     credentialPath,
@@ -1084,8 +1237,36 @@ test("credential descriptor and payload failures are closed and redacted",
         {descriptor: {fileType: "directory"}},
         {payloadValue: null},
         {payloadValue: []},
+        {payloadValue: {
+          type: "service_account",
+          project_id: PROVIDER_TARGET_PROJECT_ID,
+          private_key: SECRET_KEY,
+        }},
         {payload: {private_key: ""}},
         {payload: {client_email: 42}},
+        {payload: {client_email: null}},
+        {payload: {client_email: ""}},
+        {payload: {
+          client_email:
+            "other-observer@daegu-miami-production.iam.gserviceaccount.com",
+        }},
+        {payload: {
+          client_email:
+            "academy-reset-freeze-observer@other-project.iam.gserviceaccount.com",
+        }},
+        {payload: {client_email: SECRET_EMAIL.toUpperCase()}},
+        {payload: {client_email: ` ${SECRET_EMAIL}`}},
+        {payload: {client_email: `${SECRET_EMAIL} `}},
+        {payload: {
+          client_email:
+            "firebase-adminsdk-ab123@" +
+            "daegu-miami-production.iam.gserviceaccount.com",
+        }},
+        {payload: {
+          client_email:
+            "academy-reset-executor@" +
+            "daegu-miami-production.iam.gserviceaccount.com",
+        }},
         {payload: {project_id: "foreign-project"}},
         {payload: {renamedSigningSeed: "renamed-private-material"}},
       ];
@@ -1126,22 +1307,235 @@ test("credential descriptor and payload failures are closed and redacted",
       }
     });
 
-test("complete observation accounts for all exact 28 mandatory operations",
+test("standalone observation partitions exact 25 executed and 4 N/A operations",
     async (t) => {
-      assert.equal(PROVIDER_MANDATORY_OPERATION_IDS.length, 28);
+      assert.equal(PROVIDER_MANDATORY_OPERATION_IDS.length, 29);
       assert.equal(EXPECTED_DEPLOYED_FUNCTION_NAMES.length, 35);
       assert.equal(EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES.length, 26);
       const {result} = await runHarness(t);
       assert.deepEqual(
           result.artifacts.sensitive.executedMandatoryOperationIds,
-          PROVIDER_MANDATORY_OPERATION_IDS,
+          STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+              .executedMandatoryOperationIds,
       );
       assert.deepEqual(
           result.artifacts.sensitive.notApplicableMandatoryOperationIds,
-          [],
+          STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+              .notApplicableMandatoryOperationIds,
       );
       assert.equal(result.artifacts.summary.blockerCount, 0);
       assert.equal(result.artifacts.summary.policyAnalysisComplete, true);
+    });
+
+test("source bucket owner is derived from canonical provider metadata",
+    async (t) => {
+      const accepted = await runHarness(t);
+      assert.equal(
+          accepted.result.artifacts.summary.sourceBucketIdentities[0]
+              .projectNumber,
+          PROVIDER_TARGET_PROJECT_NUMBER,
+      );
+      for (const projectNumber of [
+        "999999999999",
+        null,
+        884850632328,
+      ]) {
+        const observation = clone(completeObservation());
+        observation.rawObservation.functions.bucketIdentities[0] =
+          fixtureSourceBucketIdentity(
+              observation.rawObservation.functions.records,
+              {projectNumber},
+          );
+        refreshMockObservationDigests(observation);
+        await assert.rejects(runHarness(t, {
+          dependencyOverrides: {
+            providerObservationRunner:
+              deepFreeze(async () => observation),
+          },
+        }), /PRODUCTION_OBSERVER_(?:SOURCE_BUCKET|STANDALONE_TOPOLOGY)/);
+      }
+      const missing = clone(completeObservation());
+      delete missing.rawObservation.functions.bucketIdentities[0].projectNumber;
+      refreshMockObservationDigests(missing);
+      await assert.rejects(runHarness(t, {
+        dependencyOverrides: {
+          providerObservationRunner: deepFreeze(async () => missing),
+        },
+      }), /PRODUCTION_OBSERVER_SOURCE_BUCKET/);
+    });
+
+test("bucket identity name, membership, swap, order, and coherent claims bind",
+    async (t) => {
+      const nameMismatch = clone(completeObservation());
+      nameMismatch.rawObservation.functions.bucketIdentities[0] =
+        fixtureSourceBucketIdentity(
+            nameMismatch.rawObservation.functions.records,
+            {bucketName: "foreign-source-bucket"},
+        );
+      refreshMockObservationDigests(nameMismatch);
+
+      const externalMember = clone(completeObservation());
+      externalMember.rawObservation.functions.records[0].source.bucket =
+        "foreign-source-bucket";
+      externalMember.rawObservation.functions.bucketIdentities = [
+        fixtureSourceBucketIdentity(
+            externalMember.rawObservation.functions.records,
+        ),
+        fixtureSourceBucketIdentity(
+            externalMember.rawObservation.functions.records,
+            {
+              bucketName: "foreign-source-bucket",
+              projectNumber: "999999999999",
+            },
+        ),
+      ];
+      refreshMockObservationDigests(externalMember);
+
+      const swapped = clone(completeObservation());
+      const originalDigest =
+        swapped.rawObservation.functions.sourceBucketIdentitySetDigest;
+      swapped.rawObservation.functions.records.forEach((record) => {
+        record.source.bucket = "same-count-swapped-bucket";
+      });
+      swapped.rawObservation.functions.bucketIdentities = [
+        fixtureSourceBucketIdentity(
+            swapped.rawObservation.functions.records,
+            {bucketName: "same-count-swapped-bucket"},
+        ),
+      ];
+      refreshMockObservationDigests(swapped);
+      assert.notEqual(
+          swapped.rawObservation.functions.sourceBucketIdentitySetDigest,
+          originalDigest,
+      );
+
+      for (const observation of [nameMismatch, externalMember, swapped]) {
+        await assert.rejects(runHarness(t, {
+          dependencyOverrides: {
+            providerObservationRunner:
+              deepFreeze(async () => observation),
+          },
+        }), /PRODUCTION_OBSERVER_(?:SOURCE_BUCKET|STANDALONE_TOPOLOGY)/);
+      }
+
+      const twoBucketRecords = [
+        {functionId: "a", source: {bucket: "bucket-a"}},
+        {functionId: "b", source: {bucket: "bucket-b"}},
+      ];
+      const identities = [
+        fixtureSourceBucketIdentity(
+            twoBucketRecords,
+            {bucketName: "bucket-a"},
+        ),
+        fixtureSourceBucketIdentity(
+            twoBucketRecords,
+            {bucketName: "bucket-b"},
+        ),
+      ];
+      assert.equal(
+          fixtureSourceBucketIdentitySetDigest(identities),
+          fixtureSourceBucketIdentitySetDigest([...identities].reverse()),
+      );
+      const identitySwap = structuredClone(identities);
+      identitySwap[1] = fixtureSourceBucketIdentity(
+          twoBucketRecords,
+          {bucketName: "bucket-b", storageClass: "NEARLINE"},
+      );
+      assert.notEqual(
+          fixtureSourceBucketIdentitySetDigest(identities),
+          fixtureSourceBucketIdentitySetDigest(identitySwap),
+      );
+    });
+
+test("raw operation trace derives exact unique mandatory coverage",
+    async (t) => {
+      const baseline = completeObservation();
+      assert.equal(
+          baseline.operationTraceSummary.executedMandatoryOperationCount,
+          25,
+      );
+      assert.equal(baseline.operationTraceSummary.uniqueOperationCount, 25);
+
+      const repeated = clone(baseline);
+      const first = clone(repeated.rawObservation.operationTrace[0]);
+      repeated.rawObservation.operationTrace =
+        Array.from({length: 25}, () => clone(first));
+      refreshMockObservationDigests(repeated);
+
+      const missing = clone(baseline);
+      missing.rawObservation.operationTrace.pop();
+      refreshMockObservationDigests(missing);
+
+      const swapped = clone(baseline);
+      swapped.rawObservation.operationTrace.at(-1).operationId =
+        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .notApplicableMandatoryOperationIds[0];
+      refreshMockObservationDigests(swapped);
+
+      const optionalReplacement = clone(baseline);
+      optionalReplacement.rawObservation.operationTrace.at(-1).operationId =
+        PRODUCTION_OBSERVER_OPTIONAL_DIAGNOSTIC;
+      refreshMockObservationDigests(optionalReplacement);
+
+      const unknown = clone(baseline);
+      unknown.rawObservation.operationTrace.at(-1).operationId =
+        "unknown.v1.resources.get";
+      refreshMockObservationDigests(unknown);
+
+      const coherent = clone(repeated);
+      coherent.executedMandatoryOperationIds =
+        [...coherent.operationTraceSummary.executedMandatoryOperationIds];
+      coherent.counts.executedMandatoryOperationCount =
+        coherent.executedMandatoryOperationIds.length;
+
+      for (const observation of [
+        repeated,
+        missing,
+        swapped,
+        optionalReplacement,
+        unknown,
+        deepFreeze(coherent),
+      ]) {
+        await assert.rejects(runHarness(t, {
+          dependencyOverrides: {
+            providerObservationRunner:
+              deepFreeze(async () => observation),
+          },
+        }), /PRODUCTION_OBSERVER_/);
+      }
+
+      const reordered = clone(baseline);
+      const setDigest = reordered.operationTraceSummary.operationIdSetDigest;
+      reordered.rawObservation.operationTrace.reverse();
+      refreshMockObservationDigests(reordered);
+      assert.equal(
+          reordered.operationTraceSummary.operationIdSetDigest,
+          setDigest,
+      );
+      const reorderedResult = await runHarness(t, {
+        dependencyOverrides: {
+          providerObservationRunner:
+            deepFreeze(async () => reordered),
+        },
+      });
+      assert.equal(reorderedResult.result.artifacts.summary.blockerCount, 0);
+
+      const boundedDuplicate = clone(baseline);
+      boundedDuplicate.rawObservation.operationTrace.push(
+          clone(boundedDuplicate.rawObservation.operationTrace[0]),
+      );
+      refreshMockObservationDigests(boundedDuplicate);
+      const duplicateResult = await runHarness(t, {
+        dependencyOverrides: {
+          providerObservationRunner:
+            deepFreeze(async () => boundedDuplicate),
+        },
+      });
+      assert.equal(
+          duplicateResult.result.artifacts.summary.operationTraceSummary
+              .executedMandatoryOperationCount,
+          25,
+      );
     });
 
 test("missing, extra, and overlapping mandatory operation coverage reject",
@@ -1711,45 +2105,14 @@ test("hierarchy missing duplicate cycle and unknown ancestor fail closed",
       }
     });
 
-test("hierarchy canonical digest is order-stable and observed policies pass",
+test("standalone IAM resource digest is order-stable and policies pass",
     async (t) => {
       const first = clone(completeObservation());
-      first.rawObservation.iam.hierarchy = [
-        fixtureHierarchyResource({parentResourceName: "folders/123"}),
-        fixtureHierarchyResource({
-          kind: "folders",
-          singular: "folder",
-          id: "123",
-          name: "folders/123",
-          parentResourceName: "organizations/456",
-          hierarchyDepth: 1,
-        }),
-        fixtureHierarchyResource({
-          kind: "organizations",
-          singular: "organization",
-          id: "456",
-          name: "organizations/456",
-          hierarchyDepth: 2,
-        }),
-      ];
-      first.rawObservation.iam.policies.push(
-          {
-            attachmentPoint: "folders/123",
-            version: 3,
-            etag: "folder-etag",
-            bindings: [],
-          },
-          {
-            attachmentPoint: "organizations/456",
-            version: 3,
-            etag: "organization-etag",
-            bindings: [],
-          },
-      );
       synchronizeMockIamClaims(first);
       const second = clone(first);
-      second.rawObservation.iam.hierarchy.reverse();
-      second.rawObservation.iam.policies.reverse();
+      second.rawObservation.iam.serviceAccounts.reverse();
+      second.rawObservation.iam.roles.reverse();
+      second.rawObservation.iam.cloudAssetAnalyses.reverse();
       synchronizeMockIamClaims(second);
       assert.equal(
           first.rawObservation.iam.resourceUniverseDigest,
@@ -1927,15 +2290,27 @@ test("provider failures redact credential material and never publish", async (t)
   assert.equal(state.counts.publish, 0);
 });
 
-test("successful artifacts contain no credential key, identity, ID, or path",
+test("artifacts bind pinned principal without credential private material",
     async (t) => {
       const {request, result} = await runHarness(t);
       const credentialPath =
         parseProductionObserverArguments(request.argv).credentialFile;
-      assertNoCredentialMaterial(result.artifacts, credentialPath);
+      assertNoCredentialMaterial(
+          result.artifacts,
+          credentialPath,
+          {allowPinnedIdentity: true},
+      );
       assert.doesNotMatch(
           JSON.stringify(result.artifacts),
           /credential|private_key|client_email|client_id/i,
+      );
+      assert.deepEqual(
+          result.artifacts.summary.observerPrincipalPolicy,
+          OBSERVER_PRINCIPAL_POLICY,
+      );
+      assert.deepEqual(
+          result.artifacts.sensitive.observerPrincipalPolicy,
+          OBSERVER_PRINCIPAL_POLICY,
       );
     });
 

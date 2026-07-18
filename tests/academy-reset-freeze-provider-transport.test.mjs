@@ -441,6 +441,35 @@ test("path encoding remains exact for validated storage lineage", async () => {
   });
 });
 
+test("bucket ownership request is exact noAcl read-only metadata", async () => {
+  const bucket = "gcf-v2-sources-884850632328-us-central1";
+  const {executor, counters} = mockHarness({
+    receipt: mockReceipt({
+      approved_storage_source_bucket: [bucket],
+    }),
+    fetchImpl: async (url, options) => {
+      assert.equal(url.pathname, `/storage/v1/b/${bucket}`);
+      assert.equal(url.searchParams.get("projection"), "noAcl");
+      assert.equal(options.method, "GET");
+      assert.equal(options.body, undefined);
+      assert.equal(options.redirect, "error");
+      return jsonResponse(url, {
+        name: bucket,
+        projectNumber: "884850632328",
+        location: "US-CENTRAL1",
+        storageClass: "STANDARD",
+      });
+    },
+  });
+  const result = await executor({
+    operationId: "storage.v1.buckets.get",
+    pathParams: {bucket},
+    query: {projection: "noAcl"},
+  });
+  assert.equal(result.response.projectNumber, "884850632328");
+  assert.equal(counters.mutation, 0);
+});
+
 test("semantic POST is receipt-bound and never becomes a mutation", async () => {
   const body = {accessTuple: {
     fullResourceName:
@@ -941,7 +970,7 @@ test("static transport surface exposes only the mock executor factory",
           /import \{GoogleAuth\} from "google-auth-library";/);
       assert.doesNotMatch(authoritySource,
           /from\s+["'](?:googleapis|[^"']*node_modules|[^"']*build\/src)/);
-      assert.equal(PROVIDER_OPERATION_IDS.length, 29);
+      assert.equal(PROVIDER_OPERATION_IDS.length, 30);
     });
 
 test("source-load then swapped global fetch exposes no non-mock path", () => {
