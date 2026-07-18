@@ -913,24 +913,33 @@ test("media result is transport-complete only and contains no auth metadata",
 
 test("static transport surface exposes only the mock executor factory",
     () => {
-      const source = fs.readFileSync(path.join(
+      const facadeSource = fs.readFileSync(path.join(
           repositoryRoot,
           "functions/scripts/academy-reset-freeze-provider-transport.mjs",
       ), "utf8");
-      assert.doesNotMatch(source,
+      const authoritySource = fs.readFileSync(path.join(
+          repositoryRoot,
+          "functions/scripts/observe-academy-reset-freeze-production.mjs",
+      ), "utf8");
+      assert.match(facadeSource,
+          /^export \{\n(?:  [A-Za-z0-9_]+,\n)+\} from "\.\/observe-academy-reset-freeze-production\.mjs";\n$/);
+      assert.doesNotMatch(facadeSource, /WeakMap|GoogleAuth|function\s+/);
+      assert.doesNotMatch(facadeSource,
+          /createProviderTransportExecutor|createGoogleAuthHeaderProvider/);
+      assert.doesNotMatch(authoritySource,
           /export (?:async )?function executeProviderOperation/);
-      assert.doesNotMatch(source, /"bindingContext"/);
-      assert.match(source, /const executorSessions = new WeakMap\(\)/);
-      assert.doesNotMatch(source,
+      assert.doesNotMatch(authoritySource, /"bindingContext"/);
+      assert.match(authoritySource, /const executorSessions = new WeakMap\(\)/);
+      assert.doesNotMatch(authoritySource,
           /export function createProviderTransportExecutor/);
-      assert.doesNotMatch(source,
+      assert.doesNotMatch(authoritySource,
           /export function createGoogleAuthHeaderProvider/);
-      assert.match(source,
+      assert.match(authoritySource,
           /export function createMockProviderTransportExecutor\(options\)/);
-      assert.match(source, /mockOnly: true/);
-      assert.match(source,
+      assert.match(authoritySource, /mockOnly: true/);
+      assert.match(authoritySource,
           /import \{GoogleAuth\} from "google-auth-library";/);
-      assert.doesNotMatch(source,
+      assert.doesNotMatch(authoritySource,
           /from\s+["'](?:googleapis|[^"']*node_modules|[^"']*build\/src)/);
       assert.equal(PROVIDER_OPERATION_IDS.length, 29);
     });
@@ -996,6 +1005,7 @@ test("approval lineage binds the exact reviewed Stage B source path set", () => 
     "functions/scripts/academy-reset-freeze-readonly-permissions.mjs",
     "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
     "functions/scripts/academy-reset-write-freeze-contract.mjs",
+    "functions/scripts/observe-academy-reset-freeze-production.mjs",
     "functions/scripts/verify-academy-reset-write-freeze.mjs",
   ]);
   assert.equal(PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,

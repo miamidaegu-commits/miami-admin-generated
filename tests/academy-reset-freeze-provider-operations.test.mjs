@@ -1033,8 +1033,14 @@ test("Stage A registry stays transport-free while Stage B is isolated",
           scriptsDirectory,
           "academy-reset-freeze-provider-transport.mjs",
       ), "utf8");
-      assert.match(transportSource,
-          /import \{GoogleAuth\} from "google-auth-library";/);
+      const observerAuthoritySource = fs.readFileSync(path.join(
+          scriptsDirectory,
+          "observe-academy-reset-freeze-production.mjs",
+      ), "utf8");
       assert.doesNotMatch(transportSource,
+          /import \{GoogleAuth\} from "google-auth-library";/);
+      assert.match(observerAuthoritySource,
+          /import \{GoogleAuth\} from "google-auth-library";/);
+      assert.doesNotMatch(observerAuthoritySource,
           /from\s+["']googleapis(?:\/[^"']*)?["']/);
     });

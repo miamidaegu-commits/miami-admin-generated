@@ -93,7 +93,8 @@ provider-observable, approval lineage, operational telemetry는 서로 다른
 
 Rules API가 local source tree, bundle SHA-256 또는 승인 artifact lineage를
 제공한다고 주장하지 않는다. Rules provider observation에는 source bundle
-필드가 없다.
+필드가 없다. `providerRulesetPayloadDigest`는 두 provider 응답의 안정성 비교용
+payload fingerprint일 뿐 local `firestore.rules` 또는 배포 bundle digest가 아니다.
 
 ### Approval lineage
 
@@ -307,10 +308,12 @@ freeze activation 전에 승인되어 `verifiedAt`까지 유효해야 한다. se
 
 현재 범위는 Stage A의 declarative operation registry/approval binding, Stage B의
 generic read-only HTTP transport, 그리고 mock-only family adapter/verifier
-통합까지다. direct `google-auth-library@10.6.2`는 functions package/lock에
-고정하지만 adapter는 production transport/auth factory를 호출하지 않는다.
-실제 provider observation, credential/token 취득, standalone Production CLI,
-배포 및 mutation은 구현하지 않았다.
+통합과 local-only pre-freeze Production observer까지다. direct
+`google-auth-library@10.6.2`와 Node 24 native fetch를 사용하지만 기존 public
+transport/adapter API는 계속 mock-only다. Production executor/auth factory/raw
+result attestation은 observer authority module 내부에만 있고 export하지 않는다.
+이번 구현·테스트에서는 실제 provider observation, credential/token 취득, 배포 또는
+mutation을 실행하지 않았다.
 dependency provenance는 다음 단일 전략만 승인한다.
 
 - strategy: `declared_google_auth_library_rest`
@@ -345,9 +348,10 @@ validation 및 proof API에서 거부한다. verifier가 사용하는 canonical
 `repositoryRoot`와 adapter source root가 다르면 observation 전에 거부한다.
 
 production executor factory는 호출별 `bindingContext`, fetch, auth, clock, sleep,
-timeout 주입을 받지 않는다. 고정 Production identity와 lazy GoogleAuth/native
-fetch만 캡처한다. 동적 resource lineage는 향후 family adapter가 검증된 provider
-응답에서 파생해야 하며 현재 production transport에 caller 문자열로 주입할 수 없다.
+timeout 주입을 받지 않는다. 고정 Production identity, 명시적 credential JSON을
+받는 lazy `GoogleAuth({credentials, scopes})`, module-load 시 캡처한 Node 24 native
+fetch만 사용한다. 동적 resource lineage는 raw family observer가 검증된 provider
+응답에서만 파생하며 caller 문자열로 주입할 수 없다.
 테스트 factory만 immutable canonical mock receipt를 받고 모든 결과에
 `mockOnly: true`를 표시한다. mock family adapter 결과도 `actualMutations: 0`,
 `mutationOperationCount: 0`, `unknownOperationCount: 0`, central descriptor에서
@@ -362,14 +366,15 @@ completeness를 주장할 수 없다.
 
 별도 reviewed-source contract는 package/lock, operation registry, transport,
 mock adapter, attestation, read-only permission manifest, runtime Git identity
-resolver, write-freeze contract, verifier의 exact 10개 path와 각 파일의 literal
+resolver, write-freeze contract, local-only Production observer, verifier의 exact
+11개 path와 각 파일의 literal
 SHA-256 및 canonical aggregate digest를 approval metadata/session/observation/proof에
 결합한다. 이 local adapter source set은 기존 deployed runtime Git critical source
 목록에 추가하지 않는다. adapter/verifier는 이 registry 자체는 hash set에서
-제외하고, exact 10개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
+제외하고, exact 11개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
 확인한 뒤 bytes SHA-256와 literal pin 및 aggregate를 다시 계산한다.
 현재 reviewed-source aggregate는
-`100c47766c28eb8266a51d3f95118402d40d6db8d63b3e1ce4ae2f0e70cca18a`이다.
+`03f08247262a309df62368d65defe7a0b6551fe6bb2db8e8a16b97a4162aea9c`이다.
 
 증명용 runtime context는 동일한 canonical repository root에서 genuine mock
 adapter/result와 reviewed-source identity를 검증한 뒤, clean Git HEAD/tree,
@@ -411,6 +416,22 @@ get/getIamPolicy를 두 pass 모두 수행한다. 승인 group/domain도 각각 
 `fullyExplored` Cloud Asset 분석과 raw `analysisResults`/`groupEdges` 증거가 있어야
 하며, 빈 결과를 synthetic completeness로 대체하지 않는다. Scheduler도 list와 모든
 job get을 시작/종료에 각각 실행해 full canonical snapshot을 비교한다.
+active IAM binding이 reviewed delete/writable permission을 포함하면 알려진 role이라도
+`policyAnalysisComplete: false`이며 blocker다.
+Resource Manager project/folder/organization 정책과 각 service account
+`getIamPolicy` binding은 하나의 canonical binding universe로 합친다. 각 record는
+exact resource type/name, policy source, direct/inherited state, member, role,
+condition, expanded permissions 및 expansion digest를 결합한다. raw nested policy를
+caller의 top-level binding/count/digest보다 우선해 재계산하며 unknown scope/role/
+principal/permission, unresolved condition, duplicate 또는 writable binding은 모두
+fail closed다.
+Resource Manager attachment는 target project의 provider-observed parent chain에
+실제로 존재하는 exact project/folder/organization resource만 허용한다. hierarchy의
+누락·중복·단절·순환·parent/type/depth/digest 불일치와 관찰되지 않은 문법상 유효한
+folder/organization도 거부한다. 각 service account는 full resource name의 마지막
+identifier와 exact email, project segment, unique ID 및 nested policy attachment를
+서로 결합한다. hierarchy 및 service-account resource identity digest는 canonical
+binding identity와 binding-set digest에 포함되며 배열 순서에는 독립적이다.
 Policy Troubleshooter를 선택 실행한다면 mandatory observation과 분리된 out-of-band
 진단 채널을 사용해야 한다. mandatory provider result의 operation ID, trace,
 observation digest 또는 proof bytes에 Troubleshooter 결과를 섞으면 contract가
@@ -421,11 +442,54 @@ Service Account list/get의 full resource name과 Scheduler get의 full job name
 요청한 target project/location/email/job allowlist와 exact 일치해야 한다.
 
 실제 token, Authorization header, service-account key, ADC path 또는 credential
-artifact는 adapter input/output/proof에 포함하지 않는다. Production observation은
-별도 구현·source review·권한 승인·approval receipt가 필요하며 이 mock approval을
-재사용할 수 없다.
-Production observer는 아직 구현되지 않았고 향후 독립 source review와 새 권한
-승인·approval receipt 없이는 실행하거나 proof를 만들 수 없다.
+artifact는 adapter input/output/proof에 포함하지 않는다. local-only Production
+observer는 구현됐지만 이번 단계에서는 injected mock dependencies로만 검증했다.
+실제 실행에는 별도 Production read-only 승인, observer가 병합된 exact release SHA,
+명시적 credential path와 exact confirmation이 필요하다. ADC,
+`GOOGLE_APPLICATION_CREDENTIALS`, user OAuth, gcloud credential 또는 default
+project fallback은 사용하지 않는다.
+
+observer credential은 명시적 absolute path의 regular non-symlink file만 허용하고
+mode `0600`, 현재 사용자 owner, JSON object, exact
+`project_id=daegu-miami-production`을 확인한다. 모든 CLI/project/release/source/output
+guard가 성공한 후에만 credential을 읽고 GoogleAuth를 생성한다. credential path,
+private key, client email/client ID, token/header는 오류나 artifact에 기록하지 않는다.
+
+향후 별도 승인된 read-only observation 명령 계약은 다음과 같다. 아래 명령은 이번
+구현 또는 테스트에서 실행하지 않았다.
+
+```sh
+CONFIRM_PRODUCTION_READ_ONLY_OBSERVATION=YES \
+node functions/scripts/observe-academy-reset-freeze-production.mjs \
+  --project=daegu-miami-production \
+  --project-number=884850632328 \
+  --release-sha=<merged-observer-release-sha> \
+  --credential-file=/absolute/local/credential.json \
+  --summary-output=/absolute/new-output/provider-observation-summary-redacted.json \
+  --sensitive-output=/absolute/new-output/provider-observation-sensitive.json
+```
+
+Policy Troubleshooter는 기본 비활성이다. 요청할 때만
+`--optional-diagnostic=policytroubleshooter.v3.iam.troubleshoot`를 exact하게 추가한다.
+그 결과는 mandatory 28개 observation, `providerObservationComplete`,
+`policyAnalysisComplete`, proof bytes 또는 write-freeze gate를 대체하지 않는다.
+
+두 output은 current-user 소유 mode `0700` secure base 아래의 동일한 신규 고유
+directory에 생성한다. base device/inode를 preflight부터 publication까지 결합하고
+생성 directory device/inode도 각 temp/link/unlink 전후에 재검증한다. directory는
+`0700`, final
+regular files는 `0600`이며 symlink/intermediate symlink, repository 또는 `.git`
+내부 경로, overwrite를 거부한다. 두 파일은 atomic no-clobber로 게시하고 두 번째
+파일 실패 시 첫 파일과 temp 및 새 directory를 rollback한다. redacted summary에는
+raw IAM member/resource path를 넣지 않고 count/digest만 기록하며 sensitive output은
+local secure storage에만 보관한다.
+
+이 output은 pre-freeze provider observation이지 freeze proof가 아니다. approval
+receipt 입력이 없는 observer이므로 `deploymentLineageApproved`,
+`drainTelemetryComplete`, `writeFreezeVerified`, `executionEligible`,
+`writeAuthorized`는 항상 `false`, `actualMutations`는 항상 `0`이다. 실제 Rules/
+Functions deploy, IAM/Scheduler 변경, sentinel freeze, planner, reset은 모두 후속
+별도 단계다.
 
 evidence는 저장소 밖 canonical regular file, mode `0600`으로 보관한다. output
 parent는 `0700`이며 output은 새 파일만 atomic no-clobber로 `0600` 생성한다.
@@ -440,10 +504,12 @@ node functions/scripts/verify-academy-reset-write-freeze.mjs \
   --output /absolute/external/write-freeze-proof.json
 ```
 
-Production CLI는 존재하지 않으며 mock adapter를 주입해도 CLI 경로는 거부한다.
-programmatic 테스트만 network 없는 mock adapter와 완전한 synthetic sentinel/IAM/
-drain/probe evidence를 결합할 수 있다. mock adapter 단독 결과는 proof가 아니고
-기존 다섯 proof gate를 우회하거나 `writeFreezeVerified: true`를 만들 수 없다.
+Production observer CLI는 local repository tool이며 Cloud Function으로
+import/export하지 않는다. 테스트는 public Production executor가 아니라
+`mockOnly: true`인 exact injected harness만 사용하고 실제 credential file,
+GoogleAuth, fetch 또는 Provider API에 접근하지 않는다. observer 결과나 mock
+adapter 단독 결과는 proof가 아니고 기존 다섯 proof gate를 우회하거나
+`writeFreezeVerified: true`를 만들 수 없다.
 
 성공 proof의 `providerObservationComplete`, `policyAnalysisComplete`,
 `drainTelemetryComplete`, `deploymentLineageApproved`, `writeFreezeVerified`는
