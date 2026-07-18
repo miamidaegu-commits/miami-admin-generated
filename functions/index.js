@@ -14440,7 +14440,20 @@ exports.inspectFixedPrivateLessonRescheduleScope = onCall({
 });
 
 exports.createFixedPrivateLessonAssignment = onCall(
-    {region: REGION, cors: true},
+    {
+      region: REGION,
+      cors: true,
+      memory: "256MiB",
+      timeoutSeconds: 60,
+      cpu: 1,
+      concurrency: 80,
+      maxInstances: 10,
+      serviceAccount:
+        "884850632328-compute@developer.gserviceaccount.com",
+      ingressSettings: "ALLOW_ALL",
+      enforceAppCheck: false,
+      consumeAppCheckToken: false,
+    },
     async (request) => {
       try {
         if (!request.auth) {
@@ -20707,7 +20720,20 @@ exports.inspectFixedPrivateLessonOutcomeRemediationEvidence = onCall(
 );
 
 exports.previewFixedPrivateLessonOutcomeAction = onCall(
-    {region: REGION, cors: true},
+    {
+      region: REGION,
+      cors: true,
+      memory: "256MiB",
+      timeoutSeconds: 60,
+      cpu: 1,
+      concurrency: 80,
+      maxInstances: 10,
+      serviceAccount:
+        "884850632328-compute@developer.gserviceaccount.com",
+      ingressSettings: "ALLOW_ALL",
+      enforceAppCheck: false,
+      consumeAppCheckToken: false,
+    },
     async (request) => {
       try {
         if (!request.auth) {
@@ -20725,7 +20751,20 @@ exports.previewFixedPrivateLessonOutcomeAction = onCall(
 );
 
 exports.commitFixedPrivateLessonOutcomeAction = onCall(
-    {region: REGION, cors: true},
+    {
+      region: REGION,
+      cors: true,
+      memory: "256MiB",
+      timeoutSeconds: 60,
+      cpu: 1,
+      concurrency: 80,
+      maxInstances: 10,
+      serviceAccount:
+        "884850632328-compute@developer.gserviceaccount.com",
+      ingressSettings: "ALLOW_ALL",
+      enforceAppCheck: false,
+      consumeAppCheckToken: false,
+    },
     async (request) => {
       try {
         if (!request.auth) {
