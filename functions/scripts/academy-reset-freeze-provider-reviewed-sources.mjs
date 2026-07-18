@@ -21,7 +21,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-transport.mjs",
-    sha256: "0c6e04044c29476e2880df6308b909b69b6b917cb84995a4239dc9b2f92c1412",
+    sha256: "90e72a261619446ab16bd013ee757bba113bb729c4679bbb082168994d583f9e",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-readonly-permissions.mjs",
@@ -36,10 +36,14 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
     sha256: "29e88b44b3a80412fd423210437be3c83dec13fb7f735ed7c98bdc57c2476d41",
   }),
   Object.freeze({
+    path: "functions/scripts/observe-academy-reset-freeze-production.mjs",
+    sha256: "8aa5057ae413c2098dc2526aca7ea883afe45d8cb7b4ac68530f67bb1fd5069a",
+  }),
+  Object.freeze({
     path: "functions/scripts/verify-academy-reset-write-freeze.mjs",
     sha256: "c01af4de8c74ea37ef7fa71144c9a92a072b255d99b96065f7497eb773cf4e46",
   }),
 ]);
 
 export const EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST =
-  "100c47766c28eb8266a51d3f95118402d40d6db8d63b3e1ce4ae2f0e70cca18a";
+  "03f08247262a309df62368d65defe7a0b6551fe6bb2db8e8a16b97a4162aea9c";
