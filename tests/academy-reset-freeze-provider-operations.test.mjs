@@ -71,6 +71,7 @@ const EXPECTED_OPERATION_IDS = [
   "run.v2.projects.locations.services.revisions.get",
   "run.v2.projects.locations.services.revisions.list",
   "serviceusage.v1.projects.services.get",
+  "storage.v1.buckets.get",
   "storage.v1.objects.getMedia",
   "storage.v1.objects.getMetadata",
 ];
@@ -164,6 +165,9 @@ const EXPECTED_ENDPOINTS = {
   "serviceusage.v1.projects.services.get":
     ["serviceusage", "https://serviceusage.googleapis.com", "v1", "GET",
       "/v1/projects/{projectNumber}/services/{serviceName}"],
+  "storage.v1.buckets.get":
+    ["storage", "https://storage.googleapis.com", "v1", "GET",
+      "/storage/v1/b/{bucket}"],
   "storage.v1.objects.getMedia":
     ["storage", "https://storage.googleapis.com", "v1", "GET",
       "/storage/v1/b/{bucket}/o/{object}"],
@@ -193,7 +197,7 @@ function clonedClassification() {
 }
 
 test("operation registry has the exact sorted keyset and endpoint semantics", () => {
-  assert.equal(PROVIDER_OPERATION_COUNT, 29);
+  assert.equal(PROVIDER_OPERATION_COUNT, 30);
   assert.deepEqual(PROVIDER_OPERATION_IDS, EXPECTED_OPERATION_IDS);
   assert.deepEqual(Object.keys(PROVIDER_OPERATION_REGISTRY),
       EXPECTED_OPERATION_IDS);
@@ -216,9 +220,9 @@ test("operation registry has the exact sorted keyset and endpoint semantics", ()
   assert.deepEqual(summaries, EXPECTED_ENDPOINTS);
 });
 
-test("operation classification has exact frozen 29/28/1 keysets", () => {
-  assert.equal(PROVIDER_OPERATION_COUNT, 29);
-  assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 28);
+test("operation classification has exact frozen 30/29/1 keysets", () => {
+  assert.equal(PROVIDER_OPERATION_COUNT, 30);
+  assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 29);
   assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT, 1);
   assert.deepEqual(PROVIDER_OPERATION_IDS, EXPECTED_OPERATION_IDS);
   assert.deepEqual(
@@ -335,6 +339,17 @@ test("every descriptor has exact schemas and bounded transport policy", () => {
 });
 
 test("Storage query schemas preserve exact metadata and media behavior", () => {
+  const bucket = PROVIDER_OPERATION_REGISTRY["storage.v1.buckets.get"];
+  assert.deepEqual(Object.keys(bucket.query.properties), ["projection"]);
+  assert.deepEqual(bucket.query.required, ["projection"]);
+  assert.equal(bucket.query.properties.projection.const, "noAcl");
+  assert.deepEqual(Object.keys(bucket.response.requiredFields).sort(), [
+    "location",
+    "name",
+    "projectNumber",
+    "storageClass",
+  ]);
+
   const metadata =
     PROVIDER_OPERATION_REGISTRY["storage.v1.objects.getMetadata"];
   assert.deepEqual(Object.keys(metadata.query.properties), ["generation"]);
@@ -756,17 +771,17 @@ test("semantic POST schema rejects missing, wrong, and inherited bindings",
 test("version and descriptor-set digest are deterministic literal invariants",
     () => {
       assert.equal(PROVIDER_OPERATION_ALLOWLIST_VERSION,
-          "academy_reset_freeze_provider_operations.v5");
+          "academy_reset_freeze_provider_operations.v6");
       assert.equal(PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
-          "3598e2bbb141497d2cfe21a867b58ad5794401fc5bf599a81d4a5bcbdd09b47d");
+          "7807e7c68a5995cae008587d0e93748f34c00ec575cbc189f8d6a64c6230a52d");
       assert.equal(PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST,
           EXPECTED_PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST);
       assert.equal(computeProviderOperationDescriptorSetDigest(),
           PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST);
       assert.equal(PROVIDER_OPERATION_CLASSIFICATION_VERSION,
-          "academy_reset_freeze_operation_classification.v1");
+          "academy_reset_freeze_operation_classification.v2");
       assert.equal(PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
-          "e139a1144665acc246298b358a3bfbb98e0acbee0c509e3a8f2a93f2a01ba8f4");
+          "acee45a37aea22392a016913a0cd6e8392a017fafdfe04c2c1550c113acd9327");
       assert.equal(PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
           EXPECTED_PROVIDER_MANDATORY_OPERATION_IDS_DIGEST);
       assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
@@ -774,7 +789,7 @@ test("version and descriptor-set digest are deterministic literal invariants",
       assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
           EXPECTED_PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST);
       assert.equal(PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
-          "d1dbc846912482625f6d3bfb405b26013a4bcd7bd0bac3c1bab877a6db9647da");
+          "45d609e3d0b4f0a2c413b8e8437a6d4c8187c8463415008e478ffc28f7f510d5");
       assert.equal(PROVIDER_OPERATION_CLASSIFICATION_DIGEST,
           EXPECTED_PROVIDER_OPERATION_CLASSIFICATION_DIGEST);
       assert.equal(
@@ -792,7 +807,7 @@ test("version and descriptor-set digest are deterministic literal invariants",
       assert.equal(PROVIDER_AUTH_DEPENDENCY, "google-auth-library@10.6.2");
       assert.equal(PROVIDER_HTTP_RUNTIME, "node24_native_fetch");
       assert.equal(PROVIDER_ADAPTER_CONTRACT_VERSION,
-          "academy_reset_freeze_provider_adapter.v5");
+          "academy_reset_freeze_provider_adapter.v6");
       assert.equal(PROVIDER_NO_MUTATION_OPERATION_COUNT, 0);
     });
 

@@ -37,12 +37,19 @@ import {
   EFFECTIVE_MANDATORY_PERMISSION_CONTRACT,
   EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
   OFFICIAL_EVIDENCE_SET_DIGEST,
+  OBSERVER_PRINCIPAL_POLICY,
   PERMISSION_RESEARCH_ARTIFACT_SHA256,
+  PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
   READONLY_PERMISSION_MANIFEST_DIGEST,
   READONLY_PERMISSION_MANIFEST_VERSION,
   REVIEWED_EVIDENCE_SET_DIGEST,
+  STANDALONE_PROJECT_OBSERVER_PROFILE,
+  STANDALONE_SOURCE_BUCKET_NAME,
   assertEffectiveMandatoryPermissionContract,
+  assertObserverPrincipalPolicy,
   assertReadonlyPermissionManifest,
+  assertStandaloneProjectObserverProfile,
+  deriveStandaloneProjectObserverProfile,
 } from "./academy-reset-freeze-readonly-permissions.mjs";
 import {
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
@@ -1119,6 +1126,9 @@ function createExecutor(session) {
 }
 
 function createExplicitCredentialGoogleAuthHeaderProvider(parsedCredential) {
+  if (parsedCredential?.client_email !== OBSERVER_PRINCIPAL_POLICY.email) {
+    observerFail("OBSERVER_PRINCIPAL_REJECTED");
+  }
   const auth = new GoogleAuth({
     credentials: parsedCredential,
     scopes: [GOOGLE_PROVIDER_READ_ONLY_SCOPE],
@@ -1289,7 +1299,7 @@ export function assertStableProviderInventory(startResult, endResult) {
 }
 
 export const PRODUCTION_OBSERVER_SCHEMA_VERSION =
-  "academy_reset_freeze_raw_production_observer.v1";
+  "academy_reset_freeze_raw_production_observer.v3";
 export const PRODUCTION_OBSERVER_SUMMARY_FILENAME =
   "provider-observation-summary-redacted.json";
 export const PRODUCTION_OBSERVER_SENSITIVE_FILENAME =
@@ -1594,11 +1604,16 @@ function assertObserverContracts() {
     );
     assertReadonlyPermissionManifest();
     assertEffectiveMandatoryPermissionContract();
+    assertObserverPrincipalPolicy();
+    const topologyProfile = deriveStandaloneProjectObserverProfile(
+        PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
+    );
+    assertStandaloneProjectObserverProfile(topologyProfile);
   } catch {
     observerFail("CONTRACT_REJECTED");
   }
-  if (PROVIDER_OPERATION_COUNT !== 29 ||
-      PROVIDER_MANDATORY_OPERATION_COUNT !== 28 ||
+  if (PROVIDER_OPERATION_COUNT !== 30 ||
+      PROVIDER_MANDATORY_OPERATION_COUNT !== 29 ||
       PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT !== 1 ||
       PROVIDER_NO_MUTATION_OPERATION_COUNT !== 0 ||
       PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS.length !== 1 ||
@@ -1655,17 +1670,23 @@ export function validateProductionObserverRequest({
       fs.realpathSync.native(repositoryRoot) !== repositoryRoot) {
     observerFail("REQUEST_REJECTED");
   }
-  const outputPlan = validateOutputPlan(argumentsValue, repositoryRoot);
   validateResolvedSourceIdentity(
       sourceIdentity,
       repositoryRoot,
       argumentsValue.releaseSha,
   );
+  const topologyProfile = deriveStandaloneProjectObserverProfile(
+      PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
+  );
+  assertObserverPrincipalPolicy(OBSERVER_PRINCIPAL_POLICY);
+  const outputPlan = validateOutputPlan(argumentsValue, repositoryRoot);
   const context = deepFreeze({
     arguments: argumentsValue,
     repositoryRoot,
     sourceIdentity,
     outputPlan,
+    topologyProfile,
+    observerPrincipalPolicy: OBSERVER_PRINCIPAL_POLICY,
     target: {
       projectId: PROVIDER_TARGET_PROJECT_ID,
       projectNumber: PROVIDER_TARGET_PROJECT_NUMBER,
@@ -1685,6 +1706,13 @@ export function validateProductionObserverRequest({
         PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST,
       effectiveMandatoryPermissionContractDigest:
         EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+      topologyProfileDigest: topologyProfile.profileDigest,
+      topologyEvidenceDigest: topologyProfile.topologyEvidenceDigest,
+      operationExecutionDigest: topologyProfile.operationExecutionDigest,
+      effectivePermissionProfileDigest:
+        topologyProfile.effectivePermissionProfileDigest,
+      observerPrincipalPolicyDigest:
+        OBSERVER_PRINCIPAL_POLICY.policyDigest,
       readonlyPermissionManifestDigest: READONLY_PERMISSION_MANIFEST_DIGEST,
       reviewedSourceDigest:
         EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
@@ -1748,6 +1776,8 @@ function assertCredentialDescriptorAndPayload(
       !Number.isSafeInteger(descriptor.size) ||
       descriptor.size < 2 || descriptor.size > MAX_CREDENTIAL_BYTES ||
       credentialResult.payload.project_id !== PROVIDER_TARGET_PROJECT_ID ||
+      credentialResult.payload.client_email !==
+        OBSERVER_PRINCIPAL_POLICY.email ||
       credentialResult.payload.type !== "service_account" ||
       typeof credentialResult.payload.private_key !== "string" ||
       credentialResult.payload.private_key.length === 0 ||
@@ -1940,6 +1970,48 @@ function markNotApplicable(state, operationId, evidence) {
   state.notApplicable.set(operationId, evidence);
 }
 
+function deriveOperationTraceSummary(operationTrace) {
+  assertStandardArray(operationTrace, "OPERATION_TRACE");
+  const counts = new Map();
+  for (const event of operationTrace) {
+    const keys = assertRecord(event, "OPERATION_TRACE_EVENT");
+    if (!keys.includes("operationId") ||
+        typeof event.operationId !== "string" ||
+        !PROVIDER_OPERATION_IDS.includes(event.operationId)) {
+      observerFail("OPERATION_TRACE_EVENT_REJECTED");
+    }
+    counts.set(event.operationId, (counts.get(event.operationId) ?? 0) + 1);
+  }
+  const operationIds = [...counts.keys()].sort();
+  const executedMandatoryOperationIds = operationIds
+      .filter((operationId) =>
+        PROVIDER_MANDATORY_OPERATION_IDS.includes(operationId));
+  const optionalDiagnosticOperationIds = operationIds
+      .filter((operationId) =>
+        PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS.includes(operationId));
+  const perOperationTraceCounts = operationIds.map((operationId) => ({
+    operationId,
+    traceCount: counts.get(operationId),
+  }));
+  return {
+    traceEventCount: operationTrace.length,
+    uniqueOperationCount: operationIds.length,
+    operationIds,
+    operationIdSetDigest: sha256Canonical(operationIds),
+    executedMandatoryOperationCount: executedMandatoryOperationIds.length,
+    executedMandatoryOperationIds,
+    executedMandatoryOperationSetDigest:
+      sha256Canonical(executedMandatoryOperationIds),
+    optionalDiagnosticOperationCount:
+      optionalDiagnosticOperationIds.length,
+    optionalDiagnosticOperationIds,
+    optionalDiagnosticOperationSetDigest:
+      sha256Canonical(optionalDiagnosticOperationIds),
+    perOperationTraceCounts,
+    perOperationTraceCountDigest: sha256Canonical(perOperationTraceCounts),
+  };
+}
+
 async function observeRawRules(state) {
   const releaseInput = {
     operationId: "firebaserules.v1.projects.releases.get",
@@ -2057,6 +2129,64 @@ function functionIdentityProjection(value) {
   };
 }
 
+function deriveSourceBucketIdentity(response, requestedBucket, functions) {
+  const responseProjection = {
+    name: response?.name,
+    projectNumber: response?.projectNumber,
+    location: response?.location,
+    storageClass: response?.storageClass,
+  };
+  if (responseProjection.name !== requestedBucket ||
+      typeof responseProjection.projectNumber !== "string" ||
+      !/^[0-9]{1,30}$/.test(responseProjection.projectNumber) ||
+      responseProjection.location !== "US-CENTRAL1" ||
+      typeof responseProjection.storageClass !== "string" ||
+      responseProjection.storageClass.length === 0) {
+    observerFail("SOURCE_BUCKET_IDENTITY_REJECTED");
+  }
+  const functionIds = functions
+      .filter(({source}) => source.bucket === requestedBucket)
+      .map(({functionId}) => functionId)
+      .sort();
+  if (functionIds.length === 0 ||
+      new Set(functionIds).size !== functionIds.length) {
+    observerFail("SOURCE_BUCKET_PROVENANCE_REJECTED");
+  }
+  const functionSourceProvenance = {
+    functionCount: functionIds.length,
+    functionIds,
+    functionIdSetDigest: sha256Canonical(functionIds),
+  };
+  const identity = {
+    bucketName: requestedBucket,
+    projectNumber: responseProjection.projectNumber,
+    location: responseProjection.location,
+    storageClass: responseProjection.storageClass,
+    observationOperationId: "storage.v1.buckets.get",
+    observationResponseDigest: sha256Canonical(responseProjection),
+    functionSourceProvenance,
+  };
+  return {
+    ...identity,
+    bucketIdentityDigest: sha256Canonical(identity),
+  };
+}
+
+function computeSourceBucketIdentitySetDigest(sourceBucketIdentities) {
+  assertStandardArray(
+      sourceBucketIdentities,
+      "SOURCE_BUCKET_IDENTITY_SET",
+  );
+  if (sourceBucketIdentities.some(({bucketName}) =>
+    typeof bucketName !== "string" || bucketName.length === 0) ||
+      new Set(sourceBucketIdentities.map(({bucketName}) => bucketName)).size !==
+        sourceBucketIdentities.length) {
+    observerFail("SOURCE_BUCKET_IDENTITY_SET_REJECTED");
+  }
+  return sha256Canonical([...sourceBucketIdentities]
+      .sort((left, right) => left.bucketName.localeCompare(right.bucketName)));
+}
+
 async function observeRawFunctionBoundary(state) {
   const projectPath = {
     projectId: PROVIDER_TARGET_PROJECT_ID,
@@ -2090,6 +2220,21 @@ async function observeRawFunctionBoundary(state) {
     });
     functions.push(functionIdentityProjection(result.response));
   }
+  const bucketIdentities = [];
+  const sourceBucketNames = [...new Set(functions.map(({source}) =>
+    source.bucket))].sort();
+  for (const bucket of sourceBucketNames) {
+    const result = await executeRaw(state, {
+      operationId: "storage.v1.buckets.get",
+      pathParams: {bucket},
+      query: {projection: "noAcl"},
+    });
+    bucketIdentities.push(
+        deriveSourceBucketIdentity(result.response, bucket, functions),
+    );
+  }
+  const sourceBucketIdentitySetDigest =
+    computeSourceBucketIdentitySetDigest(bucketIdentities);
   const expectedServiceNames =
     functions.map(({serviceName}) => serviceName).sort();
   const servicesList = await executeRaw(state, {
@@ -2189,6 +2334,8 @@ async function observeRawFunctionBoundary(state) {
   }
   return {
     listExecutionId: list.transportExecutionId,
+    bucketIdentities,
+    sourceBucketIdentitySetDigest,
     records: details.sort((left, right) =>
       left.functionId.localeCompare(right.functionId)),
   };
@@ -2202,13 +2349,24 @@ async function observeRawFunctions(state) {
   const first = await observeRawFunctionBoundary(state);
   const second = await observeRawFunctionBoundary(state);
   if (first.listExecutionId === second.listExecutionId ||
-      canonical(first.records) !== canonical(second.records)) {
+      canonical(first.records) !== canonical(second.records) ||
+      canonical(first.bucketIdentities) !==
+        canonical(second.bucketIdentities) ||
+      first.sourceBucketIdentitySetDigest !==
+        second.sourceBucketIdentitySetDigest) {
     observerFail("INVENTORY_UNSTABLE");
   }
+  const inventory = {
+    bucketIdentities: first.bucketIdentities,
+    records: first.records,
+    sourceBucketIdentitySetDigest: first.sourceBucketIdentitySetDigest,
+  };
   return {
     functionCount: first.records.length,
     guardedFunctionCount: EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES.length,
-    inventoryDigest: rawProjectionDigest(first.records),
+    inventoryDigest: rawProjectionDigest(inventory),
+    bucketIdentities: first.bucketIdentities,
+    sourceBucketIdentitySetDigest: first.sourceBucketIdentitySetDigest,
     records: first.records,
   };
 }
@@ -3104,6 +3262,118 @@ async function observeRawScheduler(state) {
   };
 }
 
+function deriveObservedStandaloneTopologyProfile(
+    hierarchy,
+    functionRecords,
+    sourceBucketIdentities,
+) {
+  assertStandardArray(hierarchy, "OBSERVED_TOPOLOGY_HIERARCHY");
+  assertStandardArray(functionRecords, "OBSERVED_TOPOLOGY_FUNCTIONS");
+  assertStandardArray(
+      sourceBucketIdentities,
+      "OBSERVED_SOURCE_BUCKET_IDENTITIES",
+  );
+  const projects = hierarchy.filter(({kind}) => kind === "projects");
+  const sourceBuckets = [...new Set(functionRecords.map((record) =>
+    record?.source?.bucket))].sort();
+  const observedBuckets = sourceBucketIdentities
+      .map((identity) => {
+        const keys = assertRecord(identity, "SOURCE_BUCKET_IDENTITY");
+        const expectedKeys = [
+          "bucketIdentityDigest",
+          "bucketName",
+          "functionSourceProvenance",
+          "location",
+          "observationOperationId",
+          "observationResponseDigest",
+          "projectNumber",
+          "storageClass",
+        ];
+        if (canonical([...keys].sort()) !==
+            canonical(expectedKeys.sort())) {
+          observerFail("SOURCE_BUCKET_IDENTITY_REJECTED");
+        }
+        const provenance = identity.functionSourceProvenance;
+        const provenanceKeys =
+          assertRecord(provenance, "SOURCE_BUCKET_PROVENANCE");
+        if (canonical([...provenanceKeys].sort()) !== canonical([
+          "functionCount",
+          "functionIdSetDigest",
+          "functionIds",
+        ]) ||
+            !Array.isArray(provenance.functionIds)) {
+          observerFail("SOURCE_BUCKET_PROVENANCE_REJECTED");
+        }
+        const expectedFunctionIds = functionRecords
+            .filter((record) => record?.source?.bucket === identity.bucketName)
+            .map(({functionId}) => functionId)
+            .sort();
+        const responseProjection = {
+          name: identity.bucketName,
+          projectNumber: identity.projectNumber,
+          location: identity.location,
+          storageClass: identity.storageClass,
+        };
+        const digestProjection = {
+          bucketName: identity.bucketName,
+          projectNumber: identity.projectNumber,
+          location: identity.location,
+          storageClass: identity.storageClass,
+          observationOperationId: identity.observationOperationId,
+          observationResponseDigest: identity.observationResponseDigest,
+          functionSourceProvenance: provenance,
+        };
+        if (identity.observationOperationId !== "storage.v1.buckets.get" ||
+            typeof identity.projectNumber !== "string" ||
+            !/^[0-9]{1,30}$/.test(identity.projectNumber) ||
+            identity.location !== "US-CENTRAL1" ||
+            typeof identity.storageClass !== "string" ||
+            identity.storageClass.length === 0 ||
+            canonical(provenance.functionIds) !==
+              canonical(expectedFunctionIds) ||
+            provenance.functionCount !== expectedFunctionIds.length ||
+            provenance.functionIdSetDigest !==
+              sha256Canonical(expectedFunctionIds) ||
+            identity.observationResponseDigest !==
+              sha256Canonical(responseProjection) ||
+            identity.bucketIdentityDigest !==
+              sha256Canonical(digestProjection)) {
+          observerFail("SOURCE_BUCKET_IDENTITY_REJECTED");
+        }
+        return identity;
+      })
+      .sort((left, right) => left.bucketName.localeCompare(right.bucketName));
+  const observedBucketNames =
+    observedBuckets.map(({bucketName}) => bucketName);
+  if (projects.length !== 1 ||
+      projects[0].name !== `projects/${PROVIDER_TARGET_PROJECT_ID}` ||
+      !Object.hasOwn(projects[0], "parentResourceName") ||
+      sourceBuckets.length !== 1 ||
+      sourceBuckets[0] !== STANDALONE_SOURCE_BUCKET_NAME ||
+      canonical(observedBucketNames) !== canonical(sourceBuckets) ||
+      observedBuckets[0]?.projectNumber !== PROVIDER_TARGET_PROJECT_NUMBER) {
+    observerFail("STANDALONE_TOPOLOGY_EVIDENCE_REJECTED");
+  }
+  try {
+    return deriveStandaloneProjectObserverProfile({
+      projectId: PROVIDER_TARGET_PROJECT_ID,
+      projectNumber: PROVIDER_TARGET_PROJECT_NUMBER,
+      projectParent: projects[0].parentResourceName,
+      observedFolderNames: hierarchy
+          .filter(({kind}) => kind === "folders")
+          .map(({name}) => name),
+      observedOrganizationNames: hierarchy
+          .filter(({kind}) => kind === "organizations")
+          .map(({name}) => name),
+      sourceBucketName: sourceBuckets[0],
+      sourceBucketOwnerProjectNumber:
+        observedBuckets[0].projectNumber,
+    });
+  } catch {
+    observerFail("STANDALONE_TOPOLOGY_EVIDENCE_REJECTED");
+  }
+}
+
 async function runRawProductionObservation(executor, preflight) {
   if (!genuineProductionExecutors.has(executor) ||
       !genuineProductionPreflightContexts.has(preflight)) {
@@ -3137,6 +3407,23 @@ async function runRawProductionObservation(executor, preflight) {
   const executedMandatoryOperationIds = [...state.executed].sort();
   const notApplicableMandatoryOperationIds =
     [...state.notApplicable.keys()].sort();
+  const topologyProfile = deriveObservedStandaloneTopologyProfile(
+      iam.hierarchy,
+      functions.records,
+      functions.bucketIdentities,
+  );
+  const operationTraceSummary = deriveOperationTraceSummary(state.trace);
+  if (canonical(operationTraceSummary.executedMandatoryOperationIds) !==
+        canonical(executedMandatoryOperationIds) ||
+      operationTraceSummary.optionalDiagnosticOperationCount !== 0 ||
+      canonical(executedMandatoryOperationIds) !==
+        canonical(topologyProfile.operationExecution
+            .executedMandatoryOperationIds) ||
+      canonical(notApplicableMandatoryOperationIds) !==
+        canonical(topologyProfile.operationExecution
+            .notApplicableMandatoryOperationIds)) {
+    observerFail("STANDALONE_OPERATION_PROFILE_REJECTED");
+  }
   const startedAtEpochMs = Math.min(
       ...state.trace.map(({observedAtEpochMs}) => observedAtEpochMs),
   );
@@ -3167,7 +3454,9 @@ async function runRawProductionObservation(executor, preflight) {
     functions,
     iam,
     scheduler,
+    topologyProfile,
     operationTrace: state.trace,
+    operationTraceSummary,
     notApplicableEvidence:
       Object.fromEntries([...state.notApplicable.entries()].sort()),
   }, "RAW_PRODUCTION_OBSERVATION");
@@ -3195,6 +3484,8 @@ async function runRawProductionObservation(executor, preflight) {
     actualMutations: 0,
     mutationOperationCount: 0,
     mutationPermissionCount: 0,
+    topologyProfile,
+    operationTraceSummary,
     executedMandatoryOperationIds,
     notApplicableMandatoryOperationIds,
     blockers: [...new Set(blockers)].sort(),
@@ -3205,6 +3496,8 @@ async function runRawProductionObservation(executor, preflight) {
       notApplicableMandatoryOperationCount:
         notApplicableMandatoryOperationIds.length,
       operationExecutionCount: state.trace.length,
+      operationUniqueOperationCount:
+        operationTraceSummary.uniqueOperationCount,
       functionCount: functions.functionCount,
       guardedFunctionCount: functions.guardedFunctionCount,
       schedulerJobCount: scheduler.jobCount,
@@ -3222,11 +3515,16 @@ async function runRawProductionObservation(executor, preflight) {
     digests: {
       rawObservationDigest: sha256Canonical(rawObservation),
       operationTraceDigest: sha256Canonical(state.trace),
+      operationTraceOperationSetDigest:
+        operationTraceSummary.operationIdSetDigest,
+      operationTraceCountDigest:
+        operationTraceSummary.perOperationTraceCountDigest,
       rulesDigest: sha256Canonical(rules),
       functionsDigest: functions.inventoryDigest,
       iamDigest: iam.digest,
       iamBindingSetDigest: iam.bindingSetDigest,
       schedulerDigest: scheduler.digest,
+      topologyProfileDigest: topologyProfile.profileDigest,
     },
     rawObservation,
   });
@@ -3290,8 +3588,10 @@ function assertMockRawObservationSemantics(value) {
     "iam",
     "notApplicableEvidence",
     "operationTrace",
+    "operationTraceSummary",
     "rules",
     "scheduler",
+    "topologyProfile",
   ];
   if (canonical(Object.keys(raw).sort()) !==
       canonical(expectedRawKeys.sort())) {
@@ -3303,6 +3603,8 @@ function assertMockRawObservationSemantics(value) {
     ["MOCK_RAW_IAM", raw.iam],
     ["MOCK_RAW_SCHEDULER", raw.scheduler],
     ["MOCK_RAW_NOT_APPLICABLE", raw.notApplicableEvidence],
+    ["MOCK_RAW_OPERATION_TRACE_SUMMARY", raw.operationTraceSummary],
+    ["MOCK_RAW_TOPOLOGY_PROFILE", raw.topologyProfile],
   ]) assertRecord(item, label);
   for (const [label, item, keys] of [
     [
@@ -3323,7 +3625,14 @@ function assertMockRawObservationSemantics(value) {
     [
       "MOCK_RAW_FUNCTIONS",
       raw.functions,
-      ["functionCount", "guardedFunctionCount", "inventoryDigest", "records"],
+      [
+        "bucketIdentities",
+        "functionCount",
+        "guardedFunctionCount",
+        "inventoryDigest",
+        "records",
+        "sourceBucketIdentitySetDigest",
+      ],
     ],
     [
       "MOCK_RAW_IAM",
@@ -3362,6 +3671,7 @@ function assertMockRawObservationSemantics(value) {
     ],
   ]) assertExactOrSubsetKeys(item, keys, keys, label);
   for (const [label, array] of [
+    ["MOCK_RAW_FUNCTION_BUCKET_IDENTITIES", raw.functions.bucketIdentities],
     ["MOCK_RAW_FUNCTION_RECORDS", raw.functions.records],
     ["MOCK_RAW_IAM_HIERARCHY", raw.iam.hierarchy],
     ["MOCK_RAW_IAM_POLICIES", raw.iam.policies],
@@ -3392,6 +3702,22 @@ function assertMockRawObservationSemantics(value) {
     analyses: raw.iam.cloudAssetAnalyses,
     denyPolicies: raw.iam.denyPolicies,
   });
+  const topologyProfile = deriveObservedStandaloneTopologyProfile(
+      raw.iam.hierarchy,
+      raw.functions.records,
+      raw.functions.bucketIdentities,
+  );
+  const sortedBucketIdentities = [...raw.functions.bucketIdentities]
+      .sort((left, right) => left.bucketName.localeCompare(right.bucketName));
+  const sourceBucketIdentitySetDigest =
+    computeSourceBucketIdentitySetDigest(sortedBucketIdentities);
+  const functionInventoryDigest = sha256Canonical({
+    bucketIdentities: sortedBucketIdentities,
+    records: raw.functions.records,
+    sourceBucketIdentitySetDigest,
+  });
+  const operationTraceSummary =
+    deriveOperationTraceSummary(raw.operationTrace);
   const iamDigestProjection = {
     resources: raw.iam.hierarchy,
     policies: raw.iam.policies,
@@ -3406,7 +3732,9 @@ function assertMockRawObservationSemantics(value) {
   };
   if (value.digests.rulesDigest !== sha256Canonical(raw.rules) ||
       raw.functions.inventoryDigest !==
-        sha256Canonical(raw.functions.records) ||
+        functionInventoryDigest ||
+      raw.functions.sourceBucketIdentitySetDigest !==
+        sourceBucketIdentitySetDigest ||
       value.digests.functionsDigest !== raw.functions.inventoryDigest ||
       raw.iam.digest !== sha256Canonical(iamDigestProjection) ||
       value.digests.iamDigest !== raw.iam.digest ||
@@ -3414,6 +3742,9 @@ function assertMockRawObservationSemantics(value) {
       raw.iam.bindingSetDigest !== iamUniverse.bindingSetDigest ||
       raw.iam.resourceUniverseDigest !==
         iamUniverse.resourceUniverseDigest ||
+      canonical(raw.topologyProfile) !== canonical(topologyProfile) ||
+      canonical(value.topologyProfile) !== canonical(topologyProfile) ||
+      value.digests.topologyProfileDigest !== topologyProfile.profileDigest ||
       canonical(raw.iam.bindings) !== canonical(iamUniverse.bindings) ||
       canonical(raw.iam.writableBindings) !==
         canonical(iamUniverse.writableBindings) ||
@@ -3430,7 +3761,20 @@ function assertMockRawObservationSemantics(value) {
       value.digests.schedulerDigest !== raw.scheduler.digest ||
       value.digests.operationTraceDigest !==
         sha256Canonical(raw.operationTrace) ||
+      canonical(raw.operationTraceSummary) !==
+        canonical(operationTraceSummary) ||
+      canonical(value.operationTraceSummary) !==
+        canonical(operationTraceSummary) ||
+      canonical(value.executedMandatoryOperationIds) !==
+        canonical(operationTraceSummary.executedMandatoryOperationIds) ||
+      operationTraceSummary.optionalDiagnosticOperationCount !== 0 ||
+      value.digests.operationTraceOperationSetDigest !==
+        operationTraceSummary.operationIdSetDigest ||
+      value.digests.operationTraceCountDigest !==
+        operationTraceSummary.perOperationTraceCountDigest ||
       value.counts.operationExecutionCount !== raw.operationTrace.length ||
+      value.counts.operationUniqueOperationCount !==
+        operationTraceSummary.uniqueOperationCount ||
       value.counts.functionCount !== raw.functions.records.length ||
       value.counts.iamBindingCount !== raw.iam.bindings.length ||
       value.counts.iamRoleCount !== raw.iam.roles.length ||
@@ -3494,6 +3838,7 @@ function assertCanonicalMockObservation(value) {
     "mutationOperationCount",
     "mutationPermissionCount",
     "notApplicableMandatoryOperationIds",
+    "operationTraceSummary",
     "paginationComplete",
     "policyAnalysisComplete",
     "projectId",
@@ -3505,6 +3850,7 @@ function assertCanonicalMockObservation(value) {
     "schemaVersion",
     "stale",
     "startedAtEpochMs",
+    "topologyProfile",
     "unreachableResourceCount",
   ];
   if (canonical([...keys].sort()) !== canonical(expectedKeys.sort())) {
@@ -3568,6 +3914,14 @@ function assertCanonicalMockObservation(value) {
         "MANDATORY_OPERATION_COVERAGE_INCOMPLETE",
     );
   }
+  if (canonical(value.executedMandatoryOperationIds) !==
+        canonical(STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .executedMandatoryOperationIds) ||
+      canonical(value.notApplicableMandatoryOperationIds) !==
+        canonical(STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .notApplicableMandatoryOperationIds)) {
+    observerFail("STANDALONE_OPERATION_PROFILE_REJECTED");
+  }
   assertRecord(value.counts, "MOCK_OBSERVATION_COUNTS");
   assertRecord(value.digests, "MOCK_OBSERVATION_DIGESTS");
   assertRecord(value.rawObservation, "MOCK_RAW_OBSERVATION");
@@ -3582,6 +3936,7 @@ function assertCanonicalMockObservation(value) {
     "mandatoryOperationCount",
     "notApplicableMandatoryOperationCount",
     "operationExecutionCount",
+    "operationUniqueOperationCount",
     "schedulerJobCount",
     "serviceAccountCount",
     "unknownIamPrincipalCount",
@@ -3594,10 +3949,13 @@ function assertCanonicalMockObservation(value) {
     "functionsDigest",
     "iamBindingSetDigest",
     "iamDigest",
+    "operationTraceCountDigest",
     "operationTraceDigest",
+    "operationTraceOperationSetDigest",
     "rawObservationDigest",
     "rulesDigest",
     "schedulerDigest",
+    "topologyProfileDigest",
   ];
   if (canonical(Object.keys(value.counts).sort()) !==
         canonical(expectedCountKeys.sort()) ||
@@ -3746,7 +4104,17 @@ export function deriveProductionObserverArtifacts({
       preflight.contracts?.providerOperationDescriptorSetDigest !==
         PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST ||
       preflight.contracts?.effectiveMandatoryPermissionContractDigest !==
-        EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST) {
+        EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST ||
+      preflight.contracts?.topologyProfileDigest !==
+        STANDALONE_PROJECT_OBSERVER_PROFILE.profileDigest ||
+      preflight.contracts?.observerPrincipalPolicyDigest !==
+        OBSERVER_PRINCIPAL_POLICY.policyDigest ||
+      canonical(preflight.topologyProfile) !==
+        canonical(STANDALONE_PROJECT_OBSERVER_PROFILE) ||
+      canonical(preflight.observerPrincipalPolicy) !==
+        canonical(OBSERVER_PRINCIPAL_POLICY) ||
+      canonical(observation.topologyProfile) !==
+        canonical(STANDALONE_PROJECT_OBSERVER_PROFILE)) {
     observerFail("ARTIFACT_PREFLIGHT_REJECTED");
   }
   const blockers = deriveBlockers(observation, observedAtEpochMs);
@@ -3795,6 +4163,9 @@ export function deriveProductionObserverArtifacts({
     optionalDiagnosticStatus: optional.status,
     blockerCount: blockers.length,
     counts: {...observation.counts},
+    operationTraceSummary: observation.operationTraceSummary,
+    sourceBucketIdentities:
+      observation.rawObservation.functions.bucketIdentities,
     digests: {
       rawObservationDigest: sha256Canonical(observation.rawObservation),
       providerObservationDigest: sha256Canonical({
@@ -3811,6 +4182,7 @@ export function deriveProductionObserverArtifacts({
           observation.executedMandatoryOperationIds,
         notApplicableMandatoryOperationIds:
           observation.notApplicableMandatoryOperationIds,
+        topologyProfile: observation.topologyProfile,
         rawObservation: observation.rawObservation,
       }),
       releaseSha: preflight.arguments.releaseSha,
@@ -3825,6 +4197,17 @@ export function deriveProductionObserverArtifacts({
       readonlyPermissionManifestDigest: READONLY_PERMISSION_MANIFEST_DIGEST,
       effectiveMandatoryPermissionContractDigest:
         EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
+      topologyProfileDigest:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.profileDigest,
+      topologyEvidenceDigest:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.topologyEvidenceDigest,
+      operationExecutionDigest:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecutionDigest,
+      effectivePermissionProfileDigest:
+        STANDALONE_PROJECT_OBSERVER_PROFILE
+            .effectivePermissionProfileDigest,
+      observerPrincipalPolicyDigest:
+        OBSERVER_PRINCIPAL_POLICY.policyDigest,
       reviewedSourceDigest:
         EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
       reviewedEvidenceSetDigest: REVIEWED_EVIDENCE_SET_DIGEST,
@@ -3848,18 +4231,41 @@ export function deriveProductionObserverArtifacts({
       providerOperationAllowlistVersion: PROVIDER_OPERATION_ALLOWLIST_VERSION,
       providerAdapterContractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
       readonlyPermissionManifestVersion: READONLY_PERMISSION_MANIFEST_VERSION,
+      topologyProfileVersion:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileVersion,
+      topologyProfileId:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileId,
+      operationExecutionProfileVersion:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+            .operationExecutionProfileVersion,
+      effectivePermissionProfileVersion:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+            .permissionProfileVersion,
+      observerPrincipalPolicyVersion:
+        OBSERVER_PRINCIPAL_POLICY.policyVersion,
       providerTransport: PROVIDER_TRANSPORT,
       providerAuthDependency: PROVIDER_AUTH_DEPENDENCY,
       providerHttpRuntime: PROVIDER_HTTP_RUNTIME,
     },
     permissions: {
       required:
-        EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions,
-      conditional:
-        EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.conditionalPermissions,
+        STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+            .effectiveRequiredPermissions,
+      reviewedConditional:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+            .reviewedConditionalPermissions,
       auxiliary:
-        EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.auxiliaryPermissions,
+        STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+            .effectiveAuxiliaryPermissions,
+      effectiveRole:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+            .effectiveRolePermissions,
+      excluded:
+        STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+            .excludedRolePermissions,
     },
+    topologyProfile: STANDALONE_PROJECT_OBSERVER_PROFILE,
+    observerPrincipalPolicy: OBSERVER_PRINCIPAL_POLICY,
   };
   const sensitive = {
     schemaVersion: PRODUCTION_OBSERVER_SCHEMA_VERSION,
@@ -3871,6 +4277,11 @@ export function deriveProductionObserverArtifacts({
       observation.executedMandatoryOperationIds,
     notApplicableMandatoryOperationIds:
       observation.notApplicableMandatoryOperationIds,
+    operationTraceSummary: observation.operationTraceSummary,
+    sourceBucketIdentities:
+      observation.rawObservation.functions.bucketIdentities,
+    topologyProfile: STANDALONE_PROJECT_OBSERVER_PROFILE,
+    observerPrincipalPolicy: OBSERVER_PRINCIPAL_POLICY,
     optionalDiagnostic: optional,
     rawObservation: observation.rawObservation,
   };
@@ -3885,7 +4296,6 @@ function assertCredentialMaterialAbsent(value, credentialPath, credential) {
     credentialPath,
     ...Object.entries(credential ?? {})
         .filter(([key]) => [
-          "client_email",
           "client_id",
           "client_x509_cert_url",
           "private_key",

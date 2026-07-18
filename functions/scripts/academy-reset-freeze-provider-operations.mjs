@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
 
 export const PROVIDER_OPERATION_ALLOWLIST_VERSION =
-  "academy_reset_freeze_provider_operations.v5";
+  "academy_reset_freeze_provider_operations.v6";
 export const PROVIDER_ADAPTER_CONTRACT_VERSION =
-  "academy_reset_freeze_provider_adapter.v5";
+  "academy_reset_freeze_provider_adapter.v6";
 export const PROVIDER_OPERATION_CLASSIFICATION_VERSION =
-  "academy_reset_freeze_operation_classification.v1";
+  "academy_reset_freeze_operation_classification.v2";
 export const PROVIDER_TRANSPORT = "google_auth_library_native_fetch_v1";
 export const PROVIDER_AUTH_DEPENDENCY = "google-auth-library@10.6.2";
 export const PROVIDER_HTTP_RUNTIME = "node24_native_fetch";
@@ -528,6 +528,34 @@ const operations = [
     ...resourceResponse("id"),
   }),
   descriptor({
+    operationId: "storage.v1.buckets.get",
+    apiFamily: "storage",
+    apiVersion: "v1",
+    host: "https://storage.googleapis.com",
+    pathTemplate: "/storage/v1/b/{bucket}",
+    pathParams: pathParams({
+      bucket: scalar("string", {
+        pattern: "^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$",
+        minLength: 3,
+        maxLength: 222,
+        binding: "approved_storage_source_bucket",
+        encoding: "path_segment",
+      }),
+    }),
+    query: query({
+      projection: scalar("string", {
+        const: "noAcl",
+        binding: "contract_literal",
+      }),
+    }, ["projection"]),
+    responseSchema: "storage.v1.Bucket",
+    ...resourceResponse("name", {
+      projectNumber: responseField("string", {minLength: 1}),
+      location: responseField("string", {minLength: 1}),
+      storageClass: responseField("string", {minLength: 1}),
+    }),
+  }),
+  descriptor({
     operationId: "storage.v1.objects.getMetadata",
     apiFamily: "storage",
     apiVersion: "v1",
@@ -1025,7 +1053,7 @@ export function computeProviderOperationIdSetDigest(operationIds) {
 }
 
 export const EXPECTED_PROVIDER_MANDATORY_OPERATION_IDS_DIGEST =
-  "e139a1144665acc246298b358a3bfbb98e0acbee0c509e3a8f2a93f2a01ba8f4";
+  "acee45a37aea22392a016913a0cd6e8392a017fafdfe04c2c1550c113acd9327";
 export const EXPECTED_PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS_DIGEST =
   "4b152b183bd0cde66744b0d58dda6af4672d3eeb8208fe0346ffb90f9ccdbad3";
 export const PROVIDER_MANDATORY_OPERATION_IDS_DIGEST =
@@ -1066,7 +1094,7 @@ export function computeProviderOperationClassificationDigest(
 }
 
 export const EXPECTED_PROVIDER_OPERATION_CLASSIFICATION_DIGEST =
-  "d1dbc846912482625f6d3bfb405b26013a4bcd7bd0bac3c1bab877a6db9647da";
+  "45d609e3d0b4f0a2c413b8e8437a6d4c8187c8463415008e478ffc28f7f510d5";
 export const PROVIDER_OPERATION_CLASSIFICATION_DIGEST =
   computeProviderOperationClassificationDigest();
 
@@ -1114,7 +1142,7 @@ export function assertProviderOperationClassification(
       classification.operationCount !== PROVIDER_OPERATION_COUNT ||
       classification.mandatoryOperationCount !== mandatoryIds.length ||
       classification.optionalDiagnosticOperationCount !== optionalIds.length ||
-      classification.mandatoryOperationCount !== 28 ||
+      classification.mandatoryOperationCount !== 29 ||
       classification.optionalDiagnosticOperationCount !== 1 ||
       JSON.stringify(combinedIds) !== JSON.stringify(PROVIDER_OPERATION_IDS) ||
       JSON.stringify(mandatoryIds) !==
@@ -1186,7 +1214,7 @@ export function computeProviderOperationDescriptorSetDigest(
 }
 
 export const EXPECTED_PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST =
-  "3598e2bbb141497d2cfe21a867b58ad5794401fc5bf599a81d4a5bcbdd09b47d";
+  "7807e7c68a5995cae008587d0e93748f34c00ec575cbc189f8d6a64c6230a52d";
 export const PROVIDER_OPERATION_DESCRIPTOR_SET_DIGEST =
   computeProviderOperationDescriptorSetDigest();
 
@@ -1359,6 +1387,14 @@ export function assertProviderOperationRegistry(
           JSON.stringify(operation.query.required) !==
             JSON.stringify(["generation"]))) {
       throw new Error("Storage metadata query contract mismatch");
+    }
+    if (operationId === "storage.v1.buckets.get" &&
+        (JSON.stringify(Object.keys(operation.query.properties).sort()) !==
+          JSON.stringify(["projection"]) ||
+          JSON.stringify(operation.query.required) !==
+            JSON.stringify(["projection"]) ||
+          operation.query.properties.projection.const !== "noAcl")) {
+      throw new Error("Storage bucket query contract mismatch");
     }
     if (operationId === "storage.v1.objects.getMedia" &&
         (JSON.stringify(Object.keys(operation.query.properties).sort()) !==

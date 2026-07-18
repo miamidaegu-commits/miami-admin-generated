@@ -8,49 +8,49 @@ sentinel 활성화, probe, planner, reset, unfreeze를 실행하거나 구현하
 
 ## Fail-closed 고정값
 
-- contract/proof: `academy_reset_write_freeze.v4` /
-  `academy_reset_write_freeze_proof.v4`
-- Observation Contract: `academy_reset_provider_observation.v4`
+- contract/proof: `academy_reset_write_freeze.v5` /
+  `academy_reset_write_freeze_proof.v5`
+- Observation Contract: `academy_reset_provider_observation.v5`
 - deployment approval/provider dependency:
-  `academy_reset_deployment_approval.v4` /
-  `academy_reset_provider_dependency.v4`
+  `academy_reset_deployment_approval.v5` /
+  `academy_reset_provider_dependency.v5`
 - project/academy: `daegu-miami-production` / `academy_daegumiami`
 - Functions: `us-central1`, `GEN_2`, 35개 exact deployed function set과 별도의
   26개 exact guarded export set
 - provider adapter ID/contract:
   `gcp_immutable_resource_observer.v1` /
-  `academy_reset_freeze_provider_adapter.v5`
+  `academy_reset_freeze_provider_adapter.v6`
 - Stage A provider operation registry:
-  `academy_reset_freeze_provider_operations.v5`, exact 29 operations,
+  `academy_reset_freeze_provider_operations.v6`, exact 30 operations,
   descriptor-set SHA-256
-  `3598e2bbb141497d2cfe21a867b58ad5794401fc5bf599a81d4a5bcbdd09b47d`
+  `7807e7c68a5995cae008587d0e93748f34c00ec575cbc189f8d6a64c6230a52d`
 - operation classification:
-  `academy_reset_freeze_operation_classification.v1`; 필수 28개와 선택 진단 1개,
+  `academy_reset_freeze_operation_classification.v2`; 필수 29개와 선택 진단 1개,
   mandatory-set SHA-256
-  `e139a1144665acc246298b358a3bfbb98e0acbee0c509e3a8f2a93f2a01ba8f4`,
+  `acee45a37aea22392a016913a0cd6e8392a017fafdfe04c2c1550c113acd9327`,
   optional-set SHA-256
   `4b152b183bd0cde66744b0d58dda6af4672d3eeb8208fe0346ffb90f9ccdbad3`,
   classification SHA-256
-  `d1dbc846912482625f6d3bfb405b26013a4bcd7bd0bac3c1bab877a6db9647da`
+  `45d609e3d0b4f0a2c413b8e8437a6d4c8187c8463415008e478ffc28f7f510d5`
 - read-only permission manifest:
-  `academy_reset_freeze_readonly_permissions.v1`, SHA-256
-  `02d0f6591b804d37e2681a710a3f7877d9ab7fc0bd98fa4c0a9a028609dafb0d`;
+  `academy_reset_freeze_readonly_permissions.v2`, SHA-256
+  `73cb701e479a2dc63996ad71c278ddc2b68df3cebcb04ba77cbc609e3de8679a`;
   reviewed-evidence SHA-256
-  `85499a91b7b132ba35d50f4c2c24b828f1c45dc432b02d72c4bc636621e520df`,
+  `9b72f1f8be2800b93174d500a1b5e60d950e7748168c38ce2ca02ca666aeb301`,
   official-evidence SHA-256
-  `430121569a9a4711ecb51461fa387fdb547993f0b7bd55eac527081470b44e37`,
+  `8f3b4b2797483f4581a3cd0e58c66efa54b4726470bfcc2bfa5c2989085d3e80`,
   research-artifact SHA-256
   `92c38c6007050d5427fafb8a4d09c8963592f492e7bc29345281055ed64be704`,
   effective mandatory permission contract SHA-256
-  `a2d077f153d7696f1351ce74db21a2d898c094fb6772bb61d8b920110d88e01d`
+  `957f28b97f279a58f43ad7e4b4b4e74d90610a4329753f92159aff6e6e4b57c2`
 - freeze window: 최대 3600초
 - writer source: registry의 literal SHA-256 pin 21개
 - reset collection: 29개
 - 누락, extra, duplicate, stale, unknown, target mismatch는 상태가 disabled 또는
   read-only처럼 보여도 거부한다.
 
-29개 registry operation은 실행 완전성에서 동일한 지위를 갖지 않는다.
-필수 28개만 provider observation과 IAM raw analysis의 근거다. Policy
+30개 registry operation은 실행 완전성에서 동일한 지위를 갖지 않는다.
+필수 29개만 provider observation과 IAM raw analysis의 근거다. Policy
 Troubleshooter `iam:troubleshoot`는 선택 진단 1개이며 누락돼도
 `providerObservationComplete`에 실패하지 않는다. 실행되더라도 mandatory operation을
 대체할 수 없고 policy analysis 또는 write-freeze proof 입력이 아니다.
@@ -320,20 +320,20 @@ dependency provenance는 다음 단일 전략만 승인한다.
 - transport: `google_auth_library_native_fetch_v1`
 - auth dependency: `google-auth-library@10.6.2`
 - HTTP runtime: `node24_native_fetch`
-- adapter contract: `academy_reset_freeze_provider_adapter.v5`
+- adapter contract: `academy_reset_freeze_provider_adapter.v6`
 - no-mutation operation count: `0`
 
 `firebase_cli_private`, transitive-only dependency, private API, unknown 전략은
-거부한다. Stage B transport는 v5 registry의 exact 29개 public
+거부한다. Stage B transport는 v6 registry의 exact 30개 public
 read/semantic-read operation
 allowlist만 사용할 수 있다. renderer-ready path placeholder, target project/region,
 lineage binding, path encoding, query serialization을 임의 caller 값으로 우회할 수
-없다. 이 29개는 필수 28개와 선택 진단 1개의 immutable classification partition으로
+없다. 이 30개는 필수 29개와 선택 진단 1개의 immutable classification partition으로
 검증한다. Policy Troubleshooter의 target 없는 `iam:troubleshoot` POST는
 `fullResourceName`을 승인/관찰 resource inventory에, `principal`을 승인 IAM
 principal/group lineage에, `permission`을 검토된 permission universe에 각각
 결합해야 하지만 선택 진단일 뿐이다. adapter source digest, lock digest,
-strategy/module/operation set/version/digest, classification version/digest/28+1
+strategy/module/operation set/version/digest, classification version/digest/29+1
 count와 permission manifest version/digest/evidence/research SHA/effective set/source
 linkage는 approval receipt에 먼저 승인되고 provider dependency observation과 exact
 결합되어야 한다.
@@ -374,7 +374,7 @@ SHA-256 및 canonical aggregate digest를 approval metadata/session/observation/
 제외하고, exact 11개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
 확인한 뒤 bytes SHA-256와 literal pin 및 aggregate를 다시 계산한다.
 현재 reviewed-source aggregate는
-`03f08247262a309df62368d65defe7a0b6551fe6bb2db8e8a16b97a4162aea9c`이다.
+`92a7e7e6a2d78542c31a40c608b58a5fce0be1b52d9bdfea9b039c3bd481fe82`이다.
 
 증명용 runtime context는 동일한 canonical repository root에서 genuine mock
 adapter/result와 reviewed-source identity를 검증한 뒤, clean Git HEAD/tree,
@@ -385,12 +385,110 @@ tracked regular HEAD blobs, 안전한 index flags, runtime bytes와 HEAD bytes�
 permission manifest는 OAuth scope와 IAM permission을 구분한다. OAuth scope는 token이
 API를 호출할 수 있는 범위일 뿐 resource authorization을 증명하지 않으므로,
 mandatory operation은 공식 IAM 근거와 exact `requiredIamPermissions`가 있어야 한다.
-필수 28개의 effective contract는 required/conditional/auxiliary/OAuth exact set,
+필수 29개의 effective contract는 required/conditional/auxiliary/OAuth exact set,
 각 값에서 source operation으로 가는 linkage, official/reviewed evidence digest,
 research artifact SHA를 모두 결합한다.
 
-Cloud Storage metadata는 registry가 `projection` query를 노출하지 않아 공식 기본값
-`noAcl`로 동작한다. 따라서 `storage.objects.get`은 required이고
+### Production Observer standalone project profile
+
+Production target `daegu-miami-production` (`884850632328`)은 organization과 folder
+parent가 없는 standalone project다. canonical `projects.get` evidence의 `parent`는
+명시적 `null`이어야 하며 folder/organization observed set은 모두 empty여야 한다.
+raw API가 `parent`를 생략할 때만 provider canonicalizer가 schema 검증 후 `null`로
+변환한다. canonical evidence의 missing/undefined/string/object parent, 관찰된
+folder/organization, 다른 project/source identity는 모두 거부한다.
+
+versioned profile은
+`academy_reset_observer_topology_profile.v2` /
+`standalone_project_v1`이며 profile SHA-256은
+`c1bd5b76bbbb8a92933039ea3d0b87f7af4c1fce384bc300d6d6f0d9d436a601`,
+topology evidence SHA-256은
+`d38dc2cda3d7eaaf5c2364ccbd3938584a158efd1df21cc30f0c38111856ef3a`다.
+Functions source bucket은
+`gcf-v2-sources-884850632328-us-central1`, owner project number는 target과 같은
+`884850632328`이다. 외부 bucket이 아니므로 별도 bucket-level IAM binding은 만들지
+않는다. organization/folder role 또는 binding도 없다. owner는 bucket 이름에서
+추출하지 않는다. exact `storage.v1.buckets.get` GET
+`/storage/v1/b/{bucket}?projection=noAcl` 응답의 `name`, string `projectNumber`,
+`location`, `storageClass`를 관찰하고 Functions source provenance와 response/identity
+digest에 결합한다. `response.name` 또는 `projectNumber` 불일치, 필드 누락·null·잘못된
+타입, unknown/external bucket은 거부한다.
+
+operation registry 30개와 mandatory 29 / optional diagnostic 1 분류를 사용한다.
+standalone topology에서 mandatory partition은 exact 25 executed와 아래 exact 4
+topology-derived N/A다.
+
+- `cloudresourcemanager.v3.folders.get`
+- `cloudresourcemanager.v3.folders.getIamPolicy`
+- `cloudresourcemanager.v3.organizations.get`
+- `cloudresourcemanager.v3.organizations.getIamPolicy`
+
+caller가 N/A set/count/digest를 지정할 수 없다. verifier는 canonical topology에서
+이를 다시 파생하며 executed와 N/A의 union은 mandatory 29 exact set, intersection은
+empty여야 한다. executed set SHA-256은
+`34f8fcb0fc9d8895cab49aac1ef6177b18f1445c009a792a35f8224ed7f76823`,
+N/A set SHA-256은
+`383d5dfd23dad6192b81e289645bf1a5d7b26897cd7b4ab0658781bb46b86ea8`다.
+operation execution profile version은
+`academy_reset_observer_operation_execution.v2`, 전체 profile SHA-256은
+`4a862c779772f7d8f4249c97db73d4355e99988025e980a7aa459e84469cb596`다.
+
+standalone project-level custom role은 records에서 재계산된 required 26와 auxiliary
+`serviceusage.services.use` 1개, 총 27개 exact permission만 사용한다.
+추가 required permission은 `storage.buckets.get`이다.
+`resourcemanager.folders.*`, `resourcemanager.organizations.*`,
+`storage.objects.getIamPolicy`, Policy Troubleshooter 관련 permission, mutation 및
+privilege-escalation permission은 effective role에서 제외한다.
+`storage.objects.getIamPolicy`는 reviewed conditional evidence에는 남지만 현재
+`noAcl` observer 호출과 standalone role에는 포함하지 않는다.
+required/auxiliary/effective-role set SHA-256은 각각
+`b6f7fc149537ddc6d3cce1a7dabe767e32157751f6b67fdbb2dde0e822e57916`,
+`c06c225b90be798853d9eed58bec19be14a84d026ea1432cd32984be9448d2a1`,
+`9ecb5fbe293958a368399c24f637ecc9deba49f82ad155cf4ab24a759621f099`다.
+effective permission profile version은
+`academy_reset_observer_permission_profile.v2`, 전체 profile SHA-256은
+`0b39531d3db4174dc56551760acc82655276a2d26e010297ec929d465d4bf050`다.
+
+raw operation trace는 event count와 별도로 unique operation ID set, mandatory/optional
+partition, per-operation event count 및 각 digest를 재계산한다. trace-derived mandatory
+set은 exact 25 executed set과 같아야 한다. N/A operation, optional diagnostic 또는
+unknown operation이 mandatory coverage를 대신할 수 없다. 실제 observer는 안정성
+double-scan 때문에 같은 operation ID의 여러 bounded event를 가질 수 있으나 unique
+coverage에는 한 번만 반영한다.
+
+Observer principal policy
+`academy_reset_observer_principal.v1`의 exact identity는 다음과 같다.
+
+- service-account ID: `academy-reset-freeze-observer`
+- email:
+  `academy-reset-freeze-observer@daegu-miami-production.iam.gserviceaccount.com`
+- member:
+  `serviceAccount:academy-reset-freeze-observer@daegu-miami-production.iam.gserviceaccount.com`
+
+principal policy SHA-256은
+`e3f271d6d4eb10f4d484d496eb675ca9186b3382084b4c12a263c4cb3ca142f9`다.
+
+credential `client_email`은 trim/lowercase/domain/prefix/suffix normalization 없이
+위 email과 byte-for-byte 일치해야 한다. 기존 Firebase Admin 또는 reset
+planner/executor credential 재사용은 금지한다. key ID, `private_key_id`,
+`client_id`는 rotation을 위해 pin하지 않는다.
+
+local preflight는 target project → release/source → topology profile →
+operation/permission profile → principal policy → output security 순서로 통과한
+뒤에만 credential file을 읽는다. file security → JSON schema → credential
+`project_id` → exact `client_email` 검증 후에만 GoogleAuth를 생성할 수 있다.
+prior gate 실패 시 credential private material read, GoogleAuth creation, Provider
+call, output은 모두 0이다.
+
+이 변경은 IAM role/service account/key/binding을 생성하지 않는다. 실제 IAM
+provisioning은 후속 독립 승인 대상이다. inventory에 누락된
+`createFixedPrivateLessonAssignment`,
+`previewFixedPrivateLessonOutcomeAction`,
+`commitFixedPrivateLessonOutcomeAction` 배포도 별도 deployment gate이며 이 profile
+승인으로 허용되지 않는다.
+
+Cloud Storage object metadata는 registry가 `projection` query를 노출하지 않아 공식
+기본값 `noAcl`로 동작한다. 따라서 `storage.objects.get`은 required이고
 `storage.objects.getIamPolicy`는 ACL 반환 시에만 conditional이며 현재 mandatory
 required set에는 포함되지 않는다. Cloud Asset `analyzeIamPolicy`의
 `iam.roles.get`도 custom-role expansion이 실제 필요한 경우에만 conditional이다.
@@ -400,7 +498,9 @@ mock observation에 필요한 read-only 권한은 operation family별로 다음�
 - Rules: release/ruleset get
 - Functions/Run/Build/Storage: 시작/종료 Functions list와 각 Function get,
   시작/종료 Run services list 및 서비스별 revisions list/get, terminal
-  `SUCCESS` Build get, generation-pinned Storage metadata/media get. metadata의
+  `SUCCESS` Build get, exact noAcl Storage bucket metadata get,
+  generation-pinned Storage object metadata/media get. bucket owner/location/
+  storage class와 object metadata의
   MD5/size와 transport가 media bytes에서 계산한 MD5/SHA-256/byte length가 exact
   일치해야 한다.
 - Resource Manager/IAM: project 및 발견된 folder/org get/getIamPolicy, role 및
@@ -471,7 +571,7 @@ node functions/scripts/observe-academy-reset-freeze-production.mjs \
 
 Policy Troubleshooter는 기본 비활성이다. 요청할 때만
 `--optional-diagnostic=policytroubleshooter.v3.iam.troubleshoot`를 exact하게 추가한다.
-그 결과는 mandatory 28개 observation, `providerObservationComplete`,
+그 결과는 mandatory 29개 observation, `providerObservationComplete`,
 `policyAnalysisComplete`, proof bytes 또는 write-freeze gate를 대체하지 않는다.
 
 두 output은 current-user 소유 mode `0700` secure base 아래의 동일한 신규 고유

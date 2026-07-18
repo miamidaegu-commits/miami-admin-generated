@@ -94,6 +94,7 @@ const EXPECTED_REQUIRED_PERMISSIONS = [
   "run.services.get",
   "run.services.list",
   "serviceusage.services.get",
+  "storage.buckets.get",
   "storage.objects.get",
 ];
 const EXPECTED_OAUTH_SCOPES = [
@@ -231,10 +232,10 @@ function assertCanonicalFrozenShape(value) {
 
 test("manifest pins exact count, classifications, statuses, and key parity", () => {
   assert.equal(READONLY_PERMISSION_MANIFEST_VERSION,
-      "academy_reset_freeze_readonly_permissions.v1");
+      "academy_reset_freeze_readonly_permissions.v2");
   assert.equal(PERMISSION_RESEARCH_ARTIFACT_SHA256,
       "92c38c6007050d5427fafb8a4d09c8963592f492e7bc29345281055ed64be704");
-  assert.equal(READONLY_PERMISSION_RECORD_COUNT, 29);
+  assert.equal(READONLY_PERMISSION_RECORD_COUNT, 30);
   assert.deepEqual(READONLY_PERMISSION_OPERATION_IDS, PROVIDER_OPERATION_IDS);
   assert.deepEqual(Object.keys(READONLY_PERMISSION_REGISTRY),
       PROVIDER_OPERATION_IDS);
@@ -245,7 +246,7 @@ test("manifest pins exact count, classifications, statuses, and key parity", () 
   assert.equal(Object.getPrototypeOf(IAM_EVIDENCE_POLICY_REGISTRY), null);
   assert.equal(Object.isFrozen(IAM_EVIDENCE_POLICY_REGISTRY), true);
   assert.equal(READONLY_PERMISSION_RECORDS.filter(
-      ({evidenceStatus}) => evidenceStatus === "PROVEN").length, 28);
+      ({evidenceStatus}) => evidenceStatus === "PROVEN").length, 29);
   assert.equal(READONLY_PERMISSION_RECORDS.filter(
       ({evidenceStatus}) => evidenceStatus === "PARTIALLY_PROVEN").length, 1);
   assert.equal(READONLY_PERMISSION_RECORDS.filter(
@@ -282,7 +283,8 @@ test("reviewed evidence round-trips and preserves the existing 23 fixture", () =
   const ids = Object.keys(EXISTING_23_RECORD_DIGEST_FIXTURE).sort();
   assert.equal(ids.length, 23);
   assert.deepEqual(ids, PROVIDER_OPERATION_IDS.filter((operationId) =>
-    !FORMERLY_PARTIALLY_PROVEN_OPERATION_IDS.includes(operationId)));
+    !FORMERLY_PARTIALLY_PROVEN_OPERATION_IDS.includes(operationId) &&
+      operationId !== "storage.v1.buckets.get"));
   const projected = ids.map((operationId) => {
     const record = READONLY_PERMISSION_REGISTRY[operationId];
     assert.equal(record.reviewedContentDigest,
@@ -298,13 +300,13 @@ test("reviewed evidence round-trips and preserves the existing 23 fixture", () =
 
 test("manifest and official evidence digests are literal and reproducible", () => {
   assert.equal(REVIEWED_EVIDENCE_SET_DIGEST,
-      "85499a91b7b132ba35d50f4c2c24b828f1c45dc432b02d72c4bc636621e520df");
+      "9b72f1f8be2800b93174d500a1b5e60d950e7748168c38ce2ca02ca666aeb301");
   assert.equal(OFFICIAL_EVIDENCE_SET_DIGEST,
-      "430121569a9a4711ecb51461fa387fdb547993f0b7bd55eac527081470b44e37");
+      "8f3b4b2797483f4581a3cd0e58c66efa54b4726470bfcc2bfa5c2989085d3e80");
   assert.equal(READONLY_PERMISSION_MANIFEST_DIGEST,
       EXPECTED_READONLY_PERMISSION_MANIFEST_DIGEST);
   assert.equal(computeReadonlyPermissionManifestDigest(),
-      "02d0f6591b804d37e2681a710a3f7877d9ab7fc0bd98fa4c0a9a028609dafb0d");
+      "73cb701e479a2dc63996ad71c278ddc2b68df3cebcb04ba77cbc609e3de8679a");
 });
 
 test("Cloud Asset, Resource Manager, and Troubleshooter are exact", () => {
@@ -337,6 +339,7 @@ test("Cloud Asset, Resource Manager, and Troubleshooter are exact", () => {
 });
 
 test("Storage permissions match exact descriptor behavior", () => {
+  const bucket = READONLY_PERMISSION_REGISTRY["storage.v1.buckets.get"];
   const media = READONLY_PERMISSION_REGISTRY["storage.v1.objects.getMedia"];
   const metadata =
     READONLY_PERMISSION_REGISTRY["storage.v1.objects.getMetadata"];
@@ -344,6 +347,12 @@ test("Storage permissions match exact descriptor behavior", () => {
     PROVIDER_OPERATION_REGISTRY["storage.v1.objects.getMedia"];
   const metadataDescriptor =
     PROVIDER_OPERATION_REGISTRY["storage.v1.objects.getMetadata"];
+  const bucketDescriptor =
+    PROVIDER_OPERATION_REGISTRY["storage.v1.buckets.get"];
+  assert.deepEqual(bucket.requiredIamPermissions, ["storage.buckets.get"]);
+  assert.deepEqual(bucket.conditionalPermissions, []);
+  assert.equal(bucketDescriptor.query.properties.projection.const, "noAcl");
+  assert.deepEqual(bucketDescriptor.query.required, ["projection"]);
   assert.deepEqual(media.requiredIamPermissions, ["storage.objects.get"]);
   assert.deepEqual(media.conditionalPermissions, []);
   assert.equal(mediaDescriptor.query.properties.alt.const, "media");
@@ -364,16 +373,16 @@ test("effective mandatory contract has exact sets, counts, and linkage", () => {
   assert.equal(contract.contractDigest,
       EXPECTED_EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST);
   assert.equal(EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
-      "a2d077f153d7696f1351ce74db21a2d898c094fb6772bb61d8b920110d88e01d");
+      "957f28b97f279a58f43ad7e4b4b4e74d90610a4329753f92159aff6e6e4b57c2");
   assert.equal(contract.providerOperationClassificationVersion,
       PROVIDER_OPERATION_CLASSIFICATION_VERSION);
   assert.equal(contract.providerMandatoryOperationSetDigest,
       PROVIDER_MANDATORY_OPERATION_SET_DIGEST);
   assert.equal(contract.providerOptionalDiagnosticOperationSetDigest,
       PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_SET_DIGEST);
-  assert.equal(contract.mandatoryOperationCount, 28);
+  assert.equal(contract.mandatoryOperationCount, 29);
   assert.equal(contract.optionalDiagnosticOperationCount, 1);
-  assert.equal(contract.requiredPermissionCount, 29);
+  assert.equal(contract.requiredPermissionCount, 30);
   assert.equal(contract.conditionalPermissionCount, 2);
   assert.equal(contract.auxiliaryPermissionCount, 1);
   assert.equal(contract.oauthScopeCount, 15);
@@ -387,6 +396,10 @@ test("effective mandatory contract has exact sets, counts, and linkage", () => {
   assert.equal(contract.requiredIamPermissions.includes("groups.read"), false);
   assert.equal(contract.requiredIamPermissions
       .includes("storage.objects.getIamPolicy"), false);
+  assert.deepEqual(
+      contract.sourceOperations.requiredIamPermissions["storage.buckets.get"],
+      ["storage.v1.buckets.get"],
+  );
   assert.deepEqual(
       contract.sourceOperations.requiredIamPermissions["storage.objects.get"],
       ["storage.v1.objects.getMedia", "storage.v1.objects.getMetadata"],
@@ -647,7 +660,7 @@ test("literal metadata and candidate contract tampering fails closed", () => {
   assert.throws(() => assertReadonlyPermissionManifest(
       READONLY_PERMISSION_REGISTRY,
       PROVIDER_OPERATION_REGISTRY,
-      {manifestVersion: "academy_reset_freeze_readonly_permissions.v2"},
+      {manifestVersion: "academy_reset_freeze_readonly_permissions.v1"},
   ));
   assert.throws(() => assertReadonlyPermissionManifest(
       READONLY_PERMISSION_REGISTRY,

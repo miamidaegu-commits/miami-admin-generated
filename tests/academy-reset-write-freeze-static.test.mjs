@@ -376,10 +376,10 @@ test("no freeze activation, IAM mutation, or reset executor is implemented", () 
   }
 });
 
-test("permission manifest preserves mandatory 28 plus optional diagnostic", () => {
-  assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 28);
+test("permission manifest preserves mandatory 29 plus optional diagnostic", () => {
+  assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 29);
   assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT, 1);
-  assert.equal(PROVIDER_MANDATORY_OPERATION_IDS.length, 28);
+  assert.equal(PROVIDER_MANDATORY_OPERATION_IDS.length, 29);
   assert.deepEqual(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS, [
     "policytroubleshooter.v3.iam.troubleshoot",
   ]);
@@ -395,7 +395,7 @@ test("permission manifest preserves mandatory 28 plus optional diagnostic", () =
   );
   assert.equal(
       EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.mandatoryOperationCount,
-      28,
+      29,
   );
   assert.equal(
       EFFECTIVE_MANDATORY_PERMISSION_CONTRACT
@@ -467,9 +467,9 @@ test("permission integration adds no Production observer or mutation path", () =
   }
 });
 
-test("runbook binds manifest and 28 plus 1 non-proof semantics", () => {
+test("runbook binds manifest and 29 plus 1 non-proof semantics", () => {
   for (const required of [
-    "필수 28개",
+    "필수 29개",
     "선택 진단 1개",
     "Policy Troubleshooter",
     "proof 입력이 아니다",

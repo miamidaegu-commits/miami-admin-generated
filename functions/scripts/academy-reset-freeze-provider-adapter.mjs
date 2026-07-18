@@ -424,6 +424,18 @@ async function observeFunctionBoundary(session) {
     addLineage(session, "approved_storage_source_object", [source.object]);
     addLineage(session, "approved_storage_source_generation",
         [source.generation]);
+    const bucketResult = await execute(session, {
+      operationId: "storage.v1.buckets.get",
+      pathParams: {bucket: source.bucket},
+      query: {projection: "noAcl"},
+    });
+    if (bucketResult.response.name !== source.bucket ||
+        bucketResult.response.projectNumber !== EXPECTED_PROJECT_NUMBER ||
+        bucketResult.response.location !== "US-CENTRAL1" ||
+        typeof bucketResult.response.storageClass !== "string" ||
+        bucketResult.response.storageClass.length === 0) {
+      fail("STORAGE_BUCKET_IDENTITY_MISMATCH");
+    }
     const storagePath = {bucket: source.bucket, object: source.object};
     const metadataResult = await execute(session, {
       operationId: "storage.v1.objects.getMetadata",
@@ -484,6 +496,7 @@ async function observeFunctionBoundary(session) {
       runService: serviceResult.response,
       runRevision: revisionResult.response,
       build: buildResult.response,
+      storageBucket: bucketResult.response,
       storageMetadata: metadataResult.response,
       storageMedia: {
         byteLength: mediaResult.media.byteLength,

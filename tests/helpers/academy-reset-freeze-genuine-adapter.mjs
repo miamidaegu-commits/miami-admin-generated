@@ -186,6 +186,13 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
         size: fn.providerSourceIdentity.size,
       };
     }
+    case "storage.v1.buckets.get":
+      return {
+        name: pathParams.bucket,
+        projectNumber: EXPECTED_PROJECT_NUMBER,
+        location: "US-CENTRAL1",
+        storageClass: "STANDARD",
+      };
     case "storage.v1.objects.getMedia":
       return new Uint8Array([1]);
     case "cloudresourcemanager.v3.projects.get":

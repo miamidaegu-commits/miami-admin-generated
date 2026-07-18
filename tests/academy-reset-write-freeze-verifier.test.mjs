@@ -25,6 +25,7 @@ import {
   IAM_PRINCIPAL_POLICY_SCHEMA,
   IAM_EVIDENCE_FAMILY_NAMES,
   OBSERVATION_COMPLETENESS_VERSION,
+  OBSERVER_PRINCIPAL_POLICY,
   PROVIDER_ADAPTER_METADATA,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
@@ -42,6 +43,7 @@ import {
   REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS,
   ROLLBACK_UNFREEZE_ORDER,
   SCHEDULER_JOB_ALLOWLIST,
+  STANDALONE_PROJECT_OBSERVER_PROFILE,
   UNFREEZE_ORDER,
   WRITABLE_PERMISSION_DERIVATION_VERSION,
   WRITER_DRAIN_CLASSES,
@@ -808,9 +810,9 @@ function deepFreezeFixture(value, seen = new Set()) {
   return Object.freeze(value);
 }
 
-test("operation classification and permission manifest bind exact 28+1 sets",
+test("operation classification and permission manifest bind exact 29+1 sets",
     () => {
-      assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 28);
+      assert.equal(PROVIDER_MANDATORY_OPERATION_COUNT, 29);
       assert.equal(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_COUNT, 1);
       assert.deepEqual(PROVIDER_OPTIONAL_DIAGNOSTIC_OPERATION_IDS, [
         "policytroubleshooter.v3.iam.troubleshoot",
@@ -848,7 +850,7 @@ test("operation classification and permission manifest bind exact 28+1 sets",
           computeReadonlyPermissionManifestDigest(),
           READONLY_PERMISSION_MANIFEST_DIGEST,
       );
-      assert.equal(READONLY_PERMISSION_RECORDS.length, 29);
+      assert.equal(READONLY_PERMISSION_RECORDS.length, 30);
       assert.doesNotThrow(() => assertProviderOperationClassification());
       assert.doesNotThrow(() => assertReadonlyPermissionManifest());
       assert.doesNotThrow(() =>
@@ -863,7 +865,7 @@ test("operation classification and permission manifest bind exact 28+1 sets",
       );
       assert.equal(
           EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.mandatoryOperationCount,
-          28,
+          29,
       );
       assert.equal(
           EFFECTIVE_MANDATORY_PERMISSION_CONTRACT
@@ -889,7 +891,7 @@ test("coherent reclassification and manifest record tamper fail closed", () => {
     optionalDiagnosticOperationIdsDigest:
       computeProviderOperationIdSetDigest(reclassifiedOptional),
   });
-  assert.equal(reclassified.mandatoryOperationCount, 28);
+  assert.equal(reclassified.mandatoryOperationCount, 29);
   assert.equal(reclassified.optionalDiagnosticOperationCount, 1);
   assert.notEqual(
       computeProviderOperationClassificationDigest(reclassified),
@@ -1121,7 +1123,7 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
       PROVIDER_OPERATION_CLASSIFICATION_VERSION);
   assert.equal(first.providerOperationClassificationDigest,
       PROVIDER_OPERATION_CLASSIFICATION_DIGEST);
-  assert.equal(first.providerMandatoryOperationCount, 28);
+  assert.equal(first.providerMandatoryOperationCount, 29);
   assert.equal(first.providerOptionalDiagnosticOperationCount, 1);
   assert.equal(first.providerMandatoryOperationIdsDigest,
       PROVIDER_MANDATORY_OPERATION_IDS_DIGEST);
@@ -1143,6 +1145,16 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
       PERMISSION_RESEARCH_ARTIFACT_SHA256);
   assert.equal(first.effectiveMandatoryPermissionContractDigest,
       EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST);
+  assert.equal(first.topologyProfileDigest,
+      STANDALONE_PROJECT_OBSERVER_PROFILE.profileDigest);
+  assert.equal(first.topologyEvidenceDigest,
+      STANDALONE_PROJECT_OBSERVER_PROFILE.topologyEvidenceDigest);
+  assert.deepEqual(first.standaloneOperationExecution,
+      STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution);
+  assert.deepEqual(first.standaloneEffectivePermissions,
+      STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions);
+  assert.deepEqual(first.observerPrincipalPolicy,
+      OBSERVER_PRINCIPAL_POLICY);
   assert.deepEqual(first.mandatoryRequiredIamPermissions,
       EFFECTIVE_MANDATORY_PERMISSION_CONTRACT.requiredIamPermissions);
   assert.deepEqual(first.mandatoryConditionalPermissions,
@@ -1200,7 +1212,7 @@ test("provider approval, observation metadata, result, and proof have parity",
           approval.providerOperationClassificationVersion,
           PROVIDER_OPERATION_CLASSIFICATION_VERSION,
       );
-      assert.equal(approval.providerMandatoryOperationCount, 28);
+      assert.equal(approval.providerMandatoryOperationCount, 29);
       assert.equal(approval.providerOptionalDiagnosticOperationCount, 1);
       assert.equal(
           approval.readonlyPermissionManifestDigest,
@@ -1233,6 +1245,14 @@ test("provider approval, observation metadata, result, and proof have parity",
         (candidate) => {
           candidate.mandatoryPermissionSourceOperations
               .requiredIamPermissions = {};
+        },
+        (candidate) => {
+          candidate.topologyProfileDigest = DIGEST_B;
+        },
+        (candidate) => {
+          candidate.observerPrincipalPolicy.email =
+            "firebase-adminsdk-ab123@" +
+            "daegu-miami-production.iam.gserviceaccount.com";
         },
       ]) {
         const candidate = structuredClone(dependency);

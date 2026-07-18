@@ -19,8 +19,13 @@ const facadePath = path.join(
     scripts,
     "academy-reset-freeze-provider-transport.mjs",
 );
+const permissionPath = path.join(
+    scripts,
+    "academy-reset-freeze-readonly-permissions.mjs",
+);
 const authoritySource = fs.readFileSync(authorityPath, "utf8");
 const facadeSource = fs.readFileSync(facadePath, "utf8");
+const permissionSource = fs.readFileSync(permissionPath, "utf8");
 const BASE = "242a96a5108ac2380f724ca756178238422b2071";
 
 function git(args, encoding = "utf8") {
@@ -126,6 +131,41 @@ test("authority has no ambient credential or project fallback", () => {
   }
   assert.match(authoritySource, /credentials: parsedCredential/);
   assert.match(authoritySource, /parsed\["credential-file"\]/);
+});
+
+test("topology and principal gates are exact and precede GoogleAuth", () => {
+  assert.match(
+      permissionSource,
+      /STANDALONE_PROJECT_TOPOLOGY_PROFILE_ID =\s*"standalone_project_v1"/,
+  );
+  assert.match(
+      permissionSource,
+      /OBSERVER_SERVICE_ACCOUNT_EMAIL =\s*"academy-reset-freeze-observer@daegu-miami-production\.iam\.gserviceaccount\.com"/,
+  );
+  assert.match(
+      authoritySource,
+      /credentialResult\.payload\.client_email !==\s*OBSERVER_PRINCIPAL_POLICY\.email/,
+  );
+  assert.doesNotMatch(
+      authoritySource,
+      /client_email\.(?:trim|toLowerCase)\s*\(/,
+  );
+  const principalGate = authoritySource.indexOf(
+      "parsedCredential?.client_email !== OBSERVER_PRINCIPAL_POLICY.email",
+  );
+  const googleAuth = authoritySource.indexOf("const auth = new GoogleAuth");
+  assert.equal(principalGate >= 0, true);
+  assert.equal(googleAuth > principalGate, true);
+  assert.match(
+      authoritySource,
+      /deriveObservedStandaloneTopologyProfile\(\s*iam\.hierarchy,\s*functions\.records,\s*functions\.bucketIdentities,\s*\)/s,
+  );
+  assert.match(authoritySource, /operationId: "storage\.v1\.buckets\.get"/);
+  assert.match(authoritySource, /query: \{projection: "noAcl"\}/);
+  assert.doesNotMatch(
+      authoritySource,
+      /gcf-v2-sources-\(\[0-9\]\+\)-us-central1/,
+  );
 });
 
 test("authority contains no Firebase Admin, Firestore, or Auth write path", () => {
@@ -341,6 +381,7 @@ test("observer test files contain no skips, only, or unfinished-work markers",
       );
       for (const relativePath of [
         "tests/academy-reset-freeze-production-observer.test.mjs",
+        "tests/academy-reset-freeze-production-observer-topology.test.mjs",
         "tests/academy-reset-freeze-production-observer-static.test.mjs",
         "tests/academy-reset-freeze-provider-transport.test.mjs",
       ]) {

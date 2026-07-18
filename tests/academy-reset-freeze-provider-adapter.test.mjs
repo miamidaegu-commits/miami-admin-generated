@@ -454,6 +454,14 @@ function providerExecutor(receipt, mutate = (operationId, value) => value) {
           size: "1",
         };
         break;
+      case "storage.v1.buckets.get":
+        value = {
+          name: pathParams.bucket,
+          projectNumber: EXPECTED_PROJECT_NUMBER,
+          location: "US-CENTRAL1",
+          storageClass: "STANDARD",
+        };
+        break;
       case "storage.v1.objects.getMedia":
         value = {media: {
           bytes: new Uint8Array([1]),
@@ -982,6 +990,13 @@ test("independent Function Run Build and Storage boundaries fail closed",
         (operationId, value) => operationId ===
           "cloudbuild.v1.projects.locations.builds.get" ?
           {...value, status: "WORKING"} : value,
+        (operationId, value) => operationId === "storage.v1.buckets.get" ?
+          {...value, projectNumber: "999999999999"} : value,
+        (operationId, value) => {
+          if (operationId !== "storage.v1.buckets.get") return value;
+          delete value.projectNumber;
+          return value;
+        },
         (operationId, value) => operationId ===
           "storage.v1.objects.getMetadata" ?
           {...value, md5Hash: "AAAAAAAAAAAAAAAAAAAAAA=="} : value,
