@@ -22,7 +22,7 @@ const WRITER_RUNTIME_SERVICE_ACCOUNT =
   "academy-private-writer-runtime@" +
   "daegu-miami-production.iam.gserviceaccount.com";
 const PREVIEW_RUNTIME_SERVICE_ACCOUNT =
-  "academy-private-preview-runtime@" +
+  "academy-private-preview-rt@" +
   "daegu-miami-production.iam.gserviceaccount.com";
 const COMPUTE_DEFAULT_SERVICE_ACCOUNT =
   "884850632328-compute@developer.gserviceaccount.com";
