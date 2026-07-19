@@ -7,7 +7,7 @@ export const EXPECTED_WRITE_SURFACE_IDENTITY_DIGEST =
   "7b95e17be6e052c3ee161ad35d46709ef01f939e2c50b3f22ae5f9edb12900e8";
 export const EXPECTED_WRITE_SOURCE_COUNT = 21;
 export const EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST =
-  "2fe9cee761e8989336f0637b312c84c08c105edcea37bef93a0dd6d148fbae90";
+  "42dca4386adef08c224591192cbfb6e49372d8127562e0e2493005c0998b8df3";
 
 export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   Object.freeze({
@@ -20,7 +20,7 @@ export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   }),
   Object.freeze({
     sourceFile: "functions/index.js",
-    sha256: "d83412ad16ba9467775d07979a89974c4466f4016c058f5d43bbf97061c23bbd",
+    sha256: "b78007bd62e35fca4e688f4e31aa9e61a77c0ed3ec9e9401ba84809665c01ada",
   }),
   Object.freeze({
     sourceFile: "lessonApi.js",

@@ -28,6 +28,7 @@ const OWNER_EMAIL = "miamidaegu@gmail.com";
 const REGION = "us-central1";
 const PRODUCTION_PROJECT_ID = "daegu-miami-production";
 const E2E_PROJECT_ID = "miami-e2e";
+const EMULATOR_PROJECT_ID = "demo-miami-e2e";
 const STUDENT_PRIVATE_CANCEL_LIMIT = 2;
 const STUDENT_PRIVATE_CANCEL_LIMIT_MAX = 24;
 const STUDENT_PRIVATE_CANCEL_CUTOFF_MS = 10 * 60 * 60 * 1000;
@@ -80,7 +81,7 @@ function normalizeHostedAppUrl(value) {
 function getProjectIdFromFirebaseConfig() {
   try {
     const config = JSON.parse(process.env.FIREBASE_CONFIG || "{}");
-    return normalizeHostedAppUrl(config.projectId);
+    return typeof config.projectId === "string" ? config.projectId : "";
   } catch (error) {
     if (error instanceof SyntaxError) return "";
     return "";
@@ -88,16 +89,30 @@ function getProjectIdFromFirebaseConfig() {
 }
 
 function getRuntimeProjectId() {
-  return (
-    normalizeHostedAppUrl(process.env.GCLOUD_PROJECT) ||
-    normalizeHostedAppUrl(process.env.GOOGLE_CLOUD_PROJECT) ||
-    getProjectIdFromFirebaseConfig()
-  );
+  const projectIds = [];
+  if (process.env.GCLOUD_PROJECT !== undefined) {
+    projectIds.push(process.env.GCLOUD_PROJECT);
+  }
+  if (process.env.GOOGLE_CLOUD_PROJECT !== undefined) {
+    projectIds.push(process.env.GOOGLE_CLOUD_PROJECT);
+  }
+  if (process.env.FIREBASE_CONFIG !== undefined) {
+    projectIds.push(getProjectIdFromFirebaseConfig());
+  }
+  if (projectIds.length === 0) return "";
+  const projectId = projectIds[0];
+  return projectIds.every((candidate) => candidate === projectId) ?
+    projectId :
+    "";
 }
 
 function requireWriteGuardRuntimeProjectId() {
   const projectId = getRuntimeProjectId();
-  if (projectId !== PRODUCTION_PROJECT_ID && projectId !== E2E_PROJECT_ID) {
+  const productionRuntime = projectId === PRODUCTION_PROJECT_ID;
+  const emulatorRuntime =
+    Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
+    projectId === EMULATOR_PROJECT_ID;
+  if (!productionRuntime && !emulatorRuntime) {
     throw new HttpsError(
         "failed-precondition",
         "Backend writes are blocked because the runtime project is unknown.",
@@ -150,16 +165,15 @@ function isProductionProject() {
 
 function isE2eProject() {
   const projectId = getRuntimeProjectId();
-  return projectId === E2E_PROJECT_ID ||
-    (Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
-      projectId.startsWith("demo-"));
+  return Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
+    projectId === EMULATOR_PROJECT_ID;
 }
 
 function requireE2eTestProject() {
   if (isE2eProject()) return;
   throw new HttpsError(
       isProductionProject() ? "permission-denied" : "failed-precondition",
-      "This test helper is disabled in production and outside miami-e2e.",
+      "This test helper is disabled outside the demo-miami-e2e emulator.",
   );
 }
 
@@ -14449,7 +14463,8 @@ exports.createFixedPrivateLessonAssignment = onCall(
       concurrency: 80,
       maxInstances: 10,
       serviceAccount:
-        "884850632328-compute@developer.gserviceaccount.com",
+        "academy-private-writer-runtime@" +
+        "daegu-miami-production.iam.gserviceaccount.com",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,
@@ -20729,7 +20744,8 @@ exports.previewFixedPrivateLessonOutcomeAction = onCall(
       concurrency: 80,
       maxInstances: 10,
       serviceAccount:
-        "884850632328-compute@developer.gserviceaccount.com",
+        "academy-private-preview-runtime@" +
+        "daegu-miami-production.iam.gserviceaccount.com",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,
@@ -20760,7 +20776,8 @@ exports.commitFixedPrivateLessonOutcomeAction = onCall(
       concurrency: 80,
       maxInstances: 10,
       serviceAccount:
-        "884850632328-compute@developer.gserviceaccount.com",
+        "academy-private-writer-runtime@" +
+        "daegu-miami-production.iam.gserviceaccount.com",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,

@@ -12,13 +12,21 @@ const repositoryRoot = path.resolve(
 const functionsPath = path.join(repositoryRoot, "functions", "index.js");
 const functionsSource = fs.readFileSync(functionsPath, "utf8");
 const BASE_FUNCTIONS_SHA256 =
-  "461f0b94acae0f7d78c73d6c481c66499c9c2bc5826ff040e17ba5392feb6170";
+  "b6cbe38ce29b1f32b53599aa159eab1651d9b5d8dbee9d23d5b9f77d26589b66";
 const TARGETS = Object.freeze([
   "createFixedPrivateLessonAssignment",
   "previewFixedPrivateLessonOutcomeAction",
   "commitFixedPrivateLessonOutcomeAction",
 ]);
-const EXPECTED_OPTIONS = Object.freeze({
+const WRITER_RUNTIME_SERVICE_ACCOUNT =
+  "academy-private-writer-runtime@" +
+  "daegu-miami-production.iam.gserviceaccount.com";
+const PREVIEW_RUNTIME_SERVICE_ACCOUNT =
+  "academy-private-preview-runtime@" +
+  "daegu-miami-production.iam.gserviceaccount.com";
+const COMPUTE_DEFAULT_SERVICE_ACCOUNT =
+  "884850632328-compute@developer.gserviceaccount.com";
+const EXPECTED_COMMON_OPTIONS = Object.freeze({
   region: "us-central1",
   cors: true,
   memory: "256MiB",
@@ -26,11 +34,23 @@ const EXPECTED_OPTIONS = Object.freeze({
   cpu: 1,
   concurrency: 80,
   maxInstances: 10,
-  serviceAccount:
-    "884850632328-compute@developer.gserviceaccount.com",
   ingressSettings: "ALLOW_ALL",
   enforceAppCheck: false,
   consumeAppCheckToken: false,
+});
+const EXPECTED_OPTIONS_BY_TARGET = Object.freeze({
+  createFixedPrivateLessonAssignment: Object.freeze({
+    ...EXPECTED_COMMON_OPTIONS,
+    serviceAccount: WRITER_RUNTIME_SERVICE_ACCOUNT,
+  }),
+  previewFixedPrivateLessonOutcomeAction: Object.freeze({
+    ...EXPECTED_COMMON_OPTIONS,
+    serviceAccount: PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+  }),
+  commitFixedPrivateLessonOutcomeAction: Object.freeze({
+    ...EXPECTED_COMMON_OPTIONS,
+    serviceAccount: WRITER_RUNTIME_SERVICE_ACCOUNT,
+  }),
 });
 
 function sha256(value) {
@@ -110,6 +130,33 @@ function evaluateOptions(range) {
   )("us-central1");
 }
 
+function optionsSource(range) {
+  return functionsSource.slice(range.start, range.end);
+}
+
+function assertExactTargetOptions(functionName, options) {
+  assert.deepEqual(
+      options,
+      EXPECTED_OPTIONS_BY_TARGET[functionName],
+      functionName,
+  );
+  assert.equal(
+      Object.prototype.hasOwnProperty.call(options, "minInstances"),
+      false,
+      functionName,
+  );
+  assert.equal(typeof options.serviceAccount, "string", functionName);
+}
+
+function assertLiteralServiceAccountCannotBeOverridden(source) {
+  assert.equal(
+      source.match(/\bserviceAccount\s*:/g)?.length || 0,
+      1,
+      "serviceAccount key count",
+  );
+  assert.doesNotMatch(source, /\.\.\./, "options spread");
+}
+
 function functionBody(declaration) {
   const declarationIndex = functionsSource.indexOf(declaration);
   assert.notEqual(declarationIndex, -1, declaration);
@@ -124,14 +171,98 @@ function functionBody(declaration) {
 
 test("three missing private functions pin the exact approved runtime options", () => {
   for (const functionName of TARGETS) {
-    const options = evaluateOptions(callableOptionsRange(functionName));
-    assert.deepEqual(options, EXPECTED_OPTIONS, functionName);
-    assert.equal(
-        Object.prototype.hasOwnProperty.call(options, "minInstances"),
-        false,
-        functionName,
-    );
+    const range = callableOptionsRange(functionName);
+    assertExactTargetOptions(functionName, evaluateOptions(range));
+    assertLiteralServiceAccountCannotBeOverridden(optionsSource(range));
   }
+});
+
+test("runtime identities are exact, isolated, and non-interchangeable", () => {
+  const optionsByTarget = Object.fromEntries(
+      TARGETS.map((functionName) => [
+        functionName,
+        evaluateOptions(callableOptionsRange(functionName)),
+      ]),
+  );
+  assert.equal(
+      optionsByTarget.createFixedPrivateLessonAssignment.serviceAccount,
+      WRITER_RUNTIME_SERVICE_ACCOUNT,
+  );
+  assert.equal(
+      optionsByTarget.commitFixedPrivateLessonOutcomeAction.serviceAccount,
+      WRITER_RUNTIME_SERVICE_ACCOUNT,
+  );
+  assert.equal(
+      optionsByTarget.previewFixedPrivateLessonOutcomeAction.serviceAccount,
+      PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+  );
+  for (const options of Object.values(optionsByTarget)) {
+    assert.notEqual(options.serviceAccount, COMPUTE_DEFAULT_SERVICE_ACCOUNT);
+  }
+
+  const ranges = TARGETS
+      .map(callableOptionsRange)
+      .sort((left, right) => right.start - left.start);
+  let unrelatedSource = functionsSource;
+  for (const range of ranges) {
+    unrelatedSource =
+      unrelatedSource.slice(0, range.start) +
+      unrelatedSource.slice(range.end);
+  }
+  assert.equal(
+      unrelatedSource.includes(WRITER_RUNTIME_SERVICE_ACCOUNT),
+      false,
+  );
+  assert.equal(
+      unrelatedSource.includes(PREVIEW_RUNTIME_SERVICE_ACCOUNT),
+      false,
+  );
+});
+
+test("runtime identity contract rejects malformed or overridden values", () => {
+  const writerName = "createFixedPrivateLessonAssignment";
+  const previewName = "previewFixedPrivateLessonOutcomeAction";
+  const writerOptions = EXPECTED_OPTIONS_BY_TARGET[writerName];
+  const previewOptions = EXPECTED_OPTIONS_BY_TARGET[previewName];
+  const invalidWriterValues = [
+    WRITER_RUNTIME_SERVICE_ACCOUNT.toUpperCase(),
+    ` ${WRITER_RUNTIME_SERVICE_ACCOUNT}`,
+    WRITER_RUNTIME_SERVICE_ACCOUNT.replace(
+        "daegu-miami-production",
+        "other-production",
+    ),
+    null,
+    884850632328,
+  ];
+  for (const serviceAccount of invalidWriterValues) {
+    assert.throws(() => assertExactTargetOptions(writerName, {
+      ...writerOptions,
+      serviceAccount,
+    }));
+  }
+  const missingServiceAccount = {...writerOptions};
+  delete missingServiceAccount.serviceAccount;
+  assert.throws(
+      () => assertExactTargetOptions(writerName, missingServiceAccount),
+  );
+  assert.throws(() => assertExactTargetOptions(writerName, {
+    ...writerOptions,
+    serviceAccount: PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+  }));
+  assert.throws(() => assertExactTargetOptions(previewName, {
+    ...previewOptions,
+    serviceAccount: WRITER_RUNTIME_SERVICE_ACCOUNT,
+  }));
+  assert.throws(
+      () => assertLiteralServiceAccountCannotBeOverridden(
+          "{...base, serviceAccount: \"writer@example.com\"}",
+      ),
+  );
+  assert.throws(
+      () => assertLiteralServiceAccountCannotBeOverridden(
+          "{serviceAccount: \"first\", serviceAccount: \"later\"}",
+      ),
+  );
 });
 
 test("no unrelated function source changed from the approved base", () => {
@@ -161,11 +292,19 @@ test("both target writers retain their exact freeze guards", () => {
   );
   assert.ok(
       assignment.indexOf("guardAcademyWrite({") <
+      assignment.indexOf("transaction.get("),
+  );
+  assert.ok(
+      assignment.indexOf("guardAcademyWrite({") <
       assignment.indexOf("transaction.create("),
   );
   assert.match(
       commit,
       /guardAcademyWrite\(\{[\s\S]*writeSurfaceId: "commitFixedPrivateLessonOutcomeAction"/,
+  );
+  assert.ok(
+      commit.indexOf("guardAcademyWrite({") <
+      commit.indexOf("transaction.get("),
   );
   assert.ok(
       commit.indexOf("guardAcademyWrite({") <

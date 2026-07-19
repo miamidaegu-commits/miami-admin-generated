@@ -118,6 +118,45 @@ function extractBalancedFunctionBody(source, declarationIndex) {
   throw new Error("Unbalanced function declaration.");
 }
 
+function extractFunctionSource(functionName) {
+  const declaration = indexSource.indexOf(`function ${functionName}(`);
+  assert.notEqual(declaration, -1, functionName);
+  const body = extractBalancedFunctionBody(indexSource, declaration);
+  const bodyStart = indexSource.indexOf(body, declaration);
+  return indexSource.slice(declaration, bodyStart + body.length);
+}
+
+function runtimeProjectContract(env) {
+  const productionDeclaration = indexSource.match(
+      /const PRODUCTION_PROJECT_ID = "daegu-miami-production";/,
+  );
+  const emulatorDeclaration = indexSource.match(
+      /const EMULATOR_PROJECT_ID = "demo-miami-e2e";/,
+  );
+  assert.ok(productionDeclaration);
+  assert.ok(emulatorDeclaration);
+  class TestHttpsError extends Error {
+    constructor(code, message, details) {
+      super(message);
+      this.code = code;
+      this.details = details;
+    }
+  }
+  return Function(
+      "process",
+      "HttpsError",
+      [
+        "\"use strict\";",
+        productionDeclaration[0],
+        emulatorDeclaration[0],
+        extractFunctionSource("getProjectIdFromFirebaseConfig"),
+        extractFunctionSource("getRuntimeProjectId"),
+        extractFunctionSource("requireWriteGuardRuntimeProjectId"),
+        "return {getRuntimeProjectId, requireWriteGuardRuntimeProjectId};",
+      ].join("\n"),
+  )({env: {...env}}, TestHttpsError);
+}
+
 function validActiveSentinel(overrides = {}) {
   return {
     schemaVersion: RESET_WRITE_FREEZE_SCHEMA_VERSION,
@@ -454,10 +493,12 @@ test("unknown runtime projects fail closed before backend write guards", () => {
   );
   assert.notEqual(declaration, -1);
   const body = extractBalancedFunctionBody(indexSource, declaration);
-  assert.match(body, /projectId !== PRODUCTION_PROJECT_ID/);
-  assert.match(body, /projectId !== E2E_PROJECT_ID/);
+  assert.match(body, /projectId === PRODUCTION_PROJECT_ID/);
+  assert.match(body, /Boolean\(process\.env\.FIRESTORE_EMULATOR_HOST\)/);
+  assert.match(body, /projectId === EMULATOR_PROJECT_ID/);
   assert.match(body, /new HttpsError\(/);
   assert.match(body, /unknown_runtime_project/);
+  assert.doesNotMatch(body, /startsWith|includes|\/\^demo-/);
   assert.match(
       indexSource,
       /assertAcademyResetWriteAllowed\(\{[\s\S]*?projectId:\s*requireWriteGuardRuntimeProjectId\(\)/,
@@ -466,6 +507,76 @@ test("unknown runtime projects fail closed before backend write guards", () => {
       indexSource,
       /assertGlobalResetWriteAllowed\(\{[\s\S]*?projectId:\s*requireWriteGuardRuntimeProjectId\(\)/,
   );
+});
+
+test("runtime project identity contract is exact and emulator-bound", () => {
+  const productionProject = "daegu-miami-production";
+  const emulatorProject = "demo-miami-e2e";
+  const emulatorHost = "127.0.0.1:8080";
+  const matchingEnv = (projectId, extras = {}) => ({
+    GCLOUD_PROJECT: projectId,
+    GOOGLE_CLOUD_PROJECT: projectId,
+    FIREBASE_CONFIG: JSON.stringify({projectId}),
+    ...extras,
+  });
+  const requireProject = (env) =>
+    runtimeProjectContract(env).requireWriteGuardRuntimeProjectId();
+  const expectUnknownRuntime = (env) => {
+    assert.throws(
+        () => requireProject(env),
+        (error) => {
+          assert.equal(error.code, "failed-precondition");
+          assert.equal(error.details?.reason, "unknown_runtime_project");
+          return true;
+        },
+    );
+  };
+
+  assert.equal(
+      requireProject(matchingEnv(productionProject)),
+      productionProject,
+  );
+  assert.equal(
+      requireProject(matchingEnv(emulatorProject, {
+        FIRESTORE_EMULATOR_HOST: emulatorHost,
+      })),
+      emulatorProject,
+  );
+
+  expectUnknownRuntime(matchingEnv(emulatorProject));
+  expectUnknownRuntime(matchingEnv("miami-e2e", {
+    FIRESTORE_EMULATOR_HOST: emulatorHost,
+  }));
+  expectUnknownRuntime(matchingEnv("demo-other", {
+    FIRESTORE_EMULATOR_HOST: emulatorHost,
+  }));
+  expectUnknownRuntime(matchingEnv("foreign-project", {
+    FIRESTORE_EMULATOR_HOST: emulatorHost,
+  }));
+
+  expectUnknownRuntime({
+    ...matchingEnv(productionProject),
+    GOOGLE_CLOUD_PROJECT: emulatorProject,
+  });
+  expectUnknownRuntime({
+    ...matchingEnv(emulatorProject, {
+      FIRESTORE_EMULATOR_HOST: emulatorHost,
+    }),
+    FIREBASE_CONFIG: JSON.stringify({projectId: "foreign-project"}),
+  });
+
+  for (const projectId of [
+    productionProject.toUpperCase(),
+    emulatorProject.toUpperCase(),
+    ` ${productionProject}`,
+    `${productionProject} `,
+    ` ${emulatorProject}`,
+    `${emulatorProject} `,
+  ]) {
+    expectUnknownRuntime(matchingEnv(projectId, {
+      FIRESTORE_EMULATOR_HOST: emulatorHost,
+    }));
+  }
 });
 
 test("write helper declarations are pinned to the exact inventory", () => {
