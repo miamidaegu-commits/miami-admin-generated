@@ -6,6 +6,25 @@ Staging/e2e project: `miami-e2e`
 
 This runbook prepares production without deleting data, resetting data, weakening tenant safety, or changing Firestore rules and Cloud Functions business logic.
 
+## Academy private Functions IAM gate
+
+The Academy private Preview → Assignment → Outcome deployment contract is not
+authorized by the commands below. Its local v6 contract requires exact Runtime
+IAM state receipts, resource-scoped Build bindings, the nine-permission Deploy
+profile, immutable release/source/selector/baseline digests, exact human
+principals, and an active RFC3339 UTC JIT window of at most two hours.
+
+Organization Policy observation is currently `UNKNOWN` because the API is
+disabled. Therefore actual IAM provisioning, deployment approval, impersonation,
+invoker publication, and IAM mutation-command publication remain ineligible.
+The current canonical Organization Policy evidence version and digest are the
+only authority; a receipt-local `ALLOW` state or coherently recomputed receipt
+digest cannot change eligibility. An `ALLOW` transition requires a separately
+reviewed source-contract release.
+Do not replace missing principals or timestamps with placeholders, create
+Eventarc service-agent bindings for the three HTTP callable targets, or widen
+Storage/Artifact Registry access to project scope.
+
 ## Order
 
 1. Confirm the active Firebase target is `daegu-miami-production` before every production command.

@@ -7,6 +7,14 @@ import {
   WRITE_SOURCE_SHA256_ALLOWLIST,
 } from "./academy-reset-write-surface-registry.mjs";
 import {
+  BUILD_SCOPE_CONTRACT_DIGEST,
+  BUILD_SCOPE_CONTRACT_VERSION,
+} from "./academy-functions-build-scope-contract.mjs";
+import {
+  PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+  PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+} from "./academy-private-runtime-iam-contract.mjs";
+import {
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
 } from "./academy-reset-freeze-provider-reviewed-sources.mjs";
@@ -24,6 +32,8 @@ const INFRASTRUCTURE_RUNTIME_SOURCE_PATHS = Object.freeze([
   "firestore.rules",
   "functions/academy-reset-write-freeze.js",
   "functions/linkStudentAccountSafety.cjs",
+  "functions/scripts/academy-functions-build-scope-contract.mjs",
+  "functions/scripts/academy-private-runtime-iam-contract.mjs",
   "functions/scripts/academy-reset-write-freeze-contract.mjs",
   "functions/scripts/academy-reset-write-surface-registry.mjs",
   "functions/scripts/verify-academy-reset-write-freeze.mjs",
@@ -34,6 +44,10 @@ export const CRITICAL_RUNTIME_SOURCE_PATHS = Object.freeze([
     ...WRITE_SOURCE_SHA256_ALLOWLIST.map(({sourceFile}) => sourceFile),
   ]),
 ].sort());
+export const IAM_CONTRACT_RUNTIME_SOURCE_PATHS = Object.freeze([
+  "functions/scripts/academy-functions-build-scope-contract.mjs",
+  "functions/scripts/academy-private-runtime-iam-contract.mjs",
+]);
 
 function canonical(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -259,6 +273,19 @@ export function resolveRuntimeGitSourceIdentity({repositoryRoot} = {}) {
         inspectTrackedSource(canonicalRoot, sourcePath,
             reviewedPins.get(sourcePath)),
   );
+  const criticalSourceByPath = new Map(
+      criticalSources.map((source) => [source.path, source]),
+  );
+  const iamContractSources = IAM_CONTRACT_RUNTIME_SOURCE_PATHS.map(
+      (sourcePath) => criticalSourceByPath.get(sourcePath),
+  );
+  const iamContractSourceIdentity = Object.freeze({
+    privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+    privateRuntimeIamContractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+    buildScopeContractVersion: BUILD_SCOPE_CONTRACT_VERSION,
+    buildScopeContractDigest: BUILD_SCOPE_CONTRACT_DIGEST,
+    sources: Object.freeze(iamContractSources),
+  });
   return Object.freeze({
     headSha,
     treeSha,
@@ -269,6 +296,8 @@ export function resolveRuntimeGitSourceIdentity({repositoryRoot} = {}) {
     reviewedSourceIdentityDigest:
       EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
     reviewedSourceSetDigest: sha256Canonical(reviewedSources),
+    iamContractSourceIdentity,
+    iamContractSourceSetDigest: sha256Canonical(iamContractSourceIdentity),
   });
 }
 

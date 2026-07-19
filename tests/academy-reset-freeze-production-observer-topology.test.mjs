@@ -116,6 +116,46 @@ test("operation profile is exact 25 executed plus topology-derived 4 N/A",
       }
     });
 
+test("evidence-derived deny GET N/A yields exact 24/5 partition", () => {
+  const denyGetOperationId = "iam.v2.policies.denypolicies.get";
+  const profile = deriveStandaloneProjectObserverProfile(
+      evidence(),
+      [denyGetOperationId],
+  );
+  const operation = profile.operationExecution;
+  assert.equal(operation.mandatoryOperationCount, 29);
+  assert.equal(operation.executedMandatoryOperationCount, 24);
+  assert.equal(operation.topologyNotApplicableMandatoryOperationCount, 4);
+  assert.equal(
+      operation.evidenceDerivedNotApplicableMandatoryOperationCount,
+      1,
+  );
+  assert.equal(operation.notApplicableMandatoryOperationCount, 5);
+  assert.deepEqual(
+      operation.evidenceDerivedNotApplicableMandatoryOperationIds,
+      [denyGetOperationId],
+  );
+  assert.equal(
+      operation.executedMandatoryOperationIds.includes(denyGetOperationId),
+      false,
+  );
+  assert.deepEqual(
+      assertStandaloneProjectObserverProfile(
+          clone(profile),
+          evidence(),
+          [denyGetOperationId],
+      ),
+      profile,
+  );
+  assert.throws(
+      () => deriveStandaloneProjectObserverProfile(
+          evidence(),
+          ["iam.v1.projects.roles.get"],
+      ),
+      /evidence-derived N\/A operation is not approved/,
+  );
+});
+
 test("effective project role is exact 26 required plus one auxiliary", () => {
   const permissions =
     STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions;

@@ -6,6 +6,10 @@ import {
   EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES,
   EXPECTED_PROJECT_ID,
   EXPECTED_PROJECT_NUMBER,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+  FUNCTION_HTTP_TRIGGER_TYPE,
   IAM_EVIDENCE_FAMILY_NAMES,
   OBSERVATION_COMPLETENESS_VERSION,
   PROJECT_IDENTITY_CONTRACT_VERSION,
@@ -18,6 +22,8 @@ import {
   REVIEWED_WRITABLE_PERMISSIONS,
   SCHEDULER_JOB_ALLOWLIST,
   WRITABLE_PERMISSION_DERIVATION_VERSION,
+  assertHttpCallableRawFunctionRecord,
+  buildFunctionTriggerAbsenceEvidence,
   buildIamFamilyCompleteness,
   computeIamPolicyDigest,
   computeObservedSetDigest,
@@ -25,6 +31,7 @@ import {
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
   KNOWN_IAM_GROUPS,
   validateProviderAdapterReviewedSources,
+  validateFunctionTriggerAbsenceEvidence,
   sha256Canonical,
   stableStringify,
 } from "./academy-reset-write-freeze-contract.mjs";
@@ -311,6 +318,13 @@ async function observeFunctionBoundary(session) {
     query: {pageSize: 1000},
   };
   const functionList = await execute(session, listInput);
+  for (const record of functionList.records) {
+    try {
+      assertHttpCallableRawFunctionRecord(record);
+    } catch {
+      fail("FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED");
+    }
+  }
   const names = functionList.records.map(({name}) => idFromName(
       name,
       /^projects\/daegu-miami-production\/locations\/us-central1\/functions\/([^/]+)$/,
@@ -352,6 +366,11 @@ async function observeFunctionBoundary(session) {
   const records = [];
   const snapshots = [];
   for (const {functionId, value: fn} of functionSnapshots) {
+    try {
+      assertHttpCallableRawFunctionRecord(fn);
+    } catch {
+      fail("FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED");
+    }
     const fullFunctionName =
       `projects/${EXPECTED_PROJECT_ID}/locations/${EXPECTED_FUNCTION_REGION}` +
       `/functions/${functionId}`;
@@ -480,6 +499,11 @@ async function observeFunctionBoundary(session) {
         size: String(mediaResult.media.byteLength),
       },
       runtimeServiceAccount: `serviceAccount:${runtimeEmail}`,
+      triggerContractVersion: FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+      triggerContractId: FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+      triggerContractDigest: FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+      triggerType: FUNCTION_HTTP_TRIGGER_TYPE,
+      eventTriggerAbsent: true,
     };
     if (stableStringify(record) !==
         stableStringify(approvedByName.get(functionId))) {
@@ -512,18 +536,31 @@ async function observeFunctions(session) {
   const startTraceIndex = session.trace.length;
   const start = await observeFunctionBoundary(session);
   const end = await observeFunctionBoundary(session);
+  const startTriggerEvidence = buildFunctionTriggerAbsenceEvidence(
+      start.snapshots.map((snapshot) => snapshot.function),
+      start.records,
+      start.functionList.records,
+  );
+  const endTriggerEvidence = buildFunctionTriggerAbsenceEvidence(
+      end.snapshots.map((snapshot) => snapshot.function),
+      end.records,
+      end.functionList.records,
+  );
   if (start.functionList.transportExecutionId ===
         end.functionList.transportExecutionId ||
       stableStringify(start.functionList.records) !==
         stableStringify(end.functionList.records) ||
       stableStringify(start.records) !== stableStringify(end.records) ||
-      stableStringify(start.snapshots) !== stableStringify(end.snapshots)) {
+      stableStringify(start.snapshots) !== stableStringify(end.snapshots) ||
+      stableStringify(startTriggerEvidence) !==
+        stableStringify(endTriggerEvidence)) {
     fail("FUNCTION_PROVIDER_SNAPSHOTS_UNSTABLE");
   }
   const familyTrace = session.trace.slice(startTraceIndex);
   return {
     records: start.records,
     guardedExportNames: [...EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES],
+    triggerEvidence: startTriggerEvidence,
     completeness: completeness(
         start.records,
         start.functionList,
@@ -1311,6 +1348,14 @@ export function assertGenuineMockAcademyResetFreezeProviderResult(
       stableStringify(providerResult.metadata.reviewedSourceIdentities) !==
         stableStringify(reviewedSources?.identities)) {
     fail("PROVIDER_RESULT_REVIEWED_SOURCE_ROOT_MISMATCH");
+  }
+  try {
+    validateFunctionTriggerAbsenceEvidence(
+        providerResult.observation?.functions?.triggerEvidence,
+        providerResult.observation?.functions?.records,
+    );
+  } catch {
+    fail("FUNCTION_TRIGGER_EVIDENCE_REJECTED");
   }
   return true;
 }

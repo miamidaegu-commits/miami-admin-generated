@@ -18,9 +18,9 @@ import {
 export const READONLY_PERMISSION_MANIFEST_VERSION =
   "academy_reset_freeze_readonly_permissions.v2";
 export const OBSERVER_TOPOLOGY_PROFILE_VERSION =
-  "academy_reset_observer_topology_profile.v2";
+  "academy_reset_observer_topology_profile.v3";
 export const OBSERVER_OPERATION_EXECUTION_PROFILE_VERSION =
-  "academy_reset_observer_operation_execution.v2";
+  "academy_reset_observer_operation_execution.v3";
 export const OBSERVER_PERMISSION_PROFILE_VERSION =
   "academy_reset_observer_permission_profile.v2";
 export const STANDALONE_PROJECT_TOPOLOGY_PROFILE_ID =
@@ -41,6 +41,10 @@ export const STANDALONE_NOT_APPLICABLE_MANDATORY_OPERATION_IDS =
     "cloudresourcemanager.v3.folders.getIamPolicy",
     "cloudresourcemanager.v3.organizations.get",
     "cloudresourcemanager.v3.organizations.getIamPolicy",
+  ]);
+export const EVIDENCE_DERIVED_NOT_APPLICABLE_MANDATORY_OPERATION_IDS =
+  Object.freeze([
+    "iam.v2.policies.denypolicies.get",
   ]);
 export const STANDALONE_REQUIRED_IAM_PERMISSIONS = Object.freeze([
   "cloudasset.assets.analyzeIamPolicy",
@@ -794,7 +798,10 @@ export function assertObserverPrincipalPolicy(
   return value;
 }
 
-export function deriveStandaloneProjectObserverProfile(evidence) {
+export function deriveStandaloneProjectObserverProfile(
+    evidence,
+    evidenceDerivedNotApplicableOperationIds = [],
+) {
   assertExactKeys(
       evidence,
       STANDALONE_TOPOLOGY_EVIDENCE_KEYS,
@@ -821,8 +828,22 @@ export function deriveStandaloneProjectObserverProfile(evidence) {
     throw new Error("standalone topology contains hierarchy ancestors");
   }
 
-  const notApplicableMandatoryOperationIds =
+  const topologyNotApplicableMandatoryOperationIds =
     [...STANDALONE_NOT_APPLICABLE_MANDATORY_OPERATION_IDS].sort();
+  const evidenceDerivedNotApplicableMandatoryOperationIds = sortedUnique(
+      evidenceDerivedNotApplicableOperationIds,
+      "evidence-derived N/A mandatory operations",
+  );
+  if (evidenceDerivedNotApplicableMandatoryOperationIds.some((operationId) =>
+    !EVIDENCE_DERIVED_NOT_APPLICABLE_MANDATORY_OPERATION_IDS.includes(
+        operationId,
+    ))) {
+    throw new Error("evidence-derived N/A operation is not approved");
+  }
+  const notApplicableMandatoryOperationIds = [
+    ...topologyNotApplicableMandatoryOperationIds,
+    ...evidenceDerivedNotApplicableMandatoryOperationIds,
+  ].sort();
   const notApplicableSet =
     new Set(notApplicableMandatoryOperationIds);
   const executedMandatoryOperationIds = PROVIDER_MANDATORY_OPERATION_IDS
@@ -835,12 +856,17 @@ export function deriveStandaloneProjectObserverProfile(evidence) {
   if (!same(coveredOperationIds, [...PROVIDER_MANDATORY_OPERATION_IDS].sort()) ||
       executedMandatoryOperationIds.some((operationId) =>
         notApplicableSet.has(operationId)) ||
-      executedMandatoryOperationIds.length !== 25 ||
-      notApplicableMandatoryOperationIds.length !== 4) {
+      executedMandatoryOperationIds.length +
+        notApplicableMandatoryOperationIds.length !==
+          PROVIDER_MANDATORY_OPERATION_IDS.length) {
     throw new Error("standalone operation execution partition mismatch");
   }
 
-  const executedRecords = executedMandatoryOperationIds.map((operationId) => {
+  const capabilityOperationIds = PROVIDER_MANDATORY_OPERATION_IDS
+      .filter((operationId) =>
+        !topologyNotApplicableMandatoryOperationIds.includes(operationId))
+      .sort();
+  const executedRecords = capabilityOperationIds.map((operationId) => {
     const record = READONLY_PERMISSION_REGISTRY[operationId];
     if (!record) throw new Error("standalone permission record missing");
     return record;
@@ -887,6 +913,20 @@ export function deriveStandaloneProjectObserverProfile(evidence) {
     executedMandatoryOperationIds,
     executedMandatoryOperationSetDigest:
       computeProviderOperationIdSetDigest(executedMandatoryOperationIds),
+    topologyNotApplicableMandatoryOperationCount:
+      topologyNotApplicableMandatoryOperationIds.length,
+    topologyNotApplicableMandatoryOperationIds,
+    topologyNotApplicableMandatoryOperationSetDigest:
+      computeProviderOperationIdSetDigest(
+          topologyNotApplicableMandatoryOperationIds,
+      ),
+    evidenceDerivedNotApplicableMandatoryOperationCount:
+      evidenceDerivedNotApplicableMandatoryOperationIds.length,
+    evidenceDerivedNotApplicableMandatoryOperationIds,
+    evidenceDerivedNotApplicableMandatoryOperationSetDigest:
+      computeProviderOperationIdSetDigest(
+          evidenceDerivedNotApplicableMandatoryOperationIds,
+      ),
     notApplicableMandatoryOperationCount:
       notApplicableMandatoryOperationIds.length,
     notApplicableMandatoryOperationIds,
@@ -955,8 +995,12 @@ export const STANDALONE_PROJECT_OBSERVER_PROFILE =
 export function assertStandaloneProjectObserverProfile(
     value,
     evidence = PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
+    evidenceDerivedNotApplicableOperationIds = [],
 ) {
-  const expected = deriveStandaloneProjectObserverProfile(evidence);
+  const expected = deriveStandaloneProjectObserverProfile(
+      evidence,
+      evidenceDerivedNotApplicableOperationIds,
+  );
   assertExactKeys(
       value,
       Object.keys(expected),
@@ -1009,6 +1053,15 @@ export function assertStandaloneProjectObserverProfile(
       executedMandatoryOperationIds: sortedUnique(
           value.operationExecution.executedMandatoryOperationIds,
           "standalone executed mandatory operations",
+      ),
+      topologyNotApplicableMandatoryOperationIds: sortedUnique(
+          value.operationExecution.topologyNotApplicableMandatoryOperationIds,
+          "standalone topology N/A mandatory operations",
+      ),
+      evidenceDerivedNotApplicableMandatoryOperationIds: sortedUnique(
+          value.operationExecution
+              .evidenceDerivedNotApplicableMandatoryOperationIds,
+          "standalone evidence-derived N/A mandatory operations",
       ),
       notApplicableMandatoryOperationIds: sortedUnique(
           value.operationExecution.notApplicableMandatoryOperationIds,

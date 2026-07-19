@@ -8,16 +8,24 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
     sha256: "e1db767d0587d36da11a8d95e79a15f1204c0b51d288b6d46c4e35b7d6895309",
   }),
   Object.freeze({
+    path: "functions/scripts/academy-functions-build-scope-contract.mjs",
+    sha256: "ed8ba525d20d396c46484fdabb100930d974e510c34eebf3322d9eabd1f5461a",
+  }),
+  Object.freeze({
+    path: "functions/scripts/academy-private-runtime-iam-contract.mjs",
+    sha256: "ca0e38b4afdd1c4f60794dfeb57b6ce698b9380db096c7ea220582e034f3e377",
+  }),
+  Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-adapter.mjs",
-    sha256: "5f7373d8a0584880e1b5d34d32c5f570c133552e5cdf606c4bac5fa727144dd3",
+    sha256: "45beeaa487e02741d9573c6bb5a6581fe852be5f98882e8f091f034d47851680",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-attestation.mjs",
-    sha256: "ee1ea7fe3e98f9f2bb1f37a2605b43dec7cd5a5c0549e816bea4a767055f6a44",
+    sha256: "5d9e70e58fa2f45e112a9ac6ffc4aaa3919d663f3043286e71794a1cae722127",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-operations.mjs",
-    sha256: "33440c6e25694814417bebbc568f205eba65f2a0c08d52f6f3e53b74f822f03d",
+    sha256: "e3528bfc149504817faae32e5272965d1c7b1b6a8fef9c48f8aad6effc5ff365",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-transport.mjs",
@@ -25,19 +33,19 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-readonly-permissions.mjs",
-    sha256: "280b95dec5096a16a44c5a8ff8677025f6fb94bbe80dd7e25acc4250c5c3ab84",
+    sha256: "3624f763ed2f8b3797e37d01a03a04739c9c21164e37c30dd9fd2918903e9bd7",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
-    sha256: "4aec624bcb8e5f3bbc1bb822ccd33c719e2849852cc7a648f5231be1f90d8feb",
+    sha256: "1e4d69105f3cf5225c78500c9e75abab0ffc2530b4071a60e76aad3efa311185",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-write-freeze-contract.mjs",
-    sha256: "21409833e5281ac304ed1046fb954fa006d69140f874798e5caf93e373c7e504",
+    sha256: "2da8370e7d95e12f9a727549bf611b01fe88e8e821713f38d5b13ffc7164d60e",
   }),
   Object.freeze({
     path: "functions/scripts/observe-academy-reset-freeze-production.mjs",
-    sha256: "a641394850aa416602afff644d069ba3eb43b5f2e6229e8e9b30ce966551a1b8",
+    sha256: "284bf4247bee40cf27ae85cc69aa00ec8d757be2a0a2b28f492ffd78df493ef7",
   }),
   Object.freeze({
     path: "functions/scripts/verify-academy-reset-write-freeze.mjs",
@@ -46,4 +54,4 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
 ]);
 
 export const EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST =
-  "92a7e7e6a2d78542c31a40c608b58a5fce0be1b52d9bdfea9b039c3bd481fe82";
+  "92cf02b5bc0b1174fcb3b3a705d79209f4495e05e65f59d3787140e70a6d2931";

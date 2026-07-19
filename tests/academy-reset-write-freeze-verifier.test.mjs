@@ -19,6 +19,10 @@ import {
   EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES,
   EXPECTED_FUNCTION_GENERATION,
   EXPECTED_FUNCTION_REGION,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+  FUNCTION_HTTP_TRIGGER_TYPE,
   EXPECTED_PROJECT_ID,
   EXPECTED_PROJECT_NUMBER,
   IAM_PRINCIPAL_POLICY_VERSION,
@@ -51,8 +55,10 @@ import {
   TARGET_PROJECT_IDENTITY,
   assertCanonicalJsonShape,
   buildApprovedIamExpectedState,
+  buildFreezeIamContractLineage,
   buildIamFamilyCompleteness,
   buildDeterministicWriteFreezeProof,
+  buildFunctionTriggerAbsenceEvidence,
   computeDrainTelemetryDigest,
   computeEvidenceArtifactDigest,
   computeIamPolicyDigest,
@@ -62,9 +68,29 @@ import {
   sha256Canonical,
   stableStringify,
   validateWriteFreezeEvidence,
+  validateFunctionTriggerAbsenceEvidence,
   validateProviderAdapterReviewedSources,
   validateProviderDependencyContract,
 } from "../functions/scripts/academy-reset-write-freeze-contract.mjs";
+import {
+  EXECUTABLE_APPROVAL_VERSION,
+  FREEZE_ACTIVATION_RECEIPT_VERSION,
+  FREEZE_ACTIVE_STATE,
+  FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING,
+  PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+  PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+  STEADY_STATE,
+  buildExecutableApprovalDigest,
+  buildStateSnapshot,
+  buildTransitionReceiptChronologyDigest,
+  compareExactRfc3339UtcInstants,
+} from "../functions/scripts/academy-private-runtime-iam-contract.mjs";
+import {
+  BUILD_SCOPE_CONTRACT_DIGEST,
+  BUILD_SCOPE_CONTRACT_VERSION,
+  ORGANIZATION_POLICY_EVIDENCE,
+  buildOrganizationPolicyLineageReference,
+} from "../functions/scripts/academy-functions-build-scope-contract.mjs";
 import {
   PROVIDER_MANDATORY_OPERATION_COUNT,
   PROVIDER_MANDATORY_OPERATION_IDS,
@@ -92,6 +118,7 @@ import {
   READONLY_PERMISSION_RECORDS,
   READONLY_PERMISSION_REGISTRY,
   REVIEWED_EVIDENCE_SET_DIGEST,
+  STANDALONE_SOURCE_BUCKET_NAME,
   assertEffectiveMandatoryPermissionContract,
   assertReadonlyPermissionManifest,
   computeEffectiveMandatoryPermissionContract,
@@ -103,6 +130,9 @@ import {
   createValidatedProviderRuntimeContext,
 } from "../functions/scripts/academy-reset-freeze-provider-attestation.mjs";
 import {
+  executeInjectedMockRawProductionObserverHarness,
+} from "../functions/scripts/observe-academy-reset-freeze-production.mjs";
+import {
   DEFAULT_REPOSITORY_ROOT,
   executeVerifierCli,
   verifyLocalWriteFreezeEvidence,
@@ -113,6 +143,7 @@ import {
 } from "../functions/scripts/academy-reset-freeze-runtime-identity.mjs";
 import {
   createGenuineAdapterForEvidence,
+  createGenuineTransportFixtureForEvidence,
 } from "./helpers/academy-reset-freeze-genuine-adapter.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -128,10 +159,32 @@ const DIGEST_B = "b".repeat(64);
 const TEST_NOW_MS = Date.now();
 const atOffsetMinutes = (minutes) =>
   new Date(TEST_NOW_MS + minutes * 60 * 1000).toISOString();
+const withFraction = (timestamp, fractionalDigits) =>
+  timestamp.replace(/\.\d{3}Z$/, `.${fractionalDigits}Z`);
+const oneNanosecondAfter = (timestamp) => {
+  const match = /^(.*\.)(\d{1,9})Z$/.exec(timestamp);
+  assert.ok(match);
+  const nanoseconds =
+    (BigInt(match[2].padEnd(9, "0")) + 1n).toString().padStart(9, "0");
+  return `${match[1]}${nanoseconds}Z`;
+};
+const oneNanosecondBefore = (timestamp) => {
+  const match = /^(.*\.)(\d{1,9})Z$/.exec(timestamp);
+  assert.ok(match);
+  const nanoseconds = BigInt(match[2].padEnd(9, "0"));
+  if (nanoseconds > 0n) {
+    return `${match[1]}${(nanoseconds - 1n).toString()
+        .padStart(9, "0")}Z`;
+  }
+  const previousSecond =
+    new Date(Date.parse(timestamp) - 1000).toISOString();
+  return withFraction(previousSecond, "999999999");
+};
 const RESOURCE_AT = atOffsetMinutes(-12);
 const APPROVED_AT = atOffsetMinutes(-11);
 const DEPLOYMENT_AT = atOffsetMinutes(-10);
 const ACTIVATED_AT = atOffsetMinutes(-9);
+const RUNTIME_IAM_TRANSITION_AT = atOffsetMinutes(-4);
 const SENTINEL_AT = atOffsetMinutes(-8);
 const SCHEDULER_UPDATE_AT = atOffsetMinutes(-7);
 const SCHEDULER_STOPPED_AT = atOffsetMinutes(-6.75);
@@ -166,6 +219,12 @@ const FIXTURE_IAM_PRINCIPAL_ALLOWLIST = Object.freeze(
         firebase_admin_backend:
           "serviceAccount:firebase-adminsdk-ab123@" +
           "daegu-miami-production.iam.gserviceaccount.com",
+        private_writer_runtime:
+          "serviceAccount:academy-private-writer-runtime@" +
+          "daegu-miami-production.iam.gserviceaccount.com",
+        private_preview_runtime:
+          "serviceAccount:academy-private-preview-rt@" +
+          "daegu-miami-production.iam.gserviceaccount.com",
         future_reset_executor:
           "serviceAccount:academy-reset-executor@" +
           "daegu-miami-production.iam.gserviceaccount.com",
@@ -199,6 +258,22 @@ function runtimeGitFixture() {
         headSha256: sha256,
       }),
   );
+  const criticalSourceByPath =
+    new Map(criticalSources.map((source) => [source.path, source]));
+  const iamContractSourceIdentity = {
+    privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+    privateRuntimeIamContractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+    buildScopeContractVersion: BUILD_SCOPE_CONTRACT_VERSION,
+    buildScopeContractDigest: BUILD_SCOPE_CONTRACT_DIGEST,
+    sources: [
+      criticalSourceByPath.get(
+          "functions/scripts/academy-functions-build-scope-contract.mjs",
+      ),
+      criticalSourceByPath.get(
+          "functions/scripts/academy-private-runtime-iam-contract.mjs",
+      ),
+    ],
+  };
   return {
     headSha: SHA,
     treeSha: TREE_SHA,
@@ -209,12 +284,19 @@ function runtimeGitFixture() {
     reviewedSourceIdentityDigest:
       EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
     reviewedSourceSetDigest: sha256Canonical(reviewedSources),
+    iamContractSourceIdentity,
+    iamContractSourceSetDigest: sha256Canonical(iamContractSourceIdentity),
   };
 }
 
-const RUNTIME_SERVICE_ACCOUNT =
-  `serviceAccount:${EXPECTED_PROJECT_NUMBER}-compute@` +
-  "developer.gserviceaccount.com";
+const RUNTIME_SERVICE_ACCOUNT_BY_FUNCTION = new Map(
+    FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING.map(
+        ({functionName, serviceAccountEmail}) => [
+          functionName,
+          `serviceAccount:${serviceAccountEmail}`,
+        ],
+    ),
+);
 
 function completeness(observedItems, {
   expectedCount = observedItems.length,
@@ -273,8 +355,56 @@ function functionRecords() {
         "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
       size: "1",
     },
-    runtimeServiceAccount: RUNTIME_SERVICE_ACCOUNT,
+    runtimeServiceAccount: RUNTIME_SERVICE_ACCOUNT_BY_FUNCTION.get(name),
+    triggerContractVersion: FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+    triggerContractId: FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+    triggerContractDigest: FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+    triggerType: FUNCTION_HTTP_TRIGGER_TYPE,
+    eventTriggerAbsent: true,
   }));
+}
+
+function runtimeActivationApprovalFixture() {
+  const approval = {
+    schemaVersion: EXECUTABLE_APPROVAL_VERSION,
+    approvalId: "academy-reset-freeze-runtime-iam-fixture",
+    approvedAt: APPROVED_AT,
+    provisioningPrincipal: "user:provisioner@daegu-miami.com",
+    impersonationPrincipal: "user:deployer@daegu-miami.com",
+    invokerOperatorPrincipal: "user:invoker@daegu-miami.com",
+    jitStartsAt: DEPLOYMENT_AT,
+    jitExpiresAt: EXPIRES_AT,
+    organizationPolicy: structuredClone(ORGANIZATION_POLICY_EVIDENCE),
+    organizationPolicyLineage:
+      structuredClone(buildOrganizationPolicyLineageReference()),
+    actualProvisioningEligible: false,
+    deploymentApprovalEligible: false,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: false,
+    approvalDigest: "",
+  };
+  approval.approvalDigest = buildExecutableApprovalDigest(approval);
+  return approval;
+}
+
+function runtimeActivationReceiptFixture(approval) {
+  const receipt = {
+    schemaVersion: FREEZE_ACTIVATION_RECEIPT_VERSION,
+    contractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+    exactChronologyDigest: "",
+    approvalId: approval.approvalId,
+    approvalDigest: approval.approvalDigest,
+    observedAt: RUNTIME_IAM_TRANSITION_AT,
+    organizationPolicyLineage:
+      structuredClone(buildOrganizationPolicyLineageReference()),
+    fromState: STEADY_STATE,
+    toState: FREEZE_ACTIVE_STATE,
+    before: structuredClone(buildStateSnapshot(STEADY_STATE)),
+    after: structuredClone(buildStateSnapshot(FREEZE_ACTIVE_STATE)),
+  };
+  receipt.exactChronologyDigest =
+    buildTransitionReceiptChronologyDigest(receipt, approval);
+  return receipt;
 }
 
 function approvedDeploymentResources(iamExpectedState) {
@@ -314,6 +444,7 @@ function functionsObservation() {
   return {
     records,
     guardedExportNames: [...EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES],
+    triggerEvidence: buildFunctionTriggerAbsenceEvidence(records, records),
     completeness: completeness(records, {
       expectedCount: EXPECTED_DEPLOYED_FUNCTION_NAMES.length,
       pageCount: 2,
@@ -426,6 +557,9 @@ function unboundEvidenceFixture() {
   const byPath = new Map(
       runtimeGit.criticalSources.map((source) => [source.path, source]),
   );
+  const runtimeIamActivationApproval = runtimeActivationApprovalFixture();
+  const runtimeIamActivationReceipt =
+    runtimeActivationReceiptFixture(runtimeIamActivationApproval);
   const evidence = {
     schemaVersion: WRITE_FREEZE_CONTRACT_VERSION,
     projectIdentityContractVersion: PROJECT_IDENTITY_CONTRACT_VERSION,
@@ -456,6 +590,12 @@ function unboundEvidenceFixture() {
         approvedRulesSourceDigest: DIGEST_B,
       },
       resources: approvedDeploymentResources(iamExpectedState),
+      runtimeIamActivationApproval,
+      runtimeIamActivationReceipt,
+      organizationPolicyLineage:
+        structuredClone(buildOrganizationPolicyLineageReference()),
+      freezeIamContractLineage:
+        buildFreezeIamContractLineage(runtimeIamActivationApproval),
       providerDependencyApproval: {
         ...structuredClone(PROVIDER_ADAPTER_METADATA),
         strategy: "declared_google_auth_library_rest",
@@ -809,6 +949,62 @@ function deepFreezeFixture(value, seen = new Set()) {
   }
   return Object.freeze(value);
 }
+
+test("v6 Runtime IAM and Build scope lineage is mandatory and fail-closed",
+    () => {
+      const accepted = evidenceFixture();
+      assert.doesNotThrow(() => validate(accepted));
+      assert.equal(
+          accepted.deploymentApprovalReceipt.runtimeIamActivationReceipt
+              .toState,
+          FREEZE_ACTIVE_STATE,
+      );
+      assert.equal(
+          accepted.deploymentApprovalReceipt.freezeIamContractLineage
+              .buildScopeContractDigest,
+          BUILD_SCOPE_CONTRACT_DIGEST,
+      );
+
+      for (const mutate of [
+        (evidence) => {
+          delete evidence.deploymentApprovalReceipt.runtimeIamActivationReceipt;
+        },
+        (evidence) => {
+          evidence.deploymentApprovalReceipt.runtimeIamActivationReceipt
+              .after.principalPermissions.find(({member}) =>
+                member.includes("academy-private-writer-runtime"))
+              .permissions.push("datastore.entities.update");
+        },
+        (evidence) => {
+          evidence.deploymentApprovalReceipt.freezeIamContractLineage
+              .buildScopeContractDigest = DIGEST_A;
+        },
+        (evidence) => {
+          delete evidence.deploymentApprovalReceipt.organizationPolicyLineage;
+        },
+        (evidence) => {
+          evidence.deploymentApprovalReceipt.organizationPolicyLineage
+              .organizationPolicyEvidenceDigest = DIGEST_A;
+        },
+        (evidence) => {
+          evidence.deploymentApprovalReceipt.runtimeIamActivationReceipt
+              .organizationPolicyLineage
+              .organizationPolicyEffectiveDecision = "ALLOW";
+        },
+        (evidence) => {
+          evidence.deploymentApprovalReceipt.resources.functions.find(
+              ({name}) => name === "createFixedPrivateLessonAssignment",
+          ).runtimeServiceAccount =
+            `serviceAccount:${EXPECTED_PROJECT_NUMBER}-compute@` +
+            "developer.gserviceaccount.com";
+        },
+      ]) {
+        const candidate = evidenceFixture();
+        mutate(candidate);
+        resign(candidate);
+        assert.throws(() => validate(candidate));
+      }
+    });
 
 test("operation classification and permission manifest bind exact 29+1 sets",
     () => {
@@ -1180,6 +1376,11 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
   }
   assert.equal(first.policyAnalysisSource, "mandatory_iam_raw_analysis");
   assert.equal(first.executionEligible, false);
+  assert.equal(first.publicationEligible, false);
+  assert.deepEqual(
+      first.organizationPolicyLineage,
+      buildOrganizationPolicyLineageReference(),
+  );
   assert.deepEqual(first.approvedProviderOperationIds,
       PROVIDER_ADAPTER_METADATA.allowedOperations);
   assert.equal(first.providerTransport, PROVIDER_ADAPTER_METADATA.transport);
@@ -1425,6 +1626,32 @@ test("provider completeness, dependency, lineage, and proof gates fail closed",
           result.observation.functions.completeness.observedSetDigest =
             DIGEST_A;
         }, /canonical observed set/],
+        [(result) => {
+          delete result.observation.functions.triggerEvidence;
+        }, /unknown or missing fields/],
+        [(result) => {
+          result.observation.functions.triggerEvidence = {
+            ...result.observation.functions.triggerEvidence,
+            triggerAbsenceEvidenceDigest: DIGEST_A,
+          };
+        }, /trigger absence evidence mismatch/],
+        [(result) => {
+          result.observation.functions.records[0].name =
+            "same-count-foreign-function";
+        }, /trigger absence evidence mismatch|deployed function/],
+        [(result) => {
+          const records = result.observation.functions.records;
+          records[0].name = "coherent-same-count-foreign-function";
+          result.observation.functions.triggerEvidence =
+            buildFunctionTriggerAbsenceEvidence(records, records);
+          result.observation.functions.completeness = completeness(records, {
+            expectedCount: EXPECTED_DEPLOYED_FUNCTION_NAMES.length,
+            pageCount: 2,
+          });
+        }, /deployed function|approval lineage/],
+        [(result) => {
+          delete result.observation.functions.records[0].eventTriggerAbsent;
+        }, /unknown or missing fields/],
         [(result) => {
           result.observation.dependencyContract.strategy =
             "firebase_cli_private";
@@ -2360,6 +2587,96 @@ test("provider-observed activation chronology is exact and proof-bound",
   );
 });
 
+test("integrated chronology A-H uses exact nanoseconds and exclusive expiry",
+    async () => {
+      const accepted = evidenceFixture();
+      const acceptedRuntime = await genuineRuntimeFor(accepted);
+      const acceptedValidation = validateWriteFreezeEvidence(accepted, {
+        providerRuntimeContext: acceptedRuntime.providerRuntimeContext,
+      });
+      assert.match(
+          acceptedValidation.activationChronology
+              .exactNanosecondChronologyDigest,
+          /^[0-9a-f]{64}$/,
+      );
+
+      const equalExpiry = evidenceFixture();
+      equalExpiry.verifiedAt = equalExpiry.freezeWindow.expiresAt;
+      resign(equalExpiry);
+      const equalRuntime = await genuineRuntimeFor(equalExpiry);
+      assert.throws(
+          () => validateWriteFreezeEvidence(equalExpiry, {
+            providerRuntimeContext: equalRuntime.providerRuntimeContext,
+          }),
+          /freeze window/,
+      );
+
+      const oneNanosecondBeforeExpiry = evidenceFixture();
+      oneNanosecondBeforeExpiry.verifiedAt =
+        oneNanosecondBefore(oneNanosecondBeforeExpiry.freezeWindow.expiresAt);
+      resign(oneNanosecondBeforeExpiry);
+      const nearExpiryRuntime =
+        await genuineRuntimeFor(oneNanosecondBeforeExpiry);
+      assert.doesNotThrow(() => validateWriteFreezeEvidence(
+          oneNanosecondBeforeExpiry,
+          {
+            currentTimestamp: oneNanosecondBeforeExpiry.verifiedAt,
+            providerRuntimeContext: nearExpiryRuntime.providerRuntimeContext,
+          },
+      ));
+
+      const invertedRuntimeIam = evidenceFixture();
+      const activationReceipt =
+        invertedRuntimeIam.deploymentApprovalReceipt
+            .runtimeIamActivationReceipt;
+      activationReceipt.observedAt =
+        oneNanosecondAfter(IAM_READ_ONLY_AT);
+      assert.equal(compareExactRfc3339UtcInstants(
+          activationReceipt.observedAt,
+          IAM_READ_ONLY_AT,
+      ), 1);
+      activationReceipt.exactChronologyDigest =
+        buildTransitionReceiptChronologyDigest(
+            activationReceipt,
+            invertedRuntimeIam.deploymentApprovalReceipt
+                .runtimeIamActivationApproval,
+        );
+      resign(invertedRuntimeIam);
+      const invertedRuntime = await genuineRuntimeFor(invertedRuntimeIam);
+      assert.throws(
+          () => validateWriteFreezeEvidence(invertedRuntimeIam, {
+            providerRuntimeContext: invertedRuntime.providerRuntimeContext,
+          }),
+          /activation order/,
+      );
+
+      const fourDigits = evidenceFixture();
+      fourDigits.freezeWindow.activatedAt =
+        fourDigits.freezeWindow.activatedAt.replace(
+            /\.(\d{3})Z$/,
+            (_, milliseconds) => `.${milliseconds}0Z`,
+        );
+      resign(fourDigits);
+      const fourDigitRuntime = await genuineRuntimeFor(fourDigits);
+      assert.doesNotThrow(() => validateWriteFreezeEvidence(fourDigits, {
+        providerRuntimeContext: fourDigitRuntime.providerRuntimeContext,
+      }));
+
+      const tooPrecise = evidenceFixture();
+      tooPrecise.freezeWindow.activatedAt =
+        tooPrecise.freezeWindow.activatedAt.replace(
+            /\.(\d{3})Z$/,
+            (_, milliseconds) => `.${milliseconds}0000000Z`,
+        );
+      resign(tooPrecise);
+      assert.throws(
+          () => validateWriteFreezeEvidence(tooPrecise, {
+            providerRuntimeContext: acceptedRuntime.providerRuntimeContext,
+          }),
+          /exact RFC3339 UTC/,
+      );
+    });
+
 test("nine probes bind exact provider, entrypoint, sentinel, project, academy", () => {
   assert.equal(REQUIRED_NEGATIVE_PROBES.length, 9);
   for (const [field, value] of [
@@ -2633,6 +2950,134 @@ test("runtime context binds genuine provider and exact clean Git identity",
             repositoryRoot,
           }),
           /dirty/,
+      );
+    });
+
+function rawDoubleScanDenyPolicy(index = 1) {
+  const attachmentPoint =
+    `cloudresourcemanager.googleapis.com/projects/${EXPECTED_PROJECT_ID}`;
+  return {
+    name: `policies/${attachmentPoint}/denypolicies/policy-${index}`,
+    updateTime: "2026-07-19T00:00:00Z",
+    rules: [{
+      description: `reviewed deny rule ${index}`,
+      denyRule: {
+        deniedPrincipals: ["principalSet://goog/public:all"],
+        exceptionPrincipals: [],
+        deniedPermissions: [
+          "cloudresourcemanager.googleapis.com/projects.get",
+        ],
+        exceptionPermissions: [],
+      },
+    }],
+  };
+}
+
+async function executeRawIamDoubleScanFixture(options = {}) {
+  const evidence = evidenceFixture();
+  for (const functionRecord of
+    evidence.deploymentApprovalReceipt.resources.functions) {
+    const source = functionRecord.providerSourceIdentity;
+    source.value = source.value.replace(
+        /^gs:\/\/[^/]+/,
+        `gs://${STANDALONE_SOURCE_BUCKET_NAME}`,
+    );
+  }
+  const {approvalReceipt, transportExecutor} =
+    createGenuineTransportFixtureForEvidence(evidence, options);
+  return executeInjectedMockRawProductionObserverHarness({
+    mockOnly: true,
+    sessionReceipt: approvalReceipt,
+    transportExecutor,
+  });
+}
+
+test("genuine IAM double-scan A-C/L — independent empty scans are stable",
+    async () => {
+      const result = await executeRawIamDoubleScanFixture();
+      assert.equal(result.inventoryStable, true);
+      assert.equal(result.providerObservationComplete, true);
+      assert.equal(result.rawObservation.iam.denyPolicyAnalysisComplete, true);
+      assert.equal(result.rawObservation.iam.denyPolicies.length, 0);
+      assert.equal(result.counts.executedMandatoryOperationCount, 24);
+      assert.equal(result.counts.notApplicableMandatoryOperationCount, 5);
+      assert.equal(result.notApplicableMandatoryOperationIds.length, 5);
+      assert.equal(result.blockers.length, 0);
+      assert.deepEqual(
+          result.operationTraceSummary,
+          result.rawObservation.operationTraceSummary,
+      );
+      assert.deepEqual(
+          result.executedMandatoryOperationIds,
+          result.operationTraceSummary.executedMandatoryOperationIds,
+      );
+      assert.equal(
+          result.digests.operationTraceDigest,
+          sha256Canonical(result.rawObservation.operationTrace),
+      );
+      assert.equal(
+          result.digests.schedulerDigest,
+          sha256Canonical(result.rawObservation.scheduler.jobs),
+      );
+      assert.equal(
+          result.rawObservation.scheduler.digest,
+          result.digests.schedulerDigest,
+      );
+      assert.equal(
+          result.digests.rawObservationDigest,
+          sha256Canonical(result.rawObservation),
+      );
+      assert.equal(
+          result.rawObservation.operationTrace.filter(({operationId}) =>
+            operationId ===
+              "cloudresourcemanager.v3.projects.get").length,
+          2,
+      );
+    });
+
+test("genuine IAM double-scan B — fully fetched deny policies are complete",
+    async () => {
+      const policies = [rawDoubleScanDenyPolicy()];
+      const result = await executeRawIamDoubleScanFixture({
+        denyPoliciesByScan: [policies, structuredClone(policies)],
+      });
+      assert.equal(result.inventoryStable, true);
+      assert.equal(result.rawObservation.iam.denyPolicyAnalysisComplete, true);
+      assert.equal(result.rawObservation.iam.denyPolicies.length, 1);
+      assert.equal(result.counts.executedMandatoryOperationCount, 25);
+      assert.equal(result.counts.notApplicableMandatoryOperationCount, 4);
+      assert.deepEqual(
+          result.blockers,
+          ["DENY_POLICY_PRESENT_REQUIRES_REVIEW"],
+      );
+    });
+
+test("genuine IAM double-scan G/H — empty/nonempty mismatches reject",
+    async () => {
+      const policies = [rawDoubleScanDenyPolicy()];
+      for (const denyPoliciesByScan of [
+        [[], policies],
+        [policies, []],
+      ]) {
+        await assert.rejects(
+            executeRawIamDoubleScanFixture({denyPoliciesByScan}),
+            /INVENTORY_UNSTABLE/,
+        );
+      }
+    });
+
+test("genuine IAM double-scan E/F/K — coherent second-scan drift rejects",
+    async () => {
+      await assert.rejects(
+          executeRawIamDoubleScanFixture({
+            responseMutator: ({iamScanIndex, input, value}) =>
+              iamScanIndex === 1 &&
+              input.operationId ===
+                "cloudresourcemanager.v3.projects.getIamPolicy" ?
+                {...value, etag: "second-scan-drift"} :
+                value,
+          }),
+          /INVENTORY_UNSTABLE/,
       );
     });
 

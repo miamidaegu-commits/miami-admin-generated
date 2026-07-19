@@ -44,23 +44,162 @@ const backendFreezeSource = fs.readFileSync(
     "utf8",
 );
 
-test("write-freeze validate verify and build exports match exact allowlist", () => {
-  const publicValidationFunctions = Object.keys(writeFreezeContract)
-      .filter((key) =>
-        /^(?:build|validate|verify)/.test(key) &&
-        typeof writeFreezeContract[key] === "function")
-      .sort();
-  assert.deepEqual(publicValidationFunctions, [
-    "buildApprovedIamExpectedState",
-    "buildDeterministicWriteFreezeProof",
-    "buildEvidenceDigestInput",
-    "buildIamFamilyCompleteness",
-    "validateObservationCompleteness",
-    "validateProviderAdapterReviewedSources",
-    "validateProviderDependencyContract",
-    "validateWriteFreezeEvidence",
-  ]);
+const APPROVED_PUBLIC_EXPORTS = Object.freeze([
+  "APPROVED_IAM_STATE_CONTRACT_VERSION",
+  "APPROVED_PROVIDER_ADAPTER_ID",
+  "CRITICAL_RUNTIME_SOURCE_PATHS",
+  "DEPLOYMENT_APPROVAL_RECEIPT_VERSION",
+  "EXPECTED_ACADEMY_ID",
+  "EXPECTED_DEPLOYED_FUNCTION_NAMES",
+  "EXPECTED_FUNCTION_GENERATION",
+  "EXPECTED_FUNCTION_REGION",
+  "EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES",
+  "EXPECTED_PROJECT_ID",
+  "EXPECTED_PROJECT_NUMBER",
+  "EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST",
+  "FREEZE_IAM_CONTRACT_LINEAGE_VERSION",
+  "FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST",
+  "FUNCTION_HTTP_TRIGGER_CONTRACT_ID",
+  "FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION",
+  "FUNCTION_HTTP_TRIGGER_TYPE",
+  "FUNCTION_TRIGGER_ABSENCE_EVIDENCE_VERSION",
+  "FUTURE_EXECUTOR_EFFECTIVE_PERMISSIONS",
+  "IAM_EVIDENCE_FAMILY_NAMES",
+  "IAM_FAMILY_COMPLETENESS_VERSION",
+  "IAM_PRINCIPAL_POLICY_SCHEMA",
+  "IAM_PRINCIPAL_POLICY_VERSION",
+  "KNOWN_IAM_GROUPS",
+  "MAX_DRAIN_QUIET_WINDOW_SECONDS",
+  "MAX_FREEZE_WINDOW_SECONDS",
+  "MIN_DRAIN_QUIET_WINDOW_SECONDS",
+  "NON_EXECUTOR_EFFECTIVE_PERMISSIONS",
+  "OBSERVATION_COMPLETENESS_VERSION",
+  "OBSERVER_PRINCIPAL_POLICY",
+  "PINNED_STANDALONE_TOPOLOGY_EVIDENCE",
+  "PROJECT_IDENTITY_CONTRACT_VERSION",
+  "PROOF_GATE_KEYS",
+  "PROVIDER_ADAPTER_METADATA",
+  "PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION",
+  "PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM",
+  "PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES",
+  "PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS",
+  "PROVIDER_DEPENDENCY_CONTRACT_VERSION",
+  "PROVIDER_DEPENDENCY_STRATEGIES",
+  "PROVIDER_OBSERVATION_VERSION",
+  "PROVIDER_READ_ONLY_OPERATIONS",
+  "REQUIRED_COMPARISON_BASELINE_DIGEST",
+  "REQUIRED_IAM_PRINCIPAL_IDS",
+  "REQUIRED_NEGATIVE_PROBES",
+  "REQUIRED_PROVIDER_OBSERVATION_OPERATION_IDS",
+  "REVIEWED_IAM_ROLE_DEFINITIONS",
+  "REVIEWED_PERMISSION_UNIVERSE",
+  "REVIEWED_WRITABLE_PERMISSIONS",
+  "ROLLBACK_UNFREEZE_ORDER",
+  "SCHEDULER_JOB_ALLOWLIST",
+  "STANDALONE_PROJECT_OBSERVER_PROFILE",
+  "TARGET_PROJECT_IDENTITY",
+  "UNFREEZE_ORDER",
+  "WRITABLE_PERMISSION_DERIVATION_VERSION",
+  "WRITER_DRAIN_CLASSES",
+  "WRITE_FREEZE_CONTRACT_VERSION",
+  "WRITE_FREEZE_PROOF_VERSION",
+  "WRITE_FREEZE_SENTINEL_MODE",
+  "assertCanonicalJsonShape",
+  "assertHttpCallableRawFunctionRecord",
+  "assertNoSecretOrPii",
+  "assertObserverPrincipalPolicy",
+  "assertStandaloneProjectObserverProfile",
+  "buildApprovedIamExpectedState",
+  "buildDeterministicWriteFreezeProof",
+  "buildEvidenceDigestInput",
+  "buildFreezeIamContractLineage",
+  "buildFunctionTriggerAbsenceEvidence",
+  "buildIamFamilyCompleteness",
+  "computeDrainTelemetryDigest",
+  "computeEvidenceArtifactDigest",
+  "computeIamPolicyDigest",
+  "computeNegativeProbeEvidenceDigest",
+  "computeObservedSetDigest",
+  "computeProviderAdapterReviewedSourceIdentityDigest",
+  "computeSentinelSnapshotDigest",
+  "deriveCapabilitiesFromEffectivePermissions",
+  "deriveStandaloneProjectObserverProfile",
+  "expectedIamPrincipalMember",
+  "parseRulesResourceIdentity",
+  "sha256Canonical",
+  "stableStringify",
+  "validateFunctionTriggerAbsenceEvidence",
+  "validateObservationCompleteness",
+  "validateProviderAdapterReviewedSources",
+  "validateProviderDependencyContract",
+  "validateWriteFreezeEvidence",
+]);
+
+function assertExactPublicExports(
+    actualExports,
+    approvedExports = APPROVED_PUBLIC_EXPORTS,
+) {
+  assert.equal(
+      new Set(approvedExports).size,
+      approvedExports.length,
+      "approved public export allowlist must not contain duplicates",
+  );
+  assert.deepEqual([...actualExports].sort(), [...approvedExports].sort());
+}
+
+test("write-freeze full public namespace matches the exact allowlist", () => {
+  assertExactPublicExports(Object.keys(writeFreezeContract));
+  assert.equal(APPROVED_PUBLIC_EXPORTS.length, 88);
 });
+
+test("write-freeze export boundary rejects every prefix and keyset bypass",
+    () => {
+      const actual = Object.keys(writeFreezeContract);
+      const without = (name) => actual.filter((entry) => entry !== name);
+      const withUnexpected = (name) => [...actual, name];
+
+      // The former prefix-filtered subset did not observe public assert* exports.
+      assert.throws(() => assertExactPublicExports(
+          actual,
+          APPROVED_PUBLIC_EXPORTS.filter((name) =>
+            name !== "assertHttpCallableRawFunctionRecord"),
+      ));
+      for (const unexpected of [
+        "assertUnexpectedRuntimeExport",
+        "createUnexpectedRuntimeExport",
+        "zUnexpectedExport",
+      ]) {
+        assert.throws(() =>
+          assertExactPublicExports(withUnexpected(unexpected)));
+      }
+      assert.throws(() =>
+        assertExactPublicExports(without("stableStringify")));
+      assert.throws(() => assertExactPublicExports(
+          actual,
+          [...APPROVED_PUBLIC_EXPORTS, "missingApprovedRuntimeExport"],
+      ));
+      assert.throws(() => assertExactPublicExports(
+          actual,
+          [...APPROVED_PUBLIC_EXPORTS,
+            "buildFunctionTriggerAbsenceEvidence"],
+      ));
+      assert.doesNotThrow(() => assertExactPublicExports(
+          [...actual].reverse(),
+          [...APPROVED_PUBLIC_EXPORTS].reverse(),
+      ));
+      for (const helper of [
+        "buildFunctionTriggerAbsenceEvidence",
+        "validateFunctionTriggerAbsenceEvidence",
+      ]) {
+        assert.throws(() => assertExactPublicExports(without(helper)));
+      }
+      assert.throws(() => assertExactPublicExports(
+          actual.map((name) =>
+            name === "assertHttpCallableRawFunctionRecord" ?
+              "assertUnexpectedRuntimeExport" :
+              name),
+      ));
+    });
 const verifierSource = fs.readFileSync(
     path.join(
         repositoryRoot,
@@ -215,7 +354,7 @@ test("deployed functions, IAM, scheduler, and unfreeze use central exact sets",
       assert.deepEqual(deployed, EXPECTED_DEPLOYED_FUNCTION_NAMES);
       assert.equal(deployed.length, 35);
       assert.equal(new Set(deployed).size, deployed.length);
-      assert.equal(IAM_PRINCIPAL_POLICY_SCHEMA.length, 3);
+      assert.equal(IAM_PRINCIPAL_POLICY_SCHEMA.length, 5);
       assert.deepEqual(TARGET_PROJECT_IDENTITY, {
         projectIdentityContractVersion: PROJECT_IDENTITY_CONTRACT_VERSION,
         targetProjectId: EXPECTED_PROJECT_ID,
@@ -238,6 +377,14 @@ test("deployed functions, IAM, scheduler, and unfreeze use central exact sets",
               memberBinding: "approval_receipt_exact",
             },
             {
+              id: "private_writer_runtime",
+              memberBinding: "canonical_runtime_contract",
+            },
+            {
+              id: "private_preview_runtime",
+              memberBinding: "canonical_runtime_contract",
+            },
+            {
               id: "future_reset_executor",
               memberBinding: "approval_receipt_exact",
             },
@@ -250,7 +397,6 @@ test("deployed functions, IAM, scheduler, and unfreeze use central exact sets",
       );
       assert.equal(SCHEDULER_JOB_ALLOWLIST.length, 1);
       assert.deepEqual(UNFREEZE_ORDER, [
-        "audit",
         "iamRestore",
         "schedulerRestore",
         "sentinelDeactivate",

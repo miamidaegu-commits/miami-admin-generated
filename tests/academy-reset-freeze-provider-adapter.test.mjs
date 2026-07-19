@@ -12,6 +12,10 @@ import {
   EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES,
   EXPECTED_PROJECT_ID,
   EXPECTED_PROJECT_NUMBER,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+  FUNCTION_HTTP_TRIGGER_TYPE,
   IAM_EVIDENCE_FAMILY_NAMES,
   PROVIDER_ADAPTER_METADATA,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
@@ -21,12 +25,15 @@ import {
   REVIEWED_PERMISSION_UNIVERSE,
   REVIEWED_WRITABLE_PERMISSIONS,
   WRITABLE_PERMISSION_DERIVATION_VERSION,
+  assertHttpCallableRawFunctionRecord,
   buildApprovedIamExpectedState,
+  buildFunctionTriggerAbsenceEvidence,
   buildIamFamilyCompleteness,
   computeIamPolicyDigest,
   computeProviderAdapterReviewedSourceIdentityDigest,
   sha256Canonical,
   validateProviderAdapterReviewedSources,
+  validateFunctionTriggerAbsenceEvidence,
 } from "../functions/scripts/academy-reset-write-freeze-contract.mjs";
 import {
   PROVIDER_ADAPTER_CONTRACT_VERSION,
@@ -142,6 +149,11 @@ function functionRecords() {
       size: "1",
     },
     runtimeServiceAccount: computeMember,
+    triggerContractVersion: FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+    triggerContractId: FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+    triggerContractDigest: FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+    triggerType: FUNCTION_HTTP_TRIGGER_TYPE,
+    eventTriggerAbsent: true,
   }));
 }
 
@@ -836,8 +848,34 @@ test("mock adapter derives all families and a canonical zero-mutation trace",
               ),
           /GENUINE_MOCK_PROVIDER_RESULT_REQUIRED/,
       );
+      const missingTriggerEvidence = structuredClone(result);
+      delete missingTriggerEvidence.observation.functions.triggerEvidence;
+      assert.throws(
+          () => adapterModule
+              .assertGenuineMockAcademyResetFreezeProviderResult(
+                  missingTriggerEvidence,
+                  reviewedSources,
+              ),
+          /GENUINE_MOCK_PROVIDER_RESULT_REQUIRED/,
+      );
       assert.equal(Object.isFrozen(result), true);
       assert.equal(Object.isFrozen(result.observation.functions.records), true);
+      assert.equal(
+          validateFunctionTriggerAbsenceEvidence(
+              result.observation.functions.triggerEvidence,
+              result.observation.functions.records,
+          ),
+          true,
+      );
+      assert.equal(
+          result.observation.functions.triggerEvidence.rawRecordCount,
+          EXPECTED_DEPLOYED_FUNCTION_NAMES.length,
+      );
+      assert.equal(
+          result.observation.functions.triggerEvidence
+              .eventTriggerOwnPropertyCount,
+          0,
+      );
       assert.deepEqual(
           result.observation.functions.records.map(({name}) => name),
           EXPECTED_DEPLOYED_FUNCTION_NAMES,
@@ -895,6 +933,197 @@ test("mock adapter derives all families and a canonical zero-mutation trace",
       assertRawIamWritableDenial(result.observation.iamPolicy);
       await assert.rejects(adapter.observeDeployment(),
           /ADAPTER_SESSION_ALREADY_OBSERVED/);
+    });
+
+test("eventTrigger adapter A-G — raw own-property rejects whole result",
+    async () => {
+      // Regression: the adapter previously projected raw provider records
+      // before checking eventTrigger, unlike the direct Observer.
+      assert.throws(
+          () => assertHttpCallableRawFunctionRecord({
+            name: "undefined-own-property",
+            eventTrigger: undefined,
+          }),
+          /FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED/,
+      );
+      for (const [label, eventTrigger] of [
+        ["firestore", {
+          eventType: "google.cloud.firestore.document.v1.written",
+        }],
+        ["pubsub", {
+          eventType: "google.cloud.pubsub.topic.v1.messagePublished",
+        }],
+        ["empty", {}],
+        ["null", null],
+      ]) {
+        const receipt = fullApprovalReceipt();
+        const executor = providerExecutor(receipt, (operationId, value) => {
+          if (operationId ===
+                "cloudfunctions.v2.projects.locations.functions.get" &&
+              value.name.endsWith(
+                  "/previewFixedPrivateLessonOutcomeAction",
+              )) {
+            return {...value, eventTrigger};
+          }
+          return value;
+        });
+        const adapter = createMockAcademyResetFreezeProviderAdapter(
+            deepFreeze({
+              approvalReceipt: receipt,
+              repositoryRoot,
+              reviewedSourceIdentities:
+                PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+              transportExecutor: executor,
+            }),
+        );
+        await assert.rejects(
+            adapter.observeDeployment(),
+            /FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED/,
+            label,
+        );
+      }
+    });
+
+test("eventTrigger adapter H — coherent derived claims cannot bypass raw reject",
+    async () => {
+      const receipt = fullApprovalReceipt();
+      const executor = providerExecutor(receipt, (operationId, value) =>
+        operationId ===
+            "cloudfunctions.v2.projects.locations.functions.get" &&
+        value.name.endsWith("/previewFixedPrivateLessonOutcomeAction") ?
+          {...value, eventTrigger: {
+            eventType: "google.cloud.firestore.document.v1.written",
+          }} :
+          value);
+      const adapter = createMockAcademyResetFreezeProviderAdapter(deepFreeze({
+        approvalReceipt: receipt,
+        repositoryRoot,
+        reviewedSourceIdentities:
+          PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+        transportExecutor: executor,
+      }));
+      await assert.rejects(
+          adapter.observeDeployment(),
+          /FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED/,
+      );
+    });
+
+test("eventTrigger adapter I-Q — list raw preimage rejects before projection",
+    async () => {
+      for (const [label, eventTrigger] of [
+        ["firestore", {
+          eventType: "google.cloud.firestore.document.v1.written",
+        }],
+        ["pubsub", {
+          eventType: "google.cloud.pubsub.topic.v1.messagePublished",
+        }],
+        ["empty", {}],
+        ["null", null],
+      ]) {
+        const receipt = fullApprovalReceipt();
+        const executor = providerExecutor(receipt, (operationId, value) => {
+          if (operationId ===
+              "cloudfunctions.v2.projects.locations.functions.list") {
+            return value.map((record, index) => index === 0 ?
+              {...record, eventTrigger} :
+              record);
+          }
+          return value;
+        });
+        const adapter = createMockAcademyResetFreezeProviderAdapter(
+            deepFreeze({
+              approvalReceipt: receipt,
+              repositoryRoot,
+              reviewedSourceIdentities:
+                PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+              transportExecutor: executor,
+            }),
+        );
+        await assert.rejects(
+            adapter.observeDeployment(),
+            /FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED/,
+            label,
+        );
+      }
+    });
+
+test("eventTrigger adapter R-S — list/GET keyset parity and reorder semantics",
+    async () => {
+      const swappedReceipt = fullApprovalReceipt();
+      const swappedExecutor = providerExecutor(
+          swappedReceipt,
+          (operationId, value) => {
+            if (operationId ===
+                "cloudfunctions.v2.projects.locations.functions.list") {
+              const swapped = structuredClone(value);
+              swapped[0].name = swapped[1].name;
+              return swapped;
+            }
+            return value;
+          },
+      );
+      const swappedAdapter = createMockAcademyResetFreezeProviderAdapter(
+          deepFreeze({
+            approvalReceipt: swappedReceipt,
+            repositoryRoot,
+            reviewedSourceIdentities:
+              PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+            transportExecutor: swappedExecutor,
+          }),
+      );
+      await assert.rejects(swappedAdapter.observeDeployment());
+
+      const reorderedReceipt = fullApprovalReceipt();
+      const reorderedExecutor = providerExecutor(
+          reorderedReceipt,
+          (operationId, value) => operationId ===
+              "cloudfunctions.v2.projects.locations.functions.list" ?
+            [...value].reverse() :
+            value,
+      );
+      const reorderedAdapter = createMockAcademyResetFreezeProviderAdapter(
+          deepFreeze({
+            approvalReceipt: reorderedReceipt,
+            repositoryRoot,
+            reviewedSourceIdentities:
+              PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
+            transportExecutor: reorderedExecutor,
+          }),
+      );
+      const reordered = await reorderedAdapter.observeDeployment();
+      assert.equal(
+          reordered.observation.functions.triggerEvidence
+              .listGetParityDigest,
+          buildFunctionTriggerAbsenceEvidence(
+              functionRecords(),
+              functionRecords(),
+          ).listGetParityDigest,
+      );
+    });
+
+test("eventTrigger evidence I-L — missing swap stale reject; reorder passes",
+    () => {
+      const records = functionRecords();
+      const evidence = buildFunctionTriggerAbsenceEvidence(records, records);
+      assert.throws(
+          () => validateFunctionTriggerAbsenceEvidence(undefined, records),
+      );
+
+      const swapped = structuredClone(records);
+      swapped[0].name = "same-count-foreign-function";
+      assert.throws(
+          () => validateFunctionTriggerAbsenceEvidence(evidence, swapped),
+      );
+
+      const stale = {...evidence, triggerAbsenceEvidenceDigest: "0".repeat(64)};
+      assert.throws(
+          () => validateFunctionTriggerAbsenceEvidence(stale, records),
+      );
+
+      const reordered = [...records].reverse();
+      const reorderedEvidence =
+        buildFunctionTriggerAbsenceEvidence(reordered, reordered);
+      assert.deepEqual(reorderedEvidence, evidence);
     });
 
 test("optional Troubleshooter responses do not control mock observation",
