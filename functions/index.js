@@ -20744,7 +20744,7 @@ exports.previewFixedPrivateLessonOutcomeAction = onCall(
       concurrency: 80,
       maxInstances: 10,
       serviceAccount:
-        "academy-private-preview-runtime@" +
+        "academy-private-preview-rt@" +
         "daegu-miami-production.iam.gserviceaccount.com",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
