@@ -278,17 +278,27 @@ HTTP callable trigger contract와 `eventTrigger` absence evidence를 기록하�
 function inventory digest가 이를 bind한다. Eventarc review 없이 event trigger나
 Service Agent binding을 허용하지 않는다.
 
-실행 approval은 세 principal에 strict ASCII dot-atom `user:<email>` 문법을 먼저
-검사한 뒤, 역할별 exact approved principal과 byte-for-byte 비교한다. trim,
+실행 approval의 세 principal은 source에 기본값이나 승인 사용자로 고정하지 않는다.
+`provisioningPrincipal`, `impersonationPrincipal`,
+`invokerOperatorPrincipal`을 execution receipt에서 반드시 제공하고 strict ASCII
+dot-atom `user:<email>` 문법, placeholder 부재, 역할 간 구분을 검사한다. trim,
 lowercase 또는 Unicode normalization은 하지 않는다. `jitStartsAt`,
-`jitExpiresAt`은 exact RFC3339 UTC이고 최대 2시간이다. Organization Policy는
-receipt-local 상태를 신뢰하지 않고 canonical evidence version/digest/status/
-decision/count를 포함한 pinned lineage와 exact 비교한다. 현재 authoritative
-evidence는 `UNKNOWN`, API disabled, count `null`이므로 actual provisioning,
-deployment/public-invoker approval, IAM mutation command publication과 proof
-publication은 모두 fail-closed false다. receipt와 digest만 ALLOW로 coherent하게
-바꾸는 경로는 없으며, 향후 ALLOW에는 source contract version/digest 변경과 별도
-release review가 필요하다.
+`jitExpiresAt`도 receipt 필수값이며 exact RFC3339 UTC, 현재 active, 최대 2시간이어야
+한다. exact 네 Service Account identity에 대한 complete key audit와 user-managed
+key count `0`도 receipt에 bind한다.
+
+Organization Policy는 receipt-local generic `ALLOW`를 신뢰하지 않고 canonical
+evidence version/digest/status와 direct/effective record count/digest를 포함한
+pinned lineage와 exact 비교한다. authoritative 상태는
+`OBSERVED_COMPATIBLE_WITH_EXPLICIT_CONTROLS`이며 API enabled, direct policy
+`0/4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`,
+effective policy
+`21/8fb48d51692619032166d4d8e60ea504f7973421d9e420f4a41ca5572987eb99`
+이다. 193-constraint catalog digest는 audit metadata일 뿐 eligibility를 바꾸지
+않는다. 이 호환성만으로 actual provisioning, deployment/public-invoker approval,
+IAM mutation command publication 또는 proof publication을 true로 만들지 않는다.
+exact principals/JIT/key audit/source binding/permission audit/compensating control이
+모두 receipt에서 승인되어야 한다.
 
 capability는 evidence claim이 아니라 exact effective Firestore/Auth permissions에서
 derive한다. receipt/provider/evidence가 서로 일치하더라도 pinned project ID/number

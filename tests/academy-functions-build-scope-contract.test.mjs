@@ -17,12 +17,20 @@ import {
   CUSTOM_ROLE_SUPPORT_EVIDENCE,
   DEPLOYMENT_COMPENSATING_CONTROLS,
   DEPLOYMENT_TARGETS,
+  DIRECT_PROJECT_ORGANIZATION_POLICY_RECORD_COUNT,
+  DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS_DIGEST,
   DEPLOY_PERMISSIONS,
   DEPLOY_PERMISSION_SET_DIGEST,
   DEPLOY_PROFILE,
+  EFFECTIVE_ORGANIZATION_POLICY_RECORD_COUNT,
+  EFFECTIVE_ORGANIZATION_POLICY_RECORDS,
+  EFFECTIVE_ORGANIZATION_POLICY_RECORDS_DIGEST,
   EVENTARC_EVIDENCE,
   FUNCTIONS_IDENTITIES,
+  IMMUTABLE_RELEASE_EVIDENCE,
   INFRASTRUCTURE_EVIDENCE_DIGEST,
+  ORGANIZATION_POLICY_COMPATIBILITY,
+  ORGANIZATION_POLICY_CONSTRAINT_CATALOG_AUDIT,
   ORGANIZATION_POLICY_EVIDENCE,
   ORGANIZATION_POLICY_EVIDENCE_VERSION,
   buildOrganizationPolicyLineageReference,
@@ -30,6 +38,7 @@ import {
   canonicalDigest,
   canonicalSetDigest,
   computeOrganizationPolicyEvidenceDigest,
+  deriveOrganizationPolicyCompatibility,
   validateApprovedInfrastructureEvidence,
   validateBuildScopeContract,
   validateCompensatingControls,
@@ -431,7 +440,7 @@ test("service-agent and custom-role support findings are exact", () => {
   );
 });
 
-test("Organization Policy remains UNKNOWN with no invented count", () => {
+test("Organization Policy pins exact 21-record compatible evidence", () => {
   const result = validateOrganizationPolicyEvidence();
   const lineage = buildOrganizationPolicyLineageReference();
   assert.equal(
@@ -442,13 +451,47 @@ test("Organization Policy remains UNKNOWN with no invented count", () => {
       ORGANIZATION_POLICY_EVIDENCE.projectId,
       "daegu-miami-production",
   );
-  assert.equal(ORGANIZATION_POLICY_EVIDENCE.apiEnabled, false);
-  assert.equal(ORGANIZATION_POLICY_EVIDENCE.observationStatus, "UNKNOWN");
-  assert.equal(ORGANIZATION_POLICY_EVIDENCE.effectivePolicyCount, null);
-  assert.equal(ORGANIZATION_POLICY_EVIDENCE.effectiveDecision, "UNKNOWN");
+  assert.equal(ORGANIZATION_POLICY_EVIDENCE.apiEnabled, true);
+  assert.equal(
+      ORGANIZATION_POLICY_EVIDENCE.observationStatus,
+      "OBSERVED_COMPATIBLE_WITH_EXPLICIT_CONTROLS",
+  );
+  assert.equal(
+      ORGANIZATION_POLICY_EVIDENCE.directProjectPolicies.count,
+      DIRECT_PROJECT_ORGANIZATION_POLICY_RECORD_COUNT,
+  );
+  assert.equal(
+      ORGANIZATION_POLICY_EVIDENCE.directProjectPolicies.digest,
+      DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS_DIGEST,
+  );
+  assert.equal(
+      ORGANIZATION_POLICY_EVIDENCE.effectivePolicies.count,
+      EFFECTIVE_ORGANIZATION_POLICY_RECORD_COUNT,
+  );
+  assert.equal(ORGANIZATION_POLICY_EVIDENCE.effectivePolicies.failedCount, 0);
+  assert.equal(
+      ORGANIZATION_POLICY_EVIDENCE.effectivePolicies.digest,
+      EFFECTIVE_ORGANIZATION_POLICY_RECORDS_DIGEST,
+  );
+  assert.deepEqual(
+      ORGANIZATION_POLICY_EVIDENCE.effectivePolicies.records,
+      EFFECTIVE_ORGANIZATION_POLICY_RECORDS,
+  );
+  assert.equal(
+      ORGANIZATION_POLICY_EVIDENCE.effectiveDecision,
+      "COMPATIBLE_WITH_EXPLICIT_CONTROLS",
+  );
   assert.equal(
       ORGANIZATION_POLICY_EVIDENCE.observationAvailability,
-      "UNAVAILABLE_API_DISABLED",
+      "AVAILABLE",
+  );
+  assert.deepEqual(
+      ORGANIZATION_POLICY_EVIDENCE.compatibility,
+      ORGANIZATION_POLICY_COMPATIBILITY,
+  );
+  assert.deepEqual(
+      ORGANIZATION_POLICY_EVIDENCE.constraintCatalogAudit,
+      ORGANIZATION_POLICY_CONSTRAINT_CATALOG_AUDIT,
   );
   assert.match(ORGANIZATION_POLICY_EVIDENCE.evidenceDigest, /^[a-f0-9]{64}$/);
   assert.equal(
@@ -456,22 +499,97 @@ test("Organization Policy remains UNKNOWN with no invented count", () => {
       ORGANIZATION_POLICY_EVIDENCE.evidenceDigest,
   );
   assert.equal(validateOrganizationPolicyLineageReference(lineage), true);
-  assert.equal(result.actualProvisioningEligible, false);
-  assert.equal(result.deploymentApprovalEligible, false);
-  assert.equal(result.publicInvokerApprovalEligible, false);
-  assert.equal(result.iamMutationCommandPublication, false);
+  assert.equal(result.organizationPolicyCompatible, true);
+  assert.equal(result.provisioningPolicyCompatible, true);
+  assert.equal(result.deploymentPolicyCompatible, true);
+  assert.equal(result.publicInvokerPolicyCompatible, true);
+  assert.equal(result.mutationCommandPublicationPolicyCompatible, true);
 
-  const inventedZero = clone(ORGANIZATION_POLICY_EVIDENCE);
-  inventedZero.effectivePolicyCount = 0;
-  assert.throws(
-      () => validateOrganizationPolicyEvidence(inventedZero),
-      /exact canonical invariant|UNKNOWN must fail closed/,
-  );
   const staleLineage = clone(lineage);
   staleLineage.organizationPolicyEvidenceDigest = "0".repeat(64);
   assert.throws(() =>
     validateOrganizationPolicyLineageReference(staleLineage));
 });
+
+test("Organization Policy rejects direct/effective count and digest drift",
+    () => {
+      for (const mutate of [
+        (evidence) => {
+          evidence.directProjectPolicies.count = 1;
+        },
+        (evidence) => {
+          evidence.directProjectPolicies.digest = "0".repeat(64);
+        },
+        (evidence) => {
+          evidence.effectivePolicies.count = 20;
+        },
+        (evidence) => {
+          evidence.effectivePolicies.digest = "0".repeat(64);
+        },
+      ]) {
+        const evidence = clone(ORGANIZATION_POLICY_EVIDENCE);
+        mutate(evidence);
+        evidence.evidenceDigest =
+          computeOrganizationPolicyEvidenceDigest(evidence);
+        assert.throws(
+            () => validateOrganizationPolicyEvidence(evidence),
+            /Organization Policy/,
+        );
+      }
+    });
+
+test("Organization Policy derives semantics from exact effective records",
+    () => {
+      const changedConstraint = (constraint, rule) => {
+        const records = clone(EFFECTIVE_ORGANIZATION_POLICY_RECORDS);
+        records.find((record) => record.constraint === constraint)
+            .spec.rules[0] = rule;
+        return records;
+      };
+      for (const [constraint, rule] of [
+        ["cloudbuild.disableCreateDefaultServiceAccount", {enforce: false}],
+        ["iam.disableCrossProjectServiceAccountUsage", {enforce: false}],
+        ["iam.allowedPolicyMemberDomains", {allowAll: false}],
+        ["iam.managed.allowedPolicyMembers", {enforce: true}],
+        ["run.managed.requireInvokerIam", {enforce: true}],
+        ["cloudfunctions.restrictAllowedGenerations", {allowAll: false}],
+        ["gcp.resourceLocations", {allowAll: false}],
+        ["gcp.restrictNonCmekServices", {allowAll: false}],
+      ]) {
+        assert.throws(
+            () => deriveOrganizationPolicyCompatibility(
+                changedConstraint(constraint, rule),
+            ),
+            /Organization Policy/,
+            constraint,
+        );
+      }
+
+      const changedRecord = clone(ORGANIZATION_POLICY_EVIDENCE);
+      changedRecord.effectivePolicies.records[0].spec.rules[0].enforce = false;
+      changedRecord.evidenceDigest =
+        computeOrganizationPolicyEvidenceDigest(changedRecord);
+      assert.throws(
+          () => validateOrganizationPolicyEvidence(changedRecord),
+          /Organization Policy/,
+      );
+    });
+
+test("constraint catalog digest is audit-only for compatibility derivation",
+    () => {
+      const before = deriveOrganizationPolicyCompatibility(
+          EFFECTIVE_ORGANIZATION_POLICY_RECORDS,
+      );
+      const catalogOnlyChange = clone(ORGANIZATION_POLICY_CONSTRAINT_CATALOG_AUDIT);
+      catalogOnlyChange.digest = "0".repeat(64);
+      assert.deepEqual(
+          deriveOrganizationPolicyCompatibility(
+              EFFECTIVE_ORGANIZATION_POLICY_RECORDS,
+          ),
+          before,
+      );
+      assert.equal(catalogOnlyChange.disposition, "AUDIT_METADATA_ONLY");
+    });
 
 test("compensating controls pin immutable release and ordered private deployment", () => {
   assert.deepEqual(
@@ -488,16 +606,93 @@ test("compensating controls pin immutable release and ordered private deployment
   );
   assert.equal(
       DEPLOYMENT_COMPENSATING_CONTROLS.immutableRelease.releaseSha,
-      "f081bd7765d37db27642f9657bb307b5fb2da414",
+      "c7eaa7b27fc9c5e9d74ae97043de6536f41a75db",
   );
   assert.equal(
       DEPLOYMENT_COMPENSATING_CONTROLS.immutableRelease.gitTree,
-      "55f98bd0565cdf3ad3b4204a689c653769df3443",
+      "3b0bf8c310d7e8067ac09305dc93ec3f07090bd7",
+  );
+  assert.equal(
+      DEPLOYMENT_COMPENSATING_CONTROLS.immutableRelease.functionsIndexSha256,
+      "754e1f559a28ca1721c5b732ede0acce91dfbb409ada6153de93092d1209db49",
+  );
+  assert.equal(
+      DEPLOYMENT_COMPENSATING_CONTROLS.immutableRelease.writerSourceDigest,
+      "8f63180960dde64a252f12c68fbe6fed938333d1325514660e0a972b6b06209b",
+  );
+  assert.equal(
+      DEPLOYMENT_COMPENSATING_CONTROLS.immutableRelease.selectorLfDigest,
+      "cd26a1b992337fc61562663b4f97ce08cd70f062abd6546701ba364f67f8db10",
+  );
+  assert.equal(
+      DEPLOYMENT_COMPENSATING_CONTROLS.immutableRelease
+          .existingFunctionBaselineDigest,
+      "1cb924fc62c97771d42fb60b98934d9f48e5192abbf0b03b31d06753ff41dcfd",
   );
   assert.equal(
       validateCompensatingControls().finalInventory,
       "35/35",
   );
+});
+
+test("release binding rejects old, mismatched, shortened, and coherent tamper",
+    () => {
+      for (const mutate of [
+        (release) => {
+          release.releaseSha =
+            "f081bd7765d37db27642f9657bb307b5fb2da414";
+          release.gitTree = "55f98bd0565cdf3ad3b4204a689c653769df3443";
+        },
+        (release) => {
+          release.releaseSha = "0".repeat(40);
+        },
+        (release) => {
+          release.gitTree = "0".repeat(40);
+        },
+        (release) => {
+          release.releaseSha = IMMUTABLE_RELEASE_EVIDENCE.releaseSha.slice(0, 12);
+        },
+        (release) => {
+          release.gitTree = IMMUTABLE_RELEASE_EVIDENCE.gitTree.slice(0, 12);
+        },
+        (release) => {
+          release.functionsIndexSha256 = "0".repeat(64);
+          release.writerSourceDigest = "1".repeat(64);
+          release.selectorLfDigest = "2".repeat(64);
+        },
+      ]) {
+        const changed = clone(DEPLOYMENT_COMPENSATING_CONTROLS);
+        mutate(changed.immutableRelease);
+        assert.throws(
+            () => validateCompensatingControls(
+                changed,
+                canonicalDigest(changed),
+            ),
+            /Immutable release evidence|digest invariant/,
+        );
+      }
+    });
+
+test("Build scope rejects every default service-account fallback", () => {
+  for (const mutate of [
+    (selection) => {
+      selection.mode = "DEFAULT";
+    },
+    (selection) => {
+      selection.serviceAccount =
+        FUNCTIONS_IDENTITIES.googleManagedCloudBuildServiceAgent;
+    },
+    (selection) => {
+      selection.defaultFallbackAllowed = true;
+    },
+  ]) {
+    const changed = clone(BUILD_SCOPE_CONTRACT);
+    mutate(changed.identity.buildServiceAccountSelection);
+    assert.throws(
+        () => validateBuildScopeContract(changed),
+        /selected explicitly/,
+    );
+  }
 });
 
 test("compensating controls reject missing baseline and wrong selector digest", () => {
@@ -648,7 +843,10 @@ test("set digests are order invariant and reject duplicates", () => {
 test("aggregate local contract validates but remains provisioning-ineligible", () => {
   const result = validateFunctionsBuildAndDeployContract();
   assert.equal(result.validLocalContract, true);
+  assert.equal(result.organizationPolicyCompatible, true);
   assert.equal(result.actualProvisioningEligible, false);
   assert.equal(result.deploymentApprovalEligible, false);
+  assert.equal(result.publicInvokerApprovalEligible, false);
   assert.equal(result.iamMutationCommandPublication, false);
+  assert.equal(result.executionApprovalRequired, true);
 });

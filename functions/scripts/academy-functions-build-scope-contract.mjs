@@ -1,16 +1,16 @@
 import crypto from "node:crypto";
 
 export const BUILD_SCOPE_CONTRACT_VERSION =
-  "academy_functions_build_scope.v1";
+  "academy_functions_build_scope.v2";
 export const DEPLOY_PROFILE_VERSION = "academy_functions_deploy.v1";
 export const COMPENSATING_CONTROL_VERSION =
-  "academy_functions_deploy_compensating_controls.v1";
+  "academy_functions_deploy_compensating_controls.v2";
 export const INFRASTRUCTURE_EVIDENCE_VERSION =
-  "academy_functions_infrastructure_evidence.v1";
+  "academy_functions_infrastructure_evidence.v2";
 export const ORGANIZATION_POLICY_EVIDENCE_VERSION =
-  "academy_functions_organization_policy_evidence.v2";
+  "academy_functions_organization_policy_evidence.v3";
 export const ORGANIZATION_POLICY_LINEAGE_VERSION =
-  "academy_functions_organization_policy_lineage.v1";
+  "academy_functions_organization_policy_lineage.v2";
 
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -220,19 +220,264 @@ export const SERVICE_AGENT_FINDINGS = frozen([
   },
 ]);
 
+export const DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS = frozen([]);
+export const DIRECT_PROJECT_ORGANIZATION_POLICY_RECORD_COUNT = 0;
+export const DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS_DIGEST =
+  "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
+
+export const EFFECTIVE_ORGANIZATION_POLICY_RECORDS = frozen([
+  {
+    constraint: "cloudbuild.disableCreateDefaultServiceAccount",
+    name:
+      "projects/884850632328/policies/" +
+      "cloudbuild.disableCreateDefaultServiceAccount",
+    spec: {rules: [{enforce: true}]},
+  },
+  {
+    constraint: "cloudbuild.useBuildServiceAccount",
+    name:
+      "projects/884850632328/policies/cloudbuild.useBuildServiceAccount",
+    spec: {rules: [{enforce: true}]},
+  },
+  {
+    constraint: "cloudbuild.useComputeServiceAccount",
+    name:
+      "projects/884850632328/policies/cloudbuild.useComputeServiceAccount",
+    spec: {rules: [{enforce: true}]},
+  },
+  {
+    constraint: "cloudfunctions.restrictAllowedGenerations",
+    name:
+      "projects/884850632328/policies/" +
+      "cloudfunctions.restrictAllowedGenerations",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "gcp.resourceLocations",
+    name: "projects/884850632328/policies/gcp.resourceLocations",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "gcp.restrictCmekCryptoKeyProjects",
+    name:
+      "projects/884850632328/policies/gcp.restrictCmekCryptoKeyProjects",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "gcp.restrictNonCmekServices",
+    name: "projects/884850632328/policies/gcp.restrictNonCmekServices",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "gcp.restrictServiceUsage",
+    name: "projects/884850632328/policies/gcp.restrictServiceUsage",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "iam.allowedPolicyMemberDomains",
+    name: "projects/884850632328/policies/iam.allowedPolicyMemberDomains",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "iam.disableCrossProjectServiceAccountUsage",
+    name:
+      "projects/884850632328/policies/" +
+      "iam.disableCrossProjectServiceAccountUsage",
+    spec: {rules: [{enforce: true}]},
+  },
+  {
+    constraint: "iam.disableServiceAccountCreation",
+    name:
+      "projects/884850632328/policies/iam.disableServiceAccountCreation",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint: "iam.disableServiceAccountKeyCreation",
+    name:
+      "projects/884850632328/policies/iam.disableServiceAccountKeyCreation",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint: "iam.disableServiceAccountKeyUpload",
+    name:
+      "projects/884850632328/policies/iam.disableServiceAccountKeyUpload",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint: "iam.managed.allowedPolicyMembers",
+    name:
+      "projects/884850632328/policies/iam.managed.allowedPolicyMembers",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint: "iam.managed.disableServiceAccountCreation",
+    name:
+      "projects/884850632328/policies/" +
+      "iam.managed.disableServiceAccountCreation",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint: "iam.managed.disableServiceAccountKeyCreation",
+    name:
+      "projects/884850632328/policies/" +
+      "iam.managed.disableServiceAccountKeyCreation",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint: "iam.managed.disableServiceAccountKeyUpload",
+    name:
+      "projects/884850632328/policies/" +
+      "iam.managed.disableServiceAccountKeyUpload",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint:
+      "iam.managed.preventPrivilegedBasicRolesForDefaultServiceAccounts",
+    name:
+      "projects/884850632328/policies/" +
+      "iam.managed.preventPrivilegedBasicRolesForDefaultServiceAccounts",
+    spec: {rules: [{enforce: false}]},
+  },
+  {
+    constraint: "run.allowedIngress",
+    name: "projects/884850632328/policies/run.allowedIngress",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "run.allowedVPCEgress",
+    name: "projects/884850632328/policies/run.allowedVPCEgress",
+    spec: {rules: [{allowAll: true}]},
+  },
+  {
+    constraint: "run.managed.requireInvokerIam",
+    name: "projects/884850632328/policies/run.managed.requireInvokerIam",
+    spec: {rules: [{enforce: false}]},
+  },
+]);
+export const EFFECTIVE_ORGANIZATION_POLICY_RECORD_COUNT = 21;
+export const EFFECTIVE_ORGANIZATION_POLICY_FAILED_COUNT = 0;
+export const EFFECTIVE_ORGANIZATION_POLICY_RECORDS_DIGEST =
+  "8fb48d51692619032166d4d8e60ea504f7973421d9e420f4a41ca5572987eb99";
+export const ORGANIZATION_POLICY_CONSTRAINT_CATALOG_AUDIT = frozen({
+  count: 193,
+  digest:
+    "87547422bb6261a6fdaa8842546d73ff18460e4475b5ef3bbd84386687142d16",
+  disposition: "AUDIT_METADATA_ONLY",
+});
+
+function effectivePolicyRecordsDigest(records) {
+  assertCanonicalValue(records, "effective Organization Policy records");
+  return sha256Hex(`${JSON.stringify(records, null, 2)}\n`);
+}
+
+function policyRule(recordsByConstraint, constraint) {
+  const record = recordsByConstraint.get(constraint);
+  if (!record ||
+      record.name !==
+        `projects/884850632328/policies/${constraint}` ||
+      !isPlainObject(record.spec) ||
+      !Array.isArray(record.spec.rules) ||
+      record.spec.rules.length !== 1 ||
+      !isPlainObject(record.spec.rules[0])) {
+    throw new Error(`Organization Policy ${constraint} record is invalid.`);
+  }
+  return record.spec.rules[0];
+}
+
+export function deriveOrganizationPolicyCompatibility(records) {
+  if (!Array.isArray(records) ||
+      records.length !== EFFECTIVE_ORGANIZATION_POLICY_RECORD_COUNT) {
+    throw new Error("Organization Policy requires exact 21 effective records.");
+  }
+  const recordsByConstraint =
+    new Map(records.map((record) => [record.constraint, record]));
+  if (recordsByConstraint.size !== records.length) {
+    throw new Error("Organization Policy contains duplicate constraints.");
+  }
+  const expectedRules = new Map([
+    ["cloudbuild.disableCreateDefaultServiceAccount", {enforce: true}],
+    ["cloudbuild.useBuildServiceAccount", {enforce: true}],
+    ["cloudbuild.useComputeServiceAccount", {enforce: true}],
+    ["cloudfunctions.restrictAllowedGenerations", {allowAll: true}],
+    ["gcp.resourceLocations", {allowAll: true}],
+    ["gcp.restrictCmekCryptoKeyProjects", {allowAll: true}],
+    ["gcp.restrictNonCmekServices", {allowAll: true}],
+    ["gcp.restrictServiceUsage", {allowAll: true}],
+    ["iam.allowedPolicyMemberDomains", {allowAll: true}],
+    ["iam.disableCrossProjectServiceAccountUsage", {enforce: true}],
+    ["iam.disableServiceAccountCreation", {enforce: false}],
+    ["iam.disableServiceAccountKeyCreation", {enforce: false}],
+    ["iam.disableServiceAccountKeyUpload", {enforce: false}],
+    ["iam.managed.allowedPolicyMembers", {enforce: false}],
+    ["iam.managed.disableServiceAccountCreation", {enforce: false}],
+    ["iam.managed.disableServiceAccountKeyCreation", {enforce: false}],
+    ["iam.managed.disableServiceAccountKeyUpload", {enforce: false}],
+    [
+      "iam.managed.preventPrivilegedBasicRolesForDefaultServiceAccounts",
+      {enforce: false},
+    ],
+    ["run.allowedIngress", {allowAll: true}],
+    ["run.allowedVPCEgress", {allowAll: true}],
+    ["run.managed.requireInvokerIam", {enforce: false}],
+  ]);
+  if (recordsByConstraint.size !== expectedRules.size) {
+    throw new Error("Organization Policy effective constraint set mismatch.");
+  }
+  for (const [constraint, expectedRule] of expectedRules) {
+    exact(
+        policyRule(recordsByConstraint, constraint),
+        expectedRule,
+        `Organization Policy ${constraint}`,
+    );
+  }
+  return frozen({
+    state: "OBSERVED_COMPATIBLE_WITH_EXPLICIT_CONTROLS",
+    sameProjectServiceAccountCreationCompatible: true,
+    crossProjectServiceAccountUsageAllowed: false,
+    userManagedKeyCreationPolicyCompatible: true,
+    userManagedKeyUploadPolicyCompatible: true,
+    requiredUserManagedKeyCount: 0,
+    explicitBuildServiceAccountRequired: true,
+    approvedBuildServiceAccount:
+      FUNCTIONS_IDENTITIES.dedicatedBuildServiceAccount,
+    defaultBuildServiceAccountFallbackAllowed: false,
+    publicInvokerPolicyCompatible: true,
+    publicInvokerRequiresFullPrivateValidation: true,
+    invokerIamCheckState: "NOT_SET",
+    gen2Compatible: true,
+    approvedRegion: TARGET_PROJECT.region,
+    nonCmekResourcesCompatible: true,
+    approvedServiceUsageCompatible: true,
+  });
+}
+
+export const ORGANIZATION_POLICY_COMPATIBILITY =
+  deriveOrganizationPolicyCompatibility(
+      EFFECTIVE_ORGANIZATION_POLICY_RECORDS,
+  );
+
 const organizationPolicyObservation = {
   contractVersion: ORGANIZATION_POLICY_EVIDENCE_VERSION,
   projectId: "daegu-miami-production",
+  projectNumber: "884850632328",
   service: "orgpolicy.googleapis.com",
-  apiEnabled: false,
-  observationStatus: "UNKNOWN",
-  effectivePolicyCount: null,
-  effectiveDecision: "UNKNOWN",
-  observationAvailability: "UNAVAILABLE_API_DISABLED",
-  actualProvisioningEligible: false,
-  deploymentApprovalEligible: false,
-  publicInvokerApprovalEligible: false,
-  iamMutationCommandPublication: false,
+  apiEnabled: true,
+  observationStatus: ORGANIZATION_POLICY_COMPATIBILITY.state,
+  effectiveDecision: "COMPATIBLE_WITH_EXPLICIT_CONTROLS",
+  observationAvailability: "AVAILABLE",
+  directProjectPolicies: {
+    count: DIRECT_PROJECT_ORGANIZATION_POLICY_RECORD_COUNT,
+    digest: DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS_DIGEST,
+    records: DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS,
+  },
+  effectivePolicies: {
+    count: EFFECTIVE_ORGANIZATION_POLICY_RECORD_COUNT,
+    failedCount: EFFECTIVE_ORGANIZATION_POLICY_FAILED_COUNT,
+    digest: EFFECTIVE_ORGANIZATION_POLICY_RECORDS_DIGEST,
+    records: EFFECTIVE_ORGANIZATION_POLICY_RECORDS,
+  },
+  constraintCatalogAudit: ORGANIZATION_POLICY_CONSTRAINT_CATALOG_AUDIT,
+  compatibility: ORGANIZATION_POLICY_COMPATIBILITY,
 };
 export const ORGANIZATION_POLICY_EVIDENCE = frozen({
   ...organizationPolicyObservation,
@@ -307,6 +552,12 @@ export const BUILD_SCOPE_CONTRACT = frozen({
     googleManagedCloudBuildServiceAgent:
       FUNCTIONS_IDENTITIES.googleManagedCloudBuildServiceAgent,
     identitiesAreDistinct: true,
+    buildServiceAccountSelection: {
+      mode: "EXPLICIT",
+      serviceAccount:
+        FUNCTIONS_IDENTITIES.dedicatedBuildServiceAccount,
+      defaultFallbackAllowed: false,
+    },
   },
   buildConfiguration: APPROVED_CLOUD_BUILD_CONFIGURATION,
   coreProfile: BUILD_CORE_PROFILE,
@@ -467,8 +718,8 @@ export const EVENTARC_EVIDENCE = frozen({
 
 export const IMMUTABLE_RELEASE_EVIDENCE = frozen({
   baseBranch: "product-version",
-  releaseSha: "f081bd7765d37db27642f9657bb307b5fb2da414",
-  gitTree: "55f98bd0565cdf3ad3b4204a689c653769df3443",
+  releaseSha: "c7eaa7b27fc9c5e9d74ae97043de6536f41a75db",
+  gitTree: "3b0bf8c310d7e8067ac09305dc93ec3f07090bd7",
   functionsIndexSha256:
     "754e1f559a28ca1721c5b732ede0acce91dfbb409ada6153de93092d1209db49",
   writerSourceDigest:
@@ -588,10 +839,20 @@ export function buildOrganizationPolicyLineageReference(
     organizationPolicyEvidenceDigest: evidence.evidenceDigest,
     organizationPolicyApiEnabled: evidence.apiEnabled,
     organizationPolicyObservationStatus: evidence.observationStatus,
-    organizationPolicyEffectivePolicyCount: evidence.effectivePolicyCount,
+    organizationPolicyDirectPolicyCount:
+      evidence.directProjectPolicies.count,
+    organizationPolicyDirectPolicyDigest:
+      evidence.directProjectPolicies.digest,
+    organizationPolicyEffectivePolicyCount:
+      evidence.effectivePolicies.count,
+    organizationPolicyEffectivePolicyDigest:
+      evidence.effectivePolicies.digest,
     organizationPolicyEffectiveDecision: evidence.effectiveDecision,
     organizationPolicyObservationAvailability:
       evidence.observationAvailability,
+    organizationPolicyCompatibilityState: evidence.compatibility.state,
+    organizationPolicyConstraintCatalogAuditDigest:
+      evidence.constraintCatalogAudit.digest,
   });
 }
 
@@ -608,27 +869,49 @@ export function validateOrganizationPolicyEvidence(
     evidence = ORGANIZATION_POLICY_EVIDENCE,
 ) {
   exact(evidence, ORGANIZATION_POLICY_EVIDENCE, "Organization Policy evidence");
+  const derivedCompatibility =
+    deriveOrganizationPolicyCompatibility(evidence.effectivePolicies.records);
   if (evidence.contractVersion !== ORGANIZATION_POLICY_EVIDENCE_VERSION ||
       evidence.projectId !== "daegu-miami-production" ||
-      evidence.observationStatus !== "UNKNOWN" ||
-      evidence.apiEnabled !== false ||
-      evidence.effectivePolicyCount !== null ||
-      evidence.effectiveDecision !== "UNKNOWN" ||
-      evidence.observationAvailability !== "UNAVAILABLE_API_DISABLED" ||
+      evidence.projectNumber !== "884850632328" ||
+      evidence.observationStatus !==
+        "OBSERVED_COMPATIBLE_WITH_EXPLICIT_CONTROLS" ||
+      evidence.apiEnabled !== true ||
+      evidence.effectiveDecision !==
+        "COMPATIBLE_WITH_EXPLICIT_CONTROLS" ||
+      evidence.observationAvailability !== "AVAILABLE" ||
+      evidence.directProjectPolicies.count !== 0 ||
+      canonicalDigest(evidence.directProjectPolicies.records) !==
+        DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS_DIGEST ||
+      evidence.directProjectPolicies.digest !==
+        DIRECT_PROJECT_ORGANIZATION_POLICY_RECORDS_DIGEST ||
+      evidence.effectivePolicies.count !== 21 ||
+      evidence.effectivePolicies.failedCount !== 0 ||
+      effectivePolicyRecordsDigest(evidence.effectivePolicies.records) !==
+        EFFECTIVE_ORGANIZATION_POLICY_RECORDS_DIGEST ||
+      evidence.effectivePolicies.digest !==
+        EFFECTIVE_ORGANIZATION_POLICY_RECORDS_DIGEST ||
+      evidence.constraintCatalogAudit.count !== 193 ||
+      evidence.constraintCatalogAudit.digest !==
+        ORGANIZATION_POLICY_CONSTRAINT_CATALOG_AUDIT.digest ||
+      evidence.constraintCatalogAudit.disposition !==
+        "AUDIT_METADATA_ONLY" ||
+      canonicalJson(evidence.compatibility) !==
+        canonicalJson(derivedCompatibility) ||
       evidence.evidenceDigest !==
-        computeOrganizationPolicyEvidenceDigest(evidence) ||
-      evidence.actualProvisioningEligible !== false ||
-      evidence.deploymentApprovalEligible !== false ||
-      evidence.publicInvokerApprovalEligible !== false ||
-      evidence.iamMutationCommandPublication !== false) {
-    throw new Error("Organization Policy UNKNOWN must fail closed.");
+        computeOrganizationPolicyEvidenceDigest(evidence)) {
+    throw new Error(
+        "Organization Policy effective evidence or compatibility failed.",
+    );
   }
   return frozen({
-    observationStatus: "UNKNOWN",
-    actualProvisioningEligible: false,
-    deploymentApprovalEligible: false,
-    publicInvokerApprovalEligible: false,
-    iamMutationCommandPublication: false,
+    observationStatus: evidence.observationStatus,
+    organizationPolicyCompatible: true,
+    provisioningPolicyCompatible: true,
+    deploymentPolicyCompatible: true,
+    publicInvokerPolicyCompatible: true,
+    mutationCommandPublicationPolicyCompatible: true,
+    compatibility: derivedCompatibility,
   });
 }
 
@@ -675,6 +958,15 @@ export function validateBuildScopeContract(
       contract.identity?.identitiesAreDistinct !== true) {
     throw new Error(
         "Dedicated Build identity must differ from Cloud Build service agent.",
+    );
+  }
+  const buildSelection = contract.identity?.buildServiceAccountSelection;
+  if (buildSelection?.mode !== "EXPLICIT" ||
+      buildSelection?.serviceAccount !==
+        FUNCTIONS_IDENTITIES.dedicatedBuildServiceAccount ||
+      buildSelection?.defaultFallbackAllowed !== false) {
+    throw new Error(
+        "Dedicated Build service account must be selected explicitly.",
     );
   }
   if (contract.projectWideStorageBindings?.length !== 0) {
@@ -856,14 +1148,13 @@ export function validateFunctionsBuildAndDeployContract(input = {}) {
 
   return frozen({
     validLocalContract: true,
-    actualProvisioningEligible:
-      organizationPolicyResult.actualProvisioningEligible,
-    deploymentApprovalEligible:
-      organizationPolicyResult.deploymentApprovalEligible,
-    publicInvokerApprovalEligible:
-      organizationPolicyResult.publicInvokerApprovalEligible,
-    iamMutationCommandPublication:
-      organizationPolicyResult.iamMutationCommandPublication,
+    organizationPolicyCompatible:
+      organizationPolicyResult.organizationPolicyCompatible,
+    actualProvisioningEligible: false,
+    deploymentApprovalEligible: false,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: false,
+    executionApprovalRequired: true,
     buildScopeContractDigest: BUILD_SCOPE_CONTRACT_DIGEST,
     deployProfileDigest: DEPLOY_PROFILE_DIGEST,
     compensatingControlDigest: COMPENSATING_CONTROL_DIGEST,

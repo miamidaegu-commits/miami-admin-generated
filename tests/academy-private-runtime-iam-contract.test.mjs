@@ -7,12 +7,13 @@ import {
 } from "../functions/scripts/academy-functions-build-scope-contract.mjs";
 import {
   ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT,
-  APPROVED_EXECUTION_PRINCIPALS,
   APPROVED_DATASTORE_PERMISSION_UNIVERSE,
   BASELINE_RUNTIME_FUNCTION_NAMES,
   BASELINE_RUNTIME_SERVICE_ACCOUNT_EMAIL,
   DEPLOYED_FUNCTION_NAMES,
   EXACT_CHRONOLOGY_PROFILE_VERSION,
+  EXECUTION_PRINCIPAL_RECEIPT_FIELDS,
+  EXECUTION_SERVICE_ACCOUNT_EMAILS,
   EXECUTABLE_APPROVAL_VERSION,
   EXPECTED_BINDINGS_BY_STATE,
   EXPECTED_BINDING_SET_DIGESTS_BY_STATE,
@@ -28,6 +29,7 @@ import {
   MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
   READ_ONLY_DATASTORE_PERMISSIONS,
   READ_ONLY_ROLE,
+  SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
   STEADY_STATE,
   TARGET_DATABASE_CMEK_KEY,
   TARGET_DATABASE_DELETE_PROTECTION,
@@ -64,6 +66,11 @@ import {
 } from "../functions/scripts/academy-private-runtime-iam-contract.mjs";
 
 const NOW = Date.parse("2026-07-19T02:00:00Z");
+const TEST_EXECUTION_PRINCIPALS = Object.freeze({
+  provisioningPrincipal: "user:provisioner@daegu-miami.com",
+  impersonationPrincipal: "user:deployer@daegu-miami.com",
+  invokerOperatorPrincipal: "user:invoker@daegu-miami.com",
+});
 
 function clone(value) {
   return structuredClone(value);
@@ -74,12 +81,19 @@ function approvalFixture(overrides = {}) {
     schemaVersion: EXECUTABLE_APPROVAL_VERSION,
     approvalId: "academy-private-runtime-change-20260719",
     approvedAt: "2026-07-19T00:30:00Z",
-    ...APPROVED_EXECUTION_PRINCIPALS,
+    ...TEST_EXECUTION_PRINCIPALS,
     jitStartsAt: "2026-07-19T01:00:00Z",
     jitExpiresAt: "2026-07-19T03:00:00Z",
     organizationPolicy: clone(ORGANIZATION_POLICY_EVIDENCE),
     organizationPolicyLineage:
       clone(buildOrganizationPolicyLineageReference()),
+    serviceAccountKeyAudit: {
+      schemaVersion: SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
+      projectId: "daegu-miami-production",
+      serviceAccountEmails: clone(EXECUTION_SERVICE_ACCOUNT_EMAILS),
+      userManagedKeyCount: 0,
+      complete: true,
+    },
     actualProvisioningEligible: false,
     deploymentApprovalEligible: false,
     publicInvokerApprovalEligible: false,
@@ -639,7 +653,8 @@ test("nanosecond L/M — coherent digest tamper rejects and equal stages pass",
       );
     });
 
-test("S — executable approval binds three exact users and active JIT", () => {
+test("S — unresolved source principals require exact receipt users and JIT",
+    () => {
   const approval = approvalFixture();
   const result = validateExecutableApproval(approval, {currentTimeMs: NOW});
   assert.equal(result.executable, false);
@@ -651,6 +666,20 @@ test("S — executable approval binds three exact users and active JIT", () => {
     iamMutationCommandPublication: false,
   });
   assert.equal(result.approvalDigest, approval.approvalDigest);
+  assert.deepEqual(
+      ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT.executionPrincipalReceipt,
+      {
+        fields: EXECUTION_PRINCIPAL_RECEIPT_FIELDS,
+        resolution: "EXACT_RECEIPT_REQUIRED_NO_SOURCE_DEFAULT",
+        placeholderDisposition: "REJECT",
+        inferredCurrentUserDisposition: "REJECT",
+      },
+  );
+  assert.equal(
+      JSON.stringify(ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT)
+          .includes("miamidaegu@gmail.com"),
+      false,
+  );
 });
 
 test("T — approval rejects non-user and placeholder principals",
@@ -677,7 +706,7 @@ test("T — approval rejects non-user and placeholder principals",
       assert.throws(() => validateExecutableApproval(
           sameApprovedUser,
           {currentTimeMs: NOW},
-      ), /exact approved principal/);
+      ), /distinct exact receipt users/);
     });
 
 test("principal grammar A-L — strict ASCII dot-atom and exact principals", () => {
@@ -715,15 +744,20 @@ test("principal grammar A-L — strict ASCII dot-atom and exact principals", () 
     assert.throws(() => parseExactUserPrincipal(principal));
   }
 
-  const caseVariant = approvalFixture();
-  caseVariant.provisioningPrincipal = "user:Provisioner@daegu-miami.com";
-  caseVariant.approvalDigest = buildExecutableApprovalDigest(caseVariant);
-  assert.throws(() => validateExecutableApproval(
-      caseVariant,
-      {currentTimeMs: NOW},
-  ), /exact approved principal/);
+  const exactReceiptCase = approvalFixture();
+  exactReceiptCase.provisioningPrincipal =
+    "user:Provisioner@daegu-miami.com";
+  exactReceiptCase.approvalDigest =
+    buildExecutableApprovalDigest(exactReceiptCase);
+  assert.equal(
+      validateExecutableApproval(
+          exactReceiptCase,
+          {currentTimeMs: NOW},
+      ).provisioningPrincipal,
+      exactReceiptCase.provisioningPrincipal,
+  );
 
-  for (const key of Object.keys(APPROVED_EXECUTION_PRINCIPALS)) {
+  for (const key of EXECUTION_PRINCIPAL_RECEIPT_FIELDS) {
     const malformed = approvalFixture();
     malformed[key] = "user:runtime..provisioner@daegu-miami.com";
     malformed.approvalDigest = buildExecutableApprovalDigest(malformed);
@@ -759,7 +793,7 @@ test("U — approval rejects inactive, non-UTC, and over-two-hour JIT", () => {
   });
 });
 
-test("V — UNKNOWN org policy forces every executable action false", () => {
+test("V — compatible Org Policy alone leaves commands unpublished", () => {
   const approval = approvalFixture();
   const result = validateExecutableApproval(approval, {currentTimeMs: NOW});
   assert.equal(result.executable, false);
@@ -775,7 +809,77 @@ test("V — UNKNOWN org policy forces every executable action false", () => {
   );
 });
 
-test("Organization Policy lineage M-X — pinned UNKNOWN is authoritative", () => {
+test("all exact execution inputs may become eligible", () => {
+  const approval = approvalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: true,
+    iamMutationCommandPublication: true,
+  });
+  const result = validateExecutableApproval(approval, {currentTimeMs: NOW});
+  assert.equal(result.executable, true);
+  assert.deepEqual(result.execution, {
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: true,
+    iamMutationCommandPublication: true,
+  });
+  assert.equal(result.userManagedServiceAccountKeyCount, 0);
+});
+
+test("missing principal or JIT cannot become provisioning-eligible", () => {
+  for (const field of [
+    ...EXECUTION_PRINCIPAL_RECEIPT_FIELDS,
+    "jitStartsAt",
+    "jitExpiresAt",
+  ]) {
+    const approval = approvalFixture({
+      actualProvisioningEligible: true,
+      deploymentApprovalEligible: true,
+      publicInvokerApprovalEligible: true,
+      iamMutationCommandPublication: true,
+    });
+    delete approval[field];
+    assert.throws(
+        () => validateExecutableApproval(approval, {currentTimeMs: NOW}),
+    );
+  }
+});
+
+test("user-managed key count above zero rejects despite policy compatibility",
+    () => {
+      const approval = approvalFixture({
+        actualProvisioningEligible: true,
+        deploymentApprovalEligible: true,
+        publicInvokerApprovalEligible: true,
+        iamMutationCommandPublication: true,
+      });
+      approval.serviceAccountKeyAudit.userManagedKeyCount = 1;
+      approval.approvalDigest = buildExecutableApprovalDigest(approval);
+      assert.throws(
+          () => validateExecutableApproval(approval, {currentTimeMs: NOW}),
+          /zero keys/,
+      );
+    });
+
+test("cross-project service account audit is rejected", () => {
+  const approval = approvalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: true,
+    iamMutationCommandPublication: true,
+  });
+  approval.serviceAccountKeyAudit.serviceAccountEmails[0] =
+    "foreign-build@other-project.iam.gserviceaccount.com";
+  approval.approvalDigest = buildExecutableApprovalDigest(approval);
+  assert.throws(
+      () => validateExecutableApproval(approval, {currentTimeMs: NOW}),
+      /exact identities and zero keys/,
+  );
+});
+
+test("Organization Policy lineage M-X — exact 21-record source is authoritative",
+    () => {
   const matching = approvalFixture();
   const matchingResult =
     validateExecutableApproval(matching, {currentTimeMs: NOW});
@@ -785,63 +889,15 @@ test("Organization Policy lineage M-X — pinned UNKNOWN is authoritative", () =
       false,
   );
 
-  const coherentAllow = clone(ORGANIZATION_POLICY_EVIDENCE);
-  Object.assign(coherentAllow, {
-    apiEnabled: true,
-    observationStatus: "ALLOW",
-    effectivePolicyCount: 0,
-    effectiveDecision: "ALLOW",
-    observationAvailability: "AVAILABLE",
-    actualProvisioningEligible: true,
-    deploymentApprovalEligible: true,
-    publicInvokerApprovalEligible: true,
-    iamMutationCommandPublication: true,
-  });
-  coherentAllow.evidenceDigest =
-    buildOrganizationPolicyEvidenceDigest(coherentAllow);
-  const coherentAllowLineage = clone(buildOrganizationPolicyLineageReference());
-  Object.assign(coherentAllowLineage, {
-    organizationPolicyEvidenceDigest: coherentAllow.evidenceDigest,
-    organizationPolicyApiEnabled: true,
-    organizationPolicyObservationStatus: "ALLOW",
-    organizationPolicyEffectivePolicyCount: 0,
-    organizationPolicyEffectiveDecision: "ALLOW",
-    organizationPolicyObservationAvailability: "AVAILABLE",
-  });
-  const allowApproval = approvalFixture({
-    organizationPolicy: coherentAllow,
-    organizationPolicyLineage: coherentAllowLineage,
-    actualProvisioningEligible: true,
-    deploymentApprovalEligible: true,
-    publicInvokerApprovalEligible: true,
-    iamMutationCommandPublication: true,
-  });
-  assert.throws(() => validateExecutableApproval(
-      allowApproval,
-      {currentTimeMs: NOW},
-  ), /Organization Policy evidence/);
-  assert.throws(() => validateFreezeActivationReceipt(
-      activationFixture(allowApproval),
-      allowApproval,
-  ), /Organization Policy evidence/);
-
-  const sameDigestAllow = approvalFixture();
-  sameDigestAllow.organizationPolicy.observationStatus = "ALLOW";
-  sameDigestAllow.approvalDigest =
-    buildExecutableApprovalDigest(sameDigestAllow);
-  assert.throws(() => validateExecutableApproval(
-      sameDigestAllow,
-      {currentTimeMs: NOW},
-  ), /Organization Policy evidence/);
-
   for (const mutate of [
     (approval) => {
-      approval.organizationPolicy.effectivePolicyCount = 0;
+      approval.organizationPolicy.effectivePolicies.count = 20;
       approval.organizationPolicy.evidenceDigest =
         buildOrganizationPolicyEvidenceDigest(approval.organizationPolicy);
     },
     (approval) => {
-      approval.organizationPolicy.observationAvailability = "AVAILABLE";
+      approval.organizationPolicy.effectivePolicies.records[0]
+          .spec.rules[0].enforce = false;
       approval.organizationPolicy.evidenceDigest =
         buildOrganizationPolicyEvidenceDigest(approval.organizationPolicy);
     },
@@ -854,12 +910,6 @@ test("Organization Policy lineage M-X — pinned UNKNOWN is authoritative", () =
         "ALLOW";
       approval.organizationPolicyLineage.organizationPolicyEffectiveDecision =
         "ALLOW";
-    },
-    (approval) => {
-      approval.actualProvisioningEligible = true;
-      approval.deploymentApprovalEligible = true;
-      approval.publicInvokerApprovalEligible = true;
-      approval.iamMutationCommandPublication = true;
     },
   ]) {
     const approval = approvalFixture();
@@ -889,19 +939,14 @@ test("Organization Policy lineage M-X — pinned UNKNOWN is authoritative", () =
     }
   }
 
-  const zeroPolicies = approvalFixture();
-  zeroPolicies.organizationPolicy.effectivePolicyCount = 0;
-  zeroPolicies.organizationPolicy.evidenceDigest =
-    buildOrganizationPolicyEvidenceDigest(zeroPolicies.organizationPolicy);
-  zeroPolicies.approvalDigest = buildExecutableApprovalDigest(zeroPolicies);
-  assert.throws(() => validateExecutableApproval(
-      zeroPolicies,
-      {currentTimeMs: NOW},
-  ), /Organization Policy evidence/);
-
+  const genericAllowReceipt = clone(ORGANIZATION_POLICY_EVIDENCE);
+  genericAllowReceipt.observationStatus = "ALLOW";
+  genericAllowReceipt.effectiveDecision = "ALLOW";
+  genericAllowReceipt.evidenceDigest =
+    buildOrganizationPolicyEvidenceDigest(genericAllowReceipt);
   const futureCanonicalSource = {
-    ...coherentAllow,
-    contractVersion: "academy_functions_organization_policy_evidence.v3",
+    ...genericAllowReceipt,
+    contractVersion: "academy_functions_organization_policy_evidence.v4",
   };
   futureCanonicalSource.evidenceDigest =
     buildOrganizationPolicyEvidenceDigest(futureCanonicalSource);
