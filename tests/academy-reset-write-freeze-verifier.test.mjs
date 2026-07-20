@@ -78,10 +78,12 @@ import {
   FREEZE_ACTIVATION_RECEIPT_VERSION,
   FREEZE_ACTIVE_STATE,
   FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING,
+  OPERATOR_MODE_CONTRACT_VERSION,
   PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
   PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
   SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
   STEADY_STATE,
+  THREE_PERSON_SEPARATION,
   buildExecutableApprovalDigest,
   buildStateSnapshot,
   buildTransitionReceiptChronologyDigest,
@@ -371,6 +373,7 @@ function runtimeActivationApprovalFixture() {
     schemaVersion: EXECUTABLE_APPROVAL_VERSION,
     approvalId: "academy-reset-freeze-runtime-iam-fixture",
     approvedAt: APPROVED_AT,
+    operatorMode: THREE_PERSON_SEPARATION,
     provisioningPrincipal: "user:provisioner@daegu-miami.com",
     impersonationPrincipal: "user:deployer@daegu-miami.com",
     invokerOperatorPrincipal: "user:invoker@daegu-miami.com",
@@ -387,6 +390,7 @@ function runtimeActivationApprovalFixture() {
       userManagedKeyCount: 0,
       complete: true,
     },
+    singleOperatorControlManifest: null,
     actualProvisioningEligible: false,
     deploymentApprovalEligible: false,
     publicInvokerApprovalEligible: false,
@@ -974,6 +978,16 @@ test("v6 Runtime IAM and Build scope lineage is mandatory and fail-closed",
               .buildScopeContractDigest,
           BUILD_SCOPE_CONTRACT_DIGEST,
       );
+      assert.equal(
+          accepted.deploymentApprovalReceipt.freezeIamContractLineage
+              .operatorModeContractVersion,
+          OPERATOR_MODE_CONTRACT_VERSION,
+      );
+      assert.equal(
+          accepted.deploymentApprovalReceipt.freezeIamContractLineage
+              .operatorMode,
+          THREE_PERSON_SEPARATION,
+      );
 
       for (const mutate of [
         (evidence) => {
@@ -988,6 +1002,10 @@ test("v6 Runtime IAM and Build scope lineage is mandatory and fail-closed",
         (evidence) => {
           evidence.deploymentApprovalReceipt.freezeIamContractLineage
               .buildScopeContractDigest = DIGEST_A;
+        },
+        (evidence) => {
+          evidence.deploymentApprovalReceipt.freezeIamContractLineage
+              .operatorMode = "SINGLE_OPERATOR_JIT_V1";
         },
         (evidence) => {
           delete evidence.deploymentApprovalReceipt.organizationPolicyLineage;

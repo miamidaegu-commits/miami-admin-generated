@@ -25,10 +25,30 @@ execution-eligibility gate.
 
 This compatibility result does not publish mutation commands by itself.
 Provisioning, deployment, impersonation, and invoker publication still require
-three explicit receipt-supplied human principals, an active JIT window no longer
-than two hours, the exact four same-project service-account identities, zero
-user-managed keys, explicit selection of the dedicated Build service account,
-the complete permission audit, source binding, and compensating controls.
+an explicit operator mode and receipt-supplied principals. The default is
+fail-closed when the mode is missing. `THREE_PERSON_SEPARATION` requires three
+distinct exact `user:<email>` principals and retains the two-hour maximum JIT
+window. `SINGLE_OPERATOR_JIT_V1` alone permits the exact repeated tuple
+`user:miamidaegu@gmail.com`, requires an exact active JIT window of at most 60
+minutes, and does not infer or normalize the user.
+
+Single-operator approval binds the mode authority to contract base release
+`d93ea87b68fa2fb8b9623f418e9a1bf2a3ac1297`. It also requires the exact
+13-step order, rollback manifest, `0700`/`0600` secure audit artifact, and
+temporary-access removal plan. A separate Production approval reference digest
+must be present before local mutation-command publication. Private validation
+completion and invoker
+publication use separate digest-bound receipts. Public invoker eligibility
+remains false until all three new private Functions pass source, permission,
+key-count, and final 35/35 validation; publication confirmation must be later
+than private validation and remain inside JIT. TokenCreator, actAs, and Deploy
+bindings must then be removed and a final permission/key/inventory receipt
+recorded inside the same JIT window.
+
+Both modes still require the exact four same-project service-account identities,
+zero user-managed keys, explicit selection of the dedicated Build service
+account, the complete permission audit, source binding, and compensating
+controls.
 The approved deployment source remains the fixed `product-version` release
 `c7eaa7b27fc9c5e9d74ae97043de6536f41a75db` and tree
 `3b0bf8c310d7e8067ac09305dc93ec3f07090bd7`; a later contract release must not

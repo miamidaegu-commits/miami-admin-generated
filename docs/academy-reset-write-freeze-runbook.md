@@ -278,14 +278,27 @@ HTTP callable trigger contract와 `eventTrigger` absence evidence를 기록하�
 function inventory digest가 이를 bind한다. Eventarc review 없이 event trigger나
 Service Agent binding을 허용하지 않는다.
 
-실행 approval의 세 principal은 source에 기본값이나 승인 사용자로 고정하지 않는다.
-`provisioningPrincipal`, `impersonationPrincipal`,
-`invokerOperatorPrincipal`을 execution receipt에서 반드시 제공하고 strict ASCII
-dot-atom `user:<email>` 문법, placeholder 부재, 역할 간 구분을 검사한다. trim,
-lowercase 또는 Unicode normalization은 하지 않는다. `jitStartsAt`,
-`jitExpiresAt`도 receipt 필수값이며 exact RFC3339 UTC, 현재 active, 최대 2시간이어야
-한다. exact 네 Service Account identity에 대한 complete key audit와 user-managed
-key count `0`도 receipt에 bind한다.
+실행 approval은 `operatorMode`를 필수로 요구하며 누락 시 fail closed다.
+`THREE_PERSON_SEPARATION`은 `provisioningPrincipal`,
+`impersonationPrincipal`, `invokerOperatorPrincipal`에 서로 다른 세 strict ASCII
+dot-atom `user:<email>`을 요구하고 기존 최대 2시간 JIT 의미를 유지한다.
+`SINGLE_OPERATOR_JIT_V1`에서만 source-authoritative approved principal
+`user:miamidaegu@gmail.com`의 exact 동일 tuple을 허용한다. 다른 user, alias,
+group/domain/serviceAccount/wildcard, placeholder, trim, lowercase 또는 Unicode
+normalization은 모두 거부하며 source default로 principal을 삽입하지 않는다.
+
+단독 운영자 모드는 contract base release
+`d93ea87b68fa2fb8b9623f418e9a1bf2a3ac1297`, exact 13-step order, rollback
+manifest, secure audit artifact, temporary-access removal plan과 mode/version을
+approval digest에 bind한다. 별도 Production approval reference digest가 없으면
+local mutation-command publication도 거부한다. `jitStartsAt`, `jitExpiresAt`은 receipt 필수 exact
+RFC3339 UTC이고 start inclusive, expiry exclusive, 최대 60분이다. private
+validation completion과 invoker-publication confirmation은 별도 receipt이며
+publication 시각은 private validation 이후여야 한다. public 적용 후
+TokenCreator/actAs/Deploy binding 제거 evidence와 final permission/key/inventory
+audit까지 같은 JIT 안에서 완료해야 한다. 어느 receipt나 control이 빠져도
+command publication은 fail closed다. 두 모드 모두 exact 네 Service Account
+identity의 complete key audit와 user-managed key count `0`을 receipt에 bind한다.
 
 Organization Policy는 receipt-local generic `ALLOW`를 신뢰하지 않고 canonical
 evidence version/digest/status와 direct/effective record count/digest를 포함한

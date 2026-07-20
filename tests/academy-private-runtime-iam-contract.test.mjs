@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEPLOYMENT_TARGETS,
+  IMMUTABLE_RELEASE_EVIDENCE,
   ORGANIZATION_POLICY_EVIDENCE,
   buildOrganizationPolicyLineageReference,
 } from "../functions/scripts/academy-functions-build-scope-contract.mjs";
 import {
   ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT,
+  APPROVED_SINGLE_OPERATOR_PRINCIPAL,
   APPROVED_DATASTORE_PERMISSION_UNIVERSE,
   BASELINE_RUNTIME_FUNCTION_NAMES,
   BASELINE_RUNTIME_SERVICE_ACCOUNT_EMAIL,
@@ -27,9 +30,21 @@ import {
   PREVIEW_RUNTIME_SERVICE_ACCOUNT_MEMBER,
   PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
   MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
+  OPERATOR_MODE_AUTHORITY,
+  OPERATOR_MODE_CONTRACT_VERSION,
   READ_ONLY_DATASTORE_PERMISSIONS,
   READ_ONLY_ROLE,
   SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
+  SINGLE_OPERATOR_COMPLETION_RECEIPT_VERSION,
+  SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION,
+  SINGLE_OPERATOR_EXECUTION_STEPS,
+  SINGLE_OPERATOR_INVOKER_PUBLICATION_RECEIPT_VERSION,
+  SINGLE_OPERATOR_JIT_V1,
+  SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
+  SINGLE_OPERATOR_PRIVATE_VALIDATION_RECEIPT_VERSION,
+  SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS,
+  SINGLE_OPERATOR_COMPLETION_STEPS,
+  SINGLE_OPERATOR_TARGET_FUNCTION_NAMES,
   STEADY_STATE,
   TARGET_DATABASE_CMEK_KEY,
   TARGET_DATABASE_DELETE_PROTECTION,
@@ -40,6 +55,7 @@ import {
   TARGET_PROJECT_NUMBER,
   TARGET_PROJECT_RESOURCE,
   UNFREEZE_RESTORATION_RECEIPT_VERSION,
+  THREE_PERSON_SEPARATION,
   WRITABLE_DATASTORE_PERMISSIONS,
   WRITER_RUNTIME_FUNCTION_NAMES,
   WRITER_RUNTIME_SERVICE_ACCOUNT_EMAIL,
@@ -49,6 +65,9 @@ import {
   buildBindingSetDigest,
   buildCanonicalSetDigest,
   buildExecutableApprovalDigest,
+  buildSingleOperatorCompletionReceiptDigest,
+  buildSingleOperatorInvokerPublicationReceiptDigest,
+  buildSingleOperatorPrivateValidationReceiptDigest,
   buildOrganizationPolicyEvidenceDigest,
   buildPermissionSetDigest,
   buildStateSnapshot,
@@ -61,6 +80,9 @@ import {
   validateExecutableApproval,
   validateFreezeActivationReceipt,
   validatePrivateRuntimeIamContract,
+  validateSingleOperatorCompletionReceipt,
+  validateSingleOperatorInvokerPublicationReceipt,
+  validateSingleOperatorPrivateValidationReceipt,
   validateStateSnapshot,
   validateUnfreezeRestorationReceipt,
 } from "../functions/scripts/academy-private-runtime-iam-contract.mjs";
@@ -81,6 +103,7 @@ function approvalFixture(overrides = {}) {
     schemaVersion: EXECUTABLE_APPROVAL_VERSION,
     approvalId: "academy-private-runtime-change-20260719",
     approvedAt: "2026-07-19T00:30:00Z",
+    operatorMode: THREE_PERSON_SEPARATION,
     ...TEST_EXECUTION_PRINCIPALS,
     jitStartsAt: "2026-07-19T01:00:00Z",
     jitExpiresAt: "2026-07-19T03:00:00Z",
@@ -94,6 +117,7 @@ function approvalFixture(overrides = {}) {
       userManagedKeyCount: 0,
       complete: true,
     },
+    singleOperatorControlManifest: null,
     actualProvisioningEligible: false,
     deploymentApprovalEligible: false,
     publicInvokerApprovalEligible: false,
@@ -103,6 +127,134 @@ function approvalFixture(overrides = {}) {
   };
   approval.approvalDigest = buildExecutableApprovalDigest(approval);
   return approval;
+}
+
+function singleOperatorControlManifest() {
+  return {
+    schemaVersion: SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION,
+    orderedSteps: clone(SINGLE_OPERATOR_EXECUTION_STEPS),
+    deploymentSource: clone(IMMUTABLE_RELEASE_EVIDENCE),
+    targets: clone(DEPLOYMENT_TARGETS),
+    productionApprovalReferenceDigest: "f".repeat(64),
+    rollbackManifestDigest: "a".repeat(64),
+    temporaryAccessRemovalPlanDigest: "b".repeat(64),
+    secureAuditArtifact: {
+      artifactDigest: "c".repeat(64),
+      directoryMode: "0700",
+      fileMode: "0600",
+    },
+  };
+}
+
+function singleOperatorApprovalFixture(overrides = {}) {
+  return approvalFixture({
+    operatorMode: SINGLE_OPERATOR_JIT_V1,
+    provisioningPrincipal: APPROVED_SINGLE_OPERATOR_PRINCIPAL,
+    impersonationPrincipal: APPROVED_SINGLE_OPERATOR_PRINCIPAL,
+    invokerOperatorPrincipal: APPROVED_SINGLE_OPERATOR_PRINCIPAL,
+    jitExpiresAt: "2026-07-19T02:00:00Z",
+    singleOperatorControlManifest: singleOperatorControlManifest(),
+    ...overrides,
+  });
+}
+
+function stepCompletions(stepIds, firstMinute) {
+  return stepIds.map((stepId, index) => ({
+    stepId,
+    completedAt:
+      `2026-07-19T01:${String(firstMinute + index).padStart(2, "0")}:00Z`,
+  }));
+}
+
+function singleOperatorPrivateValidationFixture(approval) {
+  const steps = stepCompletions(SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS, 1);
+  const receipt = {
+    schemaVersion: SINGLE_OPERATOR_PRIVATE_VALIDATION_RECEIPT_VERSION,
+    receiptId: "single-operator-private-validation",
+    receiptDigest: "",
+    approvalId: approval.approvalId,
+    approvalDigest: approval.approvalDigest,
+    operatorMode: SINGLE_OPERATOR_JIT_V1,
+    stepCompletions: steps,
+    privateValidationCompletedAt: steps.at(-1).completedAt,
+    targets: clone(SINGLE_OPERATOR_TARGET_FUNCTION_NAMES),
+    existingFunctionBaselineDigest:
+      "1cb924fc62c97771d42fb60b98934d9f48e5192abbf0b03b31d06753ff41dcfd",
+    finalFunctionCount: 35,
+    finalGen2FunctionCount: 35,
+    allTargetsPrivate: true,
+    sourceIdentityVerified: true,
+    effectivePermissionAuditComplete: true,
+    userManagedKeyCount: 0,
+  };
+  receipt.receiptDigest =
+    buildSingleOperatorPrivateValidationReceiptDigest(receipt);
+  return receipt;
+}
+
+function singleOperatorPublicationFixture(approval, privateReceipt) {
+  const receipt = {
+    schemaVersion: SINGLE_OPERATOR_INVOKER_PUBLICATION_RECEIPT_VERSION,
+    receiptId: "single-operator-invoker-publication",
+    receiptDigest: "",
+    approvalId: approval.approvalId,
+    approvalDigest: approval.approvalDigest,
+    operatorMode: SINGLE_OPERATOR_JIT_V1,
+    privateValidationReceiptDigest: privateReceipt.receiptDigest,
+    privateValidationCompletedAt:
+      privateReceipt.privateValidationCompletedAt,
+    publicationConfirmedAt: "2026-07-19T01:10:00Z",
+    confirmationSeparated: true,
+    targets: clone(SINGLE_OPERATOR_TARGET_FUNCTION_NAMES),
+  };
+  receipt.receiptDigest =
+    buildSingleOperatorInvokerPublicationReceiptDigest(receipt);
+  return receipt;
+}
+
+function singleOperatorCompletionFixture(
+    approval,
+    publicationReceipt,
+) {
+  const steps = stepCompletions(SINGLE_OPERATOR_COMPLETION_STEPS, 11);
+  const receipt = {
+    schemaVersion: SINGLE_OPERATOR_COMPLETION_RECEIPT_VERSION,
+    receiptId: "single-operator-completion",
+    receiptDigest: "",
+    approvalId: approval.approvalId,
+    approvalDigest: approval.approvalDigest,
+    operatorMode: SINGLE_OPERATOR_JIT_V1,
+    publicationReceiptDigest: publicationReceipt.receiptDigest,
+    stepCompletions: steps,
+    publicInvokerAppliedAt: steps[0].completedAt,
+    temporaryAccessRemovedAt: steps[1].completedAt,
+    finalAuditCompletedAt: steps[2].completedAt,
+    targets: clone(SINGLE_OPERATOR_TARGET_FUNCTION_NAMES),
+    rollbackManifestDigest:
+      approval.singleOperatorControlManifest.rollbackManifestDigest,
+    secureAuditArtifactDigest:
+      approval.singleOperatorControlManifest.secureAuditArtifact
+          .artifactDigest,
+    temporaryAccessRemovalEvidence: {
+      tokenCreatorBindingRemoved: true,
+      actAsBindingsRemoved: true,
+      deployRoleBindingRemoved: true,
+      evidenceDigest: "d".repeat(64),
+    },
+    finalAudit: {
+      complete: true,
+      effectivePermissionAuditComplete: true,
+      keyAuditComplete: true,
+      userManagedKeyCount: 0,
+      existingFunctionCount: 32,
+      finalFunctionCount: 35,
+      finalGen2FunctionCount: 35,
+      evidenceDigest: "e".repeat(64),
+    },
+  };
+  receipt.receiptDigest =
+    buildSingleOperatorCompletionReceiptDigest(receipt);
+  return receipt;
 }
 
 function activationFixture(approval = approvalFixture()) {
@@ -673,12 +825,13 @@ test("S — unresolved source principals require exact receipt users and JIT",
         resolution: "EXACT_RECEIPT_REQUIRED_NO_SOURCE_DEFAULT",
         placeholderDisposition: "REJECT",
         inferredCurrentUserDisposition: "REJECT",
+        operatorModeAuthority: OPERATOR_MODE_AUTHORITY,
       },
   );
   assert.equal(
       JSON.stringify(ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT)
           .includes("miamidaegu@gmail.com"),
-      false,
+      true,
   );
 });
 
@@ -875,6 +1028,255 @@ test("cross-project service account audit is rejected", () => {
   assert.throws(
       () => validateExecutableApproval(approval, {currentTimeMs: NOW}),
       /exact identities and zero keys/,
+  );
+});
+
+test("operator mode A — three-person separation accepts distinct users", () => {
+  const approval = approvalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: true,
+    iamMutationCommandPublication: true,
+  });
+  const result = validateExecutableApproval(approval, {currentTimeMs: NOW});
+  assert.equal(result.operatorMode, THREE_PERSON_SEPARATION);
+  assert.equal(result.executable, true);
+});
+
+test("operator mode B — three-person separation rejects one user", () => {
+  const approval = approvalFixture();
+  approval.impersonationPrincipal = approval.provisioningPrincipal;
+  approval.approvalDigest = buildExecutableApprovalDigest(approval);
+  assert.throws(
+      () => validateExecutableApproval(approval, {currentTimeMs: NOW}),
+      /distinct exact receipt users/,
+  );
+});
+
+test("operator mode C — exact approved single operator is structural", () => {
+  const approval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: true,
+  });
+  const result = validateExecutableApproval(approval, {
+    currentTimestamp: "2026-07-19T01:30:00Z",
+  });
+  assert.equal(result.operatorMode, SINGLE_OPERATOR_JIT_V1);
+  assert.equal(
+      result.operatorModeContractVersion,
+      OPERATOR_MODE_CONTRACT_VERSION,
+  );
+  assert.equal(result.executable, true);
+  assert.equal(result.publicInvokerRequiresSeparateReceipt, true);
+  assert.equal(result.execution.publicInvokerApprovalEligible, false);
+});
+
+test("operator mode D — one different single-operator field rejects", () => {
+  const approval = singleOperatorApprovalFixture();
+  approval.invokerOperatorPrincipal = "user:invoker@daegu-miami.com";
+  approval.approvalDigest = buildExecutableApprovalDigest(approval);
+  assert.throws(
+      () => validateExecutableApproval(approval, {
+        currentTimestamp: "2026-07-19T01:30:00Z",
+      }),
+      /exact approved principal tuple/,
+  );
+});
+
+test("operator mode E — another repeated user rejects", () => {
+  const another = "user:another@gmail.com";
+  const approval = singleOperatorApprovalFixture({
+    provisioningPrincipal: another,
+    impersonationPrincipal: another,
+    invokerOperatorPrincipal: another,
+  });
+  assert.throws(
+      () => validateExecutableApproval(approval, {
+        currentTimestamp: "2026-07-19T01:30:00Z",
+      }),
+      /exact approved principal tuple/,
+  );
+});
+
+test("operator mode F — a missing mode fails closed", () => {
+  const approval = approvalFixture();
+  delete approval.operatorMode;
+  assert.throws(
+      () => validateExecutableApproval(approval, {currentTimeMs: NOW}),
+      /exact key set mismatch/,
+  );
+  assert.equal(OPERATOR_MODE_AUTHORITY.missingModeDisposition, "REJECT");
+});
+
+test("operator mode G — malformed and non-user principals reject", () => {
+  for (const principal of [
+    "",
+    "user:TODO@gmail.com",
+    "user:miamidaegu@@gmail.com",
+    "group:miamidaegu@gmail.com",
+    "serviceAccount:miamidaegu@gmail.com",
+  ]) {
+    const approval = singleOperatorApprovalFixture({
+      provisioningPrincipal: principal,
+      impersonationPrincipal: principal,
+      invokerOperatorPrincipal: principal,
+    });
+    assert.throws(() => validateExecutableApproval(approval, {
+      currentTimestamp: "2026-07-19T01:30:00Z",
+    }));
+  }
+});
+
+test("operator mode H — exact 60-minute JIT is accepted", () => {
+  const approval = singleOperatorApprovalFixture();
+  const result = validateExecutableApproval(approval, {
+    currentTimestamp: "2026-07-19T01:30:00Z",
+  });
+  assert.equal(result.jitActive, true);
+  assert.equal(
+      SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
+      "3600000000000",
+  );
+});
+
+test("operator mode I — 60 minutes plus 1ns rejects", () => {
+  const approval = singleOperatorApprovalFixture({
+    jitExpiresAt: "2026-07-19T02:00:00.000000001Z",
+  });
+  assert.throws(
+      () => validateExecutableApproval(approval, {
+        currentTimestamp: "2026-07-19T01:30:00Z",
+      }),
+      /operator-mode maximum/,
+  );
+});
+
+test("operator mode J — public invoker before private validation rejects", () => {
+  const approval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: true,
+    iamMutationCommandPublication: true,
+  });
+  assert.throws(
+      () => validateExecutableApproval(approval, {
+        currentTimestamp: "2026-07-19T01:30:00Z",
+      }),
+      /fail closed/,
+  );
+});
+
+test("operator mode K — separate private and publication receipts pass", () => {
+  const approval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: true,
+  });
+  const privateReceipt = singleOperatorPrivateValidationFixture(approval);
+  const privateResult = validateSingleOperatorPrivateValidationReceipt(
+      privateReceipt,
+      approval,
+  );
+  assert.equal(privateResult.publicInvokerEligible, false);
+  const publicationReceipt =
+    singleOperatorPublicationFixture(approval, privateReceipt);
+  const publicationResult =
+    validateSingleOperatorInvokerPublicationReceipt(
+        publicationReceipt,
+        approval,
+        privateReceipt,
+    );
+  assert.equal(publicationResult.publicInvokerEligible, true);
+  const completionReceipt =
+    singleOperatorCompletionFixture(approval, publicationReceipt);
+  assert.equal(
+      validateSingleOperatorCompletionReceipt(
+          completionReceipt,
+          approval,
+          privateReceipt,
+          publicationReceipt,
+      ).temporaryAccessRemoved,
+      true,
+  );
+});
+
+test("operator mode L — missing temporary-removal evidence rejects", () => {
+  const approval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: true,
+  });
+  const privateReceipt = singleOperatorPrivateValidationFixture(approval);
+  const publicationReceipt =
+    singleOperatorPublicationFixture(approval, privateReceipt);
+  const completionReceipt =
+    singleOperatorCompletionFixture(approval, publicationReceipt);
+  delete completionReceipt.temporaryAccessRemovalEvidence;
+  completionReceipt.receiptDigest =
+    buildSingleOperatorCompletionReceiptDigest(completionReceipt);
+  assert.throws(() => validateSingleOperatorCompletionReceipt(
+      completionReceipt,
+      approval,
+      privateReceipt,
+      publicationReceipt,
+  ));
+});
+
+test("operator mode M — rollback or secure audit manifest missing rejects", () => {
+  for (const mutate of [
+    (manifest) => delete manifest.productionApprovalReferenceDigest,
+    (manifest) => delete manifest.rollbackManifestDigest,
+    (manifest) => delete manifest.secureAuditArtifact,
+  ]) {
+    const approval = singleOperatorApprovalFixture();
+    mutate(approval.singleOperatorControlManifest);
+    approval.approvalDigest = buildExecutableApprovalDigest(approval);
+    assert.throws(() => validateExecutableApproval(approval, {
+      currentTimestamp: "2026-07-19T01:30:00Z",
+    }));
+  }
+});
+
+test("operator mode N — coherent semantic tamper rejects", () => {
+  const tamperedMode = singleOperatorApprovalFixture();
+  tamperedMode.operatorMode = THREE_PERSON_SEPARATION;
+  tamperedMode.approvalDigest = buildExecutableApprovalDigest(tamperedMode);
+  assert.throws(() => validateExecutableApproval(tamperedMode, {
+    currentTimestamp: "2026-07-19T01:30:00Z",
+  }));
+
+  const tamperedReceiptApproval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: true,
+  });
+  const privateReceipt =
+    singleOperatorPrivateValidationFixture(tamperedReceiptApproval);
+  privateReceipt.stepCompletions[0].stepId =
+    SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS[1];
+  privateReceipt.receiptDigest =
+    buildSingleOperatorPrivateValidationReceiptDigest(privateReceipt);
+  assert.throws(() => validateSingleOperatorPrivateValidationReceipt(
+      privateReceipt,
+      tamperedReceiptApproval,
+  ), /step order/);
+});
+
+test("operator mode O — legacy three-person transitions still pass", () => {
+  const approval = approvalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: true,
+    iamMutationCommandPublication: true,
+  });
+  assert.equal(
+      validateFreezeActivationReceipt(activationFixture(approval), approval),
+      true,
   );
 });
 

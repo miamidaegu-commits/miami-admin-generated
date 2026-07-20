@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import {
+  DEPLOYMENT_TARGETS,
   FUNCTIONS_IDENTITIES,
+  IMMUTABLE_RELEASE_EVIDENCE,
   ORGANIZATION_POLICY_EVIDENCE,
   buildOrganizationPolicyLineageReference,
   computeOrganizationPolicyEvidenceDigest,
@@ -9,7 +11,7 @@ import {
 } from "./academy-functions-build-scope-contract.mjs";
 
 export const PRIVATE_RUNTIME_IAM_CONTRACT_VERSION =
-  "academy_private_runtime_iam.v5";
+  "academy_private_runtime_iam.v6";
 export const PRIVATE_RUNTIME_IAM_SET_DIGEST_VERSION =
   "academy_private_runtime_iam_set_sha256.v1";
 export const FREEZE_ACTIVATION_RECEIPT_VERSION =
@@ -17,12 +19,80 @@ export const FREEZE_ACTIVATION_RECEIPT_VERSION =
 export const UNFREEZE_RESTORATION_RECEIPT_VERSION =
   "academy_private_runtime_unfreeze_restoration.v4";
 export const EXECUTABLE_APPROVAL_VERSION =
-  "academy_private_runtime_executable_approval.v4";
+  "academy_private_runtime_executable_approval.v5";
 export const EXACT_CHRONOLOGY_PROFILE_VERSION =
   "academy_private_runtime_exact_chronology.v2";
 export const SERVICE_ACCOUNT_KEY_AUDIT_VERSION =
   "academy_private_runtime_service_account_key_audit.v1";
+export const OPERATOR_MODE_CONTRACT_VERSION =
+  "academy_private_runtime_operator_mode.v1";
+export const SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION =
+  "academy_private_runtime_single_operator_control_manifest.v1";
+export const SINGLE_OPERATOR_PRIVATE_VALIDATION_RECEIPT_VERSION =
+  "academy_private_runtime_single_operator_private_validation.v1";
+export const SINGLE_OPERATOR_INVOKER_PUBLICATION_RECEIPT_VERSION =
+  "academy_private_runtime_single_operator_invoker_publication.v1";
+export const SINGLE_OPERATOR_COMPLETION_RECEIPT_VERSION =
+  "academy_private_runtime_single_operator_completion.v1";
+export const THREE_PERSON_SEPARATION = "THREE_PERSON_SEPARATION";
+export const SINGLE_OPERATOR_JIT_V1 = "SINGLE_OPERATOR_JIT_V1";
+export const APPROVED_SINGLE_OPERATOR_PRINCIPAL =
+  "user:miamidaegu@gmail.com";
 export const MAX_JIT_DURATION_NANOSECONDS_DECIMAL = "7200000000000";
+export const SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS_DECIMAL =
+  "3600000000000";
+
+export const SINGLE_OPERATOR_EXECUTION_STEPS = deepFreeze([
+  "PROVISIONING_PREFLIGHT_AND_BASELINE",
+  "SERVICE_ACCOUNT_ROLE_BINDING_PROVISIONING",
+  "EFFECTIVE_PERMISSION_AND_KEY_COUNT_AUDIT",
+  "DEPLOY_SERVICE_ACCOUNT_IMPERSONATION",
+  "PREVIEW_PRIVATE_DEPLOYMENT",
+  "ASSIGNMENT_WRITER_PRIVATE_DEPLOYMENT",
+  "OUTCOME_WRITER_PRIVATE_DEPLOYMENT",
+  "BASELINE_32_AND_FINAL_35_VALIDATION",
+  "PRIVATE_VALIDATION_COMPLETION",
+  "INVOKER_PUBLICATION_CONFIRMATION",
+  "NEW_THREE_SERVICES_PUBLIC_INVOKER",
+  "TEMPORARY_ACCESS_REMOVAL",
+  "FINAL_PERMISSION_KEY_INVENTORY_AUDIT",
+]);
+export const SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS =
+  deepFreeze(SINGLE_OPERATOR_EXECUTION_STEPS.slice(0, 9));
+export const SINGLE_OPERATOR_COMPLETION_STEPS =
+  deepFreeze(SINGLE_OPERATOR_EXECUTION_STEPS.slice(10));
+export const SINGLE_OPERATOR_TARGET_FUNCTION_NAMES = deepFreeze(
+    DEPLOYMENT_TARGETS.map(({functionName}) => functionName),
+);
+
+export const OPERATOR_MODE_AUTHORITY = deepFreeze({
+  contractVersion: OPERATOR_MODE_CONTRACT_VERSION,
+  authorityBaseReleaseSha:
+    "d93ea87b68fa2fb8b9623f418e9a1bf2a3ac1297",
+  missingModeDisposition: "REJECT",
+  sourceDefaultPrincipalDisposition: "REJECT",
+  modes: {
+    [THREE_PERSON_SEPARATION]: {
+      principalTuple: "THREE_DISTINCT_EXACT_USERS",
+      maximumJitDurationNanoseconds:
+        MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
+      singleOperatorControlManifest: null,
+    },
+    [SINGLE_OPERATOR_JIT_V1]: {
+      principalTuple: "EXACT_APPROVED_SINGLE_USER_REPEATED_THREE_TIMES",
+      approvedPrincipal: APPROVED_SINGLE_OPERATOR_PRINCIPAL,
+      maximumJitDurationNanoseconds:
+        SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
+      controlManifestVersion: SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION,
+      orderedSteps: SINGLE_OPERATOR_EXECUTION_STEPS,
+      productionApprovalReferenceRequired: true,
+      separateInvokerPublicationReceiptRequired: true,
+      temporaryAccessRemovalEvidenceRequired: true,
+      rollbackManifestRequired: true,
+      secureAuditArtifactRequired: true,
+    },
+  },
+});
 
 const EXACT_CHRONOLOGY_PROFILE = deepFreeze({
   profileVersion: EXACT_CHRONOLOGY_PROFILE_VERSION,
@@ -375,6 +445,7 @@ const contractWithoutDigest = {
     resolution: "EXACT_RECEIPT_REQUIRED_NO_SOURCE_DEFAULT",
     placeholderDisposition: "REJECT",
     inferredCurrentUserDisposition: "REJECT",
+    operatorModeAuthority: OPERATOR_MODE_AUTHORITY,
   },
   serviceAccountKeyAudit: {
     schemaVersion: SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
@@ -593,6 +664,19 @@ const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
 const SECONDS_PER_DAY = 86_400n;
 const MAX_JIT_DURATION_NANOSECONDS =
   BigInt(MAX_JIT_DURATION_NANOSECONDS_DECIMAL);
+const SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS =
+  BigInt(SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS_DECIMAL);
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+
+function maximumJitDurationNanoseconds(operatorMode) {
+  if (operatorMode === THREE_PERSON_SEPARATION) {
+    return MAX_JIT_DURATION_NANOSECONDS;
+  }
+  if (operatorMode === SINGLE_OPERATOR_JIT_V1) {
+    return SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS;
+  }
+  fail("operator mode is missing or unsupported");
+}
 
 export function parseExactUserPrincipal(value) {
   if (typeof value !== "string" || !value.startsWith("user:")) {
@@ -721,6 +805,10 @@ function approvalChronologyProjection(approval) {
   );
   return {
     profileVersion: EXACT_CHRONOLOGY_PROFILE_VERSION,
+    operatorModeContractVersion: OPERATOR_MODE_CONTRACT_VERSION,
+    operatorMode: approval.operatorMode,
+    maximumJitDurationNanoseconds:
+      maximumJitDurationNanoseconds(approval.operatorMode).toString(),
     approvedAt: timestampDigestRecord(
         approval.approvedAt,
         "approval.approvedAt",
@@ -793,6 +881,62 @@ function validateServiceAccountKeyAudit(audit) {
   }
 }
 
+function validateSingleOperatorControlManifest(manifest) {
+  assertExactKeys(manifest, [
+    "deploymentSource",
+    "orderedSteps",
+    "productionApprovalReferenceDigest",
+    "rollbackManifestDigest",
+    "schemaVersion",
+    "secureAuditArtifact",
+    "targets",
+    "temporaryAccessRemovalPlanDigest",
+  ], "single operator control manifest");
+  assertExactKeys(manifest.secureAuditArtifact, [
+    "artifactDigest",
+    "directoryMode",
+    "fileMode",
+  ], "single operator secure audit artifact");
+  if (manifest.schemaVersion !== SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION ||
+      !same(manifest.deploymentSource, IMMUTABLE_RELEASE_EVIDENCE) ||
+      !same(manifest.targets, DEPLOYMENT_TARGETS) ||
+      !same(manifest.orderedSteps, SINGLE_OPERATOR_EXECUTION_STEPS) ||
+      !SHA256_HEX.test(manifest.productionApprovalReferenceDigest) ||
+      !SHA256_HEX.test(manifest.rollbackManifestDigest) ||
+      !SHA256_HEX.test(manifest.temporaryAccessRemovalPlanDigest) ||
+      !SHA256_HEX.test(manifest.secureAuditArtifact.artifactDigest) ||
+      manifest.secureAuditArtifact.directoryMode !== "0700" ||
+      manifest.secureAuditArtifact.fileMode !== "0600") {
+    fail(
+        "single operator rollback, audit, source, or ordered control manifest " +
+        "is invalid",
+    );
+  }
+}
+
+function validateOperatorMode(approval, executionPrincipals) {
+  if (approval.operatorMode === THREE_PERSON_SEPARATION) {
+    if (new Set(executionPrincipals).size !== executionPrincipals.length) {
+      fail("approval principal roles must be distinct exact receipt users");
+    }
+    if (approval.singleOperatorControlManifest !== null) {
+      fail("three-person mode forbids a single-operator control manifest");
+    }
+    return;
+  }
+  if (approval.operatorMode === SINGLE_OPERATOR_JIT_V1) {
+    if (executionPrincipals.some((principal) =>
+      principal !== APPROVED_SINGLE_OPERATOR_PRINCIPAL)) {
+      fail("single-operator mode requires the exact approved principal tuple");
+    }
+    validateSingleOperatorControlManifest(
+        approval.singleOperatorControlManifest,
+    );
+    return;
+  }
+  fail("operator mode is missing or unsupported");
+}
+
 export function validateExecutableApproval(
     approval,
     {
@@ -814,9 +958,11 @@ export function validateExecutableApproval(
     "jitStartsAt",
     "organizationPolicy",
     "organizationPolicyLineage",
+    "operatorMode",
     "provisioningPrincipal",
     "schemaVersion",
     "serviceAccountKeyAudit",
+    "singleOperatorControlManifest",
   ], "executable approval");
   if (approval.schemaVersion !== EXECUTABLE_APPROVAL_VERSION ||
       typeof approval.approvalId !== "string" ||
@@ -834,9 +980,7 @@ export function validateExecutableApproval(
     }
     executionPrincipals.push(member);
   }
-  if (new Set(executionPrincipals).size !== executionPrincipals.length) {
-    fail("approval principal roles must be distinct exact receipt users");
-  }
+  validateOperatorMode(approval, executionPrincipals);
   validateServiceAccountKeyAudit(approval.serviceAccountKeyAudit);
   const approvedAt = parseExactRfc3339UtcNanoseconds(
       approval.approvedAt,
@@ -854,11 +998,16 @@ export function validateExecutableApproval(
     currentTimeMs,
     currentTimestamp,
   });
+  const maximumJitDuration =
+    maximumJitDurationNanoseconds(approval.operatorMode);
   if (expiresAt <= startsAt ||
-      expiresAt - startsAt > MAX_JIT_DURATION_NANOSECONDS ||
+      expiresAt - startsAt > maximumJitDuration ||
       approvedAt > startsAt || currentTime < startsAt ||
       currentTime >= expiresAt) {
-    fail("approval JIT window is inactive, incoherent, or longer than 2 hours");
+    fail(
+        "approval JIT window is inactive, incoherent, longer than 2 hours, " +
+        "or longer than the operator-mode maximum",
+    );
   }
   const organizationPolicy = approval.organizationPolicy;
   const organizationPolicyResult =
@@ -886,6 +1035,9 @@ export function validateExecutableApproval(
     iamMutationCommandPublication:
       organizationPolicyResult.mutationCommandPublicationPolicyCompatible,
   };
+  if (approval.operatorMode === SINGLE_OPERATOR_JIT_V1) {
+    policyEligibility.publicInvokerApprovalEligible = false;
+  }
   const execution = Object.fromEntries(EXECUTION_ACTION_KEYS.map((key) => [
     key,
     policyEligibility[key] && approval[key] === true,
@@ -896,6 +1048,8 @@ export function validateExecutableApproval(
   return deepFreeze({
     approvalId: approval.approvalId,
     approvalDigest: approval.approvalDigest,
+    operatorModeContractVersion: OPERATOR_MODE_CONTRACT_VERSION,
+    operatorMode: approval.operatorMode,
     provisioningPrincipal: approval.provisioningPrincipal,
     impersonationPrincipal: approval.impersonationPrincipal,
     invokerOperatorPrincipal: approval.invokerOperatorPrincipal,
@@ -907,12 +1061,343 @@ export function validateExecutableApproval(
     userManagedServiceAccountKeyCount:
       approval.serviceAccountKeyAudit.userManagedKeyCount,
     execution,
-    executable: EXECUTION_ACTION_KEYS.every((key) => execution[key]),
+    publicInvokerRequiresSeparateReceipt:
+      approval.operatorMode === SINGLE_OPERATOR_JIT_V1,
+    executable: approval.operatorMode === SINGLE_OPERATOR_JIT_V1 ?
+      execution.actualProvisioningEligible &&
+        execution.deploymentApprovalEligible &&
+        execution.iamMutationCommandPublication &&
+        execution.publicInvokerApprovalEligible === false :
+      EXECUTION_ACTION_KEYS.every((key) => execution[key]),
   });
 }
 
 export const validatePrincipalJitOrgPolicyApproval =
   validateExecutableApproval;
+
+function receiptDigestProjection(receipt) {
+  const {receiptDigest: ignored, ...projection} = receipt;
+  return projection;
+}
+
+function buildReceiptDigest(receipt, label) {
+  assertPlainData(receipt, label);
+  return canonicalDigest(receiptDigestProjection(receipt));
+}
+
+export function buildSingleOperatorPrivateValidationReceiptDigest(receipt) {
+  return buildReceiptDigest(receipt, "single operator private validation");
+}
+
+export function buildSingleOperatorInvokerPublicationReceiptDigest(receipt) {
+  return buildReceiptDigest(receipt, "single operator invoker publication");
+}
+
+export function buildSingleOperatorCompletionReceiptDigest(receipt) {
+  return buildReceiptDigest(receipt, "single operator completion");
+}
+
+function validateSingleOperatorApprovalAt(approval, currentTimestamp) {
+  const assessment = validateExecutableApproval(approval, {currentTimestamp});
+  if (assessment.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
+      assessment.executable !== true ||
+      assessment.execution.actualProvisioningEligible !== true ||
+      assessment.execution.deploymentApprovalEligible !== true ||
+      assessment.execution.publicInvokerApprovalEligible !== false ||
+      assessment.execution.iamMutationCommandPublication !== true) {
+    fail("single-operator approval is not executable for private deployment");
+  }
+  return assessment;
+}
+
+function validateOrderedStepCompletions(
+    completions,
+    expectedSteps,
+    approval,
+    label,
+) {
+  if (!Array.isArray(completions) ||
+      completions.length !== expectedSteps.length) {
+    fail(`${label} must contain the exact ordered steps`);
+  }
+  const jitStartsAt = parseExactRfc3339UtcNanoseconds(
+      approval.jitStartsAt,
+      "approval.jitStartsAt",
+  ).epochNanoseconds;
+  const jitExpiresAt = parseExactRfc3339UtcNanoseconds(
+      approval.jitExpiresAt,
+      "approval.jitExpiresAt",
+  ).epochNanoseconds;
+  let previous = null;
+  const times = completions.map((completion, index) => {
+    assertExactKeys(
+        completion,
+        ["completedAt", "stepId"],
+        `${label}[${index}]`,
+    );
+    if (completion.stepId !== expectedSteps[index]) {
+      fail(`${label} step order mismatch`);
+    }
+    const completedAt = parseExactRfc3339UtcNanoseconds(
+        completion.completedAt,
+        `${label}[${index}].completedAt`,
+    ).epochNanoseconds;
+    if (completedAt < jitStartsAt ||
+        completedAt >= jitExpiresAt ||
+        (previous !== null && completedAt < previous)) {
+      fail(`${label} must be ordered and entirely inside JIT`);
+    }
+    previous = completedAt;
+    return completedAt;
+  });
+  return times;
+}
+
+export function validateSingleOperatorPrivateValidationReceipt(
+    receipt,
+    approval,
+) {
+  assertExactKeys(receipt, [
+    "allTargetsPrivate",
+    "approvalDigest",
+    "approvalId",
+    "effectivePermissionAuditComplete",
+    "existingFunctionBaselineDigest",
+    "finalFunctionCount",
+    "finalGen2FunctionCount",
+    "operatorMode",
+    "privateValidationCompletedAt",
+    "receiptDigest",
+    "receiptId",
+    "schemaVersion",
+    "sourceIdentityVerified",
+    "stepCompletions",
+    "targets",
+    "userManagedKeyCount",
+  ], "single operator private validation receipt");
+  const assessment = validateSingleOperatorApprovalAt(
+      approval,
+      receipt.privateValidationCompletedAt,
+  );
+  const times = validateOrderedStepCompletions(
+      receipt.stepCompletions,
+      SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS,
+      approval,
+      "single operator private validation steps",
+  );
+  const completedAt = parseExactRfc3339UtcNanoseconds(
+      receipt.privateValidationCompletedAt,
+      "privateValidationCompletedAt",
+  ).epochNanoseconds;
+  if (receipt.schemaVersion !==
+        SINGLE_OPERATOR_PRIVATE_VALIDATION_RECEIPT_VERSION ||
+      typeof receipt.receiptId !== "string" ||
+      receipt.receiptId.length === 0 ||
+      PLACEHOLDER.test(receipt.receiptId) ||
+      receipt.approvalId !== assessment.approvalId ||
+      receipt.approvalDigest !== assessment.approvalDigest ||
+      receipt.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
+      !same(receipt.targets, SINGLE_OPERATOR_TARGET_FUNCTION_NAMES) ||
+      receipt.existingFunctionBaselineDigest !==
+        IMMUTABLE_RELEASE_EVIDENCE.existingFunctionBaselineDigest ||
+      receipt.finalFunctionCount !== 35 ||
+      receipt.finalGen2FunctionCount !== 35 ||
+      receipt.allTargetsPrivate !== true ||
+      receipt.sourceIdentityVerified !== true ||
+      receipt.effectivePermissionAuditComplete !== true ||
+      receipt.userManagedKeyCount !== 0 ||
+      times.at(-1) !== completedAt ||
+      receipt.receiptDigest !==
+        buildSingleOperatorPrivateValidationReceiptDigest(receipt)) {
+    fail("single operator private validation receipt is incomplete");
+  }
+  return deepFreeze({
+    receiptId: receipt.receiptId,
+    receiptDigest: receipt.receiptDigest,
+    privateValidationCompletedAt: receipt.privateValidationCompletedAt,
+    provisioningEligible: true,
+    deploymentEligible: true,
+    publicInvokerEligible: false,
+    iamMutationCommandPublication: true,
+  });
+}
+
+export function validateSingleOperatorInvokerPublicationReceipt(
+    receipt,
+    approval,
+    privateValidationReceipt,
+) {
+  assertExactKeys(receipt, [
+    "approvalDigest",
+    "approvalId",
+    "confirmationSeparated",
+    "operatorMode",
+    "privateValidationCompletedAt",
+    "privateValidationReceiptDigest",
+    "publicationConfirmedAt",
+    "receiptDigest",
+    "receiptId",
+    "schemaVersion",
+    "targets",
+  ], "single operator invoker publication receipt");
+  const privateAssessment = validateSingleOperatorPrivateValidationReceipt(
+      privateValidationReceipt,
+      approval,
+  );
+  const approvalAssessment = validateSingleOperatorApprovalAt(
+      approval,
+      receipt.publicationConfirmedAt,
+  );
+  const privateCompletedAt = parseExactRfc3339UtcNanoseconds(
+      privateAssessment.privateValidationCompletedAt,
+      "privateValidationCompletedAt",
+  ).epochNanoseconds;
+  const publicationConfirmedAt = parseExactRfc3339UtcNanoseconds(
+      receipt.publicationConfirmedAt,
+      "publicationConfirmedAt",
+  ).epochNanoseconds;
+  if (receipt.schemaVersion !==
+        SINGLE_OPERATOR_INVOKER_PUBLICATION_RECEIPT_VERSION ||
+      typeof receipt.receiptId !== "string" ||
+      receipt.receiptId.length === 0 ||
+      PLACEHOLDER.test(receipt.receiptId) ||
+      receipt.approvalId !== approvalAssessment.approvalId ||
+      receipt.approvalDigest !== approvalAssessment.approvalDigest ||
+      receipt.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
+      receipt.privateValidationReceiptDigest !==
+        privateAssessment.receiptDigest ||
+      receipt.privateValidationCompletedAt !==
+        privateAssessment.privateValidationCompletedAt ||
+      receipt.confirmationSeparated !== true ||
+      publicationConfirmedAt <= privateCompletedAt ||
+      !same(receipt.targets, SINGLE_OPERATOR_TARGET_FUNCTION_NAMES) ||
+      receipt.receiptDigest !==
+        buildSingleOperatorInvokerPublicationReceiptDigest(receipt)) {
+    fail(
+        "single operator invoker publication must follow a separate private " +
+        "validation receipt",
+    );
+  }
+  return deepFreeze({
+    receiptId: receipt.receiptId,
+    receiptDigest: receipt.receiptDigest,
+    publicationConfirmedAt: receipt.publicationConfirmedAt,
+    publicInvokerEligible: true,
+    iamMutationCommandPublication: true,
+  });
+}
+
+export function validateSingleOperatorCompletionReceipt(
+    receipt,
+    approval,
+    privateValidationReceipt,
+    invokerPublicationReceipt,
+) {
+  assertExactKeys(receipt, [
+    "approvalDigest",
+    "approvalId",
+    "finalAudit",
+    "finalAuditCompletedAt",
+    "operatorMode",
+    "publicInvokerAppliedAt",
+    "publicationReceiptDigest",
+    "receiptDigest",
+    "receiptId",
+    "rollbackManifestDigest",
+    "schemaVersion",
+    "secureAuditArtifactDigest",
+    "stepCompletions",
+    "targets",
+    "temporaryAccessRemovalEvidence",
+    "temporaryAccessRemovedAt",
+  ], "single operator completion receipt");
+  const publicationAssessment =
+    validateSingleOperatorInvokerPublicationReceipt(
+        invokerPublicationReceipt,
+        approval,
+        privateValidationReceipt,
+    );
+  validateSingleOperatorApprovalAt(approval, receipt.finalAuditCompletedAt);
+  const times = validateOrderedStepCompletions(
+      receipt.stepCompletions,
+      SINGLE_OPERATOR_COMPLETION_STEPS,
+      approval,
+      "single operator completion steps",
+  );
+  assertExactKeys(receipt.temporaryAccessRemovalEvidence, [
+    "actAsBindingsRemoved",
+    "deployRoleBindingRemoved",
+    "evidenceDigest",
+    "tokenCreatorBindingRemoved",
+  ], "temporary access removal evidence");
+  assertExactKeys(receipt.finalAudit, [
+    "complete",
+    "effectivePermissionAuditComplete",
+    "evidenceDigest",
+    "existingFunctionCount",
+    "finalFunctionCount",
+    "finalGen2FunctionCount",
+    "keyAuditComplete",
+    "userManagedKeyCount",
+  ], "single operator final audit");
+  const manifest = approval.singleOperatorControlManifest;
+  const publicationConfirmedAt = parseExactRfc3339UtcNanoseconds(
+      publicationAssessment.publicationConfirmedAt,
+      "publicationConfirmedAt",
+  ).epochNanoseconds;
+  if (receipt.schemaVersion !== SINGLE_OPERATOR_COMPLETION_RECEIPT_VERSION ||
+      typeof receipt.receiptId !== "string" ||
+      receipt.receiptId.length === 0 ||
+      PLACEHOLDER.test(receipt.receiptId) ||
+      receipt.approvalId !== approval.approvalId ||
+      receipt.approvalDigest !== approval.approvalDigest ||
+      receipt.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
+      receipt.publicationReceiptDigest !==
+        publicationAssessment.receiptDigest ||
+      times[0] <= publicationConfirmedAt ||
+      !same(receipt.targets, SINGLE_OPERATOR_TARGET_FUNCTION_NAMES) ||
+      receipt.rollbackManifestDigest !== manifest.rollbackManifestDigest ||
+      receipt.secureAuditArtifactDigest !==
+        manifest.secureAuditArtifact.artifactDigest ||
+      receipt.publicInvokerAppliedAt !==
+        receipt.stepCompletions[0]?.completedAt ||
+      receipt.temporaryAccessRemovedAt !==
+        receipt.stepCompletions[1]?.completedAt ||
+      receipt.finalAuditCompletedAt !==
+        receipt.stepCompletions[2]?.completedAt ||
+      receipt.temporaryAccessRemovalEvidence.tokenCreatorBindingRemoved !==
+        true ||
+      receipt.temporaryAccessRemovalEvidence.actAsBindingsRemoved !== true ||
+      receipt.temporaryAccessRemovalEvidence.deployRoleBindingRemoved !==
+        true ||
+      !SHA256_HEX.test(
+          receipt.temporaryAccessRemovalEvidence.evidenceDigest,
+      ) ||
+      receipt.finalAudit.complete !== true ||
+      receipt.finalAudit.effectivePermissionAuditComplete !== true ||
+      receipt.finalAudit.keyAuditComplete !== true ||
+      receipt.finalAudit.userManagedKeyCount !== 0 ||
+      receipt.finalAudit.existingFunctionCount !== 32 ||
+      receipt.finalAudit.finalFunctionCount !== 35 ||
+      receipt.finalAudit.finalGen2FunctionCount !== 35 ||
+      !SHA256_HEX.test(receipt.finalAudit.evidenceDigest) ||
+      times.at(-1) !== parseExactRfc3339UtcNanoseconds(
+          receipt.finalAuditCompletedAt,
+          "finalAuditCompletedAt",
+      ).epochNanoseconds ||
+      receipt.receiptDigest !==
+        buildSingleOperatorCompletionReceiptDigest(receipt)) {
+    fail("single operator completion lacks removal or final audit evidence");
+  }
+  return deepFreeze({
+    receiptId: receipt.receiptId,
+    receiptDigest: receipt.receiptDigest,
+    publicInvokerEligible: true,
+    temporaryAccessRemoved: true,
+    finalAuditComplete: true,
+    completedInsideJit: true,
+  });
+}
 
 function validateReceiptApprovalBinding(receipt, approval) {
   const assessment = validateExecutableApproval(approval, {
