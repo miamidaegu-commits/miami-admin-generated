@@ -28,6 +28,7 @@ import {
   EXPECTED_PERMISSION_SET_DIGESTS_BY_STATE,
   FREEZE_ACTIVE_STATE,
   FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING,
+  OPERATOR_MODE_CONTRACT_VERSION,
   PREVIEW_RUNTIME_SERVICE_ACCOUNT_MEMBER,
   PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
   PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
@@ -169,7 +170,7 @@ export const EXPECTED_PROJECT_NUMBER =
   TARGET_PROJECT_IDENTITY.targetProjectNumber;
 export const IAM_PRINCIPAL_POLICY_VERSION = 1;
 export const FREEZE_IAM_CONTRACT_LINEAGE_VERSION =
-  "academy_reset_freeze_iam_contract_lineage.v1";
+  "academy_reset_freeze_iam_contract_lineage.v2";
 export const EXPECTED_ACADEMY_ID = "academy_daegumiami";
 export const EXPECTED_FUNCTION_REGION = "us-central1";
 export const EXPECTED_FUNCTION_GENERATION = "GEN_2";
@@ -1491,6 +1492,8 @@ function expectedFreezeIamContractLineage(executableApproval) {
     deployPermissionSetDigest: DEPLOY_PERMISSION_SET_DIGEST,
     compensatingControlVersion: COMPENSATING_CONTROL_VERSION,
     compensatingControlDigest: COMPENSATING_CONTROL_DIGEST,
+    operatorModeContractVersion: OPERATOR_MODE_CONTRACT_VERSION,
+    operatorMode: executableApproval.operatorMode,
     principalSetDigest: sha256Canonical([
       executableApproval.provisioningPrincipal,
       executableApproval.impersonationPrincipal,
