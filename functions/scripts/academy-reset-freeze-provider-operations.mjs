@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 export const PROVIDER_OPERATION_ALLOWLIST_VERSION =
   "academy_reset_freeze_provider_operations.v6";
 export const PROVIDER_ADAPTER_CONTRACT_VERSION =
-  "academy_reset_freeze_provider_adapter.v6";
+  "academy_reset_freeze_provider_adapter.v8";
 export const PROVIDER_OPERATION_CLASSIFICATION_VERSION =
   "academy_reset_freeze_operation_classification.v2";
 export const PROVIDER_TRANSPORT = "google_auth_library_native_fetch_v1";

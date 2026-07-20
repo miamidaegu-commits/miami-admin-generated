@@ -83,7 +83,13 @@ function sourceOf(record) {
   return {bucket: match[1], object: match[2], generation: match[3]};
 }
 
-function providerResponseFor(evidence, operationId, pathParams, query) {
+function providerResponseFor(
+    evidence,
+    operationId,
+    pathParams,
+    query,
+    denyPolicies = [],
+) {
   const approval = evidence.deploymentApprovalReceipt;
   const functions = approval.resources.functions;
   const functionByName = new Map(functions.map((item) => [item.name, item]));
@@ -149,6 +155,7 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
         latestReadyRevision:
           `projects/${EXPECTED_PROJECT_ID}/locations/us-central1/` +
           `services/${fn.name}/revisions/${fn.revisionId}`,
+        updateTime: fn.updateTime,
       };
     }
     case "run.v2.projects.locations.services.revisions.list": {
@@ -158,6 +165,7 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
           `services/${fn.name}/revisions/${fn.revisionId}`,
         service: `projects/${EXPECTED_PROJECT_ID}/locations/us-central1/` +
           `services/${fn.name}`,
+        createTime: fn.updateTime,
       }];
     }
     case "run.v2.projects.locations.services.revisions.get":
@@ -166,11 +174,19 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
           `services/${pathParams.serviceId}/revisions/${pathParams.revisionId}`,
         service: `projects/${EXPECTED_PROJECT_ID}/locations/us-central1/` +
           `services/${pathParams.serviceId}`,
+        createTime: functions.find(
+            ({name}) => name === pathParams.serviceId,
+        ).updateTime,
       };
     case "cloudbuild.v1.projects.locations.builds.get": {
       const fn = functions.find(({buildId}) => buildId === pathParams.buildId);
-      return {id: fn.buildId, status: "SUCCESS",
-        source: {storageSource: sourceOf(fn)}};
+      return {
+        id: fn.buildId,
+        status: "SUCCESS",
+        createTime: fn.updateTime,
+        finishTime: fn.updateTime,
+        source: {storageSource: sourceOf(fn)},
+      };
     }
     case "storage.v1.objects.getMetadata": {
       const fn = functions.find((item) => {
@@ -236,6 +252,9 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
           pathParams.serviceAccount,
         email: pathParams.serviceAccount,
         projectId: EXPECTED_PROJECT_ID,
+        uniqueId: String(
+            serviceAccounts.indexOf(pathParams.serviceAccount) + 1,
+        ),
       };
     case "iam.v1.projects.serviceAccounts.getIamPolicy":
       return {version: 3, etag: "fixture-etag", bindings: []};
@@ -265,7 +284,15 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
     case "policytroubleshooter.v3.iam.troubleshoot":
       return {access: "NOT_GRANTED"};
     case "iam.v2.policies.denypolicies.list":
-      return [];
+      return denyPolicies.map(({name}) => ({name}));
+    case "iam.v2.policies.denypolicies.get": {
+      const policy = denyPolicies.find(({name}) =>
+        name.endsWith(`/denypolicies/${pathParams.policyId}`));
+      if (!policy) {
+        throw new Error(`missing deny policy fixture: ${pathParams.policyId}`);
+      }
+      return policy;
+    }
     case "serviceusage.v1.projects.services.get":
       return {
         name: `projects/${EXPECTED_PROJECT_NUMBER}/services/` +
@@ -286,6 +313,8 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
           job.name,
         httpTarget: {uri: job.target},
         state: job.state,
+        schedule: "0 0 * * *",
+        timeZone: "Asia/Seoul",
         updateTime: job.updateTime,
       };
     }
@@ -294,10 +323,21 @@ function providerResponseFor(evidence, operationId, pathParams, query) {
   }
 }
 
-export function createGenuineAdapterForEvidence(evidence, repositoryRoot) {
+export function createGenuineTransportFixtureForEvidence(
+    evidence,
+    options = {},
+) {
   const approvalReceipt = deepFreeze(
       structuredClone(evidence.deploymentApprovalReceipt),
   );
+  const denyPoliciesByScan =
+    options.denyPoliciesByScan ?? [Object.freeze([]), Object.freeze([])];
+  const responseMutator = options.responseMutator ?? (({value}) => value);
+  if (!Array.isArray(denyPoliciesByScan) ||
+      denyPoliciesByScan.length < 2 ||
+      typeof responseMutator !== "function") {
+    throw new Error("invalid genuine transport fixture options");
+  }
   const lowLevelReceipt = {
     schemaVersion: MOCK_TRANSPORT_SESSION_VERSION,
     mockOnly: true,
@@ -311,11 +351,13 @@ export function createGenuineAdapterForEvidence(evidence, repositoryRoot) {
     computeMockTransportLineageDigest(lowLevelReceipt);
   let clock = Date.parse(evidence.freezeWindow.activatedAt) - 120000;
   let execution = 0;
+  let iamScanIndex = -1;
   const transportExecutor = createMockProviderTransportExecutor(deepFreeze({
     authHeaderProvider: async () => ({Authorization: "Bearer fixture"}),
     fetchImpl: async (url, init) => {
       const input = operationInputFromRequest(url, init.method);
       if (input.operationId === "cloudresourcemanager.v3.projects.get") {
+        iamScanIndex += 1;
         clock = Math.max(
             clock,
             Date.parse(evidence.negativeProbes[0].observedAt) - 60000,
@@ -328,12 +370,17 @@ export function createGenuineAdapterForEvidence(evidence, repositoryRoot) {
             Date.parse(evidence.scheduler.jobs[0].updateTime) + 1000,
         );
       }
-      const value = providerResponseFor(
+      const value = responseMutator({
+        iamScanIndex,
+        input,
+        value: providerResponseFor(
           evidence,
           input.operationId,
           input.pathParams,
           input.query,
-      );
+          denyPoliciesByScan[iamScanIndex] ?? [],
+        ),
+      });
       if (value instanceof Uint8Array) {
         return responseAtUrl(new Response(value, {status: 200}), url);
       }
@@ -349,6 +396,12 @@ export function createGenuineAdapterForEvidence(evidence, repositoryRoot) {
     sleep: async () => {},
     timeoutSignalProvider: () => AbortSignal.timeout(1000),
   }));
+  return deepFreeze({approvalReceipt, transportExecutor});
+}
+
+export function createGenuineAdapterForEvidence(evidence, repositoryRoot) {
+  const {approvalReceipt, transportExecutor} =
+    createGenuineTransportFixtureForEvidence(evidence);
   return createMockAcademyResetFreezeProviderAdapter(deepFreeze({
     approvalReceipt,
     repositoryRoot,

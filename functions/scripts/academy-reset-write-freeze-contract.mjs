@@ -3,6 +3,47 @@ import {
   assertValidatedProviderRuntimeContext,
 } from "./academy-reset-freeze-provider-attestation.mjs";
 import {
+  APPROVED_ARTIFACT_REPOSITORY,
+  APPROVED_SOURCE_BUCKET,
+  APPROVED_UPLOAD_BUCKET,
+  BUILD_CORE_PERMISSION_SET_DIGEST,
+  BUILD_RESOURCE_BINDING_SET_DIGEST,
+  BUILD_SCOPE_CONTRACT_DIGEST,
+  BUILD_SCOPE_CONTRACT_VERSION,
+  COMPENSATING_CONTROL_DIGEST,
+  COMPENSATING_CONTROL_VERSION,
+  DEPLOY_PERMISSION_SET_DIGEST,
+  DEPLOY_PROFILE_DIGEST,
+  DEPLOY_PROFILE_VERSION,
+  INFRASTRUCTURE_EVIDENCE_DIGEST,
+  ORGANIZATION_POLICY_EVIDENCE,
+  buildOrganizationPolicyLineageReference,
+  canonicalDigest as buildCanonicalDigest,
+  validateFunctionsBuildAndDeployContract,
+  validateOrganizationPolicyLineageReference,
+} from "./academy-functions-build-scope-contract.mjs";
+import {
+  BASELINE_RUNTIME_SERVICE_ACCOUNT_MEMBER,
+  EXPECTED_BINDING_SET_DIGESTS_BY_STATE,
+  EXPECTED_PERMISSION_SET_DIGESTS_BY_STATE,
+  FREEZE_ACTIVE_STATE,
+  FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING,
+  PREVIEW_RUNTIME_SERVICE_ACCOUNT_MEMBER,
+  PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+  PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+  READ_ONLY_DATASTORE_PERMISSIONS,
+  WRITER_RUNTIME_SERVICE_ACCOUNT_MEMBER,
+  WRITER_STEADY_DATASTORE_PERMISSIONS,
+  WRITER_STEADY_ROLE,
+  EXACT_CHRONOLOGY_PROFILE_VERSION,
+  buildBindingSetDigest as buildRuntimeBindingSetDigest,
+  buildPermissionSetDigest as buildRuntimePermissionSetDigest,
+  parseExactRfc3339UtcNanoseconds,
+  validateFreezeActivationReceipt,
+  validatePrivateRuntimeIamContract,
+  validateStateSnapshot,
+} from "./academy-private-runtime-iam-contract.mjs";
+import {
   CRITICAL_RUNTIME_SOURCE_PATHS,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
   PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM,
@@ -78,13 +119,13 @@ export {
 };
 
 export const WRITE_FREEZE_CONTRACT_VERSION =
-  "academy_reset_write_freeze.v5";
+  "academy_reset_write_freeze.v8";
 export const WRITE_FREEZE_PROOF_VERSION =
-  "academy_reset_write_freeze_proof.v5";
+  "academy_reset_write_freeze_proof.v8";
 export const DEPLOYMENT_APPROVAL_RECEIPT_VERSION =
-  "academy_reset_deployment_approval.v5";
+  "academy_reset_deployment_approval.v9";
 export const PROVIDER_OBSERVATION_VERSION =
-  "academy_reset_provider_observation.v5";
+  "academy_reset_provider_observation.v8";
 export const OBSERVATION_COMPLETENESS_VERSION =
   "academy_reset_observation_completeness.v1";
 export const IAM_FAMILY_COMPLETENESS_VERSION =
@@ -92,11 +133,30 @@ export const IAM_FAMILY_COMPLETENESS_VERSION =
 export const APPROVED_IAM_STATE_CONTRACT_VERSION =
   "academy_reset_approved_iam_state.v1";
 export const PROVIDER_DEPENDENCY_CONTRACT_VERSION =
-  "academy_reset_provider_dependency.v5";
+  "academy_reset_provider_dependency.v8";
 export const WRITABLE_PERMISSION_DERIVATION_VERSION =
   "academy_reset_writable_permission_derivation.v1";
 export const APPROVED_PROVIDER_ADAPTER_ID =
   "gcp_immutable_resource_observer.v1";
+export const FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION =
+  "academy_reset_function_http_trigger.v2";
+export const FUNCTION_HTTP_TRIGGER_CONTRACT_ID =
+  "HTTP_CALLABLE_ONLY_EVENT_TRIGGER_ABSENT";
+export const FUNCTION_TRIGGER_ABSENCE_EVIDENCE_VERSION =
+  "academy_reset_function_trigger_absence_evidence.v2";
+export const FUNCTION_HTTP_TRIGGER_TYPE = "HTTP_CALLABLE";
+const FUNCTION_HTTP_TRIGGER_CONTRACT_WITHOUT_DIGEST = Object.freeze({
+  contractVersion: FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+  contractId: FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+  triggerType: FUNCTION_HTTP_TRIGGER_TYPE,
+  eventTriggerOwnPropertyDisposition: "REJECT",
+  rawPreimageFamilies: Object.freeze([
+    "cloudfunctions.v2.projects.locations.functions.list",
+    "cloudfunctions.v2.projects.locations.functions.get",
+  ]),
+});
+export const FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST =
+  sha256Canonical(FUNCTION_HTTP_TRIGGER_CONTRACT_WITHOUT_DIGEST);
 export const WRITE_FREEZE_SENTINEL_MODE = "academy_test_data_reset";
 export const PROJECT_IDENTITY_CONTRACT_VERSION = 1;
 export const TARGET_PROJECT_IDENTITY = Object.freeze({
@@ -108,6 +168,8 @@ export const EXPECTED_PROJECT_ID = TARGET_PROJECT_IDENTITY.targetProjectId;
 export const EXPECTED_PROJECT_NUMBER =
   TARGET_PROJECT_IDENTITY.targetProjectNumber;
 export const IAM_PRINCIPAL_POLICY_VERSION = 1;
+export const FREEZE_IAM_CONTRACT_LINEAGE_VERSION =
+  "academy_reset_freeze_iam_contract_lineage.v1";
 export const EXPECTED_ACADEMY_ID = "academy_daegumiami";
 export const EXPECTED_FUNCTION_REGION = "us-central1";
 export const EXPECTED_FUNCTION_GENERATION = "GEN_2";
@@ -213,6 +275,18 @@ export const PROVIDER_ADAPTER_METADATA = Object.freeze({
   reviewedSourceIdentities: PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES,
   reviewedSourceIdentityDigest:
     EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
+  privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+  privateRuntimeIamContractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+  buildScopeContractVersion: BUILD_SCOPE_CONTRACT_VERSION,
+  buildScopeContractDigest: BUILD_SCOPE_CONTRACT_DIGEST,
+  deployProfileVersion: DEPLOY_PROFILE_VERSION,
+  deployProfileDigest: DEPLOY_PROFILE_DIGEST,
+  compensatingControlVersion: COMPENSATING_CONTROL_VERSION,
+  compensatingControlDigest: COMPENSATING_CONTROL_DIGEST,
+  functionHttpTriggerContractVersion:
+    FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+  functionHttpTriggerContractId: FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+  functionHttpTriggerContractDigest: FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
 });
 export const IAM_EVIDENCE_FAMILY_NAMES = Object.freeze([
   "bindings",
@@ -316,10 +390,15 @@ export const FUTURE_EXECUTOR_EFFECTIVE_PERMISSIONS = Object.freeze([
   "datastore.entities.delete",
 ].sort());
 export const REVIEWED_PERMISSION_UNIVERSE = Object.freeze([
-  ...FUTURE_EXECUTOR_EFFECTIVE_PERMISSIONS,
+  ...new Set([
+    ...FUTURE_EXECUTOR_EFFECTIVE_PERMISSIONS,
+    ...WRITER_STEADY_DATASTORE_PERMISSIONS,
+  ]),
 ].sort());
 export const REVIEWED_WRITABLE_PERMISSIONS = Object.freeze([
+  "datastore.entities.create",
   "datastore.entities.delete",
+  "datastore.entities.update",
 ]);
 export const REVIEWED_IAM_ROLE_DEFINITIONS = Object.freeze([
   Object.freeze({
@@ -332,6 +411,13 @@ export const REVIEWED_IAM_ROLE_DEFINITIONS = Object.freeze([
   Object.freeze({
     role: "projects/daegu-miami-production/roles/academyResetDeleteOnly",
     permissions: FUTURE_EXECUTOR_EFFECTIVE_PERMISSIONS,
+    permissionsComplete: true,
+    deleted: false,
+    stage: "GA",
+  }),
+  Object.freeze({
+    role: WRITER_STEADY_ROLE,
+    permissions: WRITER_STEADY_DATASTORE_PERMISSIONS,
     permissionsComplete: true,
     deleted: false,
     stage: "GA",
@@ -359,6 +445,22 @@ export const IAM_PRINCIPAL_POLICY_SCHEMA = Object.freeze([
     authPermissions: Object.freeze([]),
   }),
   Object.freeze({
+    id: "private_writer_runtime",
+    memberBinding: "canonical_runtime_contract",
+    semanticRole: "academy_backend_read_only",
+    disposition: "ACTIVE_READ_ONLY",
+    effectivePermissions: READ_ONLY_DATASTORE_PERMISSIONS,
+    authPermissions: Object.freeze([]),
+  }),
+  Object.freeze({
+    id: "private_preview_runtime",
+    memberBinding: "canonical_runtime_contract",
+    semanticRole: "academy_backend_read_only",
+    disposition: "ACTIVE_READ_ONLY",
+    effectivePermissions: READ_ONLY_DATASTORE_PERMISSIONS,
+    authPermissions: Object.freeze([]),
+  }),
+  Object.freeze({
     id: "future_reset_executor",
     memberBinding: "approval_receipt_exact",
     semanticRole: "academy_reset_delete_only_inactive",
@@ -383,7 +485,6 @@ export const SCHEDULER_JOB_ALLOWLIST = Object.freeze([
 ]);
 
 export const UNFREEZE_ORDER = Object.freeze([
-  "audit",
   "iamRestore",
   "schedulerRestore",
   "sentinelDeactivate",
@@ -492,7 +593,16 @@ export const REQUIRED_NEGATIVE_PROBES = Object.freeze([
 
 const HEX_64 = /^[a-f0-9]{64}$/;
 const GIT_SHA = /^[a-f0-9]{40}$/;
-const ISO_UTC = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{3})?Z$/;
+const NANOSECONDS_PER_MILLISECOND = 1_000_000n;
+const NANOSECONDS_PER_SECOND = 1_000_000_000n;
+const INTEGRATED_CHRONOLOGY_PROFILE = Object.freeze({
+  profileVersion: "academy_reset_write_freeze_exact_chronology.v1",
+  parserProfileVersion: EXACT_CHRONOLOGY_PROFILE_VERSION,
+  integerRepresentation: "SIGNED_EPOCH_NANOSECONDS_BASE10",
+  startBoundary: "INCLUSIVE",
+  expiryBoundary: "EXCLUSIVE",
+  equalStageBoundary: "ALLOWED",
+});
 const EXACT_TOP_LEVEL_KEYS = Object.freeze([
   "academyId",
   "artifactDigest",
@@ -602,10 +712,35 @@ function requireGitSha(value, label) {
   }
 }
 function requireUtc(value, label) {
-  if (!ISO_UTC.test(requireString(value, label)) ||
-      !Number.isFinite(Date.parse(value))) {
-    fail(`${label} must be an ISO UTC timestamp`);
+  requireString(value, label);
+  try {
+    return parseExactRfc3339UtcNanoseconds(value, label);
+  } catch {
+    fail(`${label} must be an exact RFC3339 UTC timestamp`);
   }
+}
+function exactTimestampNanoseconds(value, label) {
+  return requireUtc(value, label).epochNanoseconds;
+}
+function exactCurrentTimeNanoseconds(currentTimeMs, currentTimestamp) {
+  if (currentTimestamp !== undefined) {
+    return exactTimestampNanoseconds(
+        currentTimestamp,
+        "currentTimestamp",
+    );
+  }
+  if (!Number.isSafeInteger(currentTimeMs)) {
+    fail("currentTimeMs must be a safe integer");
+  }
+  return BigInt(currentTimeMs) * NANOSECONDS_PER_MILLISECOND;
+}
+function exactTimestampDigestRecord(value, label) {
+  const parsed = requireUtc(value, label);
+  return {
+    originalTimestamp: parsed.originalTimestamp,
+    epochNanoseconds: parsed.epochNanosecondsDecimal,
+    fractionalDigitCount: parsed.fractionalDigitCount,
+  };
 }
 function latestUtcTimestamp(values, label) {
   if (!Array.isArray(values) || values.length === 0) {
@@ -614,7 +749,10 @@ function latestUtcTimestamp(values, label) {
   values.forEach((value, index) =>
     requireUtc(value, `${label}[${index}]`));
   return values.reduce((latest, current) =>
-    Date.parse(current) > Date.parse(latest) ? current : latest);
+    exactTimestampNanoseconds(current, `${label}.current`) >
+      exactTimestampNanoseconds(latest, `${label}.latest`) ?
+      current :
+      latest);
 }
 function exactArray(actual, expected, label) {
   if (!Array.isArray(actual) || new Set(actual).size !== actual.length ||
@@ -712,6 +850,7 @@ function validateRelease(release) {
   exactKeys(release.runtimeGit,
       [
         "clean", "criticalSources", "criticalSourceSetDigest", "headSha",
+        "iamContractSourceIdentity", "iamContractSourceSetDigest",
         "reviewedSourceIdentityDigest", "reviewedSourceSetDigest",
         "reviewedSources", "treeSha",
       ],
@@ -724,6 +863,27 @@ function validateRelease(release) {
       "release.runtimeGit.reviewedSourceIdentityDigest");
   requireDigest(release.runtimeGit.reviewedSourceSetDigest,
       "release.runtimeGit.reviewedSourceSetDigest");
+  requireDigest(release.runtimeGit.iamContractSourceSetDigest,
+      "release.runtimeGit.iamContractSourceSetDigest");
+  exactKeys(release.runtimeGit.iamContractSourceIdentity, [
+    "buildScopeContractDigest", "buildScopeContractVersion",
+    "privateRuntimeIamContractDigest", "privateRuntimeIamContractVersion",
+    "sources",
+  ], "release.runtimeGit.iamContractSourceIdentity");
+  const iamContractSourceIdentity =
+    release.runtimeGit.iamContractSourceIdentity;
+  if (iamContractSourceIdentity.privateRuntimeIamContractVersion !==
+        PRIVATE_RUNTIME_IAM_CONTRACT_VERSION ||
+      iamContractSourceIdentity.privateRuntimeIamContractDigest !==
+        PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST ||
+      iamContractSourceIdentity.buildScopeContractVersion !==
+        BUILD_SCOPE_CONTRACT_VERSION ||
+      iamContractSourceIdentity.buildScopeContractDigest !==
+        BUILD_SCOPE_CONTRACT_DIGEST ||
+      release.runtimeGit.iamContractSourceSetDigest !==
+        sha256Canonical(iamContractSourceIdentity)) {
+    fail("runtime IAM contract source identity mismatch");
+  }
   if (release.runtimeGit.headSha !== release.sha ||
       release.runtimeGit.clean !== true) {
     fail("runtime Git HEAD is stale or tree is not clean");
@@ -761,6 +921,16 @@ function validateRelease(release) {
   if (release.runtimeGit.criticalSourceSetDigest !==
       sha256Canonical(release.runtimeGit.criticalSources)) {
     fail("critical runtime source set digest mismatch");
+  }
+  const expectedIamContractSources = release.runtimeGit.criticalSources.filter(
+      ({path: sourcePath}) => [
+        "functions/scripts/academy-functions-build-scope-contract.mjs",
+        "functions/scripts/academy-private-runtime-iam-contract.mjs",
+      ].includes(sourcePath),
+  );
+  if (stableStringify(iamContractSourceIdentity.sources) !==
+      stableStringify(expectedIamContractSources)) {
+    fail("runtime IAM contract source records mismatch");
   }
   if (!Array.isArray(release.runtimeGit.reviewedSources)) {
     fail("reviewed runtime source list is missing");
@@ -825,8 +995,13 @@ export function validateObservationCompleteness(
   }
   requireUtc(completeness.scanStartedAt, `${label}.scanStartedAt`);
   requireUtc(completeness.scanCompletedAt, `${label}.scanCompletedAt`);
-  if (Date.parse(completeness.scanStartedAt) >
-      Date.parse(completeness.scanCompletedAt)) {
+  if (exactTimestampNanoseconds(
+      completeness.scanStartedAt,
+      `${label}.scanStartedAt`,
+  ) > exactTimestampNanoseconds(
+      completeness.scanCompletedAt,
+      `${label}.scanCompletedAt`,
+  )) {
     fail(`${label} scan timestamps are reversed`);
   }
   if (!Number.isSafeInteger(completeness.pageCount) ||
@@ -907,10 +1082,20 @@ export function parseRulesResourceIdentity(rules, label = "rules") {
     "releaseCreateTime", "releaseUpdateTime", "rulesetCreateTime",
     "rulesetUpdateTime",
   ]) requireUtc(rules[field], `${label}.${field}`);
-  if (Date.parse(rules.releaseCreateTime) >
-        Date.parse(rules.releaseUpdateTime) ||
-      Date.parse(rules.rulesetCreateTime) >
-        Date.parse(rules.rulesetUpdateTime)) {
+  if (exactTimestampNanoseconds(
+      rules.releaseCreateTime,
+      `${label}.releaseCreateTime`,
+  ) > exactTimestampNanoseconds(
+      rules.releaseUpdateTime,
+      `${label}.releaseUpdateTime`,
+  ) ||
+      exactTimestampNanoseconds(
+          rules.rulesetCreateTime,
+          `${label}.rulesetCreateTime`,
+      ) > exactTimestampNanoseconds(
+          rules.rulesetUpdateTime,
+          `${label}.rulesetUpdateTime`,
+      )) {
     fail(`${label} provider create/update times are reversed`);
   }
   const observedItems = [{
@@ -961,10 +1146,170 @@ function validateApprovedRulesLineage(rules, label) {
   }
 }
 
+function functionNameFromTriggerRecord(record, label) {
+  const functionId = typeof record.functionId === "string" ?
+    record.functionId :
+    record.name;
+  if (typeof functionId !== "string") {
+    fail(`${label} Function name is missing`);
+  }
+  const fullName =
+    /^projects\/[^/]+\/locations\/[^/]+\/functions\/([^/]+)$/.exec(
+        functionId,
+    );
+  return fullName ? fullName[1] : functionId;
+}
+
+export function assertHttpCallableRawFunctionRecord(
+    record,
+    label = "raw Function record",
+) {
+  try {
+    assertPlainRecord(record, label);
+  } catch {
+    fail("FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED");
+  }
+  if (Object.hasOwn(record, "eventTrigger")) {
+    fail("FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED");
+  }
+  return true;
+}
+
+function canonicalTriggerRecord(record, label) {
+  const name = functionNameFromTriggerRecord(record, label);
+  if (record.triggerContractVersion !==
+        FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION ||
+      record.triggerContractId !== FUNCTION_HTTP_TRIGGER_CONTRACT_ID ||
+      record.triggerContractDigest !== FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST ||
+      record.triggerType !== FUNCTION_HTTP_TRIGGER_TYPE ||
+      record.eventTriggerAbsent !== true) {
+    fail(`${label} HTTP callable trigger evidence mismatch`);
+  }
+  return {
+    name,
+    triggerContractVersion: record.triggerContractVersion,
+    triggerContractId: record.triggerContractId,
+    triggerContractDigest: record.triggerContractDigest,
+    triggerType: record.triggerType,
+    eventTriggerAbsent: record.eventTriggerAbsent,
+  };
+}
+
+function triggerAbsenceEvidenceProjection({
+  listRawRecordCount,
+  listFunctionNameSetDigest,
+  getRawRecordCount,
+  getFunctionNameSetDigest,
+  functionNameSetDigest,
+  canonicalInventoryDigest,
+}) {
+  const listGetParity = {
+    listRawRecordCount,
+    listFunctionNameSetDigest,
+    listEventTriggerOwnPropertyCount: 0,
+    getRawRecordCount,
+    getFunctionNameSetDigest,
+    getEventTriggerOwnPropertyCount: 0,
+  };
+  return {
+    schemaVersion: FUNCTION_TRIGGER_ABSENCE_EVIDENCE_VERSION,
+    triggerContractVersion: FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+    triggerContractId: FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+    triggerContractDigest: FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+    triggerType: FUNCTION_HTTP_TRIGGER_TYPE,
+    rawRecordCount: getRawRecordCount,
+    eventTriggerOwnPropertyCount: 0,
+    listRawRecordCount,
+    listFunctionNameSetDigest,
+    listEventTriggerOwnPropertyCount: 0,
+    getRawRecordCount,
+    getFunctionNameSetDigest,
+    getEventTriggerOwnPropertyCount: 0,
+    listGetParityDigest: sha256Canonical(listGetParity),
+    functionNameSetDigest,
+    canonicalInventoryDigest,
+  };
+}
+
+export function buildFunctionTriggerAbsenceEvidence(
+    rawGetRecords,
+    canonicalRecords = rawGetRecords,
+    rawListRecords = rawGetRecords,
+) {
+  if (!Array.isArray(rawGetRecords) ||
+      !Array.isArray(canonicalRecords) ||
+      !Array.isArray(rawListRecords)) {
+    fail("Function trigger evidence records must be arrays");
+  }
+  rawListRecords.forEach((record, index) =>
+    assertHttpCallableRawFunctionRecord(record, `list Function[${index}]`));
+  rawGetRecords.forEach((record, index) =>
+    assertHttpCallableRawFunctionRecord(record, `GET Function[${index}]`));
+  const listNames = rawListRecords.map((record, index) =>
+    functionNameFromTriggerRecord(record, `list Function[${index}]`));
+  const getNames = rawGetRecords.map((record, index) =>
+    functionNameFromTriggerRecord(record, `GET Function[${index}]`));
+  const canonical = canonicalRecords.map((record, index) =>
+    canonicalTriggerRecord(record, `canonical Function[${index}]`));
+  const canonicalNames = canonical.map(({name}) => name);
+  exactArray(
+      listNames,
+      getNames,
+      "list/GET Function trigger keyset",
+  );
+  exactArray(
+      getNames,
+      canonicalNames,
+      "GET/canonical Function trigger keyset",
+  );
+  const canonicalInventory = canonicalObservedSet(canonicalRecords);
+  const projection = triggerAbsenceEvidenceProjection({
+    listRawRecordCount: rawListRecords.length,
+    listFunctionNameSetDigest: computeObservedSetDigest(listNames),
+    getRawRecordCount: rawGetRecords.length,
+    getFunctionNameSetDigest: computeObservedSetDigest(getNames),
+    functionNameSetDigest: computeObservedSetDigest(canonicalNames),
+    canonicalInventoryDigest: sha256Canonical(canonicalInventory),
+  });
+  return Object.freeze({
+    ...projection,
+    triggerAbsenceEvidenceDigest: sha256Canonical(projection),
+  });
+}
+
+export function validateFunctionTriggerAbsenceEvidence(evidence, records) {
+  exactKeys(evidence, [
+    "canonicalInventoryDigest",
+    "eventTriggerOwnPropertyCount",
+    "functionNameSetDigest",
+    "getEventTriggerOwnPropertyCount",
+    "getFunctionNameSetDigest",
+    "getRawRecordCount",
+    "listEventTriggerOwnPropertyCount",
+    "listFunctionNameSetDigest",
+    "listGetParityDigest",
+    "listRawRecordCount",
+    "rawRecordCount",
+    "schemaVersion",
+    "triggerAbsenceEvidenceDigest",
+    "triggerContractDigest",
+    "triggerContractId",
+    "triggerContractVersion",
+    "triggerType",
+  ], "Function trigger absence evidence");
+  const expected = buildFunctionTriggerAbsenceEvidence(records, records);
+  if (stableStringify(evidence) !== stableStringify(expected)) {
+    fail("Function trigger absence evidence mismatch");
+  }
+  return true;
+}
+
 function validateFunctionIdentity(item, label) {
   exactKeys(item, [
-    "buildId", "generation", "name", "projectId", "providerSourceIdentity",
-    "region", "revisionId", "runtime", "runtimeServiceAccount", "updateTime",
+    "buildId", "eventTriggerAbsent", "generation", "name", "projectId",
+    "providerSourceIdentity", "region", "revisionId", "runtime",
+    "runtimeServiceAccount", "triggerContractDigest", "triggerContractId",
+    "triggerContractVersion", "triggerType", "updateTime",
   ], label);
   requireString(item.name, `${label}.name`);
   requireString(item.buildId, `${label}.buildId`);
@@ -975,6 +1320,7 @@ function validateFunctionIdentity(item, label) {
       item.providerSourceIdentity,
       `${label}.providerSourceIdentity`,
   );
+  canonicalTriggerRecord(item, label);
   const runtimeMember =
     requireString(item.runtimeServiceAccount, `${label}.runtimeServiceAccount`);
   if (!runtimeMember.startsWith("serviceAccount:") ||
@@ -1026,6 +1372,14 @@ export function expectedIamPrincipalMember(policy) {
   if (policy.memberBinding === "project_number_derived") {
     return `serviceAccount:${EXPECTED_PROJECT_NUMBER}-compute@` +
       "developer.gserviceaccount.com";
+  }
+  if (policy.memberBinding === "canonical_runtime_contract") {
+    if (policy.id === "private_writer_runtime") {
+      return WRITER_RUNTIME_SERVICE_ACCOUNT_MEMBER;
+    }
+    if (policy.id === "private_preview_runtime") {
+      return PREVIEW_RUNTIME_SERVICE_ACCOUNT_MEMBER;
+    }
   }
   if (policy.memberBinding === "approval_receipt_exact") return null;
   fail(`unknown IAM member binding for ${policy.id}`);
@@ -1112,12 +1466,71 @@ function validateIamPrincipalSet(
   return normalized.sort((left, right) => left.id.localeCompare(right.id));
 }
 
+function expectedFreezeIamContractLineage(executableApproval) {
+  return {
+    schemaVersion: FREEZE_IAM_CONTRACT_LINEAGE_VERSION,
+    privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+    privateRuntimeIamContractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+    freezeBindingSetDigest:
+      EXPECTED_BINDING_SET_DIGESTS_BY_STATE[FREEZE_ACTIVE_STATE],
+    freezePermissionSetDigest:
+      EXPECTED_PERMISSION_SET_DIGESTS_BY_STATE[FREEZE_ACTIVE_STATE],
+    buildScopeContractVersion: BUILD_SCOPE_CONTRACT_VERSION,
+    buildScopeContractDigest: BUILD_SCOPE_CONTRACT_DIGEST,
+    buildCorePermissionSetDigest: BUILD_CORE_PERMISSION_SET_DIGEST,
+    buildResourceBindingSetDigest: BUILD_RESOURCE_BINDING_SET_DIGEST,
+    sourceBucketResourceDigest:
+      buildCanonicalDigest(APPROVED_SOURCE_BUCKET),
+    uploadBucketResourceDigest:
+      buildCanonicalDigest(APPROVED_UPLOAD_BUCKET),
+    artifactRepositoryResourceDigest:
+      buildCanonicalDigest(APPROVED_ARTIFACT_REPOSITORY),
+    infrastructureEvidenceDigest: INFRASTRUCTURE_EVIDENCE_DIGEST,
+    deployProfileVersion: DEPLOY_PROFILE_VERSION,
+    deployProfileDigest: DEPLOY_PROFILE_DIGEST,
+    deployPermissionSetDigest: DEPLOY_PERMISSION_SET_DIGEST,
+    compensatingControlVersion: COMPENSATING_CONTROL_VERSION,
+    compensatingControlDigest: COMPENSATING_CONTROL_DIGEST,
+    principalSetDigest: sha256Canonical([
+      executableApproval.provisioningPrincipal,
+      executableApproval.impersonationPrincipal,
+      executableApproval.invokerOperatorPrincipal,
+    ].sort()),
+    jitWindowDigest: sha256Canonical({
+      jitStartsAt: executableApproval.jitStartsAt,
+      jitExpiresAt: executableApproval.jitExpiresAt,
+    }),
+    organizationPolicyContractVersion:
+      ORGANIZATION_POLICY_EVIDENCE.contractVersion,
+    organizationPolicyObservationStatus:
+      ORGANIZATION_POLICY_EVIDENCE.observationStatus,
+    organizationPolicyEffectiveDecision:
+      ORGANIZATION_POLICY_EVIDENCE.effectiveDecision,
+    authoritativeOrganizationPolicyEvidenceDigest:
+      ORGANIZATION_POLICY_EVIDENCE.evidenceDigest,
+  };
+}
+
+export function buildFreezeIamContractLineage(executableApproval) {
+  return Object.freeze(expectedFreezeIamContractLineage(executableApproval));
+}
+
+function validateFreezeIamContractLineage(lineage, executableApproval) {
+  const expected = expectedFreezeIamContractLineage(executableApproval);
+  exactKeys(lineage, Object.keys(expected), "freeze IAM contract lineage");
+  if (stableStringify(lineage) !== stableStringify(expected)) {
+    fail("freeze IAM contract lineage mismatch");
+  }
+}
+
 function validateApprovalReceipt(receipt, release) {
   exactKeys(receipt, [
     "approvedAt", "expiresAt", "iamPrincipalAllowlist", "localSources",
-    "providerDependencyApproval",
+    "providerDependencyApproval", "freezeIamContractLineage",
+    "organizationPolicyLineage",
     "projectId", "projectIdentityContractVersion", "projectNumber", "receiptId",
-    "releaseSha", "resources", "schemaVersion",
+    "releaseSha", "resources", "runtimeIamActivationApproval",
+    "runtimeIamActivationReceipt", "schemaVersion",
   ], "deploymentApprovalReceipt");
   if (receipt.schemaVersion !== DEPLOYMENT_APPROVAL_RECEIPT_VERSION ||
       receipt.releaseSha !== release.sha) {
@@ -1138,6 +1551,40 @@ function validateApprovalReceipt(receipt, release) {
   validateApprovedDeploymentResources(receipt.resources,
       "deploymentApprovalReceipt.resources");
   validateProviderDependencyApproval(receipt.providerDependencyApproval);
+  validatePrivateRuntimeIamContract();
+  validateFunctionsBuildAndDeployContract();
+  validateOrganizationPolicyLineageReference(receipt.organizationPolicyLineage);
+  if (stableStringify(receipt.organizationPolicyLineage) !==
+      stableStringify(buildOrganizationPolicyLineageReference()) ||
+      stableStringify(receipt.organizationPolicyLineage) !==
+      stableStringify(
+          receipt.runtimeIamActivationApproval.organizationPolicyLineage,
+      ) ||
+      stableStringify(receipt.organizationPolicyLineage) !==
+      stableStringify(
+          receipt.runtimeIamActivationReceipt.organizationPolicyLineage,
+      )) {
+    fail("deployment approval Organization Policy lineage mismatch");
+  }
+  const executionEligible = validateFreezeActivationReceipt(
+      receipt.runtimeIamActivationReceipt,
+      receipt.runtimeIamActivationApproval,
+  );
+  validateStateSnapshot(
+      receipt.runtimeIamActivationReceipt.after,
+      FREEZE_ACTIVE_STATE,
+  );
+  validateFreezeIamContractLineage(
+      receipt.freezeIamContractLineage,
+      receipt.runtimeIamActivationApproval,
+  );
+  if (receipt.runtimeIamActivationApproval.approvedAt !== receipt.approvedAt ||
+      receipt.runtimeIamActivationApproval.jitExpiresAt !== receipt.expiresAt ||
+      receipt.runtimeIamActivationReceipt.observedAt <
+        receipt.runtimeIamActivationApproval.jitStartsAt ||
+      receipt.runtimeIamActivationReceipt.observedAt >= receipt.expiresAt) {
+    fail("runtime IAM activation chronology is not bound to approval receipt");
+  }
   const runtimeByPath = new Map(
       release.runtimeGit.criticalSources.map((source) => [source.path, source]),
   );
@@ -1157,6 +1604,7 @@ function validateApprovalReceipt(receipt, release) {
       receipt.iamPrincipalAllowlist,
       "deploymentApprovalReceipt.iamPrincipalAllowlist",
   );
+  return executionEligible;
 }
 
 const PROVIDER_ADAPTER_METADATA_KEYS =
@@ -1252,9 +1700,13 @@ export function validateProviderDependencyContract(dependency, approvalReceipt) 
 
 function validateFunctionProviderObservation(functions, approvedFunctions) {
   exactKeys(functions,
-      ["completeness", "guardedExportNames", "records"],
+      ["completeness", "guardedExportNames", "records", "triggerEvidence"],
       "provider observation.functions");
   validateFunctionRecords(functions.records, "provider observation functions");
+  validateFunctionTriggerAbsenceEvidence(
+      functions.triggerEvidence,
+      functions.records,
+  );
   exactArray(
       functions.guardedExportNames,
       EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES,
@@ -1608,6 +2060,25 @@ function validateIamRawEvidence(
         `IAM raw permissions for ${principal.id}`,
     );
   }
+  const runtimeMembers = [
+    BASELINE_RUNTIME_SERVICE_ACCOUNT_MEMBER,
+    WRITER_RUNTIME_SERVICE_ACCOUNT_MEMBER,
+    PREVIEW_RUNTIME_SERVICE_ACCOUNT_MEMBER,
+  ];
+  const runtimeBindings = iamPolicy.bindings.filter(({member}) =>
+    runtimeMembers.includes(member));
+  const runtimePrincipalPermissions = runtimeMembers.map((member) => ({
+    member,
+    permissions: [...(activePermissionsByMember.get(member) ?? [])].sort(),
+  }));
+  validateStateSnapshot({
+    state: FREEZE_ACTIVE_STATE,
+    bindings: runtimeBindings,
+    bindingSetDigest: buildRuntimeBindingSetDigest(runtimeBindings),
+    principalPermissions: runtimePrincipalPermissions,
+    permissionSetDigest:
+      buildRuntimePermissionSetDigest(runtimePrincipalPermissions),
+  }, FREEZE_ACTIVE_STATE);
   validateIamDenyEvidence(iamPolicy, approvedMembers);
   validateImpersonationEvidence(iamPolicy, approvedMembers);
   validateRuntimeServiceAccounts(
@@ -1783,9 +2254,19 @@ function validateRuntimeServiceAccounts(runtimeServiceAccounts, functions) {
 function validateFunctionRuntimeServiceAccounts(functions, approvedPrincipals) {
   const approvedByMember =
     new Map(approvedPrincipals.map((principal) => [principal.member, principal]));
+  const expectedByFunction = new Map(
+      FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING.map(
+          ({functionName, serviceAccountEmail}) => [
+            functionName,
+            `serviceAccount:${serviceAccountEmail}`,
+          ],
+      ),
+  );
   for (const item of functions) {
+    const expectedMember = expectedByFunction.get(item.name);
     const principal = approvedByMember.get(item.runtimeServiceAccount);
-    if (!principal ||
+    if (!expectedMember || item.runtimeServiceAccount !== expectedMember ||
+        !principal ||
         principal.disposition !== "ACTIVE_READ_ONLY" ||
         principal.semanticRole !== "academy_backend_read_only") {
       fail(`Function ${item.name} runtime service account is not approved`);
@@ -1801,6 +2282,11 @@ function validateFunctionRuntimeServiceAccounts(functions, approvedPrincipals) {
         `Function ${item.name} runtime service-account Auth permissions`,
     );
   }
+  exactArray(
+      [...expectedByFunction.keys()].sort(),
+      EXPECTED_DEPLOYED_FUNCTION_NAMES,
+      "canonical runtime function mapping",
+  );
 }
 
 function validateSchedulerProviderObservation(scheduler) {
@@ -1839,8 +2325,13 @@ function validateSchedulerProviderObservation(scheduler) {
       scheduler.jobs.map(({updateTime}) => updateTime),
       "provider scheduler update time",
   );
-  if (Date.parse(latestUpdateTime) >
-      Date.parse(scheduler.completeness.scanCompletedAt)) {
+  if (exactTimestampNanoseconds(
+      latestUpdateTime,
+      "provider scheduler latest update time",
+  ) > exactTimestampNanoseconds(
+      scheduler.completeness.scanCompletedAt,
+      "provider scheduler scan completed time",
+  )) {
     fail("scheduler scan completed before observed DISABLED update");
   }
   return Object.freeze({
@@ -2103,10 +2594,20 @@ function validateProviderDeploymentVerification(
   requireUtc(observation.scanCompletedAt,
       "provider observation scanCompletedAt");
   requireUtc(observation.observedAt, "provider observation observedAt");
-  if (Date.parse(observation.scanStartedAt) >
-        Date.parse(observation.scanCompletedAt) ||
-      Date.parse(observation.scanCompletedAt) >
-        Date.parse(observation.observedAt)) {
+  const scanStartedAt = exactTimestampNanoseconds(
+      observation.scanStartedAt,
+      "provider observation scanStartedAt",
+  );
+  const scanCompletedAt = exactTimestampNanoseconds(
+      observation.scanCompletedAt,
+      "provider observation scanCompletedAt",
+  );
+  const observationObservedAt = exactTimestampNanoseconds(
+      observation.observedAt,
+      "provider observation observedAt",
+  );
+  if (scanStartedAt > scanCompletedAt ||
+      scanCompletedAt > observationObservedAt) {
     fail("provider observation scan envelope mismatch");
   }
   const operationClassificationBoundary = validateProviderOperationExecution(
@@ -2171,23 +2672,32 @@ function validateProviderDeploymentVerification(
     observation.iamPolicy.completeness.scanCompletedAt,
     observation.scheduler.completeness.scanCompletedAt,
   ];
-  if (scanCompletedAts.some((value) =>
-    Date.parse(value) > Date.parse(observation.observedAt))) {
+  if (scanCompletedAts.some((value, index) =>
+    exactTimestampNanoseconds(value, `sub-observation[${index}] completedAt`) >
+      observationObservedAt)) {
     fail("provider observation predates a sub-observation scan completion");
   }
-  if (functionObservation.resourceUpdateTimes.some((value) =>
-    Date.parse(value) >
-      Date.parse(observation.functions.completeness.scanCompletedAt))) {
+  const functionsScanCompletedAt = exactTimestampNanoseconds(
+      observation.functions.completeness.scanCompletedAt,
+      "Functions scan completed time",
+  );
+  if (functionObservation.resourceUpdateTimes.some((value, index) =>
+    exactTimestampNanoseconds(value, `Function[${index}] updateTime`) >
+      functionsScanCompletedAt)) {
     fail("Functions scan completed before an observed resource update");
   }
+  const rulesScanCompletedAt = exactTimestampNanoseconds(
+      observation.rules.completeness.scanCompletedAt,
+      "Rules scan completed time",
+  );
   if ([
     observation.rules.releaseCreateTime,
     observation.rules.releaseUpdateTime,
     observation.rules.rulesetCreateTime,
     observation.rules.rulesetUpdateTime,
-  ].some((value) =>
-    Date.parse(value) >
-      Date.parse(observation.rules.completeness.scanCompletedAt))) {
+  ].some((value, index) =>
+    exactTimestampNanoseconds(value, `Rules resource[${index}] time`) >
+      rulesScanCompletedAt)) {
     fail("Rules scan completed before an observed resource time");
   }
   if (stableStringify(observation.iamPolicy) !==
@@ -2251,7 +2761,10 @@ function validateSentinel(sentinel, verifiedAt) {
   requireUtc(sentinel.version, "sentinel.version");
   requireUtc(verifiedAt, "verifiedAt");
   if (sentinel.version !== sentinel.capturedAt ||
-      Date.parse(sentinel.capturedAt) > Date.parse(verifiedAt)) {
+      exactTimestampNanoseconds(
+          sentinel.capturedAt,
+          "sentinel.capturedAt",
+      ) > exactTimestampNanoseconds(verifiedAt, "verifiedAt")) {
     fail("sentinel version/capturedAt is future or self-inconsistent");
   }
   requireDigest(sentinel.snapshotDigest, "sentinel.snapshotDigest");
@@ -2280,6 +2793,7 @@ function validateDrainTelemetry(
     sentinel,
     {
       currentTimeMs,
+      currentTimestamp,
       freezeExpiresAt,
       schedulerTiming,
       verifiedAt,
@@ -2301,27 +2815,51 @@ function validateDrainTelemetry(
   if (telemetry.sentinelGeneration !== sentinel.generation) {
     fail("drain telemetry uses a stale sentinel generation");
   }
-  const stopped = Date.parse(telemetry.schedulerStoppedAt);
-  const quietStarted = Date.parse(telemetry.quietWindowStartedAt);
-  const quietEnded = Date.parse(telemetry.quietWindowEndedAt);
-  const verified = Date.parse(verifiedAt);
-  const freezeExpires = Date.parse(freezeExpiresAt);
-  const quietSeconds = (quietEnded - quietStarted) / 1000;
-  if (Date.parse(schedulerTiming.latestUpdateTime) > stopped ||
-      Date.parse(schedulerTiming.scanCompletedAt) > stopped) {
+  const stopped = exactTimestampNanoseconds(
+      telemetry.schedulerStoppedAt,
+      "drainTelemetry.schedulerStoppedAt",
+  );
+  const quietStarted = exactTimestampNanoseconds(
+      telemetry.quietWindowStartedAt,
+      "drainTelemetry.quietWindowStartedAt",
+  );
+  const quietEnded = exactTimestampNanoseconds(
+      telemetry.quietWindowEndedAt,
+      "drainTelemetry.quietWindowEndedAt",
+  );
+  const verified = exactTimestampNanoseconds(verifiedAt, "verifiedAt");
+  const freezeExpires =
+    exactTimestampNanoseconds(freezeExpiresAt, "freezeWindow.expiresAt");
+  const quietDuration = quietEnded - quietStarted;
+  if (exactTimestampNanoseconds(
+      schedulerTiming.latestUpdateTime,
+      "schedulerTiming.latestUpdateTime",
+  ) > stopped ||
+      exactTimestampNanoseconds(
+          schedulerTiming.scanCompletedAt,
+          "schedulerTiming.scanCompletedAt",
+      ) > stopped) {
     fail("schedulerStoppedAt predates exact DISABLED provider evidence");
   }
-  if (quietStarted < Date.parse(schedulerTiming.scanCompletedAt)) {
+  if (quietStarted < exactTimestampNanoseconds(
+      schedulerTiming.scanCompletedAt,
+      "schedulerTiming.scanCompletedAt",
+  )) {
     fail("drain quiet window starts before scheduler scan completion");
   }
   if (stopped > quietStarted || quietEnded > verified ||
-      quietSeconds < MIN_DRAIN_QUIET_WINDOW_SECONDS ||
-      quietSeconds > MAX_DRAIN_QUIET_WINDOW_SECONDS) {
+      quietDuration <
+        BigInt(MIN_DRAIN_QUIET_WINDOW_SECONDS) * NANOSECONDS_PER_SECOND ||
+      quietDuration >
+        BigInt(MAX_DRAIN_QUIET_WINDOW_SECONDS) * NANOSECONDS_PER_SECOND) {
     fail("drain telemetry quiet window is insufficient or out of bounds");
   }
   for (const field of ["lastWriterIngressAt", "lastWriterCompletionAt"]) {
     if (telemetry[field] !== null &&
-        Date.parse(telemetry[field]) >= quietStarted) {
+        exactTimestampNanoseconds(
+            telemetry[field],
+            `drainTelemetry.${field}`,
+        ) >= quietStarted) {
       fail(`writer ingress/completion occurred during quiet window: ${field}`);
     }
   }
@@ -2340,11 +2878,15 @@ function validateDrainTelemetry(
     if (checkpoint.sentinelGeneration !== sentinel.generation) {
       fail(`${label} uses a stale sentinel generation`);
     }
-    const checkpointAt = Date.parse(checkpoint.checkpointAt);
+    const checkpointAt = exactTimestampNanoseconds(
+        checkpoint.checkpointAt,
+        `${label}.checkpointAt`,
+    );
     if (checkpointAt < quietEnded ||
         checkpointAt > verified ||
-        checkpointAt > currentTimeMs ||
-        checkpointAt > freezeExpires ||
+        checkpointAt >
+          exactCurrentTimeNanoseconds(currentTimeMs, currentTimestamp) ||
+        checkpointAt >= freezeExpires ||
         checkpoint.ingressBlocked !== true ||
         checkpoint.inFlightExecutions !== 0 ||
         checkpoint.ingressCountDuringQuietWindow !== 0 ||
@@ -2500,67 +3042,162 @@ function validateOperationalSafety(operationalSafety) {
   }
 }
 
-function validateFreezeTimeline(evidence, deploymentVerification, currentTimeMs) {
+function validateFreezeTimeline(
+    evidence,
+    deploymentVerification,
+    currentTimeMs,
+    currentTimestamp,
+) {
   exactKeys(evidence.freezeWindow, ["activatedAt", "expiresAt"],
       "freezeWindow");
-  requireUtc(evidence.freezeWindow.activatedAt, "freezeWindow.activatedAt");
-  requireUtc(evidence.freezeWindow.expiresAt, "freezeWindow.expiresAt");
-  requireUtc(evidence.verifiedAt, "verifiedAt");
-  const activated = Date.parse(evidence.freezeWindow.activatedAt);
-  const expires = Date.parse(evidence.freezeWindow.expiresAt);
-  const verified = Date.parse(evidence.verifiedAt);
-  if (!Number.isFinite(currentTimeMs) || expires <= activated ||
-      expires - activated > MAX_FREEZE_WINDOW_SECONDS * 1000 ||
-      verified < activated || verified > expires ||
-      currentTimeMs < verified || currentTimeMs > expires) {
+  const activated = exactTimestampNanoseconds(
+      evidence.freezeWindow.activatedAt,
+      "freezeWindow.activatedAt",
+  );
+  const expires = exactTimestampNanoseconds(
+      evidence.freezeWindow.expiresAt,
+      "freezeWindow.expiresAt",
+  );
+  const verified = exactTimestampNanoseconds(
+      evidence.verifiedAt,
+      "verifiedAt",
+  );
+  const currentTime =
+    exactCurrentTimeNanoseconds(currentTimeMs, currentTimestamp);
+  const freezeDuration = expires - activated;
+  if (expires <= activated ||
+      freezeDuration >
+        BigInt(MAX_FREEZE_WINDOW_SECONDS) * NANOSECONDS_PER_SECOND ||
+      verified < activated || verified >= expires ||
+      currentTime < verified || currentTime >= expires) {
     fail("freeze window is expired, reversed, stale, or exceeds bound");
   }
   const latestDeploymentObservedAt =
     deploymentVerification.latestDeploymentObservedAt;
-  requireUtc(latestDeploymentObservedAt, "latestDeploymentObservedAt");
-  const deployment = Date.parse(latestDeploymentObservedAt);
+  const deployment = exactTimestampNanoseconds(
+      latestDeploymentObservedAt,
+      "latestDeploymentObservedAt",
+  );
   const deploymentScanCompleted =
-    Date.parse(deploymentVerification.latestDeploymentScanCompletedAt);
-  const sentinel = Date.parse(evidence.sentinel.capturedAt);
-  const stopped = Date.parse(evidence.drainTelemetry.schedulerStoppedAt);
-  const drained = Date.parse(evidence.drainTelemetry.quietWindowEndedAt);
-  const iam = Date.parse(evidence.iamPolicy.observedAt);
+    exactTimestampNanoseconds(
+        deploymentVerification.latestDeploymentScanCompletedAt,
+        "latestDeploymentScanCompletedAt",
+    );
+  const sentinel = exactTimestampNanoseconds(
+      evidence.sentinel.capturedAt,
+      "sentinel.capturedAt",
+  );
+  const stopped = exactTimestampNanoseconds(
+      evidence.drainTelemetry.schedulerStoppedAt,
+      "drainTelemetry.schedulerStoppedAt",
+  );
+  const drained = exactTimestampNanoseconds(
+      evidence.drainTelemetry.quietWindowEndedAt,
+      "drainTelemetry.quietWindowEndedAt",
+  );
+  const runtimeIamTransitionObservedAt =
+    evidence.deploymentApprovalReceipt.runtimeIamActivationReceipt.observedAt;
+  const runtimeIamTransition =
+    exactTimestampNanoseconds(
+        runtimeIamTransitionObservedAt,
+        "runtimeIamActivationReceipt.observedAt",
+    );
+  const iam = exactTimestampNanoseconds(
+      evidence.iamPolicy.observedAt,
+      "iamPolicy.observedAt",
+  );
   const probeObservedAts =
     evidence.negativeProbes.map(({observedAt}) => observedAt);
   const negativeProbesCompletedAt =
     latestUtcTimestamp(probeObservedAts, "negative probe observedAt");
-  const probes = probeObservedAts.map(Date.parse);
+  const probes = probeObservedAts.map((value, index) =>
+    exactTimestampNanoseconds(value, `negativeProbe[${index}].observedAt`));
   if (deployment > activated || deploymentScanCompleted > activated ||
       activated > sentinel ||
       sentinel > stopped || stopped > drained || drained > iam ||
-      probes.some((time) => time < iam || time > verified) ||
-      verified < Math.max(...probes)) {
+      runtimeIamTransition < activated || runtimeIamTransition > iam ||
+      probes.some((time) => time < iam || time > verified)) {
     fail(
         "activation order must be deployment<=activatedAt<=sentinel<=" +
         "schedulerStopped<=drained<=iamReadOnly<=probes<=verifiedAt",
     );
   }
-  if (sentinel - deployment > MAX_FREEZE_WINDOW_SECONDS * 1000) {
+  if (sentinel - deployment >
+      BigInt(MAX_FREEZE_WINDOW_SECONDS) * NANOSECONDS_PER_SECOND) {
     fail("provider deployment observation is stale for this freeze window");
   }
   const receipt = evidence.deploymentApprovalReceipt;
-  if (Date.parse(receipt.approvedAt) > activated ||
-      Date.parse(receipt.expiresAt) < verified) {
+  const approvedAt = exactTimestampNanoseconds(
+      receipt.approvedAt,
+      "deploymentApprovalReceipt.approvedAt",
+  );
+  const receiptExpiresAt = exactTimestampNanoseconds(
+      receipt.expiresAt,
+      "deploymentApprovalReceipt.expiresAt",
+  );
+  if (approvedAt > activated || receiptExpiresAt <= verified) {
     fail("deployment approval receipt is not valid for verification window");
   }
-  const resourceTimes = [
+  const resourceTimestampEntries = [
     ...receipt.resources.functions.map(({updateTime}) => updateTime),
     deploymentVerification.rulesResourceIdentity.releaseCreateTime,
     deploymentVerification.rulesResourceIdentity.releaseUpdateTime,
     deploymentVerification.rulesResourceIdentity.rulesetCreateTime,
     deploymentVerification.rulesResourceIdentity.rulesetUpdateTime,
-  ].map(Date.parse);
-  const providerObserved = Date.parse(deploymentVerification.observedAt);
+  ];
+  const resourceTimes = resourceTimestampEntries.map((value, index) =>
+    exactTimestampNanoseconds(value, `deployedResource[${index}].observedAt`));
+  const providerObserved = exactTimestampNanoseconds(
+      deploymentVerification.observedAt,
+      "providerObservation.observedAt",
+  );
   if (providerObserved > verified ||
       resourceTimes.some((time) => time > providerObserved)) {
     fail("provider observation predates deployed immutable resource");
   }
+  const exactNanosecondChronology = {
+    ...INTEGRATED_CHRONOLOGY_PROFILE,
+    profileDigest: sha256Canonical(INTEGRATED_CHRONOLOGY_PROFILE),
+    freezeDurationNanoseconds: freezeDuration.toString(),
+    stages: [
+      ["freezeWindow.activatedAt", evidence.freezeWindow.activatedAt],
+      ["freezeWindow.expiresAt", evidence.freezeWindow.expiresAt],
+      ["verifiedAt", evidence.verifiedAt],
+      ["latestDeploymentObservedAt", latestDeploymentObservedAt],
+      [
+        "latestDeploymentScanCompletedAt",
+        deploymentVerification.latestDeploymentScanCompletedAt,
+      ],
+      ["sentinel.capturedAt", evidence.sentinel.capturedAt],
+      [
+        "drainTelemetry.schedulerStoppedAt",
+        evidence.drainTelemetry.schedulerStoppedAt,
+      ],
+      [
+        "drainTelemetry.quietWindowEndedAt",
+        evidence.drainTelemetry.quietWindowEndedAt,
+      ],
+      ["runtimeIamActivationReceipt.observedAt",
+        runtimeIamTransitionObservedAt],
+      ["iamPolicy.observedAt", evidence.iamPolicy.observedAt],
+      ...probeObservedAts.map((value, index) =>
+        [`negativeProbes[${index}].observedAt`, value]),
+      ["deploymentApprovalReceipt.approvedAt", receipt.approvedAt],
+      ["deploymentApprovalReceipt.expiresAt", receipt.expiresAt],
+      ...resourceTimestampEntries.map((value, index) =>
+        [`deployedResources[${index}].observedAt`, value]),
+      ["providerObservation.observedAt", deploymentVerification.observedAt],
+    ].map(([stage, value]) => ({
+      stage,
+      ...exactTimestampDigestRecord(value, stage),
+    })),
+  };
   return Object.freeze({
+    chronologyProfileVersion:
+      INTEGRATED_CHRONOLOGY_PROFILE.profileVersion,
+    exactNanosecondChronology,
+    exactNanosecondChronologyDigest:
+      sha256Canonical(exactNanosecondChronology),
     latestDeploymentObservedAt,
     latestDeploymentScanCompletedAt:
       deploymentVerification.latestDeploymentScanCompletedAt,
@@ -2568,6 +3205,7 @@ function validateFreezeTimeline(evidence, deploymentVerification, currentTimeMs)
     sentinelCapturedAt: evidence.sentinel.capturedAt,
     schedulerStoppedAt: evidence.drainTelemetry.schedulerStoppedAt,
     inFlightDrainedAt: evidence.drainTelemetry.quietWindowEndedAt,
+    runtimeIamTransitionObservedAt,
     iamReadOnlyAt: evidence.iamPolicy.observedAt,
     negativeProbesCompletedAt,
     verifiedAt: evidence.verifiedAt,
@@ -2576,7 +3214,7 @@ function validateFreezeTimeline(evidence, deploymentVerification, currentTimeMs)
 
 function validateWriteFreezeEvidenceContract(
     evidence,
-    {currentTimeMs = Date.now(), providerResult} = {},
+    {currentTimeMs = Date.now(), currentTimestamp, providerResult} = {},
 ) {
   assertWriteSurfaceRegistry();
   assertProviderOperationRegistry();
@@ -2601,7 +3239,8 @@ function validateWriteFreezeEvidenceContract(
     fail("artifact digest mismatch (tamper detected)");
   }
   validateRelease(evidence.release);
-  validateApprovalReceipt(evidence.deploymentApprovalReceipt, evidence.release);
+  const executionEligible =
+    validateApprovalReceipt(evidence.deploymentApprovalReceipt, evidence.release);
   validateOperationalSafety(evidence.operationalSafety);
   if (!providerResult) fail("approved provider adapter result is required");
   const deploymentVerification =
@@ -2612,6 +3251,7 @@ function validateWriteFreezeEvidenceContract(
       evidence.sentinel,
       {
         currentTimeMs,
+        currentTimestamp,
         freezeExpiresAt: evidence.freezeWindow.expiresAt,
         schedulerTiming: deploymentVerification.schedulerTiming,
         verifiedAt: evidence.verifiedAt,
@@ -2625,7 +3265,12 @@ function validateWriteFreezeEvidenceContract(
   validateNegativeProbes(evidence.negativeProbes, evidence.sentinel);
   validateBaselineComparison(evidence.baselineComparison);
   const activationChronology =
-    validateFreezeTimeline(evidence, deploymentVerification, currentTimeMs);
+    validateFreezeTimeline(
+        evidence,
+        deploymentVerification,
+        currentTimeMs,
+        currentTimestamp,
+    );
   const proofGateStates = Object.freeze(Object.fromEntries(
       PROOF_GATE_KEYS.map((gate) => [gate, true]),
   ));
@@ -2633,6 +3278,16 @@ function validateWriteFreezeEvidenceContract(
   return Object.freeze({
     artifactDigest,
     releaseSha: evidence.release.sha,
+    freezeIamContractLineage:
+      evidence.deploymentApprovalReceipt.freezeIamContractLineage,
+    runtimeIamActivationApprovalDigest:
+      sha256Canonical(
+          evidence.deploymentApprovalReceipt.runtimeIamActivationApproval,
+      ),
+    runtimeIamActivationReceiptDigest:
+      sha256Canonical(
+          evidence.deploymentApprovalReceipt.runtimeIamActivationReceipt,
+      ),
     writerCount: ACADEMY_RESET_WRITE_SURFACE_REGISTRY.length,
     collectionCount: RESET_COLLECTIONS.length,
     schedulerCount: evidence.scheduler.jobs.length,
@@ -2724,6 +3379,10 @@ function validateWriteFreezeEvidenceContract(
         .providerAdapterResultMetadata.reviewedSourceRepositoryRootDigest,
     activationChronology,
     proofGateStates,
+    organizationPolicyLineage:
+      evidence.deploymentApprovalReceipt.organizationPolicyLineage,
+    executionEligible,
+    publicationEligible: executionEligible,
     ...iamVerification,
     ...deploymentVerification,
   });
@@ -2735,9 +3394,13 @@ export function validateWriteFreezeEvidence(
 ) {
   exactKeys(options, [
     ...(Object.hasOwn(options, "currentTimeMs") ? ["currentTimeMs"] : []),
+    ...(Object.hasOwn(options, "currentTimestamp") ?
+      ["currentTimestamp"] :
+      []),
     "providerRuntimeContext",
   ], "write-freeze validation options");
   const currentTimeMs = options.currentTimeMs ?? Date.now();
+  const currentTimestamp = options.currentTimestamp;
   const providerRuntimeContext = options.providerRuntimeContext;
   try {
     assertValidatedProviderRuntimeContext(providerRuntimeContext);
@@ -2758,11 +3421,18 @@ export function validateWriteFreezeEvidence(
       providerRuntimeContext.reviewedSourceDigest !==
         providerRuntimeContext.runtimeGit.reviewedSourceIdentityDigest ||
       providerRuntimeContext.reviewedSourceSetDigest !==
-        providerRuntimeContext.runtimeGit.reviewedSourceSetDigest) {
+        providerRuntimeContext.runtimeGit.reviewedSourceSetDigest ||
+      stableStringify(providerRuntimeContext.iamContractSourceIdentity) !==
+        stableStringify(
+            providerRuntimeContext.runtimeGit.iamContractSourceIdentity,
+        ) ||
+      providerRuntimeContext.iamContractSourceSetDigest !==
+        providerRuntimeContext.runtimeGit.iamContractSourceSetDigest) {
     fail("provider runtime context Git/source identity mismatch");
   }
   return validateWriteFreezeEvidenceContract(evidence, {
     currentTimeMs,
+    currentTimestamp,
     providerResult: providerRuntimeContext.providerResult,
   });
 }
@@ -2777,6 +3447,12 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
     academyId: EXPECTED_ACADEMY_ID,
     releaseSha: validation.releaseSha,
     evidenceArtifactDigest: validation.artifactDigest,
+    freezeIamContractLineage: validation.freezeIamContractLineage,
+    organizationPolicyLineage: validation.organizationPolicyLineage,
+    runtimeIamActivationApprovalDigest:
+      validation.runtimeIamActivationApprovalDigest,
+    runtimeIamActivationReceiptDigest:
+      validation.runtimeIamActivationReceiptDigest,
     providerAdapterId: APPROVED_PROVIDER_ADAPTER_ID,
     providerAdapterContractVersion:
       validation.providerAdapterContractVersion,
@@ -2859,6 +3535,10 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
       options.providerRuntimeContext.criticalSourceSetDigest,
     runtimeReviewedSourceSetDigest:
       options.providerRuntimeContext.reviewedSourceSetDigest,
+    runtimeIamContractSourceIdentity:
+      options.providerRuntimeContext.iamContractSourceIdentity,
+    runtimeIamContractSourceSetDigest:
+      options.providerRuntimeContext.iamContractSourceSetDigest,
     providerObservationDigest: validation.observationDigest,
     deploymentApprovalReceiptDigest: validation.approvalReceiptDigest,
     rulesResourceIdentity: validation.rulesResourceIdentity,
@@ -2901,6 +3581,7 @@ export function buildDeterministicWriteFreezeProof(evidence, options = {}) {
     actualWrites: 0,
     executorImplemented: false,
     executionEligible: false,
+    publicationEligible: validation.publicationEligible,
     advisoryOnly: true,
     advisoryPlanWriteFreezeVerifiedUnchanged: true,
     comparisonBaselineDigest: REQUIRED_COMPARISON_BASELINE_DIGEST,

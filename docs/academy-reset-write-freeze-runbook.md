@@ -8,18 +8,18 @@ sentinel 활성화, probe, planner, reset, unfreeze를 실행하거나 구현하
 
 ## Fail-closed 고정값
 
-- contract/proof: `academy_reset_write_freeze.v5` /
-  `academy_reset_write_freeze_proof.v5`
-- Observation Contract: `academy_reset_provider_observation.v5`
+- contract/proof: `academy_reset_write_freeze.v8` /
+  `academy_reset_write_freeze_proof.v8`
+- Observation Contract: `academy_reset_provider_observation.v8`
 - deployment approval/provider dependency:
-  `academy_reset_deployment_approval.v5` /
-  `academy_reset_provider_dependency.v5`
+  `academy_reset_deployment_approval.v9` /
+  `academy_reset_provider_dependency.v8`
 - project/academy: `daegu-miami-production` / `academy_daegumiami`
 - Functions: `us-central1`, `GEN_2`, 35개 exact deployed function set과 별도의
   26개 exact guarded export set
 - provider adapter ID/contract:
   `gcp_immutable_resource_observer.v1` /
-  `academy_reset_freeze_provider_adapter.v6`
+  `academy_reset_freeze_provider_adapter.v8`
 - Stage A provider operation registry:
   `academy_reset_freeze_provider_operations.v6`, exact 30 operations,
   descriptor-set SHA-256
@@ -87,8 +87,12 @@ provider-observable, approval lineage, operational telemetry는 서로 다른
 - Functions: 35개 function exact set과 별도의 26개 guarded export exact set
 - 각 Function: name/project/region/runtime/`GEN_2`/revision/build/update time,
   provider source identity, runtime service account
-- 각 runtime service account는 approval receipt의 exact IAM member이며
-  `ACTIVE_READ_ONLY`, backend read-only exact permission set이어야 함
+- 각 runtime service account는 canonical 35-Function mapping과 일치해야 한다.
+  32개 baseline Function은 compute default, 두 Writer Function은
+  `academy-private-writer-runtime`, Preview Function은
+  `academy-private-preview-rt`를 사용한다.
+- freeze-active evidence에서 세 runtime identity는 모두 exact read-only 3-permission
+  profile이어야 한다. Writer steady 5-permission role은 freeze evidence가 아니다.
 - IAM raw evidence와 Scheduler provider inventory
 
 Rules API가 local source tree, bundle SHA-256 또는 승인 artifact lineage를
@@ -203,7 +207,7 @@ number에서
 `serviceAccount:884850632328-compute@developer.gserviceaccount.com`으로만
 파생한다. 다른 principal은 승인 receipt의 exact full member를 사용한다.
 
-- approval receipt가 세 semantic principal의 production full member와 아래
+- approval receipt가 다섯 semantic principal의 production full member와 아래
   policy schema를 exact allowlist로 승인한다.
 - provider adapter는 direct/inherited binding의 attachment point/member/role/
   condition, deny policy와 evaluation, group expansion path/completeness,
@@ -233,12 +237,58 @@ number에서
   member를 포함해 canonical exact 비교한다.
 - `cloud_functions_runtime`: `academy_backend_read_only`, `ACTIVE_READ_ONLY`
 - `firebase_admin_backend`: `academy_backend_read_only`, `ACTIVE_READ_ONLY`
+- `private_writer_runtime`: exact Writer SA, `ACTIVE_READ_ONLY`
+- `private_preview_runtime`: exact Preview SA, `ACTIVE_READ_ONLY`
 - `future_reset_executor`: `academy_reset_delete_only_inactive`, `INACTIVE`
-- backend 2개: datastore read 3개만
+- active backend/runtime 4개: datastore read 3개만
 - future executor: 같은 read 3개와 delete만; create/update/Auth 없음
 - future executor는 direct 또는 group-derived binding이 어떤 role로도 존재하면
   안 된다. read-only role도 active binding이면 거부한다.
-- Auth effective permission은 세 principal 모두 exact empty set
+- Auth effective permission은 다섯 principal 모두 exact empty set
+
+Runtime IAM state contract는 `steady_state`와 `freeze_active`를 분리한다.
+Writer steady profile은 datastore database get, entity create/get/list/update의
+exact 5개다. Writer freeze와 Preview의 두 상태는 read-only 3개다. activation
+receipt는 Writer steady role 제거, read-only 대체, before/after permission·binding
+set digest, exact principal, 관측 시각과 approval을 증명해야 한다.
+unknown/inherited/conditional writable permission, Preview write, Writer freeze
+write는 모두 fail closed다.
+Unfreeze restoration은 `jitStartsAt <= iamRestoredAt <= schedulerRestoredAt <=
+sentinelDeactivatedAt <= positiveSmokeAt <= observedAt < jitExpiresAt`을 actual
+RFC3339 UTC timestamp에서 재계산한다. JIT 시작은 inclusive, 만료는 exclusive다.
+1~9자리 fractional second는 BigInt signed epoch-nanoseconds로 변환하며 보안 비교에
+`Date.parse()` millisecond 값을 사용하지 않는다. exact 2시간
+`7200000000000ns`는 허용하고 1ns라도 초과하면 거부한다. original timestamp,
+derived epoch-nanoseconds decimal, duration decimal, exact chronology profile은
+approval/transition digest와 Runtime IAM contract digest에 bind한다. 단계 순서가
+맞아도 한 단계가 JIT 밖이거나 observation 이후면 receipt를 거부한다.
+
+Build 권한은 project-level Build Core 2-permission profile과 exact source/upload
+bucket bindings, exact Artifact Registry repository binding으로 분리한다. Deploy
+profile은 승인된 9개 permission만 허용하며 update/delete/IAM/SA-key/Scheduler/API/
+Firestore/Auth mutation은 0이어야 한다. Function create의 이름별 IAM 제한 부재는
+immutable release/source/selector/baseline digest, 세 Function 순차 배포, 매 단계
+Function/Build/Run/source identity 검증, final 35/35 inventory, 검증 후 invoker 공개,
+temporary binding 제거와 secure audit artifact를 모두 요구하는 compensating
+control로 보완한다.
+현재 세 target은 exact HTTP callable이다. Cloud Functions raw provider record에
+`eventTrigger` own-property가 object, empty object, `null` 또는 어떤 값으로든
+존재하면 projection 전에 전체 observation을 거부한다. 정상 record에는
+HTTP callable trigger contract와 `eventTrigger` absence evidence를 기록하며
+function inventory digest가 이를 bind한다. Eventarc review 없이 event trigger나
+Service Agent binding을 허용하지 않는다.
+
+실행 approval은 세 principal에 strict ASCII dot-atom `user:<email>` 문법을 먼저
+검사한 뒤, 역할별 exact approved principal과 byte-for-byte 비교한다. trim,
+lowercase 또는 Unicode normalization은 하지 않는다. `jitStartsAt`,
+`jitExpiresAt`은 exact RFC3339 UTC이고 최대 2시간이다. Organization Policy는
+receipt-local 상태를 신뢰하지 않고 canonical evidence version/digest/status/
+decision/count를 포함한 pinned lineage와 exact 비교한다. 현재 authoritative
+evidence는 `UNKNOWN`, API disabled, count `null`이므로 actual provisioning,
+deployment/public-invoker approval, IAM mutation command publication과 proof
+publication은 모두 fail-closed false다. receipt와 digest만 ALLOW로 coherent하게
+바꾸는 경로는 없으며, 향후 ALLOW에는 source contract version/digest 변경과 별도
+release review가 필요하다.
 
 capability는 evidence claim이 아니라 exact effective Firestore/Auth permissions에서
 derive한다. receipt/provider/evidence가 서로 일치하더라도 pinned project ID/number
@@ -279,6 +329,13 @@ verifier가 재계산한다.
 
 quiet window 시작/종료에는 120초 이상 간격이 필요하다. 그 밖의 인접 단계는
 동등 timestamp를 허용하지만 역전은 허용하지 않는다.
+public `validateWriteFreezeEvidence()` 경로도
+`academy_reset_write_freeze_exact_chronology.v1` profile에서 private Runtime IAM의
+exact RFC3339 parser를 재사용한다. 모든 최종 보안 비교는 signed epoch-nanoseconds
+`BigInt`로 수행하며 `Date.parse()` millisecond 절삭을 사용하지 않는다. freeze
+start는 inclusive, expiry는 exclusive라서 `verifiedAt === expiresAt`과 1ns 단계
+역전을 모두 거부한다. proof의 activation chronology digest는 각 original RFC3339
+문자열과 derived epoch-nanoseconds decimal을 함께 결합한다.
 
 ```text
 latestDeploymentObservedAt <= latestDeploymentScanCompletedAt
@@ -320,7 +377,7 @@ dependency provenance는 다음 단일 전략만 승인한다.
 - transport: `google_auth_library_native_fetch_v1`
 - auth dependency: `google-auth-library@10.6.2`
 - HTTP runtime: `node24_native_fetch`
-- adapter contract: `academy_reset_freeze_provider_adapter.v6`
+- adapter contract: `academy_reset_freeze_provider_adapter.v8`
 - no-mutation operation count: `0`
 
 `firebase_cli_private`, transitive-only dependency, private API, unknown 전략은
@@ -346,6 +403,16 @@ adapter와 그 결과는 각각 private `WeakSet` attestation을 통과해야 �
 duck-typed adapter, 같은 필드를 coherent하게 재작성한 result/context는 public
 validation 및 proof API에서 거부한다. verifier가 사용하는 canonical
 `repositoryRoot`와 adapter source root가 다르면 observation 전에 거부한다.
+Function raw provider record는 canonical projection 전에 shared
+`academy_reset_function_http_trigger.v2` contract로 검사한다. `functions.list`와
+`functions.get` raw record를 모두 projection 전에 검사하며, `eventTrigger`
+own-property는 값이 object, empty, null, undefined인지와 무관하게 전체 observation을
+거부한다. Adapter output은 list/GET 각각의 exact 35개 Function keyset, raw count,
+eventTrigger own-property count 0, list/GET parity digest, trigger contract ID/digest,
+order-insensitive Function-name set digest와 canonical inventory digest를
+`academy_reset_function_trigger_absence_evidence.v2` evidence digest로 결합한다.
+이 evidence가 누락되거나 stale이면 genuine result와 downstream proof validation이
+모두 실패한다.
 
 production executor factory는 호출별 `bindingContext`, fetch, auth, clock, sleep,
 timeout 주입을 받지 않는다. 고정 Production identity, 명시적 credential JSON을
@@ -364,17 +431,17 @@ digest를 포함한다. read-only semantic POST는 mutation으로 세지 않는�
 family adapter가 이 stable pair를 approval inventory와 결합하기 전에는 observation
 completeness를 주장할 수 없다.
 
-별도 reviewed-source contract는 package/lock, operation registry, transport,
-mock adapter, attestation, read-only permission manifest, runtime Git identity
-resolver, write-freeze contract, local-only Production observer, verifier의 exact
-11개 path와 각 파일의 literal
+별도 reviewed-source contract는 package/lock, Runtime IAM/Build scope contract,
+operation registry, transport, mock adapter, attestation, read-only permission
+manifest, runtime Git identity resolver, write-freeze contract, local-only Production
+observer, verifier의 exact 13개 path와 각 파일의 literal
 SHA-256 및 canonical aggregate digest를 approval metadata/session/observation/proof에
 결합한다. 이 local adapter source set은 기존 deployed runtime Git critical source
 목록에 추가하지 않는다. adapter/verifier는 이 registry 자체는 hash set에서
-제외하고, exact 11개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
+제외하고, exact 13개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
 확인한 뒤 bytes SHA-256와 literal pin 및 aggregate를 다시 계산한다.
-현재 reviewed-source aggregate는
-`92a7e7e6a2d78542c31a40c608b58a5fce0be1b52d9bdfea9b039c3bd481fe82`이다.
+reviewed-source aggregate는 source pin registry의 canonical digest를 검증 시점에
+재계산하며 문서의 복사값을 승인 근거로 사용하지 않는다.
 
 증명용 runtime context는 동일한 canonical repository root에서 genuine mock
 adapter/result와 reviewed-source identity를 검증한 뒤, clean Git HEAD/tree,
@@ -399,15 +466,18 @@ raw API가 `parent`를 생략할 때만 provider canonicalizer가 schema 검증 
 folder/organization, 다른 project/source identity는 모두 거부한다.
 
 versioned profile은
-`academy_reset_observer_topology_profile.v2` /
+`academy_reset_observer_topology_profile.v3` /
 `standalone_project_v1`이며 profile SHA-256은
-`c1bd5b76bbbb8a92933039ea3d0b87f7af4c1fce384bc300d6d6f0d9d436a601`,
+`421b57feb0e66f021e00a95932004e0a373a561d62c1577d84e41bdedd7eb30e`,
 topology evidence SHA-256은
 `d38dc2cda3d7eaaf5c2364ccbd3938584a158efd1df21cc30f0c38111856ef3a`다.
-Functions source bucket은
+Observer가 읽는 Functions source bucket은
 `gcf-v2-sources-884850632328-us-central1`, owner project number는 target과 같은
-`884850632328`이다. 외부 bucket이 아니므로 별도 bucket-level IAM binding은 만들지
-않는다. organization/folder role 또는 binding도 없다. owner는 bucket 이름에서
+`884850632328`이다. Observer read-only role에는 별도 bucket binding을 추가하지
+않는다. dedicated Build identity에는 source/upload bucket 각각의
+`roles/storage.objectViewer`와 exact `gcf-artifacts` repository의
+`roles/artifactregistry.writer`만 허용한다. project-wide Storage/Artifact Registry
+binding은 거부한다. owner는 bucket 이름에서
 추출하지 않는다. exact `storage.v1.buckets.get` GET
 `/storage/v1/b/{bucket}?projection=noAcl` 응답의 `name`, string `projectNumber`,
 `location`, `storageClass`를 관찰하고 Functions source provenance와 response/identity
@@ -415,23 +485,37 @@ digest에 결합한다. `response.name` 또는 `projectNumber` 불일치, 필드
 타입, unknown/external bucket은 거부한다.
 
 operation registry 30개와 mandatory 29 / optional diagnostic 1 분류를 사용한다.
-standalone topology에서 mandatory partition은 exact 25 executed와 아래 exact 4
-topology-derived N/A다.
+standalone topology의 capability profile은 exact 25 executed와 아래 exact 4
+topology-derived N/A다. 모든 deny-policy list가 pagination-complete exact empty이면
+`iam.v2.policies.denypolicies.get`을 raw list evidence에서 파생한 추가 N/A로 분류하여
+actual execution profile은 24 executed / 5 N/A가 된다. deny policy가 하나라도
+있으면 GET은 executed로 유지되고 listed/GET policy keyset 전체를 분석한다.
+
+genuine Observer는 IAM을 두 번 scan한다. 각 scan은 독립된 operation trace,
+executed set, topology-derived N/A, evidence-derived N/A accumulator를 사용한다.
+같은 scan 안 N/A 중복은 거부하고, scan 간에는 volatile execution ID와 관찰 시각을
+제외한 exact IAM state, operation set, N/A reason/prerequisite/parent/keyset의
+canonical semantic digest가 같아야 한다. 첫 scan의 coverage/N/A와 두 scan의 trace를
+최종 evidence에 결합하며, empty/nonempty deny profile 또는 동일 count operation
+swap이 발생하면 unstable inventory로 거부한다.
 
 - `cloudresourcemanager.v3.folders.get`
 - `cloudresourcemanager.v3.folders.getIamPolicy`
 - `cloudresourcemanager.v3.organizations.get`
 - `cloudresourcemanager.v3.organizations.getIamPolicy`
 
-caller가 N/A set/count/digest를 지정할 수 없다. verifier는 canonical topology에서
-이를 다시 파생하며 executed와 N/A의 union은 mandatory 29 exact set, intersection은
-empty여야 한다. executed set SHA-256은
-`34f8fcb0fc9d8895cab49aac1ef6177b18f1445c009a792a35f8224ed7f76823`,
+caller가 N/A set/count/digest를 지정할 수 없다. verifier는 canonical topology와
+pagination-complete raw deny list evidence에서 이를 다시 파생하며 executed와 N/A의
+union은 mandatory 29 exact set, intersection은 empty여야 한다. empty-deny fixture의
+executed set SHA-256은
+`7641f8ac62b01e490fc65c2c30e973154d0f89b103b5c4e3ac1fe4503e706a32`,
 N/A set SHA-256은
-`383d5dfd23dad6192b81e289645bf1a5d7b26897cd7b4ab0658781bb46b86ea8`다.
+`33be1a9a9fcf09c3e84de9cd09d11bc71a405368774fcbbbcdc4a78b69c3a65a`다.
 operation execution profile version은
-`academy_reset_observer_operation_execution.v2`, 전체 profile SHA-256은
-`4a862c779772f7d8f4249c97db73d4355e99988025e980a7aa459e84469cb596`다.
+`academy_reset_observer_operation_execution.v3`; base capability profile SHA-256은
+`96aae621f4a9cc1859ca360b7cf442b05a0fd81d627241be9709c3b6c5121f34`,
+empty-deny actual profile SHA-256은
+`710380c61c7ffe559ac7bde97f7d2e156441be0c877eea5bbb81bd43a76dc772`다.
 
 standalone project-level custom role은 records에서 재계산된 required 26와 auxiliary
 `serviceusage.services.use` 1개, 총 27개 exact permission만 사용한다.
@@ -451,7 +535,8 @@ effective permission profile version은
 
 raw operation trace는 event count와 별도로 unique operation ID set, mandatory/optional
 partition, per-operation event count 및 각 digest를 재계산한다. trace-derived mandatory
-set은 exact 25 executed set과 같아야 한다. N/A operation, optional diagnostic 또는
+set은 evidence-derived actual executed set(deny list empty면 24, nonempty면 25)과
+같아야 한다. N/A operation, optional diagnostic 또는
 unknown operation이 mandatory coverage를 대신할 수 없다. 실제 observer는 안정성
 double-scan 때문에 같은 operation ID의 여러 bounded event를 가질 수 있으나 unique
 coverage에는 한 번만 반영한다.
@@ -635,11 +720,11 @@ baseline approval을 재사용하지 않는다. 이 runbook 자체는 reset 권�
 정상 unfreeze와 reset 취소/rollback은 모두 contract의 같은 machine-readable
 순서를 사용한다. 병렬화하거나 이전 순서를 사용하지 않는다.
 
-1. `audit`: reset/취소 결과와 invariants를 독립 audit
-2. `iamRestore`: 검토된 IAM policy를 restore하고 effective permission 확인
-3. `schedulerRestore`: 지연/중복 실행 위험을 audit한 뒤 exact job set restore
-4. `sentinelDeactivate`: IAM과 scheduler 복구 확인 후 sentinel 비활성화
-5. `positiveSmoke`: exact project/academy에서 client/backend/scheduler positive
+1. `iamRestore`: Writer exact steady role을 복원하고 Preview read-only와 extra
+   permission 0을 확인
+2. `schedulerRestore`: 지연/중복 실행 위험을 audit한 뒤 exact job set restore
+3. `sentinelDeactivate`: IAM과 scheduler 복구 확인 후 sentinel 비활성화
+4. `positiveSmoke`: exact project/academy에서 client/backend/scheduler positive
    smoke와 관측 완료
 
 rollback도 `audit → iamRestore → schedulerRestore → sentinelDeactivate →

@@ -807,7 +807,7 @@ test("version and descriptor-set digest are deterministic literal invariants",
       assert.equal(PROVIDER_AUTH_DEPENDENCY, "google-auth-library@10.6.2");
       assert.equal(PROVIDER_HTTP_RUNTIME, "node24_native_fetch");
       assert.equal(PROVIDER_ADAPTER_CONTRACT_VERSION,
-          "academy_reset_freeze_provider_adapter.v6");
+          "academy_reset_freeze_provider_adapter.v8");
       assert.equal(PROVIDER_NO_MUTATION_OPERATION_COUNT, 0);
     });
 

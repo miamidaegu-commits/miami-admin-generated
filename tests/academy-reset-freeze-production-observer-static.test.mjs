@@ -158,7 +158,7 @@ test("topology and principal gates are exact and precede GoogleAuth", () => {
   assert.equal(googleAuth > principalGate, true);
   assert.match(
       authoritySource,
-      /deriveObservedStandaloneTopologyProfile\(\s*iam\.hierarchy,\s*functions\.records,\s*functions\.bucketIdentities,\s*\)/s,
+      /deriveObservedStandaloneTopologyProfile\(\s*iam\.hierarchy,\s*functions\.records,\s*functions\.bucketIdentities,\s*evidenceDerivedNotApplicableOperationIds,\s*\)/s,
   );
   assert.match(authoritySource, /operationId: "storage\.v1\.buckets\.get"/);
   assert.match(authoritySource, /query: \{projection: "noAcl"\}/);
@@ -230,10 +230,11 @@ test("unknown IAM principals, roles, permissions, and scopes fail closed",
       assert.match(authoritySource, /domainExpansionComplete = !hasDomain/);
     });
 
-test("deny policy presence structurally makes analysis incomplete", () => {
+test("deny policy completeness is parse-derived and semantics block separately",
+    () => {
   assert.match(
       authoritySource,
-      /const denyPolicyAnalysisComplete = denyPolicies\.length === 0;/,
+      /const denyPolicyAnalysisComplete = denyPolicies\.every\(\(policy\) =>/,
   );
   assert.match(
       authoritySource,
@@ -243,12 +244,32 @@ test("deny policy presence structurally makes analysis incomplete", () => {
       authoritySource,
       /if \(!iam\.denyPolicyAnalysisComplete\) \{\s*blockers\.push\("DENY_POLICY_ANALYSIS_INCOMPLETE"\);/s,
   );
+  assert.match(
+      authoritySource,
+      /if \(iam\.denyPolicyAnalysisComplete && iam\.denyPolicies\.length > 0\) \{\s*blockers\.push\("DENY_POLICY_PRESENT_REQUIRES_REVIEW"\);/s,
+  );
+  assert.match(
+      authoritySource,
+      /reasonCode: "EXHAUSTIVE_DENY_POLICY_LISTS_EMPTY"/,
+  );
 });
 
 test("IAM observation is double-pass and writable bindings fail closed", () => {
   assert.match(
       authoritySource,
-      /const firstIam = await observeRawIam\(state, functions\);\s*const secondIam = await observeRawIam\(state, functions\);\s*if \(canonical\(firstIam\) !== canonical\(secondIam\)\)/s,
+      /const firstState =\s*createRawObservationState\(parentState\.executor, parentState\.preflight\);\s*const secondState =\s*createRawObservationState\(parentState\.executor, parentState\.preflight\)/s,
+  );
+  assert.match(
+      authoritySource,
+      /const firstScan =\s*buildIamScanResult\(firstState, await observeRawIam\(firstState, functions\)\);\s*const secondScan =\s*buildIamScanResult\(secondState, await observeRawIam\(secondState, functions\)\)/s,
+  );
+  assert.match(
+      authoritySource,
+      /state\.notApplicable\.has\(operationId\)[\s\S]*?NOT_APPLICABLE_EVIDENCE_REJECTED/,
+  );
+  assert.match(
+      authoritySource,
+      /firstScan\.stabilityDigest !== secondScan\.stabilityDigest[\s\S]*?INVENTORY_UNSTABLE/,
   );
   assert.match(authoritySource, /REVIEWED_WRITABLE_PERMISSIONS/);
   assert.match(

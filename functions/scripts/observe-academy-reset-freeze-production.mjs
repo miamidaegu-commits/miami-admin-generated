@@ -43,6 +43,8 @@ import {
   READONLY_PERMISSION_MANIFEST_DIGEST,
   READONLY_PERMISSION_MANIFEST_VERSION,
   REVIEWED_EVIDENCE_SET_DIGEST,
+  EVIDENCE_DERIVED_NOT_APPLICABLE_MANDATORY_OPERATION_IDS,
+  STANDALONE_NOT_APPLICABLE_MANDATORY_OPERATION_IDS,
   STANDALONE_PROJECT_OBSERVER_PROFILE,
   STANDALONE_SOURCE_BUCKET_NAME,
   assertEffectiveMandatoryPermissionContract,
@@ -55,6 +57,19 @@ import {
   EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
 } from "./academy-reset-freeze-provider-reviewed-sources.mjs";
 import {
+  BUILD_SCOPE_CONTRACT_DIGEST,
+  BUILD_SCOPE_CONTRACT_VERSION,
+  COMPENSATING_CONTROL_DIGEST,
+  COMPENSATING_CONTROL_VERSION,
+  DEPLOY_PROFILE_DIGEST,
+  DEPLOY_PROFILE_VERSION,
+  ORGANIZATION_POLICY_EVIDENCE,
+} from "./academy-functions-build-scope-contract.mjs";
+import {
+  PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+  PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+} from "./academy-private-runtime-iam-contract.mjs";
+import {
   resolveRuntimeGitSourceIdentity,
   validateProviderAdapterReviewedSources,
 } from "./academy-reset-freeze-runtime-identity.mjs";
@@ -63,11 +78,18 @@ import {
   EXPECTED_FUNCTION_GENERATION,
   EXPECTED_FUNCTION_REGION,
   EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+  FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+  FUNCTION_HTTP_TRIGGER_TYPE,
   KNOWN_IAM_GROUPS,
   REVIEWED_IAM_ROLE_DEFINITIONS,
   REVIEWED_PERMISSION_UNIVERSE,
   REVIEWED_WRITABLE_PERMISSIONS,
   SCHEDULER_JOB_ALLOWLIST,
+  assertHttpCallableRawFunctionRecord,
+  buildFunctionTriggerAbsenceEvidence,
+  validateFunctionTriggerAbsenceEvidence,
 } from "./academy-reset-write-freeze-contract.mjs";
 
 export const GOOGLE_PROVIDER_READ_ONLY_SCOPE =
@@ -137,6 +159,8 @@ const genuineProductionExecutors = new WeakSet();
 const genuineProductionPreflightContexts = new WeakSet();
 const genuineRawProductionResults = new WeakMap();
 const genuineInjectedMockObservations = new WeakSet();
+const injectedMockRawIamStates = new WeakSet();
+const injectedMockRawIamExecutors = new WeakSet();
 const capturedNativeFetch = globalThis.fetch?.bind(globalThis);
 
 export class ProviderTransportError extends Error {
@@ -299,10 +323,24 @@ function createAdapterSessionLineage(sessionReceipt) {
   const lineage = Object.create(null);
   addLineageValue(lineage, "approved_rules_release_id", "cloud.firestore");
   const principals = sessionReceipt?.iamPrincipalAllowlist ?? [];
-  const permissions = [...new Set(principals.flatMap((principal) => [
+  const runtimeTransitionPermissions = [
+    sessionReceipt?.runtimeIamActivationReceipt?.before,
+    sessionReceipt?.runtimeIamActivationReceipt?.after,
+  ].flatMap((snapshot) =>
+    snapshot?.principalPermissions?.flatMap(({permissions}) => permissions) ??
+      []);
+  const receiptPermissions = [...new Set([
+    ...principals.flatMap((principal) => [
     ...(principal.effectivePermissions ?? []),
     ...(principal.authPermissions ?? []),
-  ]))].sort();
+    ]),
+    ...runtimeTransitionPermissions,
+  ])].sort();
+  if (receiptPermissions.some((permission) =>
+    !REVIEWED_PERMISSION_UNIVERSE.includes(permission))) {
+    fail("MOCK_SESSION_REVIEWED_PERMISSION_LINEAGE_REJECTED");
+  }
+  const permissions = [...REVIEWED_PERMISSION_UNIVERSE];
   const members = principals.map(({member}) => member);
   const projectResource =
     `//cloudresourcemanager.googleapis.com/projects/${PROVIDER_TARGET_PROJECT_ID}`;
@@ -1299,7 +1337,7 @@ export function assertStableProviderInventory(startResult, endResult) {
 }
 
 export const PRODUCTION_OBSERVER_SCHEMA_VERSION =
-  "academy_reset_freeze_raw_production_observer.v3";
+  "academy_reset_freeze_raw_production_observer.v7";
 export const PRODUCTION_OBSERVER_SUMMARY_FILENAME =
   "provider-observation-summary-redacted.json";
 export const PRODUCTION_OBSERVER_SENSITIVE_FILENAME =
@@ -1342,6 +1380,7 @@ const REQUIRED_SERVICE_USAGE_SERVICES = Object.freeze([
 const BLOCKER_CODES = Object.freeze([
   "CONDITION_ANALYSIS_INCOMPLETE",
   "DENY_POLICY_ANALYSIS_INCOMPLETE",
+  "DENY_POLICY_PRESENT_REQUIRES_REVIEW",
   "FUNCTION_COUNT_MISMATCH",
   "GUARDED_FUNCTION_COUNT_MISMATCH",
   "IAM_DOMAIN_EXPANSION_INCOMPLETE",
@@ -1903,12 +1942,26 @@ function createProductionSessionLineage() {
 }
 
 function addProductionLineage(executor, binding, values) {
-  if (!genuineProductionExecutors.has(executor)) {
+  if (!genuineProductionExecutors.has(executor) &&
+      !injectedMockRawIamExecutors.has(executor)) {
     observerFail("GENUINE_PRODUCTION_EXECUTOR_REQUIRED");
   }
   const session = executorSessions.get(executor);
   for (const value of values) {
     addLineageValue(session.lineageContext.lineageBindings, binding, value);
+  }
+}
+
+function addInjectedMockRawIamLineage(executor) {
+  if (!injectedMockRawIamExecutors.has(executor)) {
+    observerFail("INJECTED_MOCK_RAW_IAM_EXECUTOR_REQUIRED");
+  }
+  const session = executorSessions.get(executor);
+  for (const [binding, values] of
+    Object.entries(createProductionSessionLineage())) {
+    for (const value of values) {
+      addLineageValue(session.lineageContext.lineageBindings, binding, value);
+    }
   }
 }
 
@@ -1919,8 +1972,8 @@ function rawName(value, pattern, code) {
   return match;
 }
 
-function rawPayload(result) {
-  if (!result || result.mockOnly !== false ||
+function rawPayload(result, mockOnly = false) {
+  if (!result || result.mockOnly !== mockOnly ||
       result.paginationComplete !== true ||
       typeof result.operationId !== "string") {
     observerFail("RAW_OPERATION_RESULT_REJECTED");
@@ -1933,8 +1986,11 @@ function rawProjectionDigest(value) {
 }
 
 async function executeRaw(state, input) {
-  if (!genuineProductionExecutors.has(state.executor) ||
-      !genuineProductionPreflightContexts.has(state.preflight) ||
+  const genuineProductionState =
+    genuineProductionExecutors.has(state.executor) &&
+    genuineProductionPreflightContexts.has(state.preflight);
+  const injectedMockRawIamState = injectedMockRawIamStates.has(state);
+  if (!genuineProductionState && !injectedMockRawIamState ||
       !PROVIDER_MANDATORY_OPERATION_IDS.includes(input.operationId) &&
         input.operationId !== PRODUCTION_OBSERVER_OPTIONAL_DIAGNOSTIC) {
     observerFail("RAW_ADAPTER_BOUNDARY_REJECTED");
@@ -1945,7 +2001,7 @@ async function executeRaw(state, input) {
     observerFail("RAW_MUTATION_OPERATION_REJECTED");
   }
   const result = await state.executor(input);
-  rawPayload(result);
+  rawPayload(result, injectedMockRawIamState);
   state.trace.push({
     operationId: result.operationId,
     transportExecutionId: result.transportExecutionId,
@@ -1963,11 +2019,226 @@ async function executeRaw(state, input) {
 function markNotApplicable(state, operationId, evidence) {
   if (!PROVIDER_MANDATORY_OPERATION_IDS.includes(operationId) ||
       state.executed.has(operationId) ||
-      typeof evidence !== "string" ||
-      !/^[A-Z0-9_]{3,120}$/.test(evidence)) {
+      state.notApplicable.has(operationId) ||
+      !(typeof evidence === "string" &&
+          /^[A-Z0-9_]{3,120}$/.test(evidence) ||
+        evidence && typeof evidence === "object" &&
+          !Array.isArray(evidence))) {
     observerFail("NOT_APPLICABLE_EVIDENCE_REJECTED");
   }
   state.notApplicable.set(operationId, evidence);
+}
+
+function createRawObservationState(executor, preflight) {
+  return {
+    executor,
+    preflight,
+    trace: [],
+    executed: new Set(),
+    notApplicable: new Map(),
+  };
+}
+
+function validateNotApplicableEvidence(evidenceByOperationId) {
+  const keys = assertRecord(
+      evidenceByOperationId,
+      "NOT_APPLICABLE_EVIDENCE",
+  ).sort();
+  const topologyIds =
+    [...STANDALONE_NOT_APPLICABLE_MANDATORY_OPERATION_IDS].sort();
+  const evidenceDerivedIds = keys.filter((operationId) =>
+    !topologyIds.includes(operationId));
+  if (evidenceDerivedIds.some((operationId) =>
+    !EVIDENCE_DERIVED_NOT_APPLICABLE_MANDATORY_OPERATION_IDS.includes(
+        operationId,
+    )) ||
+      topologyIds.some((operationId) => !keys.includes(operationId)) ||
+      topologyIds.some((operationId) =>
+        typeof evidenceByOperationId[operationId] !== "string")) {
+    observerFail("NOT_APPLICABLE_EVIDENCE_REJECTED");
+  }
+  for (const operationId of evidenceDerivedIds) {
+    const evidence = evidenceByOperationId[operationId];
+    const evidenceKeys =
+      assertRecord(evidence, "EVIDENCE_DERIVED_NOT_APPLICABLE").sort();
+    const expectedKeys = [
+      "emptyNameSetDigest",
+      "listedResourceCount",
+      "operationId",
+      "paginationComplete",
+      "parentResources",
+      "prerequisiteListOperationId",
+      "rawListEvidenceDigest",
+      "reasonCode",
+      "sourceLineage",
+    ].sort();
+    if (canonical(evidenceKeys) !== canonical(expectedKeys) ||
+        evidence.operationId !== operationId ||
+        evidence.reasonCode !== "EXHAUSTIVE_DENY_POLICY_LISTS_EMPTY" ||
+        evidence.prerequisiteListOperationId !==
+          "iam.v2.policies.denypolicies.list" ||
+        evidence.paginationComplete !== true ||
+        evidence.listedResourceCount !== 0 ||
+        evidence.emptyNameSetDigest !== sha256Canonical([]) ||
+        !Array.isArray(evidence.parentResources) ||
+        new Set(evidence.parentResources).size !==
+          evidence.parentResources.length ||
+        !Array.isArray(evidence.sourceLineage) ||
+        evidence.sourceLineage.length !== evidence.parentResources.length) {
+      observerFail("NOT_APPLICABLE_EVIDENCE_REJECTED");
+    }
+    const sortedLineage = [...evidence.sourceLineage].sort((left, right) =>
+      left.attachmentPoint.localeCompare(right.attachmentPoint));
+    for (const [index, item] of sortedLineage.entries()) {
+      const itemKeys =
+        assertRecord(item, "NOT_APPLICABLE_SOURCE_LINEAGE").sort();
+      const expectedItemKeys = [
+        "attachmentPoint",
+        "completedAtEpochMs",
+        "nameSetDigest",
+        "observedAtEpochMs",
+        "operationId",
+        "pageCount",
+        "paginationComplete",
+        "rawListResultDigest",
+        "recordCount",
+        "records",
+        "transportExecutionId",
+      ].sort();
+      const digestProjection = {...item};
+      delete digestProjection.rawListResultDigest;
+      if (canonical(itemKeys) !== canonical(expectedItemKeys) ||
+          item.attachmentPoint !== evidence.parentResources[index] ||
+          item.operationId !== evidence.prerequisiteListOperationId ||
+          item.paginationComplete !== true ||
+          !Number.isSafeInteger(item.pageCount) ||
+          item.pageCount < 1 ||
+          item.recordCount !== 0 ||
+          !Array.isArray(item.records) ||
+          item.records.length !== 0 ||
+          item.nameSetDigest !== evidence.emptyNameSetDigest ||
+          item.rawListResultDigest !== sha256Canonical(digestProjection)) {
+        observerFail("NOT_APPLICABLE_EVIDENCE_REJECTED");
+      }
+    }
+    if (evidence.rawListEvidenceDigest !== sha256Canonical(sortedLineage) ||
+        canonical(evidence.parentResources) !==
+          canonical([...evidence.parentResources].sort())) {
+      observerFail("NOT_APPLICABLE_EVIDENCE_REJECTED");
+    }
+  }
+  return evidenceDerivedIds.sort();
+}
+
+function notApplicableStabilityProjection(evidenceByOperationId) {
+  return Object.fromEntries(
+      Object.entries(evidenceByOperationId)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([operationId, evidence]) => {
+            if (typeof evidence === "string") {
+              return [operationId, evidence];
+            }
+            return [operationId, {
+              emptyNameSetDigest: evidence.emptyNameSetDigest,
+              listedResourceCount: evidence.listedResourceCount,
+              operationId: evidence.operationId,
+              paginationComplete: evidence.paginationComplete,
+              parentResources: [...evidence.parentResources],
+              prerequisiteListOperationId:
+                evidence.prerequisiteListOperationId,
+              reasonCode: evidence.reasonCode,
+              sourceLineage: evidence.sourceLineage.map((item) => ({
+                attachmentPoint: item.attachmentPoint,
+                nameSetDigest: item.nameSetDigest,
+                operationId: item.operationId,
+                pageCount: item.pageCount,
+                paginationComplete: item.paginationComplete,
+                recordCount: item.recordCount,
+                records: item.records,
+              })),
+            }];
+          }),
+  );
+}
+
+function buildIamScanResult(state, iam) {
+  const executedMandatoryOperationIds = [...state.executed].sort();
+  const notApplicableMandatoryOperationIds =
+    [...state.notApplicable.keys()].sort();
+  if (executedMandatoryOperationIds.some((operationId) =>
+    state.notApplicable.has(operationId))) {
+    observerFail("IAM_SCAN_OPERATION_OVERLAP_REJECTED");
+  }
+  const notApplicableEvidence =
+    Object.fromEntries([...state.notApplicable.entries()].sort());
+  const evidenceDerivedNotApplicableOperationIds =
+    validateNotApplicableEvidence(notApplicableEvidence);
+  const standaloneProfile = deriveStandaloneProjectObserverProfile(
+      PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
+      evidenceDerivedNotApplicableOperationIds,
+  );
+  const operationProfile = {
+    executedMandatoryOperationIds,
+    notApplicableMandatoryOperationIds,
+    evidenceDerivedNotApplicableOperationIds,
+    notApplicableEvidence:
+      notApplicableStabilityProjection(notApplicableEvidence),
+    standaloneProfile,
+  };
+  const stabilityProjection = {
+    iam,
+    operationProfile,
+  };
+  return {
+    iam,
+    operationTrace: [...state.trace],
+    executedMandatoryOperationIds,
+    notApplicableMandatoryOperationIds,
+    notApplicableEvidence,
+    evidenceDerivedNotApplicableOperationIds,
+    operationProfile,
+    stabilityProjection,
+    stabilityDigest: sha256Canonical(stabilityProjection),
+  };
+}
+
+function mergeStableIamScan(parentState, firstScan, secondScan) {
+  if (firstScan.stabilityDigest !== secondScan.stabilityDigest ||
+      canonical(firstScan.stabilityProjection) !==
+        canonical(secondScan.stabilityProjection)) {
+    observerFail("INVENTORY_UNSTABLE");
+  }
+  for (const operationId of firstScan.executedMandatoryOperationIds) {
+    if (parentState.notApplicable.has(operationId)) {
+      observerFail("IAM_SCAN_OPERATION_OVERLAP_REJECTED");
+    }
+    parentState.executed.add(operationId);
+  }
+  for (const [operationId, evidence] of
+    Object.entries(firstScan.notApplicableEvidence)) {
+    markNotApplicable(parentState, operationId, evidence);
+  }
+  parentState.trace.push(
+      ...firstScan.operationTrace,
+      ...secondScan.operationTrace,
+  );
+}
+
+async function observeStableRawIamPair(parentState, functions) {
+  const firstState =
+    createRawObservationState(parentState.executor, parentState.preflight);
+  const secondState =
+    createRawObservationState(parentState.executor, parentState.preflight);
+  if (injectedMockRawIamStates.has(parentState)) {
+    injectedMockRawIamStates.add(firstState);
+    injectedMockRawIamStates.add(secondState);
+  }
+  const firstScan =
+    buildIamScanResult(firstState, await observeRawIam(firstState, functions));
+  const secondScan =
+    buildIamScanResult(secondState, await observeRawIam(secondState, functions));
+  mergeStableIamScan(parentState, firstScan, secondScan);
+  return {firstScan, secondScan, iam: firstScan.iam};
 }
 
 function deriveOperationTraceSummary(operationTrace) {
@@ -2079,6 +2350,11 @@ async function observeRawRules(state) {
 }
 
 function functionIdentityProjection(value) {
+  try {
+    assertHttpCallableRawFunctionRecord(value);
+  } catch {
+    observerFail("FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED");
+  }
   const functionId = rawName(
       value.name,
       /^projects\/daegu-miami-production\/locations\/us-central1\/functions\/([^/]+)$/,
@@ -2121,12 +2397,50 @@ function functionIdentityProjection(value) {
     buildId,
     buildName: value.buildName,
     serviceAccountEmail: value.serviceConfig.serviceAccountEmail,
+    triggerContractVersion: FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION,
+    triggerContractId: FUNCTION_HTTP_TRIGGER_CONTRACT_ID,
+    triggerContractDigest: FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST,
+    triggerType: FUNCTION_HTTP_TRIGGER_TYPE,
+    eventTriggerAbsent: true,
     source: {
       bucket: source.bucket,
       object: source.object,
       generation: source.generation,
     },
   };
+}
+
+function assertHttpCallableFunctionProjection(value) {
+  if (!value || typeof value !== "object" ||
+      Object.hasOwn(value, "eventTrigger") ||
+      value.triggerContractVersion !== FUNCTION_HTTP_TRIGGER_CONTRACT_VERSION ||
+      value.triggerContractId !== FUNCTION_HTTP_TRIGGER_CONTRACT_ID ||
+      value.triggerContractDigest !== FUNCTION_HTTP_TRIGGER_CONTRACT_DIGEST ||
+      value.triggerType !== FUNCTION_HTTP_TRIGGER_TYPE ||
+      value.eventTriggerAbsent !== true) {
+    observerFail("FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED");
+  }
+}
+
+function canonicalFunctionRecords(records) {
+  return [...records].sort((left, right) =>
+    left.functionId.localeCompare(right.functionId) ||
+    canonical(left).localeCompare(canonical(right)));
+}
+
+function computeFunctionInventoryDigest({
+  bucketIdentities,
+  records,
+  sourceBucketIdentitySetDigest,
+  triggerEvidence,
+}) {
+  return sha256Canonical({
+    bucketIdentities: [...bucketIdentities].sort((left, right) =>
+      left.bucketName.localeCompare(right.bucketName)),
+    records: canonicalFunctionRecords(records),
+    sourceBucketIdentitySetDigest,
+    triggerEvidence,
+  });
 }
 
 function deriveSourceBucketIdentity(response, requestedBucket, functions) {
@@ -2197,6 +2511,13 @@ async function observeRawFunctionBoundary(state) {
     pathParams: projectPath,
     query: {pageSize: 1000},
   });
+  for (const record of list.records) {
+    try {
+      assertHttpCallableRawFunctionRecord(record);
+    } catch {
+      observerFail("FUNCTION_EVENT_TRIGGER_REVIEW_REQUIRED");
+    }
+  }
   const functionIds = list.records.map(({name}) => rawName(
       name,
       /^projects\/daegu-miami-production\/locations\/us-central1\/functions\/([^/]+)$/,
@@ -2213,11 +2534,13 @@ async function observeRawFunctionBoundary(state) {
       functionIds,
   );
   const functions = [];
+  const rawGetRecords = [];
   for (const functionId of [...functionIds].sort()) {
     const result = await executeRaw(state, {
       operationId: "cloudfunctions.v2.projects.locations.functions.get",
       pathParams: {...projectPath, functionId},
     });
+    rawGetRecords.push(result.response);
     functions.push(functionIdentityProjection(result.response));
   }
   const bucketIdentities = [];
@@ -2332,12 +2655,19 @@ async function observeRawFunctionBoundary(state) {
       },
     });
   }
+  const sortedDetails = details.sort((left, right) =>
+    left.functionId.localeCompare(right.functionId));
+  const triggerEvidence = buildFunctionTriggerAbsenceEvidence(
+      rawGetRecords,
+      sortedDetails,
+      list.records,
+  );
   return {
     listExecutionId: list.transportExecutionId,
     bucketIdentities,
     sourceBucketIdentitySetDigest,
-    records: details.sort((left, right) =>
-      left.functionId.localeCompare(right.functionId)),
+    triggerEvidence,
+    records: sortedDetails,
   };
 }
 
@@ -2350,6 +2680,7 @@ async function observeRawFunctions(state) {
   const second = await observeRawFunctionBoundary(state);
   if (first.listExecutionId === second.listExecutionId ||
       canonical(first.records) !== canonical(second.records) ||
+      canonical(first.triggerEvidence) !== canonical(second.triggerEvidence) ||
       canonical(first.bucketIdentities) !==
         canonical(second.bucketIdentities) ||
       first.sourceBucketIdentitySetDigest !==
@@ -2360,13 +2691,15 @@ async function observeRawFunctions(state) {
     bucketIdentities: first.bucketIdentities,
     records: first.records,
     sourceBucketIdentitySetDigest: first.sourceBucketIdentitySetDigest,
+    triggerEvidence: first.triggerEvidence,
   };
   return {
     functionCount: first.records.length,
     guardedFunctionCount: EXPECTED_GUARDED_FUNCTION_EXPORT_NAMES.length,
-    inventoryDigest: rawProjectionDigest(inventory),
+    inventoryDigest: computeFunctionInventoryDigest(inventory),
     bucketIdentities: first.bucketIdentities,
     sourceBucketIdentitySetDigest: first.sourceBucketIdentitySetDigest,
+    triggerEvidence: first.triggerEvidence,
     records: first.records,
   };
 }
@@ -2801,12 +3134,57 @@ function deriveCanonicalIamBindingUniverse({
     canonicalBindings.some(({member}) => member.startsWith("domain:"));
   const groupExpansionComplete =
     hasCompleteGroupExpansionEvidence(canonicalBindings, analyses);
+  const exactStringSet = (value) =>
+    Array.isArray(value) &&
+    value.every((item) => typeof item === "string" && item.length > 0) &&
+    new Set(value).size === value.length;
+  const denyPolicyAnalysisComplete = denyPolicies.every((policy) => {
+    if (!policy || typeof policy !== "object" ||
+        typeof policy.attachmentPoint !== "string" ||
+        typeof policy.name !== "string" ||
+        typeof policy.updateTime !== "string" ||
+        !Array.isArray(policy.rules)) {
+      return false;
+    }
+    return policy.rules.every((rule) => {
+      if (!rule || typeof rule !== "object" || Array.isArray(rule) ||
+          Object.keys(rule).some((key) =>
+            !["denyRule", "description"].includes(key)) ||
+          typeof rule.denyRule !== "object" ||
+          rule.denyRule === null ||
+          Array.isArray(rule.denyRule)) {
+        return false;
+      }
+      const denyRule = rule.denyRule;
+      if (Object.keys(denyRule).some((key) => ![
+        "deniedPrincipals",
+        "exceptionPrincipals",
+        "deniedPermissions",
+        "exceptionPermissions",
+        "denialCondition",
+      ].includes(key)) ||
+          !exactStringSet(denyRule.deniedPrincipals ?? []) ||
+          !exactStringSet(denyRule.exceptionPrincipals ?? []) ||
+          !exactStringSet(denyRule.deniedPermissions ?? []) ||
+          !exactStringSet(denyRule.exceptionPermissions ?? [])) {
+        return false;
+      }
+      const condition = denyRule.denialCondition;
+      return condition === undefined ||
+        condition !== null &&
+        typeof condition === "object" &&
+        !Array.isArray(condition) &&
+        Object.keys(condition).every((key) =>
+          ["title", "description", "expression", "location"].includes(key)) &&
+        typeof condition.expression === "string" &&
+        condition.expression.length > 0;
+    });
+  });
   const iamExpansionComplete =
     unknownPrincipals.length === 0 &&
     unknownRoles.length === 0 &&
     unknownPermissions.length === 0 &&
     unknownScopes.length === 0;
-  const denyPolicyAnalysisComplete = denyPolicies.length === 0;
   const conditionAnalysisComplete = unresolvedConditions.length === 0;
   const domainExpansionComplete = !hasDomain;
   const bindingSetDigest = sha256Canonical(canonicalBindings);
@@ -3098,6 +3476,8 @@ async function observeRawIam(state, functions) {
     });
   }
   const denyPolicies = [];
+  const denyListSourceLineage = [];
+  const listedDenyPolicyNames = new Set();
   for (const resource of resources) {
     const attachmentPoint =
       `cloudresourcemanager.googleapis.com/${resource.kind}/${resource.id}`;
@@ -3106,12 +3486,39 @@ async function observeRawIam(state, functions) {
       pathParams: {attachmentPoint},
       query: {pageSize: 100},
     });
+    const listedNames = list.records.map(({name}) => name).sort();
+    const listLineageProjection = {
+      attachmentPoint: resource.name,
+      operationId: list.operationId,
+      transportExecutionId: list.transportExecutionId,
+      pageCount: list.pageCount,
+      recordCount: list.recordCount,
+      paginationComplete: list.paginationComplete,
+      observedAtEpochMs: list.observedAtEpochMs,
+      completedAtEpochMs: list.completedAtEpochMs,
+      records: list.records,
+      nameSetDigest: sha256Canonical(listedNames),
+    };
+    denyListSourceLineage.push({
+      ...listLineageProjection,
+      rawListResultDigest: sha256Canonical(listLineageProjection),
+    });
     for (const listed of list.records) {
       const policyId = rawName(
           listed.name,
           /\/denypolicies\/([^/]+)$/,
           "DENY_POLICY_IDENTITY_REJECTED",
       )[1];
+      const acceptedNames = [
+        `policies/${attachmentPoint}/denypolicies/${policyId}`,
+        `policies/${encodeURIComponent(attachmentPoint)}` +
+          `/denypolicies/${policyId}`,
+      ];
+      if (!acceptedNames.includes(listed.name) ||
+          listedDenyPolicyNames.has(listed.name)) {
+        observerFail("DENY_POLICY_IDENTITY_REJECTED");
+      }
+      listedDenyPolicyNames.add(listed.name);
       const policy = await executeRaw(state, {
         operationId: "iam.v2.policies.denypolicies.get",
         pathParams: {attachmentPoint, policyId},
@@ -3128,10 +3535,28 @@ async function observeRawIam(state, functions) {
     }
   }
   if (denyPolicies.length === 0) {
+    const sourceLineage = denyListSourceLineage.sort((left, right) =>
+      left.attachmentPoint.localeCompare(right.attachmentPoint));
+    const parentResources =
+      sourceLineage.map(({attachmentPoint}) => attachmentPoint);
     markNotApplicable(
         state,
         "iam.v2.policies.denypolicies.get",
-        "EXHAUSTIVE_DENY_POLICY_LISTS_EMPTY",
+        {
+          operationId: "iam.v2.policies.denypolicies.get",
+          reasonCode: "EXHAUSTIVE_DENY_POLICY_LISTS_EMPTY",
+          prerequisiteListOperationId: "iam.v2.policies.denypolicies.list",
+          parentResources,
+          paginationComplete:
+            sourceLineage.every(({paginationComplete}) =>
+              paginationComplete === true),
+          listedResourceCount:
+            sourceLineage.reduce((total, item) =>
+              total + item.recordCount, 0),
+          emptyNameSetDigest: sha256Canonical([]),
+          rawListEvidenceDigest: sha256Canonical(sourceLineage),
+          sourceLineage,
+        },
     );
   }
   const services = [];
@@ -3266,6 +3691,7 @@ function deriveObservedStandaloneTopologyProfile(
     hierarchy,
     functionRecords,
     sourceBucketIdentities,
+    evidenceDerivedNotApplicableOperationIds = [],
 ) {
   assertStandardArray(hierarchy, "OBSERVED_TOPOLOGY_HIERARCHY");
   assertStandardArray(functionRecords, "OBSERVED_TOPOLOGY_FUNCTIONS");
@@ -3368,33 +3794,23 @@ function deriveObservedStandaloneTopologyProfile(
       sourceBucketName: sourceBuckets[0],
       sourceBucketOwnerProjectNumber:
         observedBuckets[0].projectNumber,
-    });
+    }, evidenceDerivedNotApplicableOperationIds);
   } catch {
     observerFail("STANDALONE_TOPOLOGY_EVIDENCE_REJECTED");
   }
 }
 
-async function runRawProductionObservation(executor, preflight) {
-  if (!genuineProductionExecutors.has(executor) ||
-      !genuineProductionPreflightContexts.has(preflight)) {
-    observerFail("GENUINE_PRODUCTION_CONTEXT_REQUIRED");
-  }
-  const state = {
+async function collectRawProductionObservation(
     executor,
     preflight,
-    trace: [],
-    executed: new Set(),
-    notApplicable: new Map(),
-  };
+    {mockOnly = false} = {},
+) {
+  const state = createRawObservationState(executor, preflight);
+  if (mockOnly) injectedMockRawIamStates.add(state);
   const rules = await observeRawRules(state);
   const functions = await observeRawFunctions(state);
   const scheduler = await observeRawScheduler(state);
-  const firstIam = await observeRawIam(state, functions);
-  const secondIam = await observeRawIam(state, functions);
-  if (canonical(firstIam) !== canonical(secondIam)) {
-    observerFail("INVENTORY_UNSTABLE");
-  }
-  const iam = firstIam;
+  const {iam} = await observeStableRawIamPair(state, functions);
   const covered = [
     ...state.executed,
     ...state.notApplicable.keys(),
@@ -3407,10 +3823,15 @@ async function runRawProductionObservation(executor, preflight) {
   const executedMandatoryOperationIds = [...state.executed].sort();
   const notApplicableMandatoryOperationIds =
     [...state.notApplicable.keys()].sort();
+  const notApplicableEvidence =
+    Object.fromEntries([...state.notApplicable.entries()].sort());
+  const evidenceDerivedNotApplicableOperationIds =
+    validateNotApplicableEvidence(notApplicableEvidence);
   const topologyProfile = deriveObservedStandaloneTopologyProfile(
       iam.hierarchy,
       functions.records,
       functions.bucketIdentities,
+      evidenceDerivedNotApplicableOperationIds,
   );
   const operationTraceSummary = deriveOperationTraceSummary(state.trace);
   if (canonical(operationTraceSummary.executedMandatoryOperationIds) !==
@@ -3446,6 +3867,9 @@ async function runRawProductionObservation(executor, preflight) {
   if (!iam.denyPolicyAnalysisComplete) {
     blockers.push("DENY_POLICY_ANALYSIS_INCOMPLETE");
   }
+  if (iam.denyPolicyAnalysisComplete && iam.denyPolicies.length > 0) {
+    blockers.push("DENY_POLICY_PRESENT_REQUIRES_REVIEW");
+  }
   if (iam.writableBindings.length !== 0) {
     blockers.push("IAM_WRITABLE_PERMISSION_FOUND");
   }
@@ -3457,8 +3881,7 @@ async function runRawProductionObservation(executor, preflight) {
     topologyProfile,
     operationTrace: state.trace,
     operationTraceSummary,
-    notApplicableEvidence:
-      Object.fromEntries([...state.notApplicable.entries()].sort()),
+    notApplicableEvidence,
   }, "RAW_PRODUCTION_OBSERVATION");
   const result = deepFreeze({
     schemaVersion: PRODUCTION_OBSERVER_SCHEMA_VERSION,
@@ -3528,7 +3951,44 @@ async function runRawProductionObservation(executor, preflight) {
     },
     rawObservation,
   });
+  return result;
+}
+
+async function runRawProductionObservation(executor, preflight) {
+  if (!genuineProductionExecutors.has(executor) ||
+      !genuineProductionPreflightContexts.has(preflight)) {
+    observerFail("GENUINE_PRODUCTION_CONTEXT_REQUIRED");
+  }
+  const result = await collectRawProductionObservation(executor, preflight);
   genuineRawProductionResults.set(result, {executor, preflight});
+  return result;
+}
+
+export async function executeInjectedMockRawProductionObserverHarness(input) {
+  assertExactOrSubsetKeys(
+      input,
+      ["mockOnly", "sessionReceipt", "transportExecutor"],
+      ["mockOnly", "sessionReceipt", "transportExecutor"],
+      "MOCK_RAW_PRODUCTION_OBSERVER_INPUT",
+  );
+  if (input.mockOnly !== true ||
+      typeof input.transportExecutor !== "function") {
+    observerFail("MOCK_RAW_PRODUCTION_OBSERVER_INPUT_REJECTED");
+  }
+  assertMockProviderTransportExecutor(
+      input.transportExecutor,
+      input.sessionReceipt,
+  );
+  injectedMockRawIamExecutors.add(input.transportExecutor);
+  addInjectedMockRawIamLineage(input.transportExecutor);
+  assertDeepFrozen(input.sessionReceipt, "MOCK_RAW_SESSION_RECEIPT");
+  const result = await collectRawProductionObservation(
+      input.transportExecutor,
+      null,
+      {mockOnly: true},
+  );
+  assertCanonicalMockObservation(result);
+  genuineInjectedMockObservations.add(result);
   return result;
 }
 
@@ -3632,6 +4092,7 @@ function assertMockRawObservationSemantics(value) {
         "inventoryDigest",
         "records",
         "sourceBucketIdentitySetDigest",
+        "triggerEvidence",
       ],
     ],
     [
@@ -3690,6 +4151,9 @@ function assertMockRawObservationSemantics(value) {
     ["MOCK_RAW_SCHEDULER_JOBS", raw.scheduler.jobs],
     ["MOCK_RAW_OPERATION_TRACE", raw.operationTrace],
   ]) assertStandardArray(array, label);
+  for (const functionRecord of raw.functions.records) {
+    assertHttpCallableFunctionProjection(functionRecord);
+  }
   if (raw.operationTrace.some(({operationId}) =>
     !PROVIDER_MANDATORY_OPERATION_IDS.includes(operationId))) {
     observerFail("MOCK_RAW_OPERATION_TRACE_REJECTED");
@@ -3702,20 +4166,39 @@ function assertMockRawObservationSemantics(value) {
     analyses: raw.iam.cloudAssetAnalyses,
     denyPolicies: raw.iam.denyPolicies,
   });
+  const evidenceDerivedNotApplicableOperationIds =
+    validateNotApplicableEvidence(raw.notApplicableEvidence);
+  const denyGetNotApplicable =
+    evidenceDerivedNotApplicableOperationIds.includes(
+        "iam.v2.policies.denypolicies.get",
+    );
+  if (denyGetNotApplicable !== (raw.iam.denyPolicies.length === 0)) {
+    observerFail("DENY_POLICY_OPERATION_PARTITION_REJECTED");
+  }
   const topologyProfile = deriveObservedStandaloneTopologyProfile(
       raw.iam.hierarchy,
       raw.functions.records,
       raw.functions.bucketIdentities,
+      evidenceDerivedNotApplicableOperationIds,
   );
   const sortedBucketIdentities = [...raw.functions.bucketIdentities]
       .sort((left, right) => left.bucketName.localeCompare(right.bucketName));
   const sourceBucketIdentitySetDigest =
     computeSourceBucketIdentitySetDigest(sortedBucketIdentities);
-  const functionInventoryDigest = sha256Canonical({
+  const functionInventoryDigest = computeFunctionInventoryDigest({
     bucketIdentities: sortedBucketIdentities,
     records: raw.functions.records,
     sourceBucketIdentitySetDigest,
+    triggerEvidence: raw.functions.triggerEvidence,
   });
+  try {
+    validateFunctionTriggerAbsenceEvidence(
+        raw.functions.triggerEvidence,
+        raw.functions.records,
+    );
+  } catch {
+    observerFail("FUNCTION_TRIGGER_EVIDENCE_REJECTED");
+  }
   const operationTraceSummary =
     deriveOperationTraceSummary(raw.operationTrace);
   const iamDigestProjection = {
@@ -3915,10 +4398,10 @@ function assertCanonicalMockObservation(value) {
     );
   }
   if (canonical(value.executedMandatoryOperationIds) !==
-        canonical(STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        canonical(value.topologyProfile.operationExecution
             .executedMandatoryOperationIds) ||
       canonical(value.notApplicableMandatoryOperationIds) !==
-        canonical(STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        canonical(value.topologyProfile.operationExecution
             .notApplicableMandatoryOperationIds)) {
     observerFail("STANDALONE_OPERATION_PROFILE_REJECTED");
   }
@@ -3992,7 +4475,6 @@ function assertCanonicalMockObservation(value) {
       value.digests.rawObservationDigest !==
         sha256Canonical(value.rawObservation) ||
       value.policyAnalysisComplete && [
-        value.counts.denyPolicyCount,
         value.counts.iamConditionCount,
         value.counts.unknownIamPrincipalCount,
         value.counts.unknownIamPermissionCount,
@@ -4042,6 +4524,10 @@ function deriveBlockers(observation, observedAtEpochMs) {
   }
   if (!observation.denyPolicyAnalysisComplete) {
     blockers.add("DENY_POLICY_ANALYSIS_INCOMPLETE");
+  }
+  if (observation.denyPolicyAnalysisComplete &&
+      observation.counts.denyPolicyCount > 0) {
+    blockers.add("DENY_POLICY_PRESENT_REQUIRES_REVIEW");
   }
   if (!observation.conditionAnalysisComplete) {
     blockers.add("CONDITION_ANALYSIS_INCOMPLETE");
@@ -4097,6 +4583,15 @@ export function deriveProductionObserverArtifacts({
       optionalDiagnostic,
       preflight.arguments.optionalDiagnostic !== null,
   );
+  const evidenceDerivedNotApplicableOperationIds =
+    validateNotApplicableEvidence(
+        observation.rawObservation.notApplicableEvidence,
+    );
+  const observedTopologyProfile = assertStandaloneProjectObserverProfile(
+      observation.topologyProfile,
+      PINNED_STANDALONE_TOPOLOGY_EVIDENCE,
+      evidenceDerivedNotApplicableOperationIds,
+  );
   if (preflight.target?.projectId !== PROVIDER_TARGET_PROJECT_ID ||
       preflight.target?.projectNumber !== PROVIDER_TARGET_PROJECT_NUMBER ||
       preflight.contracts?.providerOperationClassificationDigest !==
@@ -4114,7 +4609,7 @@ export function deriveProductionObserverArtifacts({
       canonical(preflight.observerPrincipalPolicy) !==
         canonical(OBSERVER_PRINCIPAL_POLICY) ||
       canonical(observation.topologyProfile) !==
-        canonical(STANDALONE_PROJECT_OBSERVER_PROFILE)) {
+        canonical(observedTopologyProfile)) {
     observerFail("ARTIFACT_PREFLIGHT_REJECTED");
   }
   const blockers = deriveBlockers(observation, observedAtEpochMs);
@@ -4198,13 +4693,13 @@ export function deriveProductionObserverArtifacts({
       effectiveMandatoryPermissionContractDigest:
         EFFECTIVE_MANDATORY_PERMISSION_CONTRACT_DIGEST,
       topologyProfileDigest:
-        STANDALONE_PROJECT_OBSERVER_PROFILE.profileDigest,
+        observation.topologyProfile.profileDigest,
       topologyEvidenceDigest:
-        STANDALONE_PROJECT_OBSERVER_PROFILE.topologyEvidenceDigest,
+        observation.topologyProfile.topologyEvidenceDigest,
       operationExecutionDigest:
-        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecutionDigest,
+        observation.topologyProfile.operationExecutionDigest,
       effectivePermissionProfileDigest:
-        STANDALONE_PROJECT_OBSERVER_PROFILE
+        observation.topologyProfile
             .effectivePermissionProfileDigest,
       observerPrincipalPolicyDigest:
         OBSERVER_PRINCIPAL_POLICY.policyDigest,
@@ -4225,6 +4720,28 @@ export function deriveProductionObserverArtifacts({
       reviewedSourceIdentityDigest:
         EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST,
     },
+    iamContractLineage: {
+      privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+      privateRuntimeIamContractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+      buildScopeContractVersion: BUILD_SCOPE_CONTRACT_VERSION,
+      buildScopeContractDigest: BUILD_SCOPE_CONTRACT_DIGEST,
+      deployProfileVersion: DEPLOY_PROFILE_VERSION,
+      deployProfileDigest: DEPLOY_PROFILE_DIGEST,
+      compensatingControlVersion: COMPENSATING_CONTROL_VERSION,
+      compensatingControlDigest: COMPENSATING_CONTROL_DIGEST,
+      organizationPolicyObservationStatus:
+        ORGANIZATION_POLICY_EVIDENCE.observationStatus,
+      organizationPolicyContractVersion:
+        ORGANIZATION_POLICY_EVIDENCE.contractVersion,
+      organizationPolicyEffectiveDecision:
+        ORGANIZATION_POLICY_EVIDENCE.effectiveDecision,
+      organizationPolicyEvidenceDigest:
+        ORGANIZATION_POLICY_EVIDENCE.evidenceDigest,
+      actualProvisioningEligible: false,
+      deploymentApprovalEligible: false,
+      publicInvokerApprovalEligible: false,
+      iamMutationCommandPublication: false,
+    },
     contractVersions: {
       providerOperationClassificationVersion:
         PROVIDER_OPERATION_CLASSIFICATION_VERSION,
@@ -4232,14 +4749,14 @@ export function deriveProductionObserverArtifacts({
       providerAdapterContractVersion: PROVIDER_ADAPTER_CONTRACT_VERSION,
       readonlyPermissionManifestVersion: READONLY_PERMISSION_MANIFEST_VERSION,
       topologyProfileVersion:
-        STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileVersion,
+        observation.topologyProfile.topologyProfileVersion,
       topologyProfileId:
-        STANDALONE_PROJECT_OBSERVER_PROFILE.topologyProfileId,
+        observation.topologyProfile.topologyProfileId,
       operationExecutionProfileVersion:
-        STANDALONE_PROJECT_OBSERVER_PROFILE.operationExecution
+        observation.topologyProfile.operationExecution
             .operationExecutionProfileVersion,
       effectivePermissionProfileVersion:
-        STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
+        observation.topologyProfile.effectivePermissions
             .permissionProfileVersion,
       observerPrincipalPolicyVersion:
         OBSERVER_PRINCIPAL_POLICY.policyVersion,
@@ -4264,7 +4781,7 @@ export function deriveProductionObserverArtifacts({
         STANDALONE_PROJECT_OBSERVER_PROFILE.effectivePermissions
             .excludedRolePermissions,
     },
-    topologyProfile: STANDALONE_PROJECT_OBSERVER_PROFILE,
+    topologyProfile: observation.topologyProfile,
     observerPrincipalPolicy: OBSERVER_PRINCIPAL_POLICY,
   };
   const sensitive = {

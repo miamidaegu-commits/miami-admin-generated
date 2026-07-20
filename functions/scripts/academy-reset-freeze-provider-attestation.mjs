@@ -47,6 +47,8 @@ export async function createValidatedProviderRuntimeContext({
     reviewedSourceDigest: reviewedSources.aggregateDigest,
     reviewedSourceRepositoryRootDigest: rootDigest,
     reviewedSourceSetDigest: runtimeGit.reviewedSourceSetDigest,
+    iamContractSourceIdentity: runtimeGit.iamContractSourceIdentity,
+    iamContractSourceSetDigest: runtimeGit.iamContractSourceSetDigest,
     runtimeGit,
   });
   providerRuntimeContexts.add(context);

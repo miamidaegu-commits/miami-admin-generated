@@ -1027,6 +1027,8 @@ test("approval lineage binds the exact reviewed Stage B source path set", () => 
   assert.deepEqual(PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS, [
     "functions/package-lock.json",
     "functions/package.json",
+    "functions/scripts/academy-functions-build-scope-contract.mjs",
+    "functions/scripts/academy-private-runtime-iam-contract.mjs",
     "functions/scripts/academy-reset-freeze-provider-adapter.mjs",
     "functions/scripts/academy-reset-freeze-provider-attestation.mjs",
     "functions/scripts/academy-reset-freeze-provider-operations.mjs",
