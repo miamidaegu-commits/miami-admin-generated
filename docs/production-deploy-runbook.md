@@ -14,13 +14,25 @@ IAM state receipts, resource-scoped Build bindings, the nine-permission Deploy
 profile, immutable release/source/selector/baseline digests, exact human
 principals, and an active RFC3339 UTC JIT window of at most two hours.
 
-Organization Policy observation is currently `UNKNOWN` because the API is
-disabled. Therefore actual IAM provisioning, deployment approval, impersonation,
-invoker publication, and IAM mutation-command publication remain ineligible.
-The current canonical Organization Policy evidence version and digest are the
-only authority; a receipt-local `ALLOW` state or coherently recomputed receipt
-digest cannot change eligibility. An `ALLOW` transition requires a separately
-reviewed source-contract release.
+Organization Policy is pinned as
+`OBSERVED_COMPATIBLE_WITH_EXPLICIT_CONTROLS`: the API is enabled, direct project
+policy count is `0` with digest
+`4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945`,
+and the exact `21` relevant effective records have zero failures and digest
+`8fb48d51692619032166d4d8e60ea504f7973421d9e420f4a41ca5572987eb99`.
+The `193`-constraint catalog digest is audit metadata only and is not an
+execution-eligibility gate.
+
+This compatibility result does not publish mutation commands by itself.
+Provisioning, deployment, impersonation, and invoker publication still require
+three explicit receipt-supplied human principals, an active JIT window no longer
+than two hours, the exact four same-project service-account identities, zero
+user-managed keys, explicit selection of the dedicated Build service account,
+the complete permission audit, source binding, and compensating controls.
+The approved deployment source remains the fixed `product-version` release
+`c7eaa7b27fc9c5e9d74ae97043de6536f41a75db` and tree
+`3b0bf8c310d7e8067ac09305dc93ec3f07090bd7`; a later contract release must not
+replace this deployment-source pin with itself.
 Do not replace missing principals or timestamps with placeholders, create
 Eventarc service-agent bindings for the three HTTP callable targets, or widen
 Storage/Artifact Registry access to project scope.

@@ -74,11 +74,13 @@ import {
 } from "../functions/scripts/academy-reset-write-freeze-contract.mjs";
 import {
   EXECUTABLE_APPROVAL_VERSION,
+  EXECUTION_SERVICE_ACCOUNT_EMAILS,
   FREEZE_ACTIVATION_RECEIPT_VERSION,
   FREEZE_ACTIVE_STATE,
   FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING,
   PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
   PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+  SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
   STEADY_STATE,
   buildExecutableApprovalDigest,
   buildStateSnapshot,
@@ -377,6 +379,14 @@ function runtimeActivationApprovalFixture() {
     organizationPolicy: structuredClone(ORGANIZATION_POLICY_EVIDENCE),
     organizationPolicyLineage:
       structuredClone(buildOrganizationPolicyLineageReference()),
+    serviceAccountKeyAudit: {
+      schemaVersion: SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
+      projectId: "daegu-miami-production",
+      serviceAccountEmails:
+        structuredClone(EXECUTION_SERVICE_ACCOUNT_EMAILS),
+      userManagedKeyCount: 0,
+      complete: true,
+    },
     actualProvisioningEligible: false,
     deploymentApprovalEligible: false,
     publicInvokerApprovalEligible: false,

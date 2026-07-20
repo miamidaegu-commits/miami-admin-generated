@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  FUNCTIONS_IDENTITIES,
   ORGANIZATION_POLICY_EVIDENCE,
   buildOrganizationPolicyLineageReference,
   computeOrganizationPolicyEvidenceDigest,
@@ -8,7 +9,7 @@ import {
 } from "./academy-functions-build-scope-contract.mjs";
 
 export const PRIVATE_RUNTIME_IAM_CONTRACT_VERSION =
-  "academy_private_runtime_iam.v4";
+  "academy_private_runtime_iam.v5";
 export const PRIVATE_RUNTIME_IAM_SET_DIGEST_VERSION =
   "academy_private_runtime_iam_set_sha256.v1";
 export const FREEZE_ACTIVATION_RECEIPT_VERSION =
@@ -16,9 +17,11 @@ export const FREEZE_ACTIVATION_RECEIPT_VERSION =
 export const UNFREEZE_RESTORATION_RECEIPT_VERSION =
   "academy_private_runtime_unfreeze_restoration.v4";
 export const EXECUTABLE_APPROVAL_VERSION =
-  "academy_private_runtime_executable_approval.v3";
+  "academy_private_runtime_executable_approval.v4";
 export const EXACT_CHRONOLOGY_PROFILE_VERSION =
   "academy_private_runtime_exact_chronology.v2";
+export const SERVICE_ACCOUNT_KEY_AUDIT_VERSION =
+  "academy_private_runtime_service_account_key_audit.v1";
 export const MAX_JIT_DURATION_NANOSECONDS_DECIMAL = "7200000000000";
 
 const EXACT_CHRONOLOGY_PROFILE = deepFreeze({
@@ -166,11 +169,17 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
-export const APPROVED_EXECUTION_PRINCIPALS = deepFreeze({
-  provisioningPrincipal: "user:provisioner@daegu-miami.com",
-  impersonationPrincipal: "user:deployer@daegu-miami.com",
-  invokerOperatorPrincipal: "user:invoker@daegu-miami.com",
-});
+export const EXECUTION_PRINCIPAL_RECEIPT_FIELDS = deepFreeze([
+  "impersonationPrincipal",
+  "invokerOperatorPrincipal",
+  "provisioningPrincipal",
+]);
+export const EXECUTION_SERVICE_ACCOUNT_EMAILS = deepFreeze([
+  FUNCTIONS_IDENTITIES.dedicatedBuildServiceAccount,
+  FUNCTIONS_IDENTITIES.deployServiceAccount,
+  PREVIEW_RUNTIME_SERVICE_ACCOUNT_EMAIL,
+  WRITER_RUNTIME_SERVICE_ACCOUNT_EMAIL,
+].sort());
 
 function assertPlainData(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value) ||
@@ -361,7 +370,17 @@ function contractDigestProjection(contract) {
 const contractWithoutDigest = {
   schemaVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
   exactChronologyProfile: EXACT_CHRONOLOGY_PROFILE,
-  approvedExecutionPrincipals: APPROVED_EXECUTION_PRINCIPALS,
+  executionPrincipalReceipt: {
+    fields: EXECUTION_PRINCIPAL_RECEIPT_FIELDS,
+    resolution: "EXACT_RECEIPT_REQUIRED_NO_SOURCE_DEFAULT",
+    placeholderDisposition: "REJECT",
+    inferredCurrentUserDisposition: "REJECT",
+  },
+  serviceAccountKeyAudit: {
+    schemaVersion: SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
+    serviceAccountEmails: EXECUTION_SERVICE_ACCOUNT_EMAILS,
+    requiredUserManagedKeyCount: 0,
+  },
   organizationPolicyAuthority: {
     evidence: ORGANIZATION_POLICY_EVIDENCE,
     lineage: buildOrganizationPolicyLineageReference(),
@@ -561,11 +580,7 @@ const PLACEHOLDER =
   /(?:TODO|TBD|REPLACE_ME|<[^>]*>|example\.com|placeholder)/i;
 const EMAIL_LOCAL_ATOM = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+$/;
 const EMAIL_DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
-const APPROVAL_PRINCIPAL_KEYS = deepFreeze([
-  "impersonationPrincipal",
-  "invokerOperatorPrincipal",
-  "provisioningPrincipal",
-]);
+const APPROVAL_PRINCIPAL_KEYS = EXECUTION_PRINCIPAL_RECEIPT_FIELDS;
 const EXECUTION_ACTION_KEYS = deepFreeze([
   "actualProvisioningEligible",
   "deploymentApprovalEligible",
@@ -759,6 +774,25 @@ export function buildOrganizationPolicyEvidenceDigest(evidence) {
   return computeOrganizationPolicyEvidenceDigest(evidence);
 }
 
+function validateServiceAccountKeyAudit(audit) {
+  assertExactKeys(audit, [
+    "complete",
+    "projectId",
+    "schemaVersion",
+    "serviceAccountEmails",
+    "userManagedKeyCount",
+  ], "service account key audit");
+  if (audit.schemaVersion !== SERVICE_ACCOUNT_KEY_AUDIT_VERSION ||
+      audit.projectId !== TARGET_PROJECT_ID ||
+      audit.complete !== true ||
+      audit.userManagedKeyCount !== 0 ||
+      !Array.isArray(audit.serviceAccountEmails) ||
+      canonicalJson([...audit.serviceAccountEmails].sort()) !==
+        canonicalJson(EXECUTION_SERVICE_ACCOUNT_EMAILS)) {
+    fail("service account key audit must prove exact identities and zero keys");
+  }
+}
+
 export function validateExecutableApproval(
     approval,
     {
@@ -782,6 +816,7 @@ export function validateExecutableApproval(
     "organizationPolicyLineage",
     "provisioningPrincipal",
     "schemaVersion",
+    "serviceAccountKeyAudit",
   ], "executable approval");
   if (approval.schemaVersion !== EXECUTABLE_APPROVAL_VERSION ||
       typeof approval.approvalId !== "string" ||
@@ -790,14 +825,19 @@ export function validateExecutableApproval(
       approval.approvalDigest !== buildExecutableApprovalDigest(approval)) {
     fail("approval identity or digest mismatch");
   }
+  const executionPrincipals = [];
   for (const key of APPROVAL_PRINCIPAL_KEYS) {
     const member = approval[key];
     parseExactUserPrincipal(member);
-    if (PLACEHOLDER.test(member) ||
-        member !== APPROVED_EXECUTION_PRINCIPALS[key]) {
-      fail(`approval ${key} is not the exact approved principal`);
+    if (PLACEHOLDER.test(member)) {
+      fail(`approval ${key} must be resolved by the exact receipt`);
     }
+    executionPrincipals.push(member);
   }
+  if (new Set(executionPrincipals).size !== executionPrincipals.length) {
+    fail("approval principal roles must be distinct exact receipt users");
+  }
+  validateServiceAccountKeyAudit(approval.serviceAccountKeyAudit);
   const approvedAt = parseExactRfc3339UtcNanoseconds(
       approval.approvedAt,
       "approval.approvedAt",
@@ -821,7 +861,8 @@ export function validateExecutableApproval(
     fail("approval JIT window is inactive, incoherent, or longer than 2 hours");
   }
   const organizationPolicy = approval.organizationPolicy;
-  validateOrganizationPolicyEvidence(organizationPolicy);
+  const organizationPolicyResult =
+    validateOrganizationPolicyEvidence(organizationPolicy);
   validateOrganizationPolicyLineageReference(
       approval.organizationPolicyLineage,
   );
@@ -837,13 +878,13 @@ export function validateExecutableApproval(
   }
   const policyEligibility = {
     actualProvisioningEligible:
-      ORGANIZATION_POLICY_EVIDENCE.actualProvisioningEligible,
+      organizationPolicyResult.provisioningPolicyCompatible,
     deploymentApprovalEligible:
-      ORGANIZATION_POLICY_EVIDENCE.deploymentApprovalEligible,
+      organizationPolicyResult.deploymentPolicyCompatible,
     publicInvokerApprovalEligible:
-      ORGANIZATION_POLICY_EVIDENCE.publicInvokerApprovalEligible,
+      organizationPolicyResult.publicInvokerPolicyCompatible,
     iamMutationCommandPublication:
-      ORGANIZATION_POLICY_EVIDENCE.iamMutationCommandPublication,
+      organizationPolicyResult.mutationCommandPublicationPolicyCompatible,
   };
   const execution = Object.fromEntries(EXECUTION_ACTION_KEYS.map((key) => [
     key,
@@ -863,6 +904,8 @@ export function validateExecutableApproval(
     jitExpiresAt: approval.jitExpiresAt,
     organizationPolicyStatus: organizationPolicy.observationStatus,
     organizationPolicyEvidenceDigest: organizationPolicy.evidenceDigest,
+    userManagedServiceAccountKeyCount:
+      approval.serviceAccountKeyAudit.userManagedKeyCount,
     execution,
     executable: EXECUTION_ACTION_KEYS.every((key) => execution[key]),
   });
