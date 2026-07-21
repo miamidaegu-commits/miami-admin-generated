@@ -15,13 +15,35 @@ profile, immutable release/source/selector/baseline digests, exact human
 principals, and an active RFC3339 UTC JIT window of at most two hours.
 
 The versioned legacy-IAM migration authority treats only the exact preflight
-Owner, default-Service-Account Editor, and Firebase Admin SDK TokenCreator
-bindings as migration evidence. These broad roles never prove least privilege
-for an Academy identity or authorize the Observer credential. The Owner binding
-is allowed only through `POST_PROVISIONING_PRE_DEPLOY` and must be absent before
-public-invoker publication. The two deferred bindings must remain byte-exact and
-carry the separate decommission-plan version/digest until their independent
-dependency reviews complete.
+Owner, default-Service-Account Editor, Firebase Admin SDK TokenCreator, and
+legacy Cloud Build `roles/cloudbuild.builds.builder` bindings as migration
+evidence. The Build Builder binding has only the exact Compute default and
+`884850632328@cloudbuild.gserviceaccount.com` members. These broad roles never
+prove least privilege for an Academy identity or authorize the Observer
+credential. The Owner binding is allowed only through
+`POST_PROVISIONING_PRE_DEPLOY` and must be absent before public-invoker
+publication. The three deferred bindings must remain byte-exact and carry the
+separate decommission-plan version/digest until their independent dependency
+reviews complete.
+
+The existing Build baseline is many-to-one: each of the 32 Gen2 Functions must
+reference one Build, while the exact Function-derived set may contain 14 shared
+Builds. That set must equal the raw successful Build set; every Build must match
+its id/name/project/region, the fully-qualified Compute default service-account
+resource, `CLOUD_LOGGING_ONLY`, and no logs bucket. The future three Academy
+Functions must instead use the fully-qualified dedicated
+`academy-functions-build` resource. Bare emails, IAM-member prefixes, and
+implicit normalization are rejected in raw Build records.
+
+Artifact Repository IAM adjudication requires the versioned sealed evidence
+bundle: exact collection-plan command authority, status/stderr/raw-policy bytes,
+and exact pre-adjudication manifest path/length/SHA-256 parity. A standalone
+synthetic success object is `INPUT_REQUIRED`; only exact sealed successful
+etag-only evidence normalizes to empty bindings and version 1. Project IAM is
+authoritative for exact reviewed Service Agent pairs; `iam.serviceAccounts.get`
+denial on optional describe metadata is non-blocking. Raw evidence and
+result-package digests remain separate, and prior `result.json` verdicts are
+never inputs.
 
 The exact phase order is `PRE_PROVISIONING`,
 `POST_PROVISIONING_PRE_DEPLOY`,

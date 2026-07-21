@@ -1,21 +1,35 @@
 import crypto from "node:crypto";
 
 export const LEGACY_IAM_BASELINE_SCHEMA_VERSION =
-  "academy_legacy_iam_baseline.v1";
+  "academy_legacy_iam_baseline.v2";
 export const REVIEWED_MANAGED_IDENTITY_SCHEMA_VERSION =
-  "academy_reviewed_managed_identity.v1";
+  "academy_reviewed_managed_identity.v2";
 export const DECOMMISSION_PLAN_SCHEMA_VERSION =
-  "academy_legacy_iam_decommission_plan.v1";
+  "academy_legacy_iam_decommission_plan.v2";
 export const RESOURCE_STATE_SCHEMA_VERSION =
   "academy_iam_resource_state.v1";
 export const PHASE_EVIDENCE_SCHEMA_VERSION =
-  "academy_iam_migration_phase_evidence.v1";
+  "academy_iam_migration_phase_evidence.v2";
 export const ROLLBACK_RECEIPT_SCHEMA_VERSION =
-  "academy_legacy_iam_rollback_receipt.v1";
+  "academy_legacy_iam_rollback_receipt.v2";
 export const FINAL_IAM_AUDIT_SCHEMA_VERSION =
-  "academy_final_iam_audit.v1";
+  "academy_final_iam_audit.v2";
 export const MIGRATION_AUTHORITY_SCHEMA_VERSION =
-  "academy_legacy_iam_migration_authority.v1";
+  "academy_legacy_iam_migration_authority.v3";
+export const CLOUD_BUILD_LEGACY_EVIDENCE_SCHEMA_VERSION =
+  "academy_cloud_build_legacy_evidence.v2";
+export const ARTIFACT_IAM_EVIDENCE_SCHEMA_VERSION =
+  "academy_artifact_iam_evidence.v2";
+export const ARTIFACT_IAM_COLLECTION_PLAN_SCHEMA_VERSION =
+  "academy_artifact_iam_collection_plan.v1";
+export const ARTIFACT_IAM_COLLECTION_STATUS_SCHEMA_VERSION =
+  "academy_artifact_iam_collection_status.v1";
+export const ARTIFACT_IAM_RAW_MANIFEST_SCHEMA_VERSION =
+  "academy_artifact_iam_raw_manifest.v1";
+export const SERVICE_AGENT_EVIDENCE_SCHEMA_VERSION =
+  "academy_service_agent_evidence.v1";
+export const EVIDENCE_PACKAGE_INTEGRITY_SCHEMA_VERSION =
+  "academy_evidence_package_integrity.v1";
 export const CANONICAL_DIGEST_VERSION = "canonical_json_sha256.v1";
 export const CANONICAL_SET_DIGEST_VERSION = "canonical_set_sha256.v1";
 
@@ -26,6 +40,17 @@ export const REGION = "us-central1";
 export const EXISTING_FUNCTION_BASELINE_DIGEST =
   "1cb924fc62c97771d42fb60b98934d9f48e5192abbf0b03b31d06753ff41dcfd";
 export const OPERATOR_MEMBER = "user:miamidaegu@gmail.com";
+export const COMPUTE_DEFAULT_SERVICE_ACCOUNT_EMAIL =
+  "884850632328-compute@developer.gserviceaccount.com";
+export const COMPUTE_DEFAULT_SERVICE_ACCOUNT_RESOURCE =
+  `${PROJECT_SCOPE}/serviceAccounts/${COMPUTE_DEFAULT_SERVICE_ACCOUNT_EMAIL}`;
+export const LEGACY_CLOUD_BUILD_SERVICE_ACCOUNT_EMAIL =
+  "884850632328@cloudbuild.gserviceaccount.com";
+export const DEDICATED_ACADEMY_BUILD_SERVICE_ACCOUNT_EMAIL =
+  "academy-functions-build@daegu-miami-production.iam.gserviceaccount.com";
+export const DEDICATED_ACADEMY_BUILD_SERVICE_ACCOUNT_RESOURCE =
+  `${PROJECT_SCOPE}/serviceAccounts/` +
+  DEDICATED_ACADEMY_BUILD_SERVICE_ACCOUNT_EMAIL;
 
 export const PRE_PROVISIONING = "PRE_PROVISIONING";
 export const POST_PROVISIONING_PRE_DEPLOY =
@@ -250,6 +275,20 @@ export const LEGACY_IAM_BASELINE_RECORDS = frozen([
     removalTarget:
       "AFTER_FIREBASE_SIGNING_AND_AUTH_DEPENDENCY_REVIEW",
   }, "baselineRecordDigest"),
+  recordWithDigest({
+    recordId: "legacy-cloud-build-default-builder",
+    scope: PROJECT_SCOPE,
+    role: "roles/cloudbuild.builds.builder",
+    members: [
+      `serviceAccount:${COMPUTE_DEFAULT_SERVICE_ACCOUNT_EMAIL}`,
+      `serviceAccount:${LEGACY_CLOUD_BUILD_SERVICE_ACCOUNT_EMAIL}`,
+    ].sort(),
+    condition: null,
+    disposition: "TRACKED_DEFERRED_DECOMMISSION",
+    allowedMigrationPhases: ALL_PHASES,
+    removalTarget:
+      "AFTER_DEDICATED_ACADEMY_FUNCTIONS_BUILD_SERVICE_ACCOUNT_VALIDATION",
+  }, "baselineRecordDigest"),
 ]);
 
 export const LEGACY_IAM_BASELINE_DIGEST = canonicalSetDigest(
@@ -303,10 +342,17 @@ export function validateLeastPrivilegeProofBindings(bindings, phase) {
     new Set(LEGACY_IAM_BASELINE_RECORDS.map(({baselineRecordDigest}) =>
       baselineRecordDigest));
   if (bindings.some((binding) =>
-    ["roles/owner", "roles/editor"].includes(binding.role) ||
+    [
+      "roles/owner",
+      "roles/editor",
+      "roles/cloudbuild.builds.builder",
+    ].includes(binding.role) ||
     legacyDigests.has(binding.baselineRecordDigest) ||
     binding.member ===
-      DEFERRED_LEGACY_IAM_RECORDS[1].members[0])) {
+      `serviceAccount:${LEGACY_CLOUD_BUILD_SERVICE_ACCOUNT_EMAIL}` ||
+    binding.member ===
+      "serviceAccount:firebase-adminsdk-fbsvc@" +
+      "daegu-miami-production.iam.gserviceaccount.com")) {
     fail("legacy broad binding cannot satisfy least-privilege proof");
   }
   const expected = phase === PRE_PROVISIONING ? [] : PERMANENT_BINDINGS;
@@ -315,9 +361,28 @@ export function validateLeastPrivilegeProofBindings(bindings, phase) {
 }
 
 export const KNOWN_SAME_PROJECT_DEFAULT_SERVICE_ACCOUNTS = frozen([
-  "884850632328-compute@developer.gserviceaccount.com",
+  COMPUTE_DEFAULT_SERVICE_ACCOUNT_EMAIL,
   "884850632328@cloudservices.gserviceaccount.com",
   "daegu-miami-production@appspot.gserviceaccount.com",
+]);
+
+const LEGACY_IDENTITY_ROLE_PAIRS = frozen([
+  {
+    email: COMPUTE_DEFAULT_SERVICE_ACCOUNT_EMAIL,
+    role: "roles/editor",
+  },
+  {
+    email: COMPUTE_DEFAULT_SERVICE_ACCOUNT_EMAIL,
+    role: "roles/cloudbuild.builds.builder",
+  },
+  {
+    email: "884850632328@cloudservices.gserviceaccount.com",
+    role: "roles/editor",
+  },
+  {
+    email: "daegu-miami-production@appspot.gserviceaccount.com",
+    role: "roles/editor",
+  },
 ]);
 
 function reviewedRecord(member, role) {
@@ -387,10 +452,33 @@ export function classifyManagedIdentityBinding(binding) {
   const email = binding.member.startsWith("serviceAccount:") ?
     binding.member.slice("serviceAccount:".length) :
     "";
-  if (KNOWN_SAME_PROJECT_DEFAULT_SERVICE_ACCOUNTS.includes(email)) {
+  if (email === LEGACY_CLOUD_BUILD_SERVICE_ACCOUNT_EMAIL) {
+    const exactLegacyCloudBuild =
+      binding.scope === PROJECT_SCOPE &&
+      binding.role === "roles/cloudbuild.builds.builder" &&
+      binding.condition === null;
     return frozen({
-      classification: "KNOWN_SAME_PROJECT_DEFAULT",
-      disposition: "LEGACY_BASELINE_ONLY",
+      classification: exactLegacyCloudBuild ?
+        "SAME_PROJECT_GOOGLE_OWNED_LEGACY_CLOUD_BUILD" :
+        "REJECT",
+      disposition: exactLegacyCloudBuild ?
+        "LEGACY_BASELINE_ONLY" :
+        "WRONG_ROLE_SCOPE_OR_CONDITION",
+    });
+  }
+  if (KNOWN_SAME_PROJECT_DEFAULT_SERVICE_ACCOUNTS.includes(email)) {
+    const exactLegacyPair = LEGACY_IDENTITY_ROLE_PAIRS.some((candidate) =>
+      candidate.email === email &&
+      candidate.role === binding.role &&
+      binding.scope === PROJECT_SCOPE &&
+      binding.condition === null);
+    return frozen({
+      classification: exactLegacyPair ?
+        "KNOWN_SAME_PROJECT_DEFAULT" :
+        "REJECT",
+      disposition: exactLegacyPair ?
+        "LEGACY_BASELINE_ONLY" :
+        "WRONG_ROLE_SCOPE_OR_CONDITION",
     });
   }
   if (/^service-\d+@[^@]+\.iam\.gserviceaccount\.com$/.test(email) ||
@@ -421,6 +509,36 @@ export function validateReviewedManagedIdentitySet(records) {
       REVIEWED_MANAGED_IDENTITY_BINDINGS,
       "reviewed managed identity bindings",
   );
+  return true;
+}
+
+export function validateLegacyIdentityRoleAssignments(records) {
+  if (!Array.isArray(records)) {
+    fail("legacy identity role assignments must be an array");
+  }
+  const expected = LEGACY_IDENTITY_ROLE_PAIRS
+      .filter(({email}) =>
+        [
+          COMPUTE_DEFAULT_SERVICE_ACCOUNT_EMAIL,
+          LEGACY_CLOUD_BUILD_SERVICE_ACCOUNT_EMAIL,
+        ].includes(email))
+      .map(({email, role}) =>
+        reviewedRecord(`serviceAccount:${email}`, role));
+  const cloudBuildRecord = reviewedRecord(
+      `serviceAccount:${LEGACY_CLOUD_BUILD_SERVICE_ACCOUNT_EMAIL}`,
+      "roles/cloudbuild.builds.builder",
+  );
+  expected.push(cloudBuildRecord);
+  records.forEach((record) => {
+    const result = classifyManagedIdentityBinding(record);
+    if (![
+      "KNOWN_SAME_PROJECT_DEFAULT",
+      "SAME_PROJECT_GOOGLE_OWNED_LEGACY_CLOUD_BUILD",
+    ].includes(result.classification)) {
+      fail(`legacy identity role assignment contains ${result.classification}`);
+    }
+  });
+  exactSet(records, expected, "legacy identity role assignments");
   return true;
 }
 
@@ -455,6 +573,12 @@ const decommissionPlanProjection = {
       recordId: "firebase-admin-sdk-token-creator",
       requirement:
         "FIREBASE_SIGNING_AND_AUTH_DEPENDENCIES_INDEPENDENTLY_REVIEWED",
+      status: "PENDING",
+    },
+    {
+      recordId: "legacy-cloud-build-default-builder",
+      requirement:
+        "DEDICATED_ACADEMY_FUNCTIONS_BUILD_SERVICE_ACCOUNT_VALIDATED",
       status: "PENDING",
     },
   ],
@@ -813,6 +937,742 @@ export const ALL_FUNCTION_NAMES = frozen([
 export const EXISTING_FUNCTION_NAMES = frozen(
     ALL_FUNCTION_NAMES.filter((name) => !TARGET_FUNCTION_NAMES.includes(name)),
 );
+
+const BUILD_RESOURCE_PREFIX =
+  `${PROJECT_SCOPE}/locations/${REGION}/builds/`;
+const LEGACY_BUILD_SERVICE_ACCOUNT =
+  COMPUTE_DEFAULT_SERVICE_ACCOUNT_RESOURCE;
+export const ARTIFACT_IAM_COLLECTION_KEY = "artifact_repository_iam";
+export const ARTIFACT_IAM_COLLECTION_COMMAND = frozen([
+  "gcloud",
+  "artifacts",
+  "repositories",
+  "get-iam-policy",
+  "gcf-artifacts",
+  "--location=us-central1",
+  "--project=daegu-miami-production",
+  "--format=json",
+]);
+export const ARTIFACT_IAM_RAW_PATHS = frozen({
+  policy: "raw/artifact_repository_iam.json",
+  status: "status/artifact_repository_iam.json",
+  stderr: "raw/artifact_repository_iam.stderr",
+});
+const ARTIFACT_IAM_RAW_PATH_SET = frozen(
+    Object.values(ARTIFACT_IAM_RAW_PATHS).sort(),
+);
+const artifactIamCollectionPlanProjection = {
+  schemaVersion: ARTIFACT_IAM_COLLECTION_PLAN_SCHEMA_VERSION,
+  key: ARTIFACT_IAM_COLLECTION_KEY,
+  command: ARTIFACT_IAM_COLLECTION_COMMAND,
+  readOnly: true,
+  productionDataAccess: 0,
+  mutations: 0,
+  rawPaths: ARTIFACT_IAM_RAW_PATHS,
+  rawPathSetDigest: canonicalSetDigest(
+      ARTIFACT_IAM_RAW_PATH_SET,
+      "artifact_iam_raw_paths",
+  ),
+};
+export const ARTIFACT_IAM_COLLECTION_PLAN = frozen({
+  ...artifactIamCollectionPlanProjection,
+  planDigest: canonicalDigest(artifactIamCollectionPlanProjection),
+});
+export const ARTIFACT_IAM_COLLECTION_PLAN_DIGEST =
+  ARTIFACT_IAM_COLLECTION_PLAN.planDigest;
+const RESULT_PACKAGE_PATHS = frozen([
+  "SHA256SUMS",
+  "canonical-manifest.json",
+  "result.json",
+]);
+const SEALED_ARTIFACT_IAM_EVIDENCE_BUNDLES = new WeakSet();
+
+export const EXPECTED_LEGACY_CLOUD_BUILD_FACTS = frozen({
+  existingFunctionCount: 32,
+  uniqueBuildCount: 14,
+  buildStatus: "SUCCESS",
+  serviceAccount: LEGACY_BUILD_SERVICE_ACCOUNT,
+  logging: "CLOUD_LOGGING_ONLY",
+  logsBucket: null,
+});
+
+const cloudBuildLegacyEvidenceAuthorityProjection = {
+  schemaVersion: CLOUD_BUILD_LEGACY_EVIDENCE_SCHEMA_VERSION,
+  projectId: PROJECT_ID,
+  projectNumber: PROJECT_NUMBER,
+  region: REGION,
+  currentBaseline: EXPECTED_LEGACY_CLOUD_BUILD_FACTS,
+  existingFunctionNames: EXISTING_FUNCTION_NAMES,
+  targetFunctionNames: TARGET_FUNCTION_NAMES,
+  dedicatedAcademyBuildServiceAccount:
+    DEDICATED_ACADEMY_BUILD_SERVICE_ACCOUNT_RESOURCE,
+  mappingModel: "FUNCTION_EXACTLY_ONE_BUILD_BUILD_ONE_OR_MORE_FUNCTIONS",
+  artifactIamSchemaVersion: ARTIFACT_IAM_EVIDENCE_SCHEMA_VERSION,
+  artifactIamCollectionPlan: ARTIFACT_IAM_COLLECTION_PLAN,
+  artifactIamCollectionStatusSchemaVersion:
+    ARTIFACT_IAM_COLLECTION_STATUS_SCHEMA_VERSION,
+  artifactIamRawManifestSchemaVersion:
+    ARTIFACT_IAM_RAW_MANIFEST_SCHEMA_VERSION,
+  serviceAgentEvidenceSchemaVersion: SERVICE_AGENT_EVIDENCE_SCHEMA_VERSION,
+  evidencePackageIntegritySchemaVersion:
+    EVIDENCE_PACKAGE_INTEGRITY_SCHEMA_VERSION,
+};
+
+export const CLOUD_BUILD_LEGACY_EVIDENCE_AUTHORITY = frozen({
+  ...cloudBuildLegacyEvidenceAuthorityProjection,
+  authorityDigest: canonicalDigest(cloudBuildLegacyEvidenceAuthorityProjection),
+});
+export const CLOUD_BUILD_LEGACY_EVIDENCE_AUTHORITY_DIGEST =
+  CLOUD_BUILD_LEGACY_EVIDENCE_AUTHORITY.authorityDigest;
+
+function requireNonEmptyString(value, label) {
+  if (typeof value !== "string" || value.length === 0) {
+    fail(`${label} must be a non-empty string`);
+  }
+  return value;
+}
+
+function parseBuildReference(buildRef, label) {
+  requireNonEmptyString(buildRef, label);
+  if (!buildRef.startsWith(BUILD_RESOURCE_PREFIX)) {
+    fail(`${label} project or region mismatch`);
+  }
+  const buildId = buildRef.slice(BUILD_RESOURCE_PREFIX.length);
+  if (buildId.length === 0 || buildId.includes("/")) {
+    fail(`${label} build ID is malformed`);
+  }
+  return buildId;
+}
+
+function validateCollectionStatus(status, label) {
+  assertExactKeys(
+      status,
+      ["exitStatus", "status", "stderr"],
+      label,
+  );
+  if (!Number.isSafeInteger(status.exitStatus) ||
+      typeof status.status !== "string" ||
+      typeof status.stderr !== "string") {
+    fail(`${label} fields are malformed`);
+  }
+  return status.exitStatus === 0 &&
+    status.status === "SUCCESS" &&
+    status.stderr === "";
+}
+
+export function analyzeFunctionBuildEvidence(evidence) {
+  assertExactKeys(evidence, [
+    "buildCollectionStatuses",
+    "builds",
+    "functions",
+    "schemaVersion",
+  ], "Function/Build evidence");
+  if (evidence.schemaVersion !== CLOUD_BUILD_LEGACY_EVIDENCE_SCHEMA_VERSION ||
+      !Array.isArray(evidence.functions) ||
+      !Array.isArray(evidence.builds) ||
+      !Array.isArray(evidence.buildCollectionStatuses)) {
+    fail("Function/Build evidence version or arrays mismatch");
+  }
+
+  const functionNames = [];
+  const functionBuildRecords = [];
+  const expectedServiceAccountsByBuild = new Map();
+  for (const [index, record] of evidence.functions.entries()) {
+    assertExactKeys(
+        record,
+        [
+          "buildRef",
+          "buildServiceAccount",
+          "functionName",
+          "generation",
+          "region",
+        ],
+        `Function/Build evidence function[${index}]`,
+    );
+    requireNonEmptyString(
+        record.functionName,
+        `function[${index}].functionName`,
+    );
+    if (record.generation !== "GEN_2" || record.region !== REGION) {
+      fail(`function[${index}] generation or region mismatch`);
+    }
+    const buildId =
+      parseBuildReference(record.buildRef, `function[${index}].buildRef`);
+    functionNames.push(record.functionName);
+    const isExisting = EXISTING_FUNCTION_NAMES.includes(record.functionName);
+    const isTarget = TARGET_FUNCTION_NAMES.includes(record.functionName);
+    if (!isExisting && !isTarget) {
+      fail(`function[${index}] is not an approved Function`);
+    }
+    const expectedServiceAccount = isExisting ?
+      LEGACY_BUILD_SERVICE_ACCOUNT :
+      DEDICATED_ACADEMY_BUILD_SERVICE_ACCOUNT_RESOURCE;
+    if (record.buildServiceAccount !== expectedServiceAccount) {
+      fail(`function[${index}] Build service account resource mismatch`);
+    }
+    const expectedForBuild =
+      expectedServiceAccountsByBuild.get(buildId) ?? new Set();
+    expectedForBuild.add(expectedServiceAccount);
+    expectedServiceAccountsByBuild.set(buildId, expectedForBuild);
+    functionBuildRecords.push({
+      functionName: record.functionName,
+      buildId,
+      buildRef: record.buildRef,
+      buildServiceAccount: record.buildServiceAccount,
+    });
+  }
+  if (new Set(functionNames).size !== functionNames.length) {
+    fail("Function/Build evidence contains a duplicate Function name");
+  }
+  const existingOnly = functionNames.length ===
+    EXPECTED_LEGACY_CLOUD_BUILD_FACTS.existingFunctionCount;
+  if (existingOnly) {
+    exactSet(functionNames, EXISTING_FUNCTION_NAMES, "existing Functions");
+  } else {
+    exactSet(functionNames, ALL_FUNCTION_NAMES, "final Functions");
+  }
+
+  const referencedBuildIds =
+    [...expectedServiceAccountsByBuild.keys()].sort();
+  if (existingOnly &&
+      referencedBuildIds.length !==
+        EXPECTED_LEGACY_CLOUD_BUILD_FACTS.uniqueBuildCount) {
+    fail("existing Function-derived unique Build count mismatch");
+  }
+
+  const buildIds = [];
+  const canonicalBuildRecords = [];
+  for (const [index, record] of evidence.builds.entries()) {
+    assertExactKeys(record, [
+      "id",
+      "logging",
+      "logsBucket",
+      "name",
+      "projectId",
+      "region",
+      "serviceAccount",
+      "status",
+    ], `Function/Build evidence build[${index}]`);
+    requireNonEmptyString(record.id, `build[${index}].id`);
+    buildIds.push(record.id);
+    const expectedName = `${BUILD_RESOURCE_PREFIX}${record.id}`;
+    const expectedServiceAccounts =
+      expectedServiceAccountsByBuild.get(record.id);
+    if (!expectedServiceAccounts || expectedServiceAccounts.size !== 1) {
+      fail(`build[${index}] is extra or mixes legacy and Academy cohorts`);
+    }
+    const [expectedServiceAccount] = expectedServiceAccounts;
+    if (record.name !== expectedName ||
+        record.projectId !== PROJECT_ID ||
+        record.region !== REGION ||
+        record.status !== "SUCCESS" ||
+        record.serviceAccount !== expectedServiceAccount ||
+        record.logging !== "CLOUD_LOGGING_ONLY" ||
+        record.logsBucket !== null) {
+      fail(`build[${index}] identity, status, or configuration mismatch`);
+    }
+    canonicalBuildRecords.push(record);
+  }
+  if (new Set(buildIds).size !== buildIds.length) {
+    fail("Function/Build evidence contains a duplicate raw Build");
+  }
+  exactSet(buildIds, referencedBuildIds, "Function-derived raw Build IDs");
+
+  const statusBuildIds = [];
+  for (const [index, status] of
+    evidence.buildCollectionStatuses.entries()) {
+    assertExactKeys(
+        status,
+        ["buildId", "exitStatus", "status", "stderr"],
+        `Build collection status[${index}]`,
+    );
+    statusBuildIds.push(status.buildId);
+    if (!referencedBuildIds.includes(status.buildId) ||
+        !validateCollectionStatus({
+          exitStatus: status.exitStatus,
+          status: status.status,
+          stderr: status.stderr,
+        }, `Build collection status[${index}]`)) {
+      fail(`Build collection status[${index}] failed`);
+    }
+  }
+  if (new Set(statusBuildIds).size !== statusBuildIds.length) {
+    fail("Build collection status contains a duplicate Build");
+  }
+  exactSet(
+      statusBuildIds,
+      referencedBuildIds,
+      "Build collection status IDs",
+  );
+
+  const result = {
+    schemaVersion: CLOUD_BUILD_LEGACY_EVIDENCE_SCHEMA_VERSION,
+    functionCount: functionNames.length,
+    uniqueBuildCount: referencedBuildIds.length,
+    mappingModel: "MANY_FUNCTIONS_TO_ONE_BUILD_ALLOWED",
+    functionBuildReferenceDigest: canonicalSetDigest(
+        functionBuildRecords,
+        "function_build_references",
+    ),
+    rawBuildSetDigest: canonicalSetDigest(
+        canonicalBuildRecords,
+        "raw_build_records",
+    ),
+    buildCollectionStatusDigest: canonicalSetDigest(
+        evidence.buildCollectionStatuses,
+        "build_collection_statuses",
+    ),
+    completeness: "EXACT",
+    resourceIdentity: "EXACT",
+  };
+  return frozen({...result, evidenceDigest: canonicalDigest(result)});
+}
+
+export function buildArtifactIamCollectionPlanDigest(plan) {
+  return canonicalDigest(projectionWithout(plan, "planDigest"));
+}
+
+export function buildArtifactIamRawManifestDigest(manifest) {
+  return canonicalDigest({
+    schemaVersion: manifest.schemaVersion,
+    recordSetDigest: manifest.recordSetDigest,
+  });
+}
+
+function validateArtifactIamRawBytes(rawBytesByPath) {
+  assertExactKeys(
+      rawBytesByPath,
+      ARTIFACT_IAM_RAW_PATH_SET,
+      "Artifact IAM raw bytes",
+  );
+  for (const [path, bytes] of Object.entries(rawBytesByPath)) {
+    if (typeof bytes !== "string") {
+      fail(`Artifact IAM raw bytes at ${path} must be a string`);
+    }
+  }
+}
+
+export function buildArtifactIamRawManifest(rawBytesByPath) {
+  validateArtifactIamRawBytes(rawBytesByPath);
+  const records = ARTIFACT_IAM_RAW_PATH_SET.map((path) => ({
+    path,
+    byteLength: Buffer.byteLength(rawBytesByPath[path], "utf8"),
+    sha256: sha256Hex(rawBytesByPath[path]),
+  }));
+  const manifest = {
+    schemaVersion: ARTIFACT_IAM_RAW_MANIFEST_SCHEMA_VERSION,
+    records,
+    recordSetDigest: canonicalSetDigest(
+        records,
+        "artifact_iam_raw_manifest_records",
+    ),
+  };
+  return frozen({
+    ...manifest,
+    manifestDigest: buildArtifactIamRawManifestDigest(manifest),
+  });
+}
+
+function validateArtifactIamRawManifest(manifest, rawBytesByPath) {
+  assertExactKeys(manifest, [
+    "manifestDigest",
+    "records",
+    "recordSetDigest",
+    "schemaVersion",
+  ], "Artifact IAM raw manifest");
+  if (manifest.schemaVersion !== ARTIFACT_IAM_RAW_MANIFEST_SCHEMA_VERSION ||
+      !Array.isArray(manifest.records)) {
+    fail("Artifact IAM raw manifest version or records mismatch");
+  }
+  manifest.records.forEach((record, index) => {
+    assertExactKeys(
+        record,
+        ["byteLength", "path", "sha256"],
+        `Artifact IAM raw manifest[${index}]`,
+    );
+    requireNonEmptyString(
+        record.path,
+        `Artifact IAM raw manifest[${index}].path`,
+    );
+    if (!Number.isSafeInteger(record.byteLength) ||
+        record.byteLength < 0 ||
+        !SHA256_HEX.test(record.sha256)) {
+      fail(`Artifact IAM raw manifest[${index}] metadata mismatch`);
+    }
+  });
+  exactSet(
+      manifest.records.map(({path}) => path),
+      ARTIFACT_IAM_RAW_PATH_SET,
+      "Artifact IAM raw manifest paths",
+  );
+  if (manifest.recordSetDigest !== canonicalSetDigest(
+      manifest.records,
+      "artifact_iam_raw_manifest_records",
+  ) ||
+      manifest.manifestDigest !== buildArtifactIamRawManifestDigest(manifest)) {
+    fail("Artifact IAM raw manifest digest mismatch");
+  }
+  for (const record of manifest.records) {
+    const bytes = rawBytesByPath[record.path];
+    if (Buffer.byteLength(bytes, "utf8") !== record.byteLength ||
+        sha256Hex(bytes) !== record.sha256) {
+      fail(`Artifact IAM raw byte parity mismatch at ${record.path}`);
+    }
+  }
+}
+
+function parseArtifactIamStatus(statusBytes) {
+  let status;
+  try {
+    status = JSON.parse(statusBytes);
+  } catch {
+    fail("Artifact IAM collection status JSON is invalid");
+  }
+  assertExactKeys(status, [
+    "command",
+    "exitCode",
+    "failureClass",
+    "key",
+    "mutations",
+    "productionDataAccess",
+    "readOnly",
+    "schemaVersion",
+  ], "Artifact IAM collection status");
+  if (status.schemaVersion !== ARTIFACT_IAM_COLLECTION_STATUS_SCHEMA_VERSION ||
+      status.key !== ARTIFACT_IAM_COLLECTION_KEY ||
+      canonicalJson(status.command) !==
+        canonicalJson(ARTIFACT_IAM_COLLECTION_COMMAND) ||
+      !Number.isSafeInteger(status.exitCode) ||
+      typeof status.failureClass !== "string" ||
+      status.readOnly !== true ||
+      status.productionDataAccess !== 0 ||
+      status.mutations !== 0) {
+    fail("Artifact IAM collection status authority mismatch");
+  }
+  return status;
+}
+
+export function sealArtifactRepositoryIamEvidenceBundle(input) {
+  assertExactKeys(input, [
+    "collectionPlan",
+    "rawBytesByPath",
+    "rawManifest",
+    "schemaVersion",
+  ], "Artifact IAM bundle seal input");
+  if (input.schemaVersion !== ARTIFACT_IAM_EVIDENCE_SCHEMA_VERSION) {
+    fail("Artifact IAM bundle schema version mismatch");
+  }
+  exact(
+      input.collectionPlan,
+      ARTIFACT_IAM_COLLECTION_PLAN,
+      "Artifact IAM collection plan",
+  );
+  if (input.collectionPlan.planDigest !==
+      buildArtifactIamCollectionPlanDigest(input.collectionPlan)) {
+    fail("Artifact IAM collection plan digest mismatch");
+  }
+  validateArtifactIamRawBytes(input.rawBytesByPath);
+  validateArtifactIamRawManifest(
+      input.rawManifest,
+      input.rawBytesByPath,
+  );
+  const status = parseArtifactIamStatus(
+      input.rawBytesByPath[ARTIFACT_IAM_RAW_PATHS.status],
+  );
+  const stderrBytes =
+    input.rawBytesByPath[ARTIFACT_IAM_RAW_PATHS.stderr];
+  if (status.exitCode === 0 &&
+      status.failureClass === "SUCCESS" &&
+      stderrBytes !== "") {
+    fail("successful Artifact IAM collection stderr must be empty");
+  }
+  const normalizedManifest =
+    buildArtifactIamRawManifest(input.rawBytesByPath);
+  const bundle = {
+    schemaVersion: ARTIFACT_IAM_EVIDENCE_SCHEMA_VERSION,
+    collectionPlan: ARTIFACT_IAM_COLLECTION_PLAN,
+    rawBytesByPath: frozen({...input.rawBytesByPath}),
+    rawManifest: normalizedManifest,
+  };
+  const sealedBundle = frozen({
+    ...bundle,
+    bundleDigest: canonicalDigest(bundle),
+  });
+  SEALED_ARTIFACT_IAM_EVIDENCE_BUNDLES.add(sealedBundle);
+  return sealedBundle;
+}
+
+function artifactIamInputRequired(disposition) {
+  return frozen({classification: "INPUT_REQUIRED", disposition});
+}
+
+function adjudicateArtifactRepositoryIamPolicy(rawPolicy) {
+  if (!isPlainObject(rawPolicy)) {
+    return artifactIamInputRequired("ARTIFACT_IAM_RAW_POLICY_INVALID");
+  }
+  const rawKeys = Object.keys(rawPolicy).sort();
+  const allowedKeys = ["bindings", "etag", "version"];
+  if (rawKeys.some((key) => !allowedKeys.includes(key)) ||
+      rawPolicy.etag !== "ACAB" ||
+      (Object.hasOwn(rawPolicy, "bindings") &&
+       !Array.isArray(rawPolicy.bindings)) ||
+      (Object.hasOwn(rawPolicy, "version") &&
+       rawPolicy.version !== 1)) {
+    return artifactIamInputRequired("ARTIFACT_IAM_RAW_POLICY_INVALID");
+  }
+  const normalizedPolicy = frozen({
+    bindings: rawPolicy.bindings ?? [],
+    etag: rawPolicy.etag,
+    version: rawPolicy.version ?? 1,
+  });
+  if (normalizedPolicy.bindings.length !== 0) {
+    return artifactIamInputRequired(
+        "ARTIFACT_IAM_BINDINGS_REQUIRE_EXACT_REVIEW",
+    );
+  }
+  return frozen({
+    classification: "ACCEPT",
+    disposition: "EXACT_EMPTY_BINDINGS",
+    normalizedPolicy,
+    policyDigest: canonicalDigest(normalizedPolicy),
+  });
+}
+
+export function analyzeArtifactRepositoryIamEvidence(evidence) {
+  if (!isPlainObject(evidence) ||
+      evidence.schemaVersion !== ARTIFACT_IAM_EVIDENCE_SCHEMA_VERSION ||
+      canonicalJson(Object.keys(evidence).sort()) !== canonicalJson([
+        "bundleDigest",
+        "collectionPlan",
+        "rawBytesByPath",
+        "rawManifest",
+        "schemaVersion",
+      ])) {
+    return artifactIamInputRequired(
+        "SEALED_ARTIFACT_IAM_EVIDENCE_BUNDLE_REQUIRED",
+    );
+  }
+  if (!SEALED_ARTIFACT_IAM_EVIDENCE_BUNDLES.has(evidence)) {
+    fail("Artifact IAM bundle seal provenance mismatch");
+  }
+  if (evidence.bundleDigest !==
+      canonicalDigest(projectionWithout(evidence, "bundleDigest"))) {
+    fail("Artifact IAM bundle digest mismatch");
+  }
+  exact(
+      evidence.collectionPlan,
+      ARTIFACT_IAM_COLLECTION_PLAN,
+      "Artifact IAM collection plan",
+  );
+  validateArtifactIamRawBytes(evidence.rawBytesByPath);
+  validateArtifactIamRawManifest(
+      evidence.rawManifest,
+      evidence.rawBytesByPath,
+  );
+  const statusBytes =
+    evidence.rawBytesByPath[ARTIFACT_IAM_RAW_PATHS.status];
+  const stderrBytes =
+    evidence.rawBytesByPath[ARTIFACT_IAM_RAW_PATHS.stderr];
+  const rawPolicyBytes =
+    evidence.rawBytesByPath[ARTIFACT_IAM_RAW_PATHS.policy];
+  const status = parseArtifactIamStatus(statusBytes);
+  if (status.exitCode !== 0 || status.failureClass !== "SUCCESS") {
+    return artifactIamInputRequired("ARTIFACT_IAM_COLLECTION_UNAVAILABLE");
+  }
+  if (stderrBytes !== "") {
+    fail("successful Artifact IAM collection stderr must be empty");
+  }
+  let rawPolicy;
+  try {
+    rawPolicy = JSON.parse(rawPolicyBytes);
+  } catch {
+    return artifactIamInputRequired("ARTIFACT_IAM_RAW_POLICY_INVALID");
+  }
+  const adjudication =
+    adjudicateArtifactRepositoryIamPolicy(rawPolicy);
+  if (adjudication.classification !== "ACCEPT") return adjudication;
+  const result = {
+    ...adjudication,
+    collectionPlanDigest: evidence.collectionPlan.planDigest,
+    rawManifestDigest: evidence.rawManifest.manifestDigest,
+    statusDigest: canonicalDigest(status),
+    statusSha256: sha256Hex(statusBytes),
+    stderrSha256: sha256Hex(stderrBytes),
+    rawPolicySha256: sha256Hex(rawPolicyBytes),
+    bundleDigest: evidence.bundleDigest,
+  };
+  return frozen({...result, evidenceDigest: canonicalDigest(result)});
+}
+
+export function analyzeReviewedServiceAgentEvidence(evidence) {
+  assertExactKeys(evidence, [
+    "describeObservation",
+    "projectBinding",
+    "projectIamCollectionStatus",
+    "schemaVersion",
+  ], "reviewed Service Agent evidence");
+  if (evidence.schemaVersion !== SERVICE_AGENT_EVIDENCE_SCHEMA_VERSION) {
+    fail("reviewed Service Agent evidence version mismatch");
+  }
+  if (!validateCollectionStatus(
+      evidence.projectIamCollectionStatus,
+      "project IAM collection status",
+  )) {
+    return frozen({
+      classification: "INPUT_REQUIRED",
+      disposition: "PROJECT_IAM_EVIDENCE_UNAVAILABLE",
+    });
+  }
+  const bindingClassification =
+    classifyManagedIdentityBinding(evidence.projectBinding);
+  if (bindingClassification.classification !==
+      "REVIEWED_MANAGED_IDENTITY") {
+    return frozen({
+      classification: "REJECT",
+      disposition: "MISSING_OR_WRONG_REVIEWED_PROJECT_PAIR",
+    });
+  }
+  if (!isPlainObject(evidence.describeObservation)) {
+    return frozen({
+      classification: "INPUT_REQUIRED",
+      disposition: "SERVICE_AGENT_DESCRIBE_RESULT_INVALID",
+    });
+  }
+  const observation = evidence.describeObservation;
+  if (observation.status === "SUCCESS") {
+    assertExactKeys(observation, [
+      "exitStatus",
+      "serviceAccountEmail",
+      "status",
+      "stderr",
+    ], "Service Agent describe success");
+    const memberEmail =
+      evidence.projectBinding.member.slice("serviceAccount:".length);
+    if (!validateCollectionStatus({
+      exitStatus: observation.exitStatus,
+      status: observation.status,
+      stderr: observation.stderr,
+    }, "Service Agent describe success") ||
+        observation.serviceAccountEmail !== memberEmail) {
+      return frozen({
+        classification: "INPUT_REQUIRED",
+        disposition: "SERVICE_AGENT_DESCRIBE_IDENTITY_MISMATCH",
+      });
+    }
+    return frozen({
+      classification: "REVIEWED_MANAGED_IDENTITY",
+      disposition: "PROJECT_IAM_AUTHORITATIVE_METADATA_AVAILABLE",
+    });
+  }
+  assertExactKeys(observation, [
+    "exitStatus",
+    "permission",
+    "status",
+    "stderr",
+  ], "Service Agent describe failure");
+  if (observation.status === "PERMISSION_DENIED" &&
+      observation.exitStatus !== 0 &&
+      observation.permission === "iam.serviceAccounts.get" &&
+      observation.stderr.length > 0) {
+    return frozen({
+      classification: "OPTIONAL_GOOGLE_MANAGED_METADATA_UNAVAILABLE",
+      disposition: "PROJECT_IAM_EXACT_PAIR_REMAINS_AUTHORITATIVE",
+    });
+  }
+  return frozen({
+    classification: "INPUT_REQUIRED",
+    disposition: "SERVICE_AGENT_DESCRIBE_FAILURE_NOT_OPTIONAL",
+  });
+}
+
+function validateEvidenceFileRecord(record, label) {
+  assertExactKeys(record, ["path", "sha256", "size"], label);
+  requireNonEmptyString(record.path, `${label}.path`);
+  if (!SHA256_HEX.test(record.sha256) ||
+      !Number.isSafeInteger(record.size) ||
+      record.size < 0) {
+    fail(`${label} digest or size mismatch`);
+  }
+}
+
+function isRawEvidencePath(path) {
+  return path.startsWith("raw/") ||
+    path.startsWith("status/") ||
+    path.startsWith("config/") ||
+    path.startsWith("plan/") ||
+    ["contract-config.json", "collection-plan.json"].includes(path);
+}
+
+export function sealRawEvidenceSnapshot(records) {
+  if (!Array.isArray(records)) {
+    fail("raw evidence snapshot must be an array");
+  }
+  records.forEach((record, index) => {
+    validateEvidenceFileRecord(record, `raw evidence[${index}]`);
+    if (!isRawEvidencePath(record.path) ||
+        RESULT_PACKAGE_PATHS.includes(record.path)) {
+      fail(`raw evidence[${index}] path is outside the raw snapshot`);
+    }
+  });
+  const paths = records.map(({path}) => path);
+  if (new Set(paths).size !== paths.length) {
+    fail("raw evidence snapshot contains a duplicate path");
+  }
+  const projection = {
+    schemaVersion: EVIDENCE_PACKAGE_INTEGRITY_SCHEMA_VERSION,
+    records: [...records].sort((left, right) =>
+      left.path.localeCompare(right.path)),
+  };
+  return frozen({
+    ...projection,
+    rawEvidenceDigest: canonicalDigest(projection),
+  });
+}
+
+export function validateEvidenceResultPackage({
+  rawSeal,
+  afterRawRecords,
+  resultPackageRecords,
+}) {
+  assertExactKeys(rawSeal, [
+    "rawEvidenceDigest",
+    "records",
+    "schemaVersion",
+  ], "raw evidence seal");
+  if (rawSeal.schemaVersion !== EVIDENCE_PACKAGE_INTEGRITY_SCHEMA_VERSION ||
+      rawSeal.rawEvidenceDigest !== canonicalDigest(
+          projectionWithout(rawSeal, "rawEvidenceDigest"),
+      )) {
+    fail("raw evidence seal version or digest mismatch");
+  }
+  const afterSeal = sealRawEvidenceSnapshot(afterRawRecords);
+  if (afterSeal.rawEvidenceDigest !== rawSeal.rawEvidenceDigest) {
+    fail("raw evidence bytes changed after sealing");
+  }
+  if (!Array.isArray(resultPackageRecords)) {
+    fail("result package records must be an array");
+  }
+  resultPackageRecords.forEach((record, index) =>
+    validateEvidenceFileRecord(record, `result package[${index}]`));
+  exactSet(
+      resultPackageRecords.map(({path}) => path),
+      RESULT_PACKAGE_PATHS,
+      "result package paths",
+  );
+  if (resultPackageRecords.some(({path}) => isRawEvidencePath(path))) {
+    fail("result package file was counted as raw evidence");
+  }
+  return frozen({
+    schemaVersion: EVIDENCE_PACKAGE_INTEGRITY_SCHEMA_VERSION,
+    rawEvidenceIntegrity: "PASS",
+    rawEvidenceDigest: rawSeal.rawEvidenceDigest,
+    resultPackageDigest: canonicalSetDigest(
+        resultPackageRecords,
+        "result_package_records",
+    ),
+    previousResultVerdictTrusted: false,
+  });
+}
 
 function existingFunctionRecord(functionName) {
   return {
@@ -1417,6 +2277,11 @@ const authorityProjection = {
     phaseEvidence: PHASE_EVIDENCE_SCHEMA_VERSION,
     rollbackReceipt: ROLLBACK_RECEIPT_SCHEMA_VERSION,
     finalAudit: FINAL_IAM_AUDIT_SCHEMA_VERSION,
+    cloudBuildLegacyEvidence: CLOUD_BUILD_LEGACY_EVIDENCE_SCHEMA_VERSION,
+    artifactIamEvidence: ARTIFACT_IAM_EVIDENCE_SCHEMA_VERSION,
+    serviceAgentEvidence: SERVICE_AGENT_EVIDENCE_SCHEMA_VERSION,
+    evidencePackageIntegrity:
+      EVIDENCE_PACKAGE_INTEGRITY_SCHEMA_VERSION,
   },
   phases: MIGRATION_PHASES,
   legacyBaselineRecords: LEGACY_IAM_BASELINE_RECORDS,
@@ -1432,6 +2297,8 @@ const authorityProjection = {
   firebaseDependencyBindings: FIREBASE_DEPENDENCY_BINDINGS,
   targetRunInvokerBindings: TARGET_RUN_INVOKER_BINDINGS,
   existingFunctionBaselineDigest: EXISTING_FUNCTION_BASELINE_DIGEST,
+  cloudBuildLegacyEvidenceAuthority:
+    CLOUD_BUILD_LEGACY_EVIDENCE_AUTHORITY,
 };
 
 export const ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY = frozen({
