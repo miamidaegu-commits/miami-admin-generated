@@ -9,9 +9,23 @@ import {
   validateOrganizationPolicyEvidence,
   validateOrganizationPolicyLineageReference,
 } from "./academy-functions-build-scope-contract.mjs";
+import {
+  ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY,
+  ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+  FINAL_STEADY_STATE as FINAL_IAM_MIGRATION_PHASE,
+  MIGRATION_AUTHORITY_SCHEMA_VERSION,
+  POST_PRIVATE_DEPLOY_PRE_PUBLICATION,
+  POST_PROVISIONING_PRE_DEPLOY,
+  POST_PUBLICATION_PRE_CLEANUP,
+  PRE_PROVISIONING,
+  validateFinalIamAudit,
+  validateMigrationAuthority,
+  validatePhaseEvidence,
+  validateRollbackReceipt,
+} from "./academy-legacy-iam-migration-contract.mjs";
 
 export const PRIVATE_RUNTIME_IAM_CONTRACT_VERSION =
-  "academy_private_runtime_iam.v6";
+  "academy_private_runtime_iam.v7";
 export const PRIVATE_RUNTIME_IAM_SET_DIGEST_VERSION =
   "academy_private_runtime_iam_set_sha256.v1";
 export const FREEZE_ACTIVATION_RECEIPT_VERSION =
@@ -19,7 +33,7 @@ export const FREEZE_ACTIVATION_RECEIPT_VERSION =
 export const UNFREEZE_RESTORATION_RECEIPT_VERSION =
   "academy_private_runtime_unfreeze_restoration.v4";
 export const EXECUTABLE_APPROVAL_VERSION =
-  "academy_private_runtime_executable_approval.v5";
+  "academy_private_runtime_executable_approval.v6";
 export const EXACT_CHRONOLOGY_PROFILE_VERSION =
   "academy_private_runtime_exact_chronology.v2";
 export const SERVICE_ACCOUNT_KEY_AUDIT_VERSION =
@@ -27,13 +41,13 @@ export const SERVICE_ACCOUNT_KEY_AUDIT_VERSION =
 export const OPERATOR_MODE_CONTRACT_VERSION =
   "academy_private_runtime_operator_mode.v1";
 export const SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION =
-  "academy_private_runtime_single_operator_control_manifest.v1";
+  "academy_private_runtime_single_operator_control_manifest.v2";
 export const SINGLE_OPERATOR_PRIVATE_VALIDATION_RECEIPT_VERSION =
-  "academy_private_runtime_single_operator_private_validation.v1";
+  "academy_private_runtime_single_operator_private_validation.v2";
 export const SINGLE_OPERATOR_INVOKER_PUBLICATION_RECEIPT_VERSION =
   "academy_private_runtime_single_operator_invoker_publication.v1";
 export const SINGLE_OPERATOR_COMPLETION_RECEIPT_VERSION =
-  "academy_private_runtime_single_operator_completion.v1";
+  "academy_private_runtime_single_operator_completion.v2";
 export const THREE_PERSON_SEPARATION = "THREE_PERSON_SEPARATION";
 export const SINGLE_OPERATOR_JIT_V1 = "SINGLE_OPERATOR_JIT_V1";
 export const APPROVED_SINGLE_OPERATOR_PRINCIPAL =
@@ -456,6 +470,13 @@ const contractWithoutDigest = {
     evidence: ORGANIZATION_POLICY_EVIDENCE,
     lineage: buildOrganizationPolicyLineageReference(),
   },
+  legacyIamMigrationAuthority: {
+    schemaVersion: MIGRATION_AUTHORITY_SCHEMA_VERSION,
+    authorityDigest: ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+    phases: ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY.phases,
+    legacyBaselineDigest:
+      ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY.legacyBaselineDigest,
+  },
   project: {
     projectId: TARGET_PROJECT_ID,
     projectNumber: TARGET_PROJECT_NUMBER,
@@ -541,6 +562,7 @@ export function validateFunctionRuntimeServiceAccountMapping(mapping) {
 export function validatePrivateRuntimeIamContract(
     contract = ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT,
 ) {
+  validateMigrationAuthority();
   assertExactKeys(contract, Object.keys(ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT),
       "contract");
   if (!same(contract, ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT) ||
@@ -884,6 +906,7 @@ function validateServiceAccountKeyAudit(audit) {
 function validateSingleOperatorControlManifest(manifest) {
   assertExactKeys(manifest, [
     "deploymentSource",
+    "legacyIamMigrationAuthorityDigest",
     "orderedSteps",
     "productionApprovalReferenceDigest",
     "rollbackManifestDigest",
@@ -899,6 +922,8 @@ function validateSingleOperatorControlManifest(manifest) {
   ], "single operator secure audit artifact");
   if (manifest.schemaVersion !== SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION ||
       !same(manifest.deploymentSource, IMMUTABLE_RELEASE_EVIDENCE) ||
+      manifest.legacyIamMigrationAuthorityDigest !==
+        ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST ||
       !same(manifest.targets, DEPLOYMENT_TARGETS) ||
       !same(manifest.orderedSteps, SINGLE_OPERATOR_EXECUTION_STEPS) ||
       !SHA256_HEX.test(manifest.productionApprovalReferenceDigest) ||
@@ -959,6 +984,7 @@ export function validateExecutableApproval(
     "organizationPolicy",
     "organizationPolicyLineage",
     "operatorMode",
+    "preProvisioningMigrationEvidence",
     "provisioningPrincipal",
     "schemaVersion",
     "serviceAccountKeyAudit",
@@ -982,6 +1008,10 @@ export function validateExecutableApproval(
   }
   validateOperatorMode(approval, executionPrincipals);
   validateServiceAccountKeyAudit(approval.serviceAccountKeyAudit);
+  validatePhaseEvidence(approval.preProvisioningMigrationEvidence);
+  if (approval.preProvisioningMigrationEvidence.phase !== PRE_PROVISIONING) {
+    fail("approval requires exact PRE_PROVISIONING migration evidence");
+  }
   const approvedAt = parseExactRfc3339UtcNanoseconds(
       approval.approvedAt,
       "approval.approvedAt",
@@ -1058,6 +1088,10 @@ export function validateExecutableApproval(
     jitExpiresAt: approval.jitExpiresAt,
     organizationPolicyStatus: organizationPolicy.observationStatus,
     organizationPolicyEvidenceDigest: organizationPolicy.evidenceDigest,
+    legacyIamMigrationAuthorityDigest:
+      ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+    preProvisioningMigrationEvidenceDigest:
+      approval.preProvisioningMigrationEvidence.evidenceDigest,
     userManagedServiceAccountKeyCount:
       approval.serviceAccountKeyAudit.userManagedKeyCount,
     execution,
@@ -1166,6 +1200,8 @@ export function validateSingleOperatorPrivateValidationReceipt(
     "finalFunctionCount",
     "finalGen2FunctionCount",
     "operatorMode",
+    "postProvisioningMigrationEvidence",
+    "prePublicationMigrationEvidence",
     "privateValidationCompletedAt",
     "receiptDigest",
     "receiptId",
@@ -1179,6 +1215,14 @@ export function validateSingleOperatorPrivateValidationReceipt(
       approval,
       receipt.privateValidationCompletedAt,
   );
+  validatePhaseEvidence(receipt.postProvisioningMigrationEvidence);
+  validatePhaseEvidence(receipt.prePublicationMigrationEvidence);
+  if (receipt.postProvisioningMigrationEvidence.phase !==
+        POST_PROVISIONING_PRE_DEPLOY ||
+      receipt.prePublicationMigrationEvidence.phase !==
+        POST_PRIVATE_DEPLOY_PRE_PUBLICATION) {
+    fail("private validation requires exact post-provisioning phase evidence");
+  }
   const times = validateOrderedStepCompletions(
       receipt.stepCompletions,
       SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS,
@@ -1215,6 +1259,10 @@ export function validateSingleOperatorPrivateValidationReceipt(
     receiptId: receipt.receiptId,
     receiptDigest: receipt.receiptDigest,
     privateValidationCompletedAt: receipt.privateValidationCompletedAt,
+    postProvisioningMigrationEvidenceDigest:
+      receipt.postProvisioningMigrationEvidence.evidenceDigest,
+    prePublicationMigrationEvidenceDigest:
+      receipt.prePublicationMigrationEvidence.evidenceDigest,
     provisioningEligible: true,
     deploymentEligible: true,
     publicInvokerEligible: false,
@@ -1298,11 +1346,15 @@ export function validateSingleOperatorCompletionReceipt(
     "approvalId",
     "finalAudit",
     "finalAuditCompletedAt",
+    "finalIamAudit",
+    "finalMigrationEvidence",
     "operatorMode",
+    "postPublicationMigrationEvidence",
     "publicInvokerAppliedAt",
     "publicationReceiptDigest",
     "receiptDigest",
     "receiptId",
+    "rollbackReceipt",
     "rollbackManifestDigest",
     "schemaVersion",
     "secureAuditArtifactDigest",
@@ -1318,6 +1370,26 @@ export function validateSingleOperatorCompletionReceipt(
         privateValidationReceipt,
     );
   validateSingleOperatorApprovalAt(approval, receipt.finalAuditCompletedAt);
+  validatePhaseEvidence(receipt.postPublicationMigrationEvidence);
+  validatePhaseEvidence(receipt.finalMigrationEvidence);
+  validateFinalIamAudit(receipt.finalIamAudit);
+  validateRollbackReceipt(receipt.rollbackReceipt);
+  if (receipt.postPublicationMigrationEvidence.phase !==
+        POST_PUBLICATION_PRE_CLEANUP ||
+      receipt.finalMigrationEvidence.phase !== FINAL_IAM_MIGRATION_PHASE ||
+      receipt.finalIamAudit.phase !== FINAL_IAM_MIGRATION_PHASE ||
+      receipt.rollbackReceipt.phase !== FINAL_IAM_MIGRATION_PHASE ||
+      receipt.rollbackReceipt.restoredRecords.length !== 0 ||
+      !same(
+          receipt.rollbackReceipt.beforeRecords,
+          receipt.finalMigrationEvidence.legacyRecords,
+      ) ||
+      !same(
+          receipt.rollbackReceipt.afterRecords,
+          receipt.finalMigrationEvidence.legacyRecords,
+      )) {
+    fail("completion migration phase, rollback, or final IAM audit is invalid");
+  }
   const times = validateOrderedStepCompletions(
       receipt.stepCompletions,
       SINGLE_OPERATOR_COMPLETION_STEPS,
@@ -1380,7 +1452,7 @@ export function validateSingleOperatorCompletionReceipt(
       receipt.finalAudit.existingFunctionCount !== 32 ||
       receipt.finalAudit.finalFunctionCount !== 35 ||
       receipt.finalAudit.finalGen2FunctionCount !== 35 ||
-      !SHA256_HEX.test(receipt.finalAudit.evidenceDigest) ||
+      receipt.finalAudit.evidenceDigest !== receipt.finalIamAudit.auditDigest ||
       times.at(-1) !== parseExactRfc3339UtcNanoseconds(
           receipt.finalAuditCompletedAt,
           "finalAuditCompletedAt",
@@ -1395,6 +1467,10 @@ export function validateSingleOperatorCompletionReceipt(
     publicInvokerEligible: true,
     temporaryAccessRemoved: true,
     finalAuditComplete: true,
+    finalIamAuditDigest: receipt.finalIamAudit.auditDigest,
+    finalMigrationEvidenceDigest:
+      receipt.finalMigrationEvidence.evidenceDigest,
+    rollbackReceiptDigest: receipt.rollbackReceipt.receiptDigest,
     completedInsideJit: true,
   });
 }

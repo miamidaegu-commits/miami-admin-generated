@@ -9,10 +9,29 @@ This runbook prepares production without deleting data, resetting data, weakenin
 ## Academy private Functions IAM gate
 
 The Academy private Preview → Assignment → Outcome deployment contract is not
-authorized by the commands below. Its local v6 contract requires exact Runtime
+authorized by the commands below. Its local v7 contract requires exact Runtime
 IAM state receipts, resource-scoped Build bindings, the nine-permission Deploy
 profile, immutable release/source/selector/baseline digests, exact human
 principals, and an active RFC3339 UTC JIT window of at most two hours.
+
+The versioned legacy-IAM migration authority treats only the exact preflight
+Owner, default-Service-Account Editor, and Firebase Admin SDK TokenCreator
+bindings as migration evidence. These broad roles never prove least privilege
+for an Academy identity or authorize the Observer credential. The Owner binding
+is allowed only through `POST_PROVISIONING_PRE_DEPLOY` and must be absent before
+public-invoker publication. The two deferred bindings must remain byte-exact and
+carry the separate decommission-plan version/digest until their independent
+dependency reviews complete.
+
+The exact phase order is `PRE_PROVISIONING`,
+`POST_PROVISIONING_PRE_DEPLOY`,
+`POST_PRIVATE_DEPLOY_PRE_PUBLICATION`,
+`POST_PUBLICATION_PRE_CLEANUP`, and `FINAL_STEADY_STATE`. Pre-provisioning
+requires all four Academy Service Accounts and four custom roles to be absent.
+All later phases require the exact active 4+4 resources, exact permissions, no
+unexpected `academy-` resources, and zero user-managed keys. Unknown
+same-project service agents are `INPUT_REQUIRED`; no
+`service-${PROJECT_NUMBER}@*` wildcard is approved.
 
 Organization Policy is pinned as
 `OBSERVED_COMPATIBLE_WITH_EXPLICIT_CONTROLS`: the API is enabled, direct project
@@ -43,7 +62,11 @@ remains false until all three new private Functions pass source, permission,
 key-count, and final 35/35 validation; publication confirmation must be later
 than private validation and remain inside JIT. TokenCreator, actAs, and Deploy
 bindings must then be removed and a final permission/key/inventory receipt
-recorded inside the same JIT window.
+recorded inside the same JIT window. The final receipt also binds the canonical
+project/Service-Account/bucket/repository/temporary/legacy/reviewed-managed/key/
+Run-invoker record sets and recomputed digests. Rollback may restore only an
+exact original-baseline subset; automatic Owner restoration after publication
+is forbidden and a separate break-glass approval SHA is mandatory.
 
 Both modes still require the exact four same-project service-account identities,
 zero user-managed keys, explicit selection of the dedicated Build service

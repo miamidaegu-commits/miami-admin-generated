@@ -6,6 +6,40 @@ sentinel 활성화, probe, planner, reset, unfreeze를 실행하거나 구현하
 기존 advisory planner의 `writeFreezeVerified: false`와 comparison-only baseline은
 승인 또는 실행 권한이 아니다.
 
+## Legacy IAM migration authority
+
+`academy_legacy_iam_migration_authority.v1`은 기존 project IAM을 새 Academy
+identity의 최소 권한 증명과 분리한다. preflight baseline은 condition `null`을
+포함한 exact scope/role/member set으로 다음 세 binding만 추적한다.
+
+- `user:miamidaegu@gmail.com`의 project Owner는
+  `MUST_REMOVE_BEFORE_PUBLICATION`이며 `PRE_PROVISIONING`과
+  `POST_PROVISIONING_PRE_DEPLOY`에서만 migration authority로 허용한다.
+- 세 default Service Account의 project Editor와 Firebase Admin SDK identity의
+  project TokenCreator는 `TRACKED_DEFERRED_DECOMMISSION`이다. 두 binding은
+  decommission-plan version/digest와 각각의 기존 32-Function replacement
+  permission review 또는 Firebase signing/auth dependency review가 필요하다.
+- 위 broad binding은 Observer credential, Deploy impersonation, JIT 또는 새
+  Academy path의 effective-permission 증명에 사용할 수 없다.
+
+phase는 `PRE_PROVISIONING` →
+`POST_PROVISIONING_PRE_DEPLOY` →
+`POST_PRIVATE_DEPLOY_PRE_PUBLICATION` →
+`POST_PUBLICATION_PRE_CLEANUP` → `FINAL_STEADY_STATE`의 exact typed 순서다.
+첫 phase는 Academy Service Account/custom role 4+4가 모두 absent여야 하고,
+provisioning 이후에는 동일 4+4가 exact present, active/not-deleted, permission
+exact, user-managed key 0이어야 한다. partial set, same-count identity/role swap,
+unknown `academy-` resource와 wildcard-shaped Google-managed identity는 fail
+closed다. 알려지지 않은 same-project service agent는 `INPUT_REQUIRED`다.
+
+private publication gate 전 Owner는 제거되어야 하며, public invoker는 private
+validation receipt 뒤 exact 세 service에만 허용한다. final audit는 project/SA/
+bucket/repository/temporary/legacy/reviewed-managed/key/Run-invoker record set과
+binding/effective-permission/legacy/reviewed-managed/temporary/function-inventory
+digest를 canonical record에서 재계산한다. rollback은 original preflight baseline
+subset만 exact 복원할 수 있고, publication 이후 Owner 복원은 automatic action이
+아니며 별도 break-glass SHA approval이 필요하다.
+
 ## Fail-closed 고정값
 
 - contract/proof: `academy_reset_write_freeze.v8` /
@@ -455,13 +489,14 @@ family adapter가 이 stable pair를 approval inventory와 결합하기 전에�
 completeness를 주장할 수 없다.
 
 별도 reviewed-source contract는 package/lock, Runtime IAM/Build scope contract,
-operation registry, transport, mock adapter, attestation, read-only permission
+legacy IAM migration authority, operation registry, transport, mock adapter,
+attestation, read-only permission
 manifest, runtime Git identity resolver, write-freeze contract, local-only Production
-observer, verifier의 exact 13개 path와 각 파일의 literal
+observer, verifier의 exact 14개 path와 각 파일의 literal
 SHA-256 및 canonical aggregate digest를 approval metadata/session/observation/proof에
 결합한다. 이 local adapter source set은 기존 deployed runtime Git critical source
 목록에 추가하지 않는다. adapter/verifier는 이 registry 자체는 hash set에서
-제외하고, exact 13개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
+제외하고, exact 14개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
 확인한 뒤 bytes SHA-256와 literal pin 및 aggregate를 다시 계산한다.
 reviewed-source aggregate는 source pin registry의 canonical digest를 검증 시점에
 재계산하며 문서의 복사값을 승인 근거로 사용하지 않는다.

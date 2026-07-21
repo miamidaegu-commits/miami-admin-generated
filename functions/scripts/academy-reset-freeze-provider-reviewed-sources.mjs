@@ -9,11 +9,15 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-functions-build-scope-contract.mjs",
-    sha256: "bf04d61060fe50e599696e9877b20f8aceb82a5095499bbcc76940afa8785644",
+    sha256: "bd25e04ee17ea53e27aa37f2ff36723a5a5c3af33ff8ed1a6716938ad8a29f4e",
+  }),
+  Object.freeze({
+    path: "functions/scripts/academy-legacy-iam-migration-contract.mjs",
+    sha256: "0a213a8377857e1e99ccffe9fca6025d2d7aca1c6d5f6c7f8a50a4e6dbcb1bcb",
   }),
   Object.freeze({
     path: "functions/scripts/academy-private-runtime-iam-contract.mjs",
-    sha256: "f98c6de3dd7587ffe512e316507b82692e9d85cd637a4c29718f4a56daae4f2f",
+    sha256: "054e95c8241accf8fe06b98b0fe5fe295ecd9e9eb360b4bba5f08ac4f6a04e59",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-provider-adapter.mjs",
@@ -37,11 +41,11 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
-    sha256: "1e4d69105f3cf5225c78500c9e75abab0ffc2530b4071a60e76aad3efa311185",
+    sha256: "c2bf3915b325c0b911369fc3c925c158b0a7c29f571def680d60fbc7d3a422f9",
   }),
   Object.freeze({
     path: "functions/scripts/academy-reset-write-freeze-contract.mjs",
-    sha256: "e2e8cacbca67527e94931d0e588ad5a5a764279ba2736ecd086d55407d9f5f3c",
+    sha256: "54facd404b6229566578ee05055c3a2a3c54235ff0819f4ba38bb88c42860990",
   }),
   Object.freeze({
     path: "functions/scripts/observe-academy-reset-freeze-production.mjs",
@@ -54,4 +58,4 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
 ]);
 
 export const EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST =
-  "3880ceb771df8624008f905863d601d4f59e5d5d72947ea36d09da68117953bb";
+  "502f4fc736d78267e086d5d3ae34f2e5763ca3f1c9f43649f2651ae155e040bb";

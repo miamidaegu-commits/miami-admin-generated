@@ -23,6 +23,12 @@ import {
   validateOrganizationPolicyLineageReference,
 } from "./academy-functions-build-scope-contract.mjs";
 import {
+  ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+  LEGACY_IAM_BASELINE_DIGEST,
+  MIGRATION_AUTHORITY_SCHEMA_VERSION,
+  validateMigrationAuthority,
+} from "./academy-legacy-iam-migration-contract.mjs";
+import {
   BASELINE_RUNTIME_SERVICE_ACCOUNT_MEMBER,
   EXPECTED_BINDING_SET_DIGESTS_BY_STATE,
   EXPECTED_PERMISSION_SET_DIGESTS_BY_STATE,
@@ -170,7 +176,7 @@ export const EXPECTED_PROJECT_NUMBER =
   TARGET_PROJECT_IDENTITY.targetProjectNumber;
 export const IAM_PRINCIPAL_POLICY_VERSION = 1;
 export const FREEZE_IAM_CONTRACT_LINEAGE_VERSION =
-  "academy_reset_freeze_iam_contract_lineage.v2";
+  "academy_reset_freeze_iam_contract_lineage.v3";
 export const EXPECTED_ACADEMY_ID = "academy_daegumiami";
 export const EXPECTED_FUNCTION_REGION = "us-central1";
 export const EXPECTED_FUNCTION_GENERATION = "GEN_2";
@@ -868,12 +874,18 @@ function validateRelease(release) {
       "release.runtimeGit.iamContractSourceSetDigest");
   exactKeys(release.runtimeGit.iamContractSourceIdentity, [
     "buildScopeContractDigest", "buildScopeContractVersion",
+    "legacyIamMigrationAuthorityDigest",
+    "legacyIamMigrationAuthorityVersion",
     "privateRuntimeIamContractDigest", "privateRuntimeIamContractVersion",
     "sources",
   ], "release.runtimeGit.iamContractSourceIdentity");
   const iamContractSourceIdentity =
     release.runtimeGit.iamContractSourceIdentity;
-  if (iamContractSourceIdentity.privateRuntimeIamContractVersion !==
+  if (iamContractSourceIdentity.legacyIamMigrationAuthorityVersion !==
+        MIGRATION_AUTHORITY_SCHEMA_VERSION ||
+      iamContractSourceIdentity.legacyIamMigrationAuthorityDigest !==
+        ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST ||
+      iamContractSourceIdentity.privateRuntimeIamContractVersion !==
         PRIVATE_RUNTIME_IAM_CONTRACT_VERSION ||
       iamContractSourceIdentity.privateRuntimeIamContractDigest !==
         PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST ||
@@ -925,6 +937,7 @@ function validateRelease(release) {
   }
   const expectedIamContractSources = release.runtimeGit.criticalSources.filter(
       ({path: sourcePath}) => [
+        "functions/scripts/academy-legacy-iam-migration-contract.mjs",
         "functions/scripts/academy-functions-build-scope-contract.mjs",
         "functions/scripts/academy-private-runtime-iam-contract.mjs",
       ].includes(sourcePath),
@@ -1468,6 +1481,7 @@ function validateIamPrincipalSet(
 }
 
 function expectedFreezeIamContractLineage(executableApproval) {
+  validateMigrationAuthority();
   return {
     schemaVersion: FREEZE_IAM_CONTRACT_LINEAGE_VERSION,
     privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
@@ -1487,6 +1501,13 @@ function expectedFreezeIamContractLineage(executableApproval) {
     artifactRepositoryResourceDigest:
       buildCanonicalDigest(APPROVED_ARTIFACT_REPOSITORY),
     infrastructureEvidenceDigest: INFRASTRUCTURE_EVIDENCE_DIGEST,
+    legacyIamMigrationAuthorityVersion:
+      MIGRATION_AUTHORITY_SCHEMA_VERSION,
+    legacyIamMigrationAuthorityDigest:
+      ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+    legacyIamBaselineDigest: LEGACY_IAM_BASELINE_DIGEST,
+    preProvisioningMigrationEvidenceDigest:
+      executableApproval.preProvisioningMigrationEvidence.evidenceDigest,
     deployProfileVersion: DEPLOY_PROFILE_VERSION,
     deployProfileDigest: DEPLOY_PROFILE_DIGEST,
     deployPermissionSetDigest: DEPLOY_PERMISSION_SET_DIGEST,

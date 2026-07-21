@@ -1,12 +1,19 @@
 import crypto from "node:crypto";
+import {
+  ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+  MIGRATION_AUTHORITY_SCHEMA_VERSION,
+  REVIEWED_MANAGED_IDENTITY_DIGEST,
+  REVIEWED_MANAGED_IDENTITY_SCHEMA_VERSION,
+  validateMigrationAuthority,
+} from "./academy-legacy-iam-migration-contract.mjs";
 
 export const BUILD_SCOPE_CONTRACT_VERSION =
-  "academy_functions_build_scope.v2";
+  "academy_functions_build_scope.v3";
 export const DEPLOY_PROFILE_VERSION = "academy_functions_deploy.v1";
 export const COMPENSATING_CONTROL_VERSION =
   "academy_functions_deploy_compensating_controls.v2";
 export const INFRASTRUCTURE_EVIDENCE_VERSION =
-  "academy_functions_infrastructure_evidence.v2";
+  "academy_functions_infrastructure_evidence.v3";
 export const ORGANIZATION_POLICY_EVIDENCE_VERSION =
   "academy_functions_organization_policy_evidence.v3";
 export const ORGANIZATION_POLICY_LINEAGE_VERSION =
@@ -484,6 +491,14 @@ export const ORGANIZATION_POLICY_EVIDENCE = frozen({
   evidenceDigest: canonicalDigest(organizationPolicyObservation),
 });
 
+export const LEGACY_IAM_MIGRATION_AUTHORITY_REFERENCE = frozen({
+  schemaVersion: MIGRATION_AUTHORITY_SCHEMA_VERSION,
+  authorityDigest: ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+  reviewedManagedIdentitySchemaVersion:
+    REVIEWED_MANAGED_IDENTITY_SCHEMA_VERSION,
+  reviewedManagedIdentityDigest: REVIEWED_MANAGED_IDENTITY_DIGEST,
+});
+
 export const APPROVED_INFRASTRUCTURE_EVIDENCE = frozen({
   evidenceVersion: INFRASTRUCTURE_EVIDENCE_VERSION,
   project: TARGET_PROJECT,
@@ -493,6 +508,7 @@ export const APPROVED_INFRASTRUCTURE_EVIDENCE = frozen({
   cloudBuild: APPROVED_CLOUD_BUILD_CONFIGURATION,
   requiredApis: REQUIRED_API_EVIDENCE,
   serviceAgents: SERVICE_AGENT_FINDINGS,
+  legacyIamMigrationAuthority: LEGACY_IAM_MIGRATION_AUTHORITY_REFERENCE,
   organizationPolicy: ORGANIZATION_POLICY_EVIDENCE,
 });
 
@@ -560,6 +576,7 @@ export const BUILD_SCOPE_CONTRACT = frozen({
     },
   },
   buildConfiguration: APPROVED_CLOUD_BUILD_CONFIGURATION,
+  legacyIamMigrationAuthority: LEGACY_IAM_MIGRATION_AUTHORITY_REFERENCE,
   coreProfile: BUILD_CORE_PROFILE,
   coreBinding: {
     principal:
@@ -796,6 +813,7 @@ export const COMPENSATING_CONTROL_DIGEST =
 export function validateApprovedInfrastructureEvidence(
     evidence = APPROVED_INFRASTRUCTURE_EVIDENCE,
 ) {
+  validateMigrationAuthority();
   exact(
       evidence,
       APPROVED_INFRASTRUCTURE_EVIDENCE,
