@@ -13,7 +13,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/scripts/academy-legacy-iam-migration-contract.mjs",
-    sha256: "0a213a8377857e1e99ccffe9fca6025d2d7aca1c6d5f6c7f8a50a4e6dbcb1bcb",
+    sha256: "fb122372fdc2f76ea876f89940034624079d1f692f576cbfae6e659ef10cbfde",
   }),
   Object.freeze({
     path: "functions/scripts/academy-private-runtime-iam-contract.mjs",
@@ -58,4 +58,4 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
 ]);
 
 export const EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST =
-  "502f4fc736d78267e086d5d3ae34f2e5763ca3f1c9f43649f2651ae155e040bb";
+  "208d60a7b0db2ac249b46d3ee4fa44b3c84f3a84c78aab8f324e54f4fa03c67d";

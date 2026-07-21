@@ -8,19 +8,43 @@ sentinel 활성화, probe, planner, reset, unfreeze를 실행하거나 구현하
 
 ## Legacy IAM migration authority
 
-`academy_legacy_iam_migration_authority.v1`은 기존 project IAM을 새 Academy
+`academy_legacy_iam_migration_authority.v3`는 기존 project IAM을 새 Academy
 identity의 최소 권한 증명과 분리한다. preflight baseline은 condition `null`을
-포함한 exact scope/role/member set으로 다음 세 binding만 추적한다.
+포함한 exact scope/role/member set으로 다음 네 binding만 추적한다.
 
 - `user:miamidaegu@gmail.com`의 project Owner는
   `MUST_REMOVE_BEFORE_PUBLICATION`이며 `PRE_PROVISIONING`과
   `POST_PROVISIONING_PRE_DEPLOY`에서만 migration authority로 허용한다.
-- 세 default Service Account의 project Editor와 Firebase Admin SDK identity의
-  project TokenCreator는 `TRACKED_DEFERRED_DECOMMISSION`이다. 두 binding은
-  decommission-plan version/digest와 각각의 기존 32-Function replacement
-  permission review 또는 Firebase signing/auth dependency review가 필요하다.
+- 세 default Service Account의 project Editor, Firebase Admin SDK identity의
+  project TokenCreator, Compute default와 Google-owned legacy Cloud Build
+  identity의 project `roles/cloudbuild.builds.builder`는
+  `TRACKED_DEFERRED_DECOMMISSION`이다. 세 binding은 decommission-plan
+  version/digest와 각각의 기존 32-Function replacement permission review,
+  Firebase signing/auth dependency review 또는 dedicated
+  `academy-functions-build` 검증이 필요하다.
 - 위 broad binding은 Observer credential, Deploy impersonation, JIT 또는 새
   Academy path의 effective-permission 증명에 사용할 수 없다.
+
+기존 32 Gen2 Function의 Build evidence는 Function마다 정확히 한 Build ref를
+요구하되 shared Build를 허용한다. 현재 baseline은 32 Function에서 파생된
+14 unique Build와 raw Build set이 정확히 같아야 하고, 각 Build는 project/region/
+id/name/status와 fully-qualified Compute default Build SA resource
+`projects/daegu-miami-production/serviceAccounts/884850632328-compute@developer.gserviceaccount.com`,
+`CLOUD_LOGGING_ONLY`, logs bucket `null`을 만족해야 한다. 신규 세 Function은
+fully-qualified dedicated
+`projects/daegu-miami-production/serviceAccounts/academy-functions-build@daegu-miami-production.iam.gserviceaccount.com`
+resource만 사용한다. email, `serviceAccount:` IAM member, prefix 삽입 또는
+normalization은 raw Build SA로 허용하지 않는다.
+
+Artifact IAM은 `academy_artifact_iam_evidence.v2` sealed bundle만 판정한다.
+exact collection plan/command, status JSON bytes, stderr bytes, raw policy bytes와
+pre-adjudication raw manifest의 path/byte-length/SHA-256 parity가 모두 맞는
+성공 collection의 valid etag-only object만 `bindings: []`, `version: 1`로
+정규화한다. standalone synthetic success, missing provenance, digest refresh
+claim과 result-package verdict는 raw authority가 아니다. reviewed Service Agent의
+project IAM exact pair가 권위이며, 별도 describe의 `iam.serviceAccounts.get`
+`PERMISSION_DENIED`는 optional metadata unavailable로만 기록한다. raw/status/
+config/plan seal은 result package 세 파일과 별도 digest로 유지한다.
 
 phase는 `PRE_PROVISIONING` →
 `POST_PROVISIONING_PRE_DEPLOY` →
