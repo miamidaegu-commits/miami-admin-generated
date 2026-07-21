@@ -96,6 +96,12 @@ import {
   buildOrganizationPolicyLineageReference,
 } from "../functions/scripts/academy-functions-build-scope-contract.mjs";
 import {
+  ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+  MIGRATION_AUTHORITY_SCHEMA_VERSION,
+  PRE_PROVISIONING,
+  buildPhaseEvidence,
+} from "../functions/scripts/academy-legacy-iam-migration-contract.mjs";
+import {
   PROVIDER_MANDATORY_OPERATION_COUNT,
   PROVIDER_MANDATORY_OPERATION_IDS,
   PROVIDER_MANDATORY_OPERATION_IDS_DIGEST,
@@ -265,6 +271,10 @@ function runtimeGitFixture() {
   const criticalSourceByPath =
     new Map(criticalSources.map((source) => [source.path, source]));
   const iamContractSourceIdentity = {
+    legacyIamMigrationAuthorityVersion:
+      MIGRATION_AUTHORITY_SCHEMA_VERSION,
+    legacyIamMigrationAuthorityDigest:
+      ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
     privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
     privateRuntimeIamContractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
     buildScopeContractVersion: BUILD_SCOPE_CONTRACT_VERSION,
@@ -272,6 +282,9 @@ function runtimeGitFixture() {
     sources: [
       criticalSourceByPath.get(
           "functions/scripts/academy-functions-build-scope-contract.mjs",
+      ),
+      criticalSourceByPath.get(
+          "functions/scripts/academy-legacy-iam-migration-contract.mjs",
       ),
       criticalSourceByPath.get(
           "functions/scripts/academy-private-runtime-iam-contract.mjs",
@@ -382,6 +395,8 @@ function runtimeActivationApprovalFixture() {
     organizationPolicy: structuredClone(ORGANIZATION_POLICY_EVIDENCE),
     organizationPolicyLineage:
       structuredClone(buildOrganizationPolicyLineageReference()),
+    preProvisioningMigrationEvidence:
+      structuredClone(buildPhaseEvidence(PRE_PROVISIONING)),
     serviceAccountKeyAudit: {
       schemaVersion: SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
       projectId: "daegu-miami-production",

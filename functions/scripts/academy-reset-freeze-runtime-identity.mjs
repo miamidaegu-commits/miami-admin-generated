@@ -11,6 +11,10 @@ import {
   BUILD_SCOPE_CONTRACT_VERSION,
 } from "./academy-functions-build-scope-contract.mjs";
 import {
+  ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+  MIGRATION_AUTHORITY_SCHEMA_VERSION,
+} from "./academy-legacy-iam-migration-contract.mjs";
+import {
   PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
   PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
 } from "./academy-private-runtime-iam-contract.mjs";
@@ -33,6 +37,7 @@ const INFRASTRUCTURE_RUNTIME_SOURCE_PATHS = Object.freeze([
   "functions/academy-reset-write-freeze.js",
   "functions/linkStudentAccountSafety.cjs",
   "functions/scripts/academy-functions-build-scope-contract.mjs",
+  "functions/scripts/academy-legacy-iam-migration-contract.mjs",
   "functions/scripts/academy-private-runtime-iam-contract.mjs",
   "functions/scripts/academy-reset-write-freeze-contract.mjs",
   "functions/scripts/academy-reset-write-surface-registry.mjs",
@@ -46,6 +51,7 @@ export const CRITICAL_RUNTIME_SOURCE_PATHS = Object.freeze([
 ].sort());
 export const IAM_CONTRACT_RUNTIME_SOURCE_PATHS = Object.freeze([
   "functions/scripts/academy-functions-build-scope-contract.mjs",
+  "functions/scripts/academy-legacy-iam-migration-contract.mjs",
   "functions/scripts/academy-private-runtime-iam-contract.mjs",
 ]);
 
@@ -280,6 +286,10 @@ export function resolveRuntimeGitSourceIdentity({repositoryRoot} = {}) {
       (sourcePath) => criticalSourceByPath.get(sourcePath),
   );
   const iamContractSourceIdentity = Object.freeze({
+    legacyIamMigrationAuthorityVersion:
+      MIGRATION_AUTHORITY_SCHEMA_VERSION,
+    legacyIamMigrationAuthorityDigest:
+      ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
     privateRuntimeIamContractVersion: PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
     privateRuntimeIamContractDigest: PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
     buildScopeContractVersion: BUILD_SCOPE_CONTRACT_VERSION,

@@ -8,6 +8,18 @@ import {
   buildOrganizationPolicyLineageReference,
 } from "../functions/scripts/academy-functions-build-scope-contract.mjs";
 import {
+  ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
+  DEFERRED_LEGACY_IAM_RECORDS,
+  FINAL_STEADY_STATE as FINAL_IAM_MIGRATION_PHASE,
+  POST_PRIVATE_DEPLOY_PRE_PUBLICATION,
+  POST_PROVISIONING_PRE_DEPLOY,
+  POST_PUBLICATION_PRE_CLEANUP,
+  PRE_PROVISIONING,
+  buildFinalIamAudit,
+  buildPhaseEvidence,
+  buildRollbackReceipt,
+} from "../functions/scripts/academy-legacy-iam-migration-contract.mjs";
+import {
   ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT,
   APPROVED_SINGLE_OPERATOR_PRINCIPAL,
   APPROVED_DATASTORE_PERMISSION_UNIVERSE,
@@ -110,6 +122,8 @@ function approvalFixture(overrides = {}) {
     organizationPolicy: clone(ORGANIZATION_POLICY_EVIDENCE),
     organizationPolicyLineage:
       clone(buildOrganizationPolicyLineageReference()),
+    preProvisioningMigrationEvidence:
+      clone(buildPhaseEvidence(PRE_PROVISIONING)),
     serviceAccountKeyAudit: {
       schemaVersion: SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
       projectId: "daegu-miami-production",
@@ -133,6 +147,8 @@ function singleOperatorControlManifest() {
   return {
     schemaVersion: SINGLE_OPERATOR_CONTROL_MANIFEST_VERSION,
     orderedSteps: clone(SINGLE_OPERATOR_EXECUTION_STEPS),
+    legacyIamMigrationAuthorityDigest:
+      ACADEMY_LEGACY_IAM_MIGRATION_AUTHORITY_DIGEST,
     deploymentSource: clone(IMMUTABLE_RELEASE_EVIDENCE),
     targets: clone(DEPLOYMENT_TARGETS),
     productionApprovalReferenceDigest: "f".repeat(64),
@@ -175,6 +191,10 @@ function singleOperatorPrivateValidationFixture(approval) {
     approvalId: approval.approvalId,
     approvalDigest: approval.approvalDigest,
     operatorMode: SINGLE_OPERATOR_JIT_V1,
+    postProvisioningMigrationEvidence:
+      clone(buildPhaseEvidence(POST_PROVISIONING_PRE_DEPLOY)),
+    prePublicationMigrationEvidence:
+      clone(buildPhaseEvidence(POST_PRIVATE_DEPLOY_PRE_PUBLICATION)),
     stepCompletions: steps,
     privateValidationCompletedAt: steps.at(-1).completedAt,
     targets: clone(SINGLE_OPERATOR_TARGET_FUNCTION_NAMES),
@@ -249,9 +269,20 @@ function singleOperatorCompletionFixture(
       existingFunctionCount: 32,
       finalFunctionCount: 35,
       finalGen2FunctionCount: 35,
-      evidenceDigest: "e".repeat(64),
+      evidenceDigest: "",
     },
+    postPublicationMigrationEvidence:
+      clone(buildPhaseEvidence(POST_PUBLICATION_PRE_CLEANUP)),
+    finalMigrationEvidence:
+      clone(buildPhaseEvidence(FINAL_IAM_MIGRATION_PHASE)),
+    finalIamAudit: clone(buildFinalIamAudit()),
+    rollbackReceipt: clone(buildRollbackReceipt({
+      phase: FINAL_IAM_MIGRATION_PHASE,
+      beforeRecords: DEFERRED_LEGACY_IAM_RECORDS,
+      restoredRecords: [],
+    })),
   };
+  receipt.finalAudit.evidenceDigest = receipt.finalIamAudit.auditDigest;
   receipt.receiptDigest =
     buildSingleOperatorCompletionReceiptDigest(receipt);
   return receipt;
