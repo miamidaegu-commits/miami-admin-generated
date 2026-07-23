@@ -9,7 +9,7 @@ This runbook prepares production without deleting data, resetting data, weakenin
 ## Academy private Functions IAM gate
 
 The Academy private Preview → Assignment → Outcome deployment contract is not
-authorized by the commands below. Its local v7 contract requires exact Runtime
+authorized by the commands below. Its local v9 contract requires exact Runtime
 IAM state receipts, resource-scoped Build bindings, the nine-permission Deploy
 profile, immutable release/source/selector/baseline digests, exact human
 principals, and an active RFC3339 UTC JIT window of at most two hours.
@@ -72,6 +72,51 @@ distinct exact `user:<email>` principals and retains the two-hour maximum JIT
 window. `SINGLE_OPERATOR_JIT_V1` alone permits the exact repeated tuple
 `user:miamidaegu@gmail.com`, requires an exact active JIT window of at most 60
 minutes, and does not infer or normalize the user.
+
+Active `SINGLE_OPERATOR_JIT_V1` issuance additionally requires
+`academy_single_operator_fresh_preflight_receipt.v1`. The issuance process
+generates a 256-bit nonce itself, invokes the approved read-only collector with
+that nonce, validates exact canonical receipt bytes and the source/evidence/
+manifest/tool/current-state projection, and only then fixes `jitStartsAt`.
+The nonce is single-use. A caller-selected nonce, old standalone receipt path,
+reconstructed invocation, finding, input requirement, Production data access,
+mutation, or changed 32-Function/14-Build PRE_PROVISIONING baseline rejects
+issuance. There is no time-based freshness TTL and no existing READY package is
+freshness authority by itself.
+
+The collector scope is the minimum projection needed to reprove the current
+baseline, not an automatic replay of every historical raw-evidence command. It
+must bind the exact active account/project and absent impersonation, absent four
+Academy Service Accounts and four Custom Roles, exact four-record legacy IAM
+baseline, zero unexpected Academy-prefixed resources, exact 32 Gen2 Functions
+with the target three absent, the exact 14-Build and Function→Run→Build
+projection digests, zero user-managed keys, exact Artifact metadata/IAM
+digests, and the exact 21-record Organization Policy digest. Before JIT start,
+the same process must copy the canonical receipt to the secure audit artifact.
+The contract accepts in-memory Buffer transport only, so no standalone
+temporary freshness file exists to retain or replay. Mutation commands remain
+unpublished.
+
+Fresh-preflight contract `academy_single_operator_fresh_preflight_contract.v2`
+and Runtime IAM contract `academy_private_runtime_iam.v9` export no Production
+helper that can mint authorization from a caller clock, raw projection, or
+synthetic receipt. Production orchestration uses only the reviewed-source-fixed
+collector/config and its internal clock. Pure config or projection assessments
+are data only and are rejected by every downstream authorization API.
+
+Runtime authorization is a linear one-shot chain held in a module-private
+`WeakMap`: the fresh module finalizes the canonical
+`freshPreflightSameInvocationValidated` state into an opaque capability. The
+Production orchestrator consumes that exact capability before validating the
+approval template and creates the initial private-validation capability only on
+success. Private validation then creates a new publication capability only on
+success; publication creates a completion capability only on success;
+completion consumes the final capability and creates no successor. Consumption
+occurs before validation, so failures cannot be retried with the same object. Reuse,
+out-of-order calls, stage skipping, cross-invocation lineage, cloning,
+serialization, reconstruction, and raw receipt/approval/assessment inputs all
+reject. Canonical receipts remain audit evidence, never authorization
+capabilities.
 
 Single-operator approval binds the mode authority to contract base release
 `d93ea87b68fa2fb8b9623f418e9a1bf2a3ac1297`. It also requires the exact

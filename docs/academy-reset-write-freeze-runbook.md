@@ -66,8 +66,8 @@ subset만 exact 복원할 수 있고, publication 이후 Owner 복원은 automat
 
 ## Fail-closed 고정값
 
-- contract/proof: `academy_reset_write_freeze.v8` /
-  `academy_reset_write_freeze_proof.v8`
+- contract/proof: `academy_reset_write_freeze.v10` /
+  `academy_reset_write_freeze_proof.v10`
 - Observation Contract: `academy_reset_provider_observation.v8`
 - deployment approval/provider dependency:
   `academy_reset_deployment_approval.v9` /
@@ -358,6 +358,50 @@ audit까지 같은 JIT 안에서 완료해야 한다. 어느 receipt나 control�
 command publication은 fail closed다. 두 모드 모두 exact 네 Service Account
 identity의 complete key audit와 user-managed key count `0`을 receipt에 bind한다.
 
+Active `SINGLE_OPERATOR_JIT_V1` issuance는
+`academy_single_operator_fresh_preflight_receipt.v1` same-invocation
+challenge-response를 추가로 요구한다. issuance process가 256-bit nonce를 직접
+생성하고 approved read-only collector에 전달한 뒤 canonical receipt의 exact
+nonce/source/evidence/rollback/provisioning/execution/tool/current-state digest를
+검증한다. 검증이 끝난 뒤에만 `jitStartsAt`을 확정하며 nonce는 한 번만 사용할 수
+있다. caller-selected nonce, standalone receipt path, reconstructed invocation,
+finding/inputRequired, Production data access/mutation, target-three 존재,
+SA/role partial state, legacy baseline 변경 또는 32-Function/14-Build mapping 변경은
+거부한다. 임의 TTL은 없고 과거 READY package만으로는 `INPUT_REQUIRED`를 해소할 수
+없다.
+
+Fresh collector는 과거 full raw evidence 전체를 무조건 재수집하지 않고 현재
+PRE_PROVISIONING을 재증명하는 최소 projection만 수집한다. active
+account/project, impersonation 부재, Academy SA/Custom Role 각 4개의 부재,
+4-record legacy IAM, unexpected Academy-prefix `0`, 32 Gen2 Function과
+target-three 부재, 14 Build 및 Function→Run→Build projection digest,
+user-managed key `0`, Artifact metadata/IAM digest, 21-record Organization
+Policy digest를 모두 exact로 bind한다. canonical receipt는 같은 process에서
+secure audit artifact로 복사된 뒤에만 JIT start를 확정한다. transport는
+in-memory Buffer만 허용하므로 replay 가능한 standalone temporary freshness
+file은 생성하지 않으며 mutation command는 계속 unpublished다.
+
+Fresh-preflight contract `academy_single_operator_fresh_preflight_contract.v2`
+및 Runtime IAM contract `academy_private_runtime_iam.v9`에서는 Production
+module namespace에 deterministic clock, raw projection 또는 synthetic receipt로
+authorization capability를 발급하는 test helper를 export하지 않는다. Production
+orchestration은 reviewed-source에 고정된 collector/config와 internal clock만
+호출한다. pure config/projection assessment는 opaque authorization이 아니며
+downstream Runtime IAM API에서 항상 거부한다.
+
+Runtime authorization은 module-private `WeakMap`의 exact object identity로만
+검증하는 linear one-shot chain이다. Fresh module은 canonical
+`freshPreflightSameInvocationValidated` state를 opaque finalization capability로
+확정한다. Production orchestrator는 이 exact capability를 approval validation 전에
+소비하고 성공한 경우에만 최초 private-validation capability를 발급한다. 이후
+private validation, publication, completion은 각각 직전 capability를 validation 전에
+소비하고, 성공한 경우에만 다음 stage용 새 opaque capability를 발급한다. 실패 시
+successor가 없고 completion 후에도 successor가 없다. 재사용, stage
+skip/out-of-order, 다른 invocation lineage,
+clone/Object.assign/structuredClone/JSON reconstruction 및 raw receipt/approval/
+assessment는 모두 거부한다. persisted canonical receipt는 audit evidence일 뿐
+authorization capability가 아니다.
+
 Organization Policy는 receipt-local generic `ALLOW`를 신뢰하지 않고 canonical
 evidence version/digest/status와 direct/effective record count/digest를 포함한
 pinned lineage와 exact 비교한다. authoritative 상태는
@@ -515,12 +559,12 @@ completeness를 주장할 수 없다.
 별도 reviewed-source contract는 package/lock, Runtime IAM/Build scope contract,
 legacy IAM migration authority, operation registry, transport, mock adapter,
 attestation, read-only permission
-manifest, runtime Git identity resolver, write-freeze contract, local-only Production
-observer, verifier의 exact 14개 path와 각 파일의 literal
+manifest, runtime Git identity resolver, write-freeze contract, fresh-preflight
+contract, local-only Production observer, verifier의 exact 15개 path와 각 파일의 literal
 SHA-256 및 canonical aggregate digest를 approval metadata/session/observation/proof에
 결합한다. 이 local adapter source set은 기존 deployed runtime Git critical source
 목록에 추가하지 않는다. adapter/verifier는 이 registry 자체는 hash set에서
-제외하고, exact 14개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
+제외하고, exact 15개 runtime path를 `lstat`/`realpath`로 regular non-symlink인지
 확인한 뒤 bytes SHA-256와 literal pin 및 aggregate를 다시 계산한다.
 reviewed-source aggregate는 source pin registry의 canonical digest를 검증 시점에
 재계산하며 문서의 복사값을 승인 근거로 사용하지 않는다.

@@ -25,7 +25,7 @@ import {
 
 const GIT_OUTPUT_LIMIT = 16 * 1024 * 1024;
 export const PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION =
-  "academy_reset_provider_reviewed_sources.v1";
+  "academy_reset_provider_reviewed_sources.v2";
 export const PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM =
   "sha256_canonical_path_and_file_sha256.v1";
 export const PROVIDER_ADAPTER_REVIEWED_SOURCE_PATHS = Object.freeze(
@@ -39,6 +39,7 @@ const INFRASTRUCTURE_RUNTIME_SOURCE_PATHS = Object.freeze([
   "functions/scripts/academy-functions-build-scope-contract.mjs",
   "functions/scripts/academy-legacy-iam-migration-contract.mjs",
   "functions/scripts/academy-private-runtime-iam-contract.mjs",
+  "functions/scripts/academy-single-operator-fresh-preflight-contract.mjs",
   "functions/scripts/academy-reset-write-freeze-contract.mjs",
   "functions/scripts/academy-reset-write-surface-registry.mjs",
   "functions/scripts/verify-academy-reset-write-freeze.mjs",
@@ -53,6 +54,7 @@ export const IAM_CONTRACT_RUNTIME_SOURCE_PATHS = Object.freeze([
   "functions/scripts/academy-functions-build-scope-contract.mjs",
   "functions/scripts/academy-legacy-iam-migration-contract.mjs",
   "functions/scripts/academy-private-runtime-iam-contract.mjs",
+  "functions/scripts/academy-single-operator-fresh-preflight-contract.mjs",
 ]);
 
 function canonical(value) {
