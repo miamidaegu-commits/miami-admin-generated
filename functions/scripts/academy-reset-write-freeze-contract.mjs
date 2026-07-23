@@ -126,9 +126,9 @@ export {
 };
 
 export const WRITE_FREEZE_CONTRACT_VERSION =
-  "academy_reset_write_freeze.v8";
+  "academy_reset_write_freeze.v10";
 export const WRITE_FREEZE_PROOF_VERSION =
-  "academy_reset_write_freeze_proof.v8";
+  "academy_reset_write_freeze_proof.v10";
 export const DEPLOYMENT_APPROVAL_RECEIPT_VERSION =
   "academy_reset_deployment_approval.v9";
 export const PROVIDER_OBSERVATION_VERSION =
@@ -940,6 +940,7 @@ function validateRelease(release) {
         "functions/scripts/academy-legacy-iam-migration-contract.mjs",
         "functions/scripts/academy-functions-build-scope-contract.mjs",
         "functions/scripts/academy-private-runtime-iam-contract.mjs",
+        "functions/scripts/academy-single-operator-fresh-preflight-contract.mjs",
       ].includes(sourcePath),
   );
   if (stableStringify(iamContractSourceIdentity.sources) !==

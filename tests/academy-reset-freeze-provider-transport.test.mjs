@@ -1037,11 +1037,12 @@ test("approval lineage binds the exact reviewed Stage B source path set", () => 
     "functions/scripts/academy-reset-freeze-readonly-permissions.mjs",
     "functions/scripts/academy-reset-freeze-runtime-identity.mjs",
     "functions/scripts/academy-reset-write-freeze-contract.mjs",
+    "functions/scripts/academy-single-operator-fresh-preflight-contract.mjs",
     "functions/scripts/observe-academy-reset-freeze-production.mjs",
     "functions/scripts/verify-academy-reset-write-freeze.mjs",
   ]);
   assert.equal(PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
-      "academy_reset_provider_reviewed_sources.v1");
+      "academy_reset_provider_reviewed_sources.v2");
   assert.equal(PROVIDER_ADAPTER_REVIEWED_SOURCE_DIGEST_ALGORITHM,
       "sha256_canonical_path_and_file_sha256.v1");
   assert.deepEqual(

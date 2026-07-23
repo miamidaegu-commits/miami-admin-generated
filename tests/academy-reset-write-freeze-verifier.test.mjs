@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import {execFileSync} from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {fileURLToPath} from "node:url";
+import {fileURLToPath, pathToFileURL} from "node:url";
 import {
   ACADEMY_RESET_WRITE_SURFACE_REGISTRY,
   EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST,
@@ -162,10 +163,42 @@ const sourceRepositoryRootDigest = sha256Canonical({
   repositoryRoot: fs.realpathSync(sourceRepositoryRoot),
   schemaVersion: PROVIDER_ADAPTER_REVIEWED_SOURCE_CONTRACT_VERSION,
 });
+
+async function loadInstrumentedReleaseValidator() {
+  const sourceDirectory = path.join(sourceRepositoryRoot, "functions/scripts");
+  const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "academy-release-validator-"),
+  );
+  const scriptsDirectory = path.join(temporaryRoot, "scripts");
+  fs.cpSync(sourceDirectory, scriptsDirectory, {recursive: true});
+  const contractPath = path.join(
+      scriptsDirectory,
+      "academy-reset-write-freeze-contract.mjs",
+  );
+  fs.appendFileSync(contractPath, `
+export {validateRelease as __testValidateRelease};
+`);
+  try {
+    const instrumented = await import(
+        `${pathToFileURL(contractPath).href}?instrumented=${Date.now()}`,
+    );
+    return instrumented.__testValidateRelease;
+  } finally {
+    fs.rmSync(temporaryRoot, {recursive: true, force: true});
+  }
+}
+
+const validateReleaseForTest = await loadInstrumentedReleaseValidator();
 const SHA = "1234567890abcdef1234567890abcdef12345678";
 const TREE_SHA = "abcdef1234567890abcdef1234567890abcdef12";
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
+const EXPECTED_RUNTIME_IAM_SOURCE_PATHS = Object.freeze([
+  "functions/scripts/academy-functions-build-scope-contract.mjs",
+  "functions/scripts/academy-legacy-iam-migration-contract.mjs",
+  "functions/scripts/academy-private-runtime-iam-contract.mjs",
+  "functions/scripts/academy-single-operator-fresh-preflight-contract.mjs",
+]);
 const TEST_NOW_MS = Date.now();
 const atOffsetMinutes = (minutes) =>
   new Date(TEST_NOW_MS + minutes * 60 * 1000).toISOString();
@@ -289,6 +322,9 @@ function runtimeGitFixture() {
       criticalSourceByPath.get(
           "functions/scripts/academy-private-runtime-iam-contract.mjs",
       ),
+      criticalSourceByPath.get(
+          "functions/scripts/academy-single-operator-fresh-preflight-contract.mjs",
+      ),
     ],
   };
   return {
@@ -392,6 +428,7 @@ function runtimeActivationApprovalFixture() {
     invokerOperatorPrincipal: "user:invoker@daegu-miami.com",
     jitStartsAt: DEPLOYMENT_AT,
     jitExpiresAt: EXPIRES_AT,
+    freshPreflightReceiptDigest: null,
     organizationPolicy: structuredClone(ORGANIZATION_POLICY_EVIDENCE),
     organizationPolicyLineage:
       structuredClone(buildOrganizationPolicyLineageReference()),
@@ -978,6 +1015,133 @@ function deepFreezeFixture(value, seen = new Set()) {
   }
   return Object.freeze(value);
 }
+
+function mutateRuntimeIamSourceProjection(mutate) {
+  const evidence = evidenceFixture();
+  assert.deepEqual(
+      evidence.release.runtimeGit,
+      sharedProviderRuntimeContext.runtimeGit,
+  );
+  const release = structuredClone(evidence.release);
+  assert.doesNotThrow(() => validateReleaseForTest(release));
+  release.runtimeGit.iamContractSourceIdentity = structuredClone(
+      release.runtimeGit.iamContractSourceIdentity,
+  );
+  mutate(
+      release.runtimeGit.iamContractSourceIdentity.sources,
+      release.runtimeGit,
+  );
+  release.runtimeGit.iamContractSourceSetDigest = sha256Canonical(
+      release.runtimeGit.iamContractSourceIdentity,
+  );
+  return release;
+}
+
+test("blocker K — Runtime IAM lineage uses exact four source bytes", () => {
+  const runtimeGit = sharedAttestedEvidence.release.runtimeGit;
+  const sources = runtimeGit.iamContractSourceIdentity.sources;
+  assert.deepEqual(
+      sources.map(({path: sourcePath}) => sourcePath),
+      EXPECTED_RUNTIME_IAM_SOURCE_PATHS,
+  );
+  assert.equal(sources.length, 4);
+  const reviewedPins = new Map(
+      PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES.map(
+          ({path: sourcePath, sha256}) => [sourcePath, sha256],
+      ),
+  );
+  for (const source of sources) {
+    const actualSha256 = crypto.createHash("sha256")
+        .update(fs.readFileSync(path.join(sourceRepositoryRoot, source.path)))
+        .digest("hex");
+    assert.equal(source.runtimeSha256, actualSha256, source.path);
+    assert.equal(source.headSha256, actualSha256, source.path);
+    assert.equal(reviewedPins.get(source.path), actualSha256, source.path);
+  }
+});
+
+test("blocker L1 — missing Runtime IAM lineage source rejects", () => {
+  const missing = mutateRuntimeIamSourceProjection(
+      (sources) => sources.pop(),
+  );
+  assert.throws(() => validateReleaseForTest(missing), {
+    message: "Write-freeze evidence rejected: runtime IAM contract source " +
+      "records mismatch",
+  });
+});
+
+test("blocker L2 — extra Runtime IAM lineage source rejects", () => {
+  const extra = mutateRuntimeIamSourceProjection(
+      (sources, runtimeGit) => sources.push(
+          structuredClone(runtimeGit.criticalSources.find(
+              ({path: sourcePath}) =>
+                sourcePath ===
+                  "functions/scripts/academy-reset-write-freeze-contract.mjs",
+          )),
+      ),
+  );
+  assert.throws(() => validateReleaseForTest(extra), {
+    message: "Write-freeze evidence rejected: runtime IAM contract source " +
+      "records mismatch",
+  });
+});
+
+test("blocker M1 — same-count Runtime IAM source swap rejects", () => {
+  const swapped = mutateRuntimeIamSourceProjection(
+      (sources, runtimeGit) => {
+        sources[sources.length - 1] = structuredClone(
+            runtimeGit.criticalSources.find(({path: sourcePath}) =>
+              sourcePath ===
+                "functions/scripts/academy-reset-write-freeze-contract.mjs"),
+        );
+      },
+  );
+  assert.throws(() => validateReleaseForTest(swapped), {
+    message: "Write-freeze evidence rejected: runtime IAM contract source " +
+      "records mismatch",
+  });
+});
+
+test("blocker M2 — stale Runtime IAM source digest rejects", () => {
+  const stale = mutateRuntimeIamSourceProjection(
+      (sources) => {
+        sources.at(-1).runtimeSha256 = DIGEST_A;
+        sources.at(-1).headSha256 = DIGEST_A;
+      },
+  );
+  assert.throws(() => validateReleaseForTest(stale), {
+    message: "Write-freeze evidence rejected: runtime IAM contract source " +
+      "records mismatch",
+  });
+});
+
+test("blocker N — runbooks use the exported Runtime IAM version", () => {
+  const runtimeSource = fs.readFileSync(path.join(
+      sourceRepositoryRoot,
+      "functions/scripts/academy-private-runtime-iam-contract.mjs",
+  ), "utf8");
+  assert.match(
+      runtimeSource,
+      new RegExp(`\"${PRIVATE_RUNTIME_IAM_CONTRACT_VERSION}\"`),
+  );
+  for (const relativePath of [
+    "docs/academy-reset-write-freeze-runbook.md",
+    "docs/production-deploy-runbook.md",
+  ]) {
+    const runbook = fs.readFileSync(
+        path.join(sourceRepositoryRoot, relativePath),
+        "utf8",
+    );
+    assert.equal(
+        runbook.includes(PRIVATE_RUNTIME_IAM_CONTRACT_VERSION),
+        true,
+    );
+    const staleVersion = `academy_private_runtime_iam.v${8}`;
+    const staleLabel = `local v${8} contract`;
+    assert.equal(runbook.includes(staleVersion), false);
+    assert.equal(runbook.includes(staleLabel), false);
+  }
+});
 
 test("v6 Runtime IAM and Build scope lineage is mandatory and fail-closed",
     () => {

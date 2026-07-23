@@ -23,9 +23,16 @@ import {
   validatePhaseEvidence,
   validateRollbackReceipt,
 } from "./academy-legacy-iam-migration-contract.mjs";
+import {
+  FRESH_PREFLIGHT_CONTRACT,
+  FRESH_PREFLIGHT_CONTRACT_DIGEST,
+  FRESH_PREFLIGHT_CONTRACT_VERSION,
+  consumeSingleOperatorFreshPreflightFinalizationCapability,
+  runApprovedSingleOperatorFreshPreflightCollector,
+} from "./academy-single-operator-fresh-preflight-contract.mjs";
 
 export const PRIVATE_RUNTIME_IAM_CONTRACT_VERSION =
-  "academy_private_runtime_iam.v7";
+  "academy_private_runtime_iam.v9";
 export const PRIVATE_RUNTIME_IAM_SET_DIGEST_VERSION =
   "academy_private_runtime_iam_set_sha256.v1";
 export const FREEZE_ACTIVATION_RECEIPT_VERSION =
@@ -33,7 +40,7 @@ export const FREEZE_ACTIVATION_RECEIPT_VERSION =
 export const UNFREEZE_RESTORATION_RECEIPT_VERSION =
   "academy_private_runtime_unfreeze_restoration.v4";
 export const EXECUTABLE_APPROVAL_VERSION =
-  "academy_private_runtime_executable_approval.v6";
+  "academy_private_runtime_executable_approval.v7";
 export const EXACT_CHRONOLOGY_PROFILE_VERSION =
   "academy_private_runtime_exact_chronology.v2";
 export const SERVICE_ACCOUNT_KEY_AUDIT_VERSION =
@@ -55,6 +62,12 @@ export const APPROVED_SINGLE_OPERATOR_PRINCIPAL =
 export const MAX_JIT_DURATION_NANOSECONDS_DECIMAL = "7200000000000";
 export const SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS_DECIMAL =
   "3600000000000";
+const issuedSingleOperatorAuthorizationSessions = new WeakMap();
+const SINGLE_OPERATOR_AUTHORIZATION_STAGES = Object.freeze({
+  PRIVATE_VALIDATION: "PRIVATE_VALIDATION",
+  PUBLICATION: "PUBLICATION",
+  COMPLETION: "COMPLETION",
+});
 
 export const SINGLE_OPERATOR_EXECUTION_STEPS = deepFreeze([
   "PROVISIONING_PREFLIGHT_AND_BASELINE",
@@ -104,6 +117,10 @@ export const OPERATOR_MODE_AUTHORITY = deepFreeze({
       temporaryAccessRemovalEvidenceRequired: true,
       rollbackManifestRequired: true,
       secureAuditArtifactRequired: true,
+      freshPreflightContractVersion: FRESH_PREFLIGHT_CONTRACT_VERSION,
+      freshPreflightContractDigest: FRESH_PREFLIGHT_CONTRACT_DIGEST,
+      freshPreflightSameInvocationRequired: true,
+      standaloneFreshnessReceiptDisposition: "REJECT",
     },
   },
 });
@@ -243,6 +260,14 @@ export const FUNCTION_RUNTIME_SERVICE_ACCOUNT_MAPPING = deepFreeze(
 
 function fail(message) {
   throw new Error(`Academy private runtime IAM contract rejected: ${message}`);
+}
+
+function inputRequired(message) {
+  const error = new Error(
+      `Academy private runtime IAM contract requires input: ${message}`,
+  );
+  error.code = "INPUT_REQUIRED";
+  throw error;
 }
 
 function deepFreeze(value) {
@@ -465,6 +490,25 @@ const contractWithoutDigest = {
     schemaVersion: SERVICE_ACCOUNT_KEY_AUDIT_VERSION,
     serviceAccountEmails: EXECUTION_SERVICE_ACCOUNT_EMAILS,
     requiredUserManagedKeyCount: 0,
+  },
+  singleOperatorFreshPreflight: FRESH_PREFLIGHT_CONTRACT,
+  singleOperatorAuthorizationCapabilityChain: {
+    initialCapability: "FRESH_PREFLIGHT_FINALIZATION_CAPABILITY",
+    initialBridge:
+      "SAME_INVOCATION_FRESH_FINALIZATION_TO_PRIVATE_VALIDATION",
+    canonicalSameInvocationField:
+      "freshPreflightSameInvocationValidated",
+    stages: [
+      SINGLE_OPERATOR_AUTHORIZATION_STAGES.PRIVATE_VALIDATION,
+      SINGLE_OPERATOR_AUTHORIZATION_STAGES.PUBLICATION,
+      SINGLE_OPERATOR_AUTHORIZATION_STAGES.COMPLETION,
+    ],
+    storage: "MODULE_PRIVATE_WEAKMAP",
+    consumeBeforeValidation: true,
+    failureSuccessorDisposition: "NONE",
+    successfulStageSuccessor: "NEW_OPAQUE_OBJECT",
+    completionSuccessorDisposition: "NONE",
+    copiedSerializedReconstructedDisposition: "REJECT",
   },
   organizationPolicyAuthority: {
     evidence: ORGANIZATION_POLICY_EVIDENCE,
@@ -962,11 +1006,15 @@ function validateOperatorMode(approval, executionPrincipals) {
   fail("operator mode is missing or unsupported");
 }
 
-export function validateExecutableApproval(
+function validateExecutableApprovalInternal(
     approval,
     {
       currentTimeMs = Date.now(),
       currentTimestamp,
+    } = {},
+    {
+      prevalidatedFreshPreflight = null,
+      requireFreshPreflight = true,
     } = {},
 ) {
   assertExactKeys(approval, [
@@ -975,6 +1023,7 @@ export function validateExecutableApproval(
     "approvedAt",
     "actualProvisioningEligible",
     "deploymentApprovalEligible",
+    "freshPreflightReceiptDigest",
     "publicInvokerApprovalEligible",
     "iamMutationCommandPublication",
     "impersonationPrincipal",
@@ -1007,6 +1056,14 @@ export function validateExecutableApproval(
     executionPrincipals.push(member);
   }
   validateOperatorMode(approval, executionPrincipals);
+  if (approval.operatorMode === SINGLE_OPERATOR_JIT_V1) {
+    if (typeof approval.freshPreflightReceiptDigest !== "string" ||
+        !SHA256_HEX.test(approval.freshPreflightReceiptDigest)) {
+      fail("single-operator approval requires a fresh preflight digest");
+    }
+  } else if (approval.freshPreflightReceiptDigest !== null) {
+    fail("three-person approval forbids a fresh preflight digest");
+  }
   validateServiceAccountKeyAudit(approval.serviceAccountKeyAudit);
   validatePhaseEvidence(approval.preProvisioningMigrationEvidence);
   if (approval.preProvisioningMigrationEvidence.phase !== PRE_PROVISIONING) {
@@ -1075,6 +1132,26 @@ export function validateExecutableApproval(
   if (EXECUTION_ACTION_KEYS.some((key) => approval[key] !== execution[key])) {
     fail("approval execution flags do not fail closed for Organization Policy");
   }
+  const freshPreflightValidation = prevalidatedFreshPreflight;
+  if (approval.operatorMode === SINGLE_OPERATOR_JIT_V1) {
+    if (requireFreshPreflight) {
+      inputRequired(
+          "same-invocation collector orchestration is required",
+      );
+    }
+    if (freshPreflightValidation !== null &&
+        (freshPreflightValidation.freshPreflightReceiptDigest !==
+          approval.freshPreflightReceiptDigest ||
+         freshPreflightValidation.freshPreflightSameInvocationValidated !==
+          true ||
+         freshPreflightValidation.jitStartsAfterFreshCollection !== true ||
+         freshPreflightValidation.rollbackManifestDigest !==
+          approval.singleOperatorControlManifest.rollbackManifestDigest ||
+         freshPreflightValidation.secureAuditCopyValidated !== true ||
+         freshPreflightValidation.mutationCommandsPublished !== false)) {
+      fail("approval fresh preflight validation binding mismatch");
+    }
+  }
   return deepFreeze({
     approvalId: approval.approvalId,
     approvalDigest: approval.approvalDigest,
@@ -1094,6 +1171,25 @@ export function validateExecutableApproval(
       approval.preProvisioningMigrationEvidence.evidenceDigest,
     userManagedServiceAccountKeyCount:
       approval.serviceAccountKeyAudit.userManagedKeyCount,
+    freshPreflightContractVersion:
+      approval.operatorMode === SINGLE_OPERATOR_JIT_V1 ?
+        FRESH_PREFLIGHT_CONTRACT_VERSION : null,
+    freshPreflightContractDigest:
+      approval.operatorMode === SINGLE_OPERATOR_JIT_V1 ?
+        FRESH_PREFLIGHT_CONTRACT_DIGEST : null,
+    freshPreflightReceiptDigest: approval.freshPreflightReceiptDigest,
+    freshPreflightSameInvocationValidated:
+      freshPreflightValidation === null ?
+        null :
+        freshPreflightValidation.freshPreflightSameInvocationValidated,
+    rollbackManifestDigest:
+      approval.operatorMode === SINGLE_OPERATOR_JIT_V1 ?
+        approval.singleOperatorControlManifest.rollbackManifestDigest : null,
+    secureAuditArtifactDigest:
+      approval.operatorMode === SINGLE_OPERATOR_JIT_V1 ?
+        approval.singleOperatorControlManifest.secureAuditArtifact
+            .artifactDigest : null,
+    mutationCommandsPublished: false,
     execution,
     publicInvokerRequiresSeparateReceipt:
       approval.operatorMode === SINGLE_OPERATOR_JIT_V1,
@@ -1104,6 +1200,263 @@ export function validateExecutableApproval(
         execution.publicInvokerApprovalEligible === false :
       EXECUTION_ACTION_KEYS.every((key) => execution[key]),
   });
+}
+
+export function validateExecutableApproval(approval, options = {}) {
+  return validateExecutableApprovalInternal(approval, options);
+}
+
+function mintIssuedSingleOperatorAuthorizationCapability(
+    approval,
+    assessment,
+    {
+      expectedStage = SINGLE_OPERATOR_AUTHORIZATION_STAGES.PRIVATE_VALIDATION,
+      invocationIdentity = approval.freshPreflightReceiptDigest,
+      previousStageLineage = null,
+    } = {},
+) {
+  const authorizationCapability = Object.freeze(Object.create(null));
+  issuedSingleOperatorAuthorizationSessions.set(
+      authorizationCapability,
+      deepFreeze({
+        approval: structuredClone(approval),
+        assessment: structuredClone(assessment),
+        expectedStage,
+        invocationIdentity,
+        previousStageLineage: previousStageLineage === null ?
+          null :
+          structuredClone(previousStageLineage),
+      }),
+  );
+  return authorizationCapability;
+}
+
+function consumeIssuedSingleOperatorAuthorizationCapability(
+    authorizationCapability,
+    expectedStage,
+) {
+  if (!authorizationCapability ||
+      (typeof authorizationCapability !== "object" &&
+       typeof authorizationCapability !== "function")) {
+    fail("runtime authorization capability is absent, copied, or consumed");
+  }
+  const issued =
+    issuedSingleOperatorAuthorizationSessions.get(authorizationCapability);
+  if (!issued) {
+    fail("runtime authorization capability is absent, copied, or consumed");
+  }
+  issuedSingleOperatorAuthorizationSessions.delete(authorizationCapability);
+  if (issued.expectedStage !== expectedStage) {
+    fail(
+        "runtime authorization capability stage mismatch: " +
+        `expected ${expectedStage}, received ${issued.expectedStage}`,
+    );
+  }
+  return issued;
+}
+
+function validateIssuedExecutableApproval(
+    approvalOrAuthorizationCapability,
+    options = {},
+) {
+  if (issuedSingleOperatorAuthorizationSessions.has(
+      approvalOrAuthorizationCapability,
+  )) {
+    fail(
+        "stage-specific Runtime IAM capability must be consumed by its " +
+        "exact downstream API",
+    );
+  }
+  if (approvalOrAuthorizationCapability?.operatorMode ===
+      SINGLE_OPERATOR_JIT_V1) {
+    fail("raw single-operator approval is not an authorization capability");
+  }
+  return validateExecutableApprovalInternal(
+      approvalOrAuthorizationCapability,
+      options,
+      {requireFreshPreflight: false},
+  );
+}
+
+function addExactSixtyMinutes(timestamp) {
+  return new Date(Date.parse(timestamp) + 60 * 60 * 1_000).toISOString();
+}
+
+function buildInternallyTimedSingleOperatorApproval(
+    approvalTemplate,
+    {
+      approvedAt,
+      freshPreflightReceiptDigest,
+      jitStartsAt,
+    },
+) {
+  assertExactKeys(approvalTemplate, [
+    "approvalId",
+    "actualProvisioningEligible",
+    "deploymentApprovalEligible",
+    "iamMutationCommandPublication",
+    "impersonationPrincipal",
+    "invokerOperatorPrincipal",
+    "organizationPolicy",
+    "organizationPolicyLineage",
+    "operatorMode",
+    "preProvisioningMigrationEvidence",
+    "provisioningPrincipal",
+    "publicInvokerApprovalEligible",
+    "schemaVersion",
+    "serviceAccountKeyAudit",
+    "singleOperatorControlManifest",
+  ], "single-operator approval template");
+  const approval = {
+    ...structuredClone(approvalTemplate),
+    approvedAt,
+    jitStartsAt,
+    jitExpiresAt: addExactSixtyMinutes(jitStartsAt),
+    freshPreflightReceiptDigest,
+    approvalDigest: "",
+  };
+  approval.approvalDigest = buildExecutableApprovalDigest(approval);
+  return approval;
+}
+
+function bridgeSingleOperatorFreshFinalizationToPrivateValidation(
+    freshFinalizationCapability,
+    approvalTemplate,
+) {
+  const freshFinalization =
+    consumeSingleOperatorFreshPreflightFinalizationCapability(
+        freshFinalizationCapability,
+    );
+  const approval = buildInternallyTimedSingleOperatorApproval(
+      approvalTemplate,
+      {
+        approvedAt: freshFinalization.jitStartsAt,
+        freshPreflightReceiptDigest:
+          freshFinalization.freshPreflightReceiptDigest,
+        jitStartsAt: freshFinalization.jitStartsAt,
+      },
+  );
+  const assessment = validateExecutableApprovalInternal(
+      approval,
+      {currentTimestamp: freshFinalization.jitStartsAt},
+      {
+        prevalidatedFreshPreflight: freshFinalization,
+        requireFreshPreflight: false,
+      },
+  );
+  if (assessment.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
+      assessment.executable !== true ||
+      assessment.freshPreflightSameInvocationValidated !== true ||
+      freshFinalization.activeJitReceiptEligible !== true ||
+      freshFinalization.mutationCommandsPublished !== false) {
+    fail("fresh finalization is not executable for private validation");
+  }
+  const authorizationCapability =
+    mintIssuedSingleOperatorAuthorizationCapability(
+        approval,
+        assessment,
+        {
+          expectedStage:
+            SINGLE_OPERATOR_AUTHORIZATION_STAGES.PRIVATE_VALIDATION,
+          invocationIdentity:
+            freshFinalization.freshPreflightReceiptDigest,
+          previousStageLineage: {
+            freshPreflightReceiptDigest:
+              freshFinalization.freshPreflightReceiptDigest,
+          },
+        },
+    );
+  return deepFreeze({
+    activeJitReceiptCreated: 0,
+    approval: deepFreeze(structuredClone(approval)),
+    assessment,
+    authorizationCapability,
+  });
+}
+
+async function runSingleOperatorFreshProductionOrchestrator() {
+  const orchestration =
+    await runApprovedSingleOperatorFreshPreflightCollector();
+  assertExactKeys(orchestration, [
+    "approvalTemplate",
+    "freshFinalizationCapability",
+  ], "approved fresh-preflight orchestration result");
+  return bridgeSingleOperatorFreshFinalizationToPrivateValidation(
+      orchestration.freshFinalizationCapability,
+      orchestration.approvalTemplate,
+  );
+}
+
+export async function validateSingleOperatorFreshExecutableApproval() {
+  if (arguments.length !== 0) {
+    fail("production fresh issuance accepts no override parameters");
+  }
+  return runSingleOperatorFreshProductionOrchestrator();
+}
+
+export async function assessSingleOperatorFreshJitIssuance() {
+  try {
+    if (arguments.length !== 0) {
+      fail("production fresh issuance accepts no override parameters");
+    }
+    inputRequired(
+        "fresh capability assessment cannot consume the production bridge",
+    );
+  } catch (error) {
+    return deepFreeze({
+      verdict: error?.code === "INPUT_REQUIRED" ?
+        "INPUT_REQUIRED" : "REJECTED",
+      activeJitReceiptEligible: false,
+      activeJitReceiptCreated: 0,
+      deploymentEligible: false,
+      mutationCommandPublicationEligible: false,
+      mutationCommandsPublished: false,
+      provisioningEligible: false,
+      publicInvokerEligible: false,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+export function assessSingleOperatorJitIssuance(approval, options = {}) {
+  const rejected = {
+    activeJitReceiptEligible: false,
+    activeJitReceiptCreated: 0,
+    deploymentEligible: false,
+    mutationCommandPublicationEligible: false,
+    mutationCommandsPublished: false,
+    provisioningEligible: false,
+    publicInvokerEligible: false,
+  };
+  try {
+    const assessment = validateExecutableApproval(approval, options);
+    if (assessment.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
+        assessment.executable !== true ||
+        assessment.freshPreflightSameInvocationValidated !== true) {
+      fail("single-operator issuance assessment is not freshly executable");
+    }
+    return deepFreeze({
+      verdict: "READY_FOR_ACTIVE_JIT_RECEIPT",
+      activeJitReceiptEligible: true,
+      activeJitReceiptCreated: 0,
+      deploymentEligible:
+        assessment.execution.deploymentApprovalEligible,
+      mutationCommandPublicationEligible:
+        assessment.execution.iamMutationCommandPublication,
+      mutationCommandsPublished: false,
+      provisioningEligible:
+        assessment.execution.actualProvisioningEligible,
+      publicInvokerEligible:
+        assessment.execution.publicInvokerApprovalEligible,
+    });
+  } catch (error) {
+    return deepFreeze({
+      verdict: error?.code === "INPUT_REQUIRED" ?
+        "INPUT_REQUIRED" : "REJECTED",
+      ...rejected,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export const validatePrincipalJitOrgPolicyApproval =
@@ -1131,8 +1484,24 @@ export function buildSingleOperatorCompletionReceiptDigest(receipt) {
   return buildReceiptDigest(receipt, "single operator completion");
 }
 
-function validateSingleOperatorApprovalAt(approval, currentTimestamp) {
-  const assessment = validateExecutableApproval(approval, {currentTimestamp});
+function validateSingleOperatorApprovalDataAt(approval, currentTimestamp) {
+  const assessment = validateExecutableApprovalInternal(
+      approval,
+      {currentTimestamp},
+      {
+        prevalidatedFreshPreflight: {
+          freshPreflightReceiptDigest:
+            approval.freshPreflightReceiptDigest,
+          freshPreflightSameInvocationValidated: true,
+          jitStartsAfterFreshCollection: true,
+          mutationCommandsPublished: false,
+          rollbackManifestDigest:
+            approval.singleOperatorControlManifest.rollbackManifestDigest,
+          secureAuditCopyValidated: true,
+        },
+        requireFreshPreflight: false,
+      },
+  );
   if (assessment.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
       assessment.executable !== true ||
       assessment.execution.actualProvisioningEligible !== true ||
@@ -1187,7 +1556,7 @@ function validateOrderedStepCompletions(
   return times;
 }
 
-export function validateSingleOperatorPrivateValidationReceipt(
+function validateSingleOperatorPrivateValidationReceiptData(
     receipt,
     approval,
 ) {
@@ -1211,7 +1580,7 @@ export function validateSingleOperatorPrivateValidationReceipt(
     "targets",
     "userManagedKeyCount",
   ], "single operator private validation receipt");
-  const assessment = validateSingleOperatorApprovalAt(
+  const assessment = validateSingleOperatorApprovalDataAt(
       approval,
       receipt.privateValidationCompletedAt,
   );
@@ -1226,7 +1595,7 @@ export function validateSingleOperatorPrivateValidationReceipt(
   const times = validateOrderedStepCompletions(
       receipt.stepCompletions,
       SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS,
-      approval,
+      assessment,
       "single operator private validation steps",
   );
   const completedAt = parseExactRfc3339UtcNanoseconds(
@@ -1270,7 +1639,36 @@ export function validateSingleOperatorPrivateValidationReceipt(
   });
 }
 
-export function validateSingleOperatorInvokerPublicationReceipt(
+export function validateSingleOperatorPrivateValidationReceipt(
+    receipt,
+    authorizationCapability,
+) {
+  const issued = consumeIssuedSingleOperatorAuthorizationCapability(
+      authorizationCapability,
+      SINGLE_OPERATOR_AUTHORIZATION_STAGES.PRIVATE_VALIDATION,
+  );
+  const assessment = validateSingleOperatorPrivateValidationReceiptData(
+      receipt,
+      issued.approval,
+  );
+  const successor = mintIssuedSingleOperatorAuthorizationCapability(
+      issued.approval,
+      issued.assessment,
+      {
+        expectedStage: SINGLE_OPERATOR_AUTHORIZATION_STAGES.PUBLICATION,
+        invocationIdentity: issued.invocationIdentity,
+        previousStageLineage: {
+          privateValidationReceiptDigest: assessment.receiptDigest,
+        },
+      },
+  );
+  return deepFreeze({
+    ...assessment,
+    authorizationCapability: successor,
+  });
+}
+
+function validateSingleOperatorInvokerPublicationReceiptData(
     receipt,
     approval,
     privateValidationReceipt,
@@ -1288,11 +1686,11 @@ export function validateSingleOperatorInvokerPublicationReceipt(
     "schemaVersion",
     "targets",
   ], "single operator invoker publication receipt");
-  const privateAssessment = validateSingleOperatorPrivateValidationReceipt(
+  const privateAssessment = validateSingleOperatorPrivateValidationReceiptData(
       privateValidationReceipt,
       approval,
   );
-  const approvalAssessment = validateSingleOperatorApprovalAt(
+  const approvalAssessment = validateSingleOperatorApprovalDataAt(
       approval,
       receipt.publicationConfirmedAt,
   );
@@ -1335,7 +1733,49 @@ export function validateSingleOperatorInvokerPublicationReceipt(
   });
 }
 
-export function validateSingleOperatorCompletionReceipt(
+export function validateSingleOperatorInvokerPublicationReceipt(
+    receipt,
+    authorizationCapability,
+    privateValidationReceipt,
+) {
+  const issued = consumeIssuedSingleOperatorAuthorizationCapability(
+      authorizationCapability,
+      SINGLE_OPERATOR_AUTHORIZATION_STAGES.PUBLICATION,
+  );
+  const privateAssessment = validateSingleOperatorPrivateValidationReceiptData(
+      privateValidationReceipt,
+      issued.approval,
+  );
+  if (issued.invocationIdentity !==
+        issued.approval.freshPreflightReceiptDigest ||
+      issued.previousStageLineage?.privateValidationReceiptDigest !==
+        privateAssessment.receiptDigest) {
+    fail("publication capability previous-stage lineage mismatch");
+  }
+  const assessment = validateSingleOperatorInvokerPublicationReceiptData(
+      receipt,
+      issued.approval,
+      privateValidationReceipt,
+  );
+  const successor = mintIssuedSingleOperatorAuthorizationCapability(
+      issued.approval,
+      issued.assessment,
+      {
+        expectedStage: SINGLE_OPERATOR_AUTHORIZATION_STAGES.COMPLETION,
+        invocationIdentity: issued.invocationIdentity,
+        previousStageLineage: {
+          privateValidationReceiptDigest: privateAssessment.receiptDigest,
+          publicationReceiptDigest: assessment.receiptDigest,
+        },
+      },
+  );
+  return deepFreeze({
+    ...assessment,
+    authorizationCapability: successor,
+  });
+}
+
+function validateSingleOperatorCompletionReceiptData(
     receipt,
     approval,
     privateValidationReceipt,
@@ -1364,12 +1804,16 @@ export function validateSingleOperatorCompletionReceipt(
     "temporaryAccessRemovedAt",
   ], "single operator completion receipt");
   const publicationAssessment =
-    validateSingleOperatorInvokerPublicationReceipt(
+    validateSingleOperatorInvokerPublicationReceiptData(
         invokerPublicationReceipt,
         approval,
         privateValidationReceipt,
     );
-  validateSingleOperatorApprovalAt(approval, receipt.finalAuditCompletedAt);
+  const assessment =
+    validateSingleOperatorApprovalDataAt(
+        approval,
+        receipt.finalAuditCompletedAt,
+    );
   validatePhaseEvidence(receipt.postPublicationMigrationEvidence);
   validatePhaseEvidence(receipt.finalMigrationEvidence);
   validateFinalIamAudit(receipt.finalIamAudit);
@@ -1393,7 +1837,7 @@ export function validateSingleOperatorCompletionReceipt(
   const times = validateOrderedStepCompletions(
       receipt.stepCompletions,
       SINGLE_OPERATOR_COMPLETION_STEPS,
-      approval,
+      assessment,
       "single operator completion steps",
   );
   assertExactKeys(receipt.temporaryAccessRemovalEvidence, [
@@ -1412,7 +1856,6 @@ export function validateSingleOperatorCompletionReceipt(
     "keyAuditComplete",
     "userManagedKeyCount",
   ], "single operator final audit");
-  const manifest = approval.singleOperatorControlManifest;
   const publicationConfirmedAt = parseExactRfc3339UtcNanoseconds(
       publicationAssessment.publicationConfirmedAt,
       "publicationConfirmedAt",
@@ -1421,16 +1864,16 @@ export function validateSingleOperatorCompletionReceipt(
       typeof receipt.receiptId !== "string" ||
       receipt.receiptId.length === 0 ||
       PLACEHOLDER.test(receipt.receiptId) ||
-      receipt.approvalId !== approval.approvalId ||
-      receipt.approvalDigest !== approval.approvalDigest ||
+      receipt.approvalId !== assessment.approvalId ||
+      receipt.approvalDigest !== assessment.approvalDigest ||
       receipt.operatorMode !== SINGLE_OPERATOR_JIT_V1 ||
       receipt.publicationReceiptDigest !==
         publicationAssessment.receiptDigest ||
       times[0] <= publicationConfirmedAt ||
       !same(receipt.targets, SINGLE_OPERATOR_TARGET_FUNCTION_NAMES) ||
-      receipt.rollbackManifestDigest !== manifest.rollbackManifestDigest ||
+      receipt.rollbackManifestDigest !== assessment.rollbackManifestDigest ||
       receipt.secureAuditArtifactDigest !==
-        manifest.secureAuditArtifact.artifactDigest ||
+        assessment.secureAuditArtifactDigest ||
       receipt.publicInvokerAppliedAt !==
         receipt.stepCompletions[0]?.completedAt ||
       receipt.temporaryAccessRemovedAt !==
@@ -1475,8 +1918,44 @@ export function validateSingleOperatorCompletionReceipt(
   });
 }
 
+export function validateSingleOperatorCompletionReceipt(
+    receipt,
+    authorizationCapability,
+    privateValidationReceipt,
+    invokerPublicationReceipt,
+) {
+  const issued = consumeIssuedSingleOperatorAuthorizationCapability(
+      authorizationCapability,
+      SINGLE_OPERATOR_AUTHORIZATION_STAGES.COMPLETION,
+  );
+  const privateAssessment = validateSingleOperatorPrivateValidationReceiptData(
+      privateValidationReceipt,
+      issued.approval,
+  );
+  const publicationAssessment =
+    validateSingleOperatorInvokerPublicationReceiptData(
+        invokerPublicationReceipt,
+        issued.approval,
+        privateValidationReceipt,
+    );
+  if (issued.invocationIdentity !==
+        issued.approval.freshPreflightReceiptDigest ||
+      issued.previousStageLineage?.privateValidationReceiptDigest !==
+        privateAssessment.receiptDigest ||
+      issued.previousStageLineage?.publicationReceiptDigest !==
+        publicationAssessment.receiptDigest) {
+    fail("completion capability previous-stage lineage mismatch");
+  }
+  return validateSingleOperatorCompletionReceiptData(
+      receipt,
+      issued.approval,
+      privateValidationReceipt,
+      invokerPublicationReceipt,
+  );
+}
+
 function validateReceiptApprovalBinding(receipt, approval) {
-  const assessment = validateExecutableApproval(approval, {
+  const assessment = validateIssuedExecutableApproval(approval, {
     currentTimestamp: receipt.observedAt,
   });
   validateOrganizationPolicyLineageReference(

@@ -1,6 +1,30 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import nodeTest from "node:test";
+import {fileURLToPath, pathToFileURL} from "node:url";
 
+const blockerFocused = process.env.ACADEMY_BLOCKER_FOCUSED === "1";
+const failedSevenFocused =
+  process.env.ACADEMY_FAILED_SEVEN_FOCUSED === "1";
+function test(name, optionsOrFunction, maybeFunction) {
+  if (failedSevenFocused &&
+      !/^(?:operator mode L|blocker C|blocker E|blocker I|blocker J)/u
+          .test(name)) {
+    return undefined;
+  }
+  if (!failedSevenFocused && blockerFocused &&
+      !/^(?:blocker|operator mode L)/u.test(name)) {
+    return undefined;
+  }
+  return maybeFunction === undefined ?
+    nodeTest(name, optionsOrFunction) :
+    nodeTest(name, optionsOrFunction, maybeFunction);
+}
+
+import * as runtimeContractNamespace from
+  "../functions/scripts/academy-private-runtime-iam-contract.mjs";
 import {
   DEPLOYMENT_TARGETS,
   IMMUTABLE_RELEASE_EVIDENCE,
@@ -41,6 +65,7 @@ import {
   PREVIEW_RUNTIME_SERVICE_ACCOUNT_EMAIL,
   PREVIEW_RUNTIME_SERVICE_ACCOUNT_MEMBER,
   PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST,
+  PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
   MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
   OPERATOR_MODE_AUTHORITY,
   OPERATOR_MODE_CONTRACT_VERSION,
@@ -98,8 +123,159 @@ import {
   validateStateSnapshot,
   validateUnfreezeRestorationReceipt,
 } from "../functions/scripts/academy-private-runtime-iam-contract.mjs";
+import {
+  FRESH_PREFLIGHT_AUDIT_DISPOSITION_VERSION,
+  FRESH_PREFLIGHT_APPROVED_CONFIG,
+  FRESH_PREFLIGHT_APPROVED_RAW_PROJECTION,
+  assessFreshPreflightApprovedConfig,
+} from "../functions/scripts/academy-single-operator-fresh-preflight-contract.mjs";
+
+async function loadInstrumentedRuntimeModule() {
+  const testDirectory = path.dirname(fileURLToPath(import.meta.url));
+  const sourceDirectory = path.resolve(
+      testDirectory,
+      "../functions/scripts",
+  );
+  const temporaryRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "academy-runtime-capability-instrumentation-"),
+  );
+  const scriptsDirectory = path.join(temporaryRoot, "scripts");
+  fs.cpSync(sourceDirectory, scriptsDirectory, {recursive: true});
+  const freshPath = path.join(
+      scriptsDirectory,
+      "academy-single-operator-fresh-preflight-contract.mjs",
+  );
+  fs.appendFileSync(freshPath, `
+export {
+  beginSingleOperatorFreshPreflightInvocationForTest as __testBeginFresh,
+  buildSingleOperatorFreshPreflightReceiptForTest as __testBuildFreshReceipt,
+  finalizeSingleOperatorFreshPreflightInvocation as __testFinalizeFresh,
+  validateSingleOperatorFreshPreflightAuditDisposition as __testAuditFresh,
+  validateSingleOperatorFreshPreflightReceipt as __testValidateFresh
+};
+
+export function __testHasFreshFinalizationCapability(capability) {
+  return freshFinalizationCapabilities.has(capability);
+}
+`);
+  const runtimePath = path.join(
+      scriptsDirectory,
+      "academy-private-runtime-iam-contract.mjs",
+  );
+  fs.appendFileSync(runtimePath, `
+export function __testAssessSingleOperatorApproval(
+    approval,
+    currentTimestamp
+) {
+  return validateSingleOperatorApprovalDataAt(approval, currentTimestamp);
+}
+
+export function __testAssessPrivateValidation(receipt, approval) {
+  return validateSingleOperatorPrivateValidationReceiptData(
+      receipt,
+      approval
+  );
+}
+
+export function __testAssessPublication(
+    receipt,
+    approval,
+    privateValidationReceipt
+) {
+  return validateSingleOperatorInvokerPublicationReceiptData(
+      receipt,
+      approval,
+      privateValidationReceipt
+  );
+}
+
+export function __testAssessCompletion(
+    receipt,
+    approval,
+    privateValidationReceipt,
+    publicationReceipt
+) {
+  return validateSingleOperatorCompletionReceiptData(
+      receipt,
+      approval,
+      privateValidationReceipt,
+      publicationReceipt
+  );
+}
+
+let __testRuntimeCapabilityMintCount = 0;
+const __testOriginalRuntimeCapabilityMint =
+  mintIssuedSingleOperatorAuthorizationCapability;
+mintIssuedSingleOperatorAuthorizationCapability = function(...args) {
+  __testRuntimeCapabilityMintCount += 1;
+  return __testOriginalRuntimeCapabilityMint(...args);
+};
+
+export function __testBridgeFreshFinalization(
+    freshFinalizationCapability,
+    approvalTemplate
+) {
+  return bridgeSingleOperatorFreshFinalizationToPrivateValidation(
+      freshFinalizationCapability,
+      approvalTemplate
+  );
+}
+
+export function __testRuntimeCapabilityMintCountValue() {
+  return __testRuntimeCapabilityMintCount;
+}
+
+export function __testHasRuntimeCapability(capability) {
+  return issuedSingleOperatorAuthorizationSessions.has(capability);
+}
+`);
+  try {
+    const runtimeModule = await import(
+        `${pathToFileURL(runtimePath).href}?instrumented=${Date.now()}`,
+    );
+    const freshModule = await import(pathToFileURL(freshPath).href);
+    return {freshModule, runtimeModule};
+  } finally {
+    fs.rmSync(temporaryRoot, {recursive: true, force: true});
+  }
+}
+
+const {
+  freshModule: instrumentedFresh,
+  runtimeModule: instrumentedRuntime,
+} = await loadInstrumentedRuntimeModule();
+const {
+  __testAssessCompletion: assessSingleOperatorCompletionForTest,
+  __testAssessPrivateValidation: assessSingleOperatorPrivateValidationForTest,
+  __testAssessPublication: assessSingleOperatorPublicationForTest,
+  __testAssessSingleOperatorApproval: assessSingleOperatorApprovalForTest,
+  __testBridgeFreshFinalization:
+    bridgeFreshFinalizationForTest,
+  __testHasRuntimeCapability:
+    hasRuntimeCapabilityForTest,
+  __testRuntimeCapabilityMintCountValue:
+    runtimeCapabilityMintCountForTest,
+  validateSingleOperatorCompletionReceipt:
+    validateCompletionWithCapabilityForTest,
+  validateSingleOperatorInvokerPublicationReceipt:
+    validatePublicationWithCapabilityForTest,
+  validateSingleOperatorPrivateValidationReceipt:
+    validatePrivateWithCapabilityForTest,
+} = instrumentedRuntime;
+const {
+  __testAuditFresh: auditFreshForTest,
+  __testBeginFresh: beginFreshForTest,
+  __testBuildFreshReceipt: buildFreshReceiptForTest,
+  __testFinalizeFresh: finalizeFreshForTest,
+  __testHasFreshFinalizationCapability:
+    hasFreshFinalizationCapabilityForTest,
+  __testValidateFresh: validateFreshForTest,
+} = instrumentedFresh;
 
 const NOW = Date.parse("2026-07-19T02:00:00Z");
+const RUNTIME_CAPABILITY_ABSENT_MESSAGE =
+  "Academy private runtime IAM contract rejected: runtime authorization " +
+  "capability is absent, copied, or consumed";
 const TEST_EXECUTION_PRINCIPALS = Object.freeze({
   provisioningPrincipal: "user:provisioner@daegu-miami.com",
   impersonationPrincipal: "user:deployer@daegu-miami.com",
@@ -119,6 +295,7 @@ function approvalFixture(overrides = {}) {
     ...TEST_EXECUTION_PRINCIPALS,
     jitStartsAt: "2026-07-19T01:00:00Z",
     jitExpiresAt: "2026-07-19T03:00:00Z",
+    freshPreflightReceiptDigest: null,
     organizationPolicy: clone(ORGANIZATION_POLICY_EVIDENCE),
     organizationPolicyLineage:
       clone(buildOrganizationPolicyLineageReference()),
@@ -169,9 +346,87 @@ function singleOperatorApprovalFixture(overrides = {}) {
     impersonationPrincipal: APPROVED_SINGLE_OPERATOR_PRINCIPAL,
     invokerOperatorPrincipal: APPROVED_SINGLE_OPERATOR_PRINCIPAL,
     jitExpiresAt: "2026-07-19T02:00:00Z",
+    freshPreflightReceiptDigest: "d".repeat(64),
     singleOperatorControlManifest: singleOperatorControlManifest(),
     ...overrides,
   });
+}
+
+function assessedSingleOperatorFixture(overrides = {}) {
+  const approval = singleOperatorApprovalFixture(overrides);
+  approval.singleOperatorControlManifest.rollbackManifestDigest =
+    FRESH_PREFLIGHT_APPROVED_CONFIG.rollbackManifestDigest;
+  approval.approvalDigest = buildExecutableApprovalDigest(approval);
+  return {
+    approval,
+    assessment: assessSingleOperatorApprovalForTest(
+        approval,
+        approval.jitStartsAt,
+    ),
+    authorizationCapability: null,
+  };
+}
+
+function freshFinalizationFixture() {
+  const invocation = beginFreshForTest("2026-07-19T00:59:59.000Z");
+  const collectionStartedAt = "2026-07-19T00:59:59.001Z";
+  const collectionCompletedAt = "2026-07-19T00:59:59.002Z";
+  const jitStartsAt = "2026-07-19T01:00:00.000Z";
+  const receipt = buildFreshReceiptForTest({
+    collectionCompletedAt,
+    collectionStartedAt,
+    invocation,
+    rawProjection: FRESH_PREFLIGHT_APPROVED_RAW_PROJECTION,
+  });
+  const receiptCapability = validateFreshForTest(
+      invocation,
+      instrumentedFresh.buildFreshPreflightReceiptCanonicalBytes(receipt),
+  );
+  auditFreshForTest(receiptCapability, {
+    schemaVersion: FRESH_PREFLIGHT_AUDIT_DISPOSITION_VERSION,
+    freshPreflightReceiptDigest: receipt.receiptDigest,
+    secureAuditCopyComplete: true,
+    receiptTransport: "IN_MEMORY_BUFFER",
+    temporaryFreshnessEvidenceDisposition: "NOT_CREATED",
+    mutationCommandsPublished: false,
+    productionDataAccess: 0,
+    mutations: 0,
+  });
+  const finalizationCapability = finalizeFreshForTest(receiptCapability, {
+    freshPreflightReceiptDigest: receipt.receiptDigest,
+    jitStartsAt,
+  });
+  return {finalizationCapability, invocation, jitStartsAt, receipt};
+}
+
+function bridgeApprovalTemplate(overrides = {}) {
+  const approval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: true,
+  });
+  approval.singleOperatorControlManifest.rollbackManifestDigest =
+    FRESH_PREFLIGHT_APPROVED_CONFIG.rollbackManifestDigest;
+  for (const key of [
+    "approvalDigest",
+    "approvedAt",
+    "freshPreflightReceiptDigest",
+    "jitExpiresAt",
+    "jitStartsAt",
+  ]) {
+    delete approval[key];
+  }
+  return {...approval, ...overrides};
+}
+
+function bridgedSingleOperatorFixture(templateOverrides = {}) {
+  const fresh = freshFinalizationFixture();
+  const bridge = bridgeFreshFinalizationForTest(
+      fresh.finalizationCapability,
+      bridgeApprovalTemplate(templateOverrides),
+  );
+  return {...fresh, ...bridge};
 }
 
 function stepCompletions(stepIds, firstMinute) {
@@ -286,6 +541,22 @@ function singleOperatorCompletionFixture(
   receipt.receiptDigest =
     buildSingleOperatorCompletionReceiptDigest(receipt);
   return receipt;
+}
+
+function singleOperatorLinearChainFixture() {
+  const assessed = bridgedSingleOperatorFixture();
+  const privateReceipt =
+    singleOperatorPrivateValidationFixture(assessed.approval);
+  const publicationReceipt =
+    singleOperatorPublicationFixture(assessed.approval, privateReceipt);
+  const completionReceipt =
+    singleOperatorCompletionFixture(assessed.approval, publicationReceipt);
+  return {
+    ...assessed,
+    privateReceipt,
+    publicationReceipt,
+    completionReceipt,
+  };
 }
 
 function activationFixture(approval = approvalFixture()) {
@@ -461,6 +732,10 @@ test("E — canonical contract is deeply frozen and digest-bound", () => {
     ACADEMY_PRIVATE_RUNTIME_IAM_CONTRACT;
   assert.equal(canonicalDigest(projection), contractDigest);
   assert.equal(contractDigest, PRIVATE_RUNTIME_IAM_CONTRACT_DIGEST);
+  assert.equal(
+      PRIVATE_RUNTIME_IAM_CONTRACT_VERSION,
+      "academy_private_runtime_iam.v9",
+  );
   assert.equal(validatePrivateRuntimeIamContract(), true);
 });
 
@@ -1084,24 +1359,19 @@ test("operator mode B — three-person separation rejects one user", () => {
   );
 });
 
-test("operator mode C — exact approved single operator is structural", () => {
+test("operator mode C — exact single operator requires fresh preflight", () => {
   const approval = singleOperatorApprovalFixture({
     actualProvisioningEligible: true,
     deploymentApprovalEligible: true,
     publicInvokerApprovalEligible: false,
     iamMutationCommandPublication: true,
   });
-  const result = validateExecutableApproval(approval, {
-    currentTimestamp: "2026-07-19T01:30:00Z",
-  });
-  assert.equal(result.operatorMode, SINGLE_OPERATOR_JIT_V1);
-  assert.equal(
-      result.operatorModeContractVersion,
-      OPERATOR_MODE_CONTRACT_VERSION,
+  assert.throws(
+      () => validateExecutableApproval(approval, {
+        currentTimestamp: "2026-07-19T01:30:00Z",
+      }),
+      (error) => error.code === "INPUT_REQUIRED",
   );
-  assert.equal(result.executable, true);
-  assert.equal(result.publicInvokerRequiresSeparateReceipt, true);
-  assert.equal(result.execution.publicInvokerApprovalEligible, false);
 });
 
 test("operator mode D — one different single-operator field rejects", () => {
@@ -1160,12 +1430,14 @@ test("operator mode G — malformed and non-user principals reject", () => {
   }
 });
 
-test("operator mode H — exact 60-minute JIT is accepted", () => {
+test("operator mode H — exact 60-minute JIT still requires fresh input", () => {
   const approval = singleOperatorApprovalFixture();
-  const result = validateExecutableApproval(approval, {
-    currentTimestamp: "2026-07-19T01:30:00Z",
-  });
-  assert.equal(result.jitActive, true);
+  assert.throws(
+      () => validateExecutableApproval(approval, {
+        currentTimestamp: "2026-07-19T01:30:00Z",
+      }),
+      (error) => error.code === "INPUT_REQUIRED",
+  );
   assert.equal(
       SINGLE_OPERATOR_MAX_JIT_DURATION_NANOSECONDS_DECIMAL,
       "3600000000000",
@@ -1199,43 +1471,33 @@ test("operator mode J — public invoker before private validation rejects", () 
   );
 });
 
-test("operator mode K — separate private and publication receipts pass", () => {
-  const approval = singleOperatorApprovalFixture({
-    actualProvisioningEligible: true,
-    deploymentApprovalEligible: true,
-    publicInvokerApprovalEligible: false,
-    iamMutationCommandPublication: true,
-  });
-  const privateReceipt = singleOperatorPrivateValidationFixture(approval);
-  const privateResult = validateSingleOperatorPrivateValidationReceipt(
-      privateReceipt,
-      approval,
+test("operator mode K — opaque session gates private and publication receipts",
+    () => {
+  const fixture = singleOperatorLinearChainFixture();
+  const privateResult = validatePrivateWithCapabilityForTest(
+      fixture.privateReceipt,
+      fixture.authorizationCapability,
   );
   assert.equal(privateResult.publicInvokerEligible, false);
-  const publicationReceipt =
-    singleOperatorPublicationFixture(approval, privateReceipt);
-  const publicationResult =
-    validateSingleOperatorInvokerPublicationReceipt(
-        publicationReceipt,
-        approval,
-        privateReceipt,
-    );
+  const publicationResult = validatePublicationWithCapabilityForTest(
+      fixture.publicationReceipt,
+      privateResult.authorizationCapability,
+      fixture.privateReceipt,
+  );
   assert.equal(publicationResult.publicInvokerEligible, true);
-  const completionReceipt =
-    singleOperatorCompletionFixture(approval, publicationReceipt);
   assert.equal(
-      validateSingleOperatorCompletionReceipt(
-          completionReceipt,
-          approval,
-          privateReceipt,
-          publicationReceipt,
+      validateCompletionWithCapabilityForTest(
+          fixture.completionReceipt,
+          publicationResult.authorizationCapability,
+          fixture.privateReceipt,
+          fixture.publicationReceipt,
       ).temporaryAccessRemoved,
       true,
   );
 });
 
 test("operator mode L — missing temporary-removal evidence rejects", () => {
-  const approval = singleOperatorApprovalFixture({
+  const {approval} = assessedSingleOperatorFixture({
     actualProvisioningEligible: true,
     deploymentApprovalEligible: true,
     publicInvokerApprovalEligible: false,
@@ -1247,14 +1509,15 @@ test("operator mode L — missing temporary-removal evidence rejects", () => {
   const completionReceipt =
     singleOperatorCompletionFixture(approval, publicationReceipt);
   delete completionReceipt.temporaryAccessRemovalEvidence;
-  completionReceipt.receiptDigest =
-    buildSingleOperatorCompletionReceiptDigest(completionReceipt);
-  assert.throws(() => validateSingleOperatorCompletionReceipt(
+  assert.throws(() => assessSingleOperatorCompletionForTest(
       completionReceipt,
       approval,
       privateReceipt,
       publicationReceipt,
-  ));
+  ), {
+    message: "Academy private runtime IAM contract rejected: " +
+      "single operator completion receipt exact key set mismatch",
+  });
 });
 
 test("operator mode M — rollback or secure audit manifest missing rejects", () => {
@@ -1280,7 +1543,7 @@ test("operator mode N — coherent semantic tamper rejects", () => {
     currentTimestamp: "2026-07-19T01:30:00Z",
   }));
 
-  const tamperedReceiptApproval = singleOperatorApprovalFixture({
+  const {approval: tamperedReceiptApproval} = assessedSingleOperatorFixture({
     actualProvisioningEligible: true,
     deploymentApprovalEligible: true,
     publicInvokerApprovalEligible: false,
@@ -1292,10 +1555,252 @@ test("operator mode N — coherent semantic tamper rejects", () => {
     SINGLE_OPERATOR_PRIVATE_VALIDATION_STEPS[1];
   privateReceipt.receiptDigest =
     buildSingleOperatorPrivateValidationReceiptDigest(privateReceipt);
-  assert.throws(() => validateSingleOperatorPrivateValidationReceipt(
+  assert.throws(() => assessSingleOperatorPrivateValidationForTest(
       privateReceipt,
       tamperedReceiptApproval,
   ), /step order/);
+});
+
+test("raw single-operator approval cannot authorize downstream receipts", () => {
+  const approval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: true,
+  });
+  const privateReceipt = singleOperatorPrivateValidationFixture(approval);
+  assert.throws(() => validateSingleOperatorPrivateValidationReceipt(
+      privateReceipt,
+      approval,
+  ), {
+    message: "Academy private runtime IAM contract rejected: runtime " +
+      "authorization capability is absent, copied, or consumed",
+  });
+  assert.throws(() => validateSingleOperatorPrivateValidationReceipt(
+      privateReceipt,
+      clone(approval),
+  ), {
+    message: "Academy private runtime IAM contract rejected: runtime " +
+      "authorization capability is absent, copied, or consumed",
+  });
+});
+
+test("blocker A/B/K — production namespace and assessment are non-authorizing",
+    () => {
+  assert.equal(
+      Object.hasOwn(
+          runtimeContractNamespace,
+          "validateSingleOperatorFreshExecutableApprovalForTest",
+      ),
+      false,
+  );
+  assert.equal(
+      Object.hasOwn(
+          runtimeContractNamespace,
+          "assessSingleOperatorFreshJitIssuanceForTest",
+      ),
+      false,
+  );
+  const assessment =
+    assessFreshPreflightApprovedConfig(clone(FRESH_PREFLIGHT_APPROVED_CONFIG));
+  assert.equal(assessment.authorizationCapability, null);
+  const approval = singleOperatorApprovalFixture({
+    actualProvisioningEligible: true,
+    deploymentApprovalEligible: true,
+    publicInvokerApprovalEligible: false,
+    iamMutationCommandPublication: true,
+  });
+  const receipt = singleOperatorPrivateValidationFixture(approval);
+  for (const candidate of [
+    assessment,
+    Object.freeze({...assessment}),
+    structuredClone(assessment),
+    JSON.parse(JSON.stringify(assessment)),
+    receipt,
+    approval,
+    {freshPreflightReceiptDigest: approval.freshPreflightReceiptDigest},
+  ]) {
+    assert.throws(
+        () => validateSingleOperatorPrivateValidationReceipt(
+            receipt,
+            candidate,
+        ),
+        {
+          message: "Academy private runtime IAM contract rejected: runtime " +
+            "authorization capability is absent, copied, or consumed",
+        },
+    );
+  }
+});
+
+test("blocker C/D/F/G — each capability stage is linear and one-shot",
+    () => {
+  const fixture = singleOperatorLinearChainFixture();
+  const privateCapability = fixture.authorizationCapability;
+  const privateResult = validatePrivateWithCapabilityForTest(
+      fixture.privateReceipt,
+      privateCapability,
+  );
+  assert.equal(privateResult.publicInvokerEligible, false);
+  assert.throws(
+      () => validatePrivateWithCapabilityForTest(
+          fixture.privateReceipt,
+          privateCapability,
+      ),
+      {message: RUNTIME_CAPABILITY_ABSENT_MESSAGE},
+  );
+  const publicationCapability = privateResult.authorizationCapability;
+  const publicationResult = validatePublicationWithCapabilityForTest(
+      fixture.publicationReceipt,
+      publicationCapability,
+      fixture.privateReceipt,
+  );
+  assert.equal(publicationResult.publicInvokerEligible, true);
+  assert.throws(
+      () => validatePublicationWithCapabilityForTest(
+          fixture.publicationReceipt,
+          publicationCapability,
+          fixture.privateReceipt,
+      ),
+      {message: RUNTIME_CAPABILITY_ABSENT_MESSAGE},
+  );
+  const completionCapability = publicationResult.authorizationCapability;
+  const completionResult = validateCompletionWithCapabilityForTest(
+      fixture.completionReceipt,
+      completionCapability,
+      fixture.privateReceipt,
+      fixture.publicationReceipt,
+  );
+  assert.equal(completionResult.completedInsideJit, true);
+  assert.equal(
+      Object.hasOwn(completionResult, "authorizationCapability"),
+      false,
+  );
+  assert.throws(
+      () => validateCompletionWithCapabilityForTest(
+          fixture.completionReceipt,
+          completionCapability,
+          fixture.privateReceipt,
+          fixture.publicationReceipt,
+      ),
+      {message: RUNTIME_CAPABILITY_ABSENT_MESSAGE},
+  );
+});
+
+test("blocker E/H — out-of-order and skipped stages consume the capability",
+    () => {
+  const skipped = singleOperatorLinearChainFixture();
+  assert.throws(
+      () => validateCompletionWithCapabilityForTest(
+          skipped.completionReceipt,
+          skipped.authorizationCapability,
+          skipped.privateReceipt,
+          skipped.publicationReceipt,
+      ),
+      {
+        message: "Academy private runtime IAM contract rejected: runtime " +
+          "authorization capability stage mismatch: expected COMPLETION, " +
+          "received PRIVATE_VALIDATION",
+      },
+  );
+  assert.throws(
+      () => validatePrivateWithCapabilityForTest(
+          skipped.privateReceipt,
+          skipped.authorizationCapability,
+      ),
+      {message: RUNTIME_CAPABILITY_ABSENT_MESSAGE},
+  );
+
+  const outOfOrder = singleOperatorLinearChainFixture();
+  assert.throws(
+      () => validatePublicationWithCapabilityForTest(
+          outOfOrder.publicationReceipt,
+          outOfOrder.authorizationCapability,
+          outOfOrder.privateReceipt,
+      ),
+      {
+        message: "Academy private runtime IAM contract rejected: runtime " +
+          "authorization capability stage mismatch: expected PUBLICATION, " +
+          "received PRIVATE_VALIDATION",
+      },
+  );
+  assert.throws(
+      () => validatePrivateWithCapabilityForTest(
+          outOfOrder.privateReceipt,
+          outOfOrder.authorizationCapability,
+      ),
+      {message: RUNTIME_CAPABILITY_ABSENT_MESSAGE},
+  );
+});
+
+test("blocker I — a failed validation consumes its capability", () => {
+  const fixture = singleOperatorLinearChainFixture();
+  const invalidReceipt = clone(fixture.privateReceipt);
+  invalidReceipt.allTargetsPrivate = false;
+  invalidReceipt.receiptDigest =
+    buildSingleOperatorPrivateValidationReceiptDigest(invalidReceipt);
+  const mintCountBeforeValidation = runtimeCapabilityMintCountForTest();
+  assert.throws(
+      () => validatePrivateWithCapabilityForTest(
+          invalidReceipt,
+          fixture.authorizationCapability,
+      ),
+      {
+        message: "Academy private runtime IAM contract rejected: single " +
+          "operator private validation receipt is incomplete",
+      },
+  );
+  assert.equal(
+      runtimeCapabilityMintCountForTest(),
+      mintCountBeforeValidation,
+  );
+  assert.equal(
+      hasRuntimeCapabilityForTest(fixture.authorizationCapability),
+      false,
+  );
+  assert.throws(
+      () => validatePrivateWithCapabilityForTest(
+          fixture.privateReceipt,
+          fixture.authorizationCapability,
+      ),
+      {message: RUNTIME_CAPABILITY_ABSENT_MESSAGE},
+  );
+});
+
+test("blocker J — clone, assignment, serialization, and reconstruction reject",
+    () => {
+  const fixture = singleOperatorLinearChainFixture();
+  const capability = fixture.authorizationCapability;
+  const candidates = [
+    {...capability},
+    Object.assign({}, capability),
+    structuredClone(capability),
+    JSON.parse(JSON.stringify(capability)),
+    Object.freeze({expectedStage: "PRIVATE_VALIDATION"}),
+    fixture.approval,
+    fixture.assessment,
+    fixture.privateReceipt,
+  ];
+  for (const candidate of candidates) {
+    assert.throws(
+        () => validatePrivateWithCapabilityForTest(
+            fixture.privateReceipt,
+            candidate,
+        ),
+        {
+          message: "Academy private runtime IAM contract rejected: runtime " +
+            "authorization capability is absent, copied, or consumed",
+        },
+    );
+  }
+  const accepted = validatePrivateWithCapabilityForTest(
+      fixture.privateReceipt,
+      capability,
+  );
+  assert.equal(
+      hasRuntimeCapabilityForTest(accepted.authorizationCapability),
+      true,
+  );
 });
 
 test("operator mode O — legacy three-person transitions still pass", () => {
