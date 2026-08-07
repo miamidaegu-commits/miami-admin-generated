@@ -249,8 +249,10 @@ test('mobile dashboard containment is scoped and preserves desktop box models', 
 
   assert.match(
     css,
-    /\.dashboard--mobile\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100vw;[\s\S]*?box-sizing: border-box;/
+    /\.dashboard--mobile\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
   )
+  const mobileDashboardRule = css.match(/\.dashboard--mobile\s*\{([^}]*)\}/)?.[1] || ''
+  assert.doesNotMatch(mobileDashboardRule, /100vw/)
   assert.match(
     css,
     /\.dashboard--mobile \.main\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?margin: 0;[\s\S]*?align-self: stretch;[\s\S]*?box-sizing: border-box;[\s\S]*?overflow-x: hidden;/
@@ -270,6 +272,52 @@ test('mobile dashboard containment is scoped and preserves desktop box models', 
   )
   assert.equal(/\bwidth\s*:/.test(bodyRule), false)
   assert.match(today, /gridTemplateColumns: 'repeat\(4, minmax\(0, 1fr\)\)'/)
+})
+
+test('mobile shell header applies one safe-area contract with contained touch targets', () => {
+  const css = read('index.css')
+  const shell = read('src/components/AuthenticatedShell.jsx')
+  const headerRule = css.match(/\.mobile-shell-header\s*\{([^}]*)\}/)?.[1] || ''
+  const headerControlsRule =
+    css.match(/\.mobile-shell-header > \.icon-button\s*\{([^}]*)\}/)?.[1] || ''
+
+  assert.match(shell, /<header className="mobile-shell-header" data-testid="mobile-shell-header">/)
+  assert.match(shell, /className="icon-button"[\s\S]*?aria-label=\{t\('common\.menu'\)\}/)
+  assert.match(shell, /<SettingsControl className="icon-button" label=\{t\('common\.settings'\)\}>/)
+  assert.match(headerRule, /width: 100%/)
+  assert.match(headerRule, /min-width: 0/)
+  assert.match(headerRule, /box-sizing: border-box/)
+  assert.match(headerRule, /padding-inline: 16px/)
+  assert.match(headerRule, /padding-top: max\(8px, env\(safe-area-inset-top, 0px\)\)/)
+  assert.match(headerRule, /min-height: calc\(56px \+ env\(safe-area-inset-top, 0px\)\)/)
+  assert.match(headerRule, /position: sticky/)
+  assert.match(headerRule, /grid-template-columns: 44px minmax\(0, 1fr\) 44px/)
+  assert.equal((headerRule.match(/safe-area-inset-top/g) || []).length, 2)
+  for (const property of ['width', 'min-width', 'height', 'min-height']) {
+    assert.match(headerControlsRule, new RegExp(`${property}: 44px`))
+  }
+})
+
+test('mobile reservation notification header contains wrapping and fixed metadata', () => {
+  const css = read('index.css')
+  const dashboard = read('Dashboard.jsx')
+
+  assert.match(
+    dashboard,
+    /data-testid="reservation-notifications-panel"[\s\S]*?display: 'flex'[\s\S]*?<h2 className="section-title"[\s\S]*?<span/
+  )
+  assert.match(
+    css,
+    /\[data-testid="reservation-notifications-panel"\][\s\S]*?> div:first-child\s*\{[\s\S]*?display: grid !important;[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: 12px !important;[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
+  )
+  assert.match(
+    css,
+    /\[data-testid="reservation-notifications-panel"\][\s\S]*?> div:first-child[\s\S]*?> :first-child\s*\{[\s\S]*?min-width: 0;[\s\S]*?white-space: normal;[\s\S]*?overflow-wrap: anywhere;/
+  )
+  assert.match(
+    css,
+    /\[data-testid="reservation-notifications-panel"\][\s\S]*?> div:first-child[\s\S]*?> :last-child\s*\{[\s\S]*?flex-shrink: 0;[\s\S]*?white-space: nowrap;/
+  )
 })
 
 test('mobile shell resets horizontal scroll while retaining vertical positions', () => {
@@ -319,7 +367,7 @@ test('teacher calendar and today summary use stable responsive class roles', () 
   )
   assert.match(
     css,
-    /\.teacher-calendar-days\s*\[data-testid="calendar-day-button"\]\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;[\s\S]*?min-height: 52px !important;[\s\S]*?padding: 6px !important;[\s\S]*?overflow: hidden;/
+    /\.teacher-calendar-days\s*\[data-testid="calendar-day-button"\]\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0 !important;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;[\s\S]*?min-height: 52px !important;[\s\S]*?padding: 6px !important;[\s\S]*?padding-inline: 4px !important;[\s\S]*?overflow: hidden;/
   )
   assert.match(
     css,
@@ -335,6 +383,39 @@ test('teacher calendar and today summary use stable responsive class roles', () 
   assert.match(
     css,
     /\.today-schedule-summary-card\s*\{[\s\S]*?min-width: 0;[\s\S]*?overflow-wrap: anywhere;/
+  )
+})
+
+test('mobile teacher calendar uses fixed controls and shrinkable seven-column grids', () => {
+  const css = read('index.css')
+
+  assert.match(
+    css,
+    /\.teacher-calendar-toolbar\s*\{[\s\S]*?display: grid !important;[\s\S]*?grid-template-columns: 44px minmax\(0, 1fr\) 44px;[\s\S]*?gap: 8px !important;[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-toolbar > button\s*\{[\s\S]*?width: 44px;[\s\S]*?min-width: 44px;[\s\S]*?max-width: 44px;[\s\S]*?height: 44px;[\s\S]*?min-height: 44px !important;[\s\S]*?max-height: 44px;[\s\S]*?margin: 0 !important;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-toolbar \.section-title\s*\{[\s\S]*?min-width: 0;[\s\S]*?text-align: center;[\s\S]*?white-space: normal;[\s\S]*?overflow-wrap: anywhere;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-weekdays,[\s\S]*?\.teacher-calendar-days\s*\{[\s\S]*?display: grid !important;[\s\S]*?grid-template-columns: repeat\(7, minmax\(0, 1fr\)\) !important;[\s\S]*?gap: 4px !important;[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-weekdays > \*,[\s\S]*?\.teacher-calendar-days > \*\s*\{[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-weekdays > \*\s*\{[\s\S]*?text-align: center;[\s\S]*?overflow: hidden;[\s\S]*?white-space: nowrap;/
+  )
+  assert.match(
+    css,
+    /\.dashboard--mobile\.dashboard--teacher,[\s\S]*?\.dashboard--mobile\.dashboard--teacher \.main\s*\{[\s\S]*?overflow-x: hidden;/
   )
 })
 
