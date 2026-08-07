@@ -76,6 +76,7 @@ export default function TodaySchedulePanel({
 
   return (
     <section
+      className="today-schedule-panel"
       data-testid="today-schedule-panel"
       style={{
         border: '1px solid #2e3240',
@@ -87,10 +88,11 @@ export default function TodaySchedulePanel({
       <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{title}</h2>
       {summaryItems.length > 0 ? (
         <div
+          className="today-schedule-summary-grid"
           data-testid="today-schedule-summary"
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))',
+            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
             gap: 8,
             marginTop: 12,
           }}
@@ -98,6 +100,7 @@ export default function TodaySchedulePanel({
           {summaryItems.map(([label, value]) => (
             <div
               key={label}
+              className="today-schedule-summary-card"
               data-testid="today-schedule-summary-item"
               style={{
                 border: '1px solid #283042',

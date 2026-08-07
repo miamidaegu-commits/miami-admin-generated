@@ -242,6 +242,102 @@ test('mobile CSS defines touch, focus, card, overflow, and full-screen sheet con
   assert.match(css, /\.dashboard--mobile \.main[\s\S]*overflow-x: hidden/)
 })
 
+test('mobile dashboard containment is scoped and preserves desktop box models', () => {
+  const css = read('index.css')
+  const today = read('src/features/dashboard/components/TodaySchedulePanel.jsx')
+  const bodyRule = css.match(/\nbody\s*\{([^}]*)\}/)?.[1] || ''
+
+  assert.match(
+    css,
+    /\.dashboard--mobile\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100vw;[\s\S]*?box-sizing: border-box;/
+  )
+  assert.match(
+    css,
+    /\.dashboard--mobile \.main\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?margin: 0;[\s\S]*?align-self: stretch;[\s\S]*?box-sizing: border-box;[\s\S]*?overflow-x: hidden;/
+  )
+  for (const marker of [
+    '.main-header',
+    '.activity-section',
+    '.teacher-calendar-month',
+    '.today-schedule-panel',
+    '[data-testid="reservation-notifications-panel"]',
+  ]) {
+    assert.match(css, new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+  assert.match(
+    css,
+    /:where\([\s\S]*?\)\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
+  )
+  assert.equal(/\bwidth\s*:/.test(bodyRule), false)
+  assert.match(today, /gridTemplateColumns: 'repeat\(4, minmax\(0, 1fr\)\)'/)
+})
+
+test('mobile shell resets horizontal scroll while retaining vertical positions', () => {
+  const shell = read('src/components/AuthenticatedShell.jsx')
+
+  assert.match(
+    shell,
+    /!isMobile \|\|[\s\S]*?typeof window === 'undefined' \|\|[\s\S]*?typeof document === 'undefined'/
+  )
+  assert.match(shell, /document\.scrollingElement,[\s\S]*?document\.documentElement,[\s\S]*?document\.body/)
+  assert.match(shell, /const scrollTopByElement = new Map/)
+  assert.match(shell, /window\.scrollTo\(0, windowScrollY\)/)
+  assert.match(shell, /element\.scrollLeft = 0/)
+  assert.match(shell, /element\.scrollTop = scrollTopByElement\.get\(element\) \|\| 0/)
+  assert.match(shell, /window\.requestAnimationFrame\(resetHorizontalScroll\)/)
+  assert.match(shell, /window\.cancelAnimationFrame\(frameId\)/)
+  assert.match(shell, /\}, \[activeKey, isMobile\]\)/)
+})
+
+test('teacher calendar and today summary use stable responsive class roles', () => {
+  const calendar = read('src/features/dashboard/sections/CalendarSection.jsx')
+  const today = read('src/features/dashboard/components/TodaySchedulePanel.jsx')
+  const css = read('index.css')
+  const toolbarIndex = calendar.indexOf("'teacher-calendar-toolbar'")
+  const weekdaysIndex = calendar.indexOf("'teacher-calendar-weekdays'")
+  const daysIndex = calendar.indexOf("'teacher-calendar-days'")
+  const dayButtonIndex = calendar.indexOf('data-testid="calendar-day-button"')
+  const previewIndex = calendar.indexOf('data-testid="calendar-day-preview-row"')
+
+  assert.ok(toolbarIndex >= 0)
+  assert.ok(weekdaysIndex > toolbarIndex)
+  assert.ok(daysIndex > weekdaysIndex)
+  assert.ok(dayButtonIndex > daysIndex)
+  assert.ok(previewIndex > dayButtonIndex)
+  assert.equal((calendar.match(/teacher-calendar-toolbar/g) || []).length, 1)
+  assert.equal((calendar.match(/teacher-calendar-weekdays/g) || []).length, 1)
+  assert.equal((calendar.match(/teacher-calendar-days/g) || []).length, 1)
+  assert.doesNotMatch(calendar + css, /teacher-calendar-grid/)
+  assert.match(calendar, /gridTemplateColumns: 'repeat\(7, 1fr\)'/)
+  assert.match(
+    css,
+    /\.teacher-calendar-weekdays,\s*\.dashboard--mobile\.dashboard--teacher \.teacher-calendar-days\s*\{[\s\S]*?grid-template-columns: repeat\(7, minmax\(0, 1fr\)\) !important;[\s\S]*?gap: 4px !important;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-toolbar\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?box-sizing: border-box;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-days\s*\[data-testid="calendar-day-button"\]\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;[\s\S]*?min-height: 52px !important;[\s\S]*?padding: 6px !important;[\s\S]*?overflow: hidden;/
+  )
+  assert.match(
+    css,
+    /\.teacher-calendar-days\s*\[data-testid="calendar-day-preview-row"\]\s*\{[\s\S]*?display: none;/
+  )
+  assert.match(today, /className="today-schedule-panel"/)
+  assert.match(today, /className="today-schedule-summary-grid"/)
+  assert.match(today, /className="today-schedule-summary-card"/)
+  assert.match(
+    css,
+    /\.today-schedule-summary-grid\s*\{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\) !important;/
+  )
+  assert.match(
+    css,
+    /\.today-schedule-summary-card\s*\{[\s\S]*?min-width: 0;[\s\S]*?overflow-wrap: anywhere;/
+  )
+})
+
 test('mobile presentation cannot bypass admin-only action gates', () => {
   const dashboard = read('Dashboard.jsx')
   const groups = read('src/features/dashboard/sections/GroupsSection.jsx')

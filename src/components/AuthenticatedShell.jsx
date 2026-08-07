@@ -53,6 +53,49 @@ export default function AuthenticatedShell({
     if (!isMobile) setDrawerOpen(false)
   }, [isMobile])
 
+  useEffect(() => {
+    if (
+      !isMobile ||
+      typeof window === 'undefined' ||
+      typeof document === 'undefined'
+    ) {
+      return undefined
+    }
+
+    const scrollRoots = [
+      document.scrollingElement,
+      document.documentElement,
+      document.body,
+    ].filter((element, index, elements) => element && elements.indexOf(element) === index)
+    const scrollTopByElement = new Map(
+      scrollRoots.map((element) => [element, element.scrollTop])
+    )
+    const windowScrollY = Number.isFinite(window.scrollY)
+      ? window.scrollY
+      : scrollRoots[0]?.scrollTop || 0
+    const resetHorizontalScroll = () => {
+      if (typeof window.scrollTo === 'function') {
+        window.scrollTo(0, windowScrollY)
+      }
+      scrollRoots.forEach((element) => {
+        element.scrollLeft = 0
+        element.scrollTop = scrollTopByElement.get(element) || 0
+      })
+    }
+
+    resetHorizontalScroll()
+    const frameId =
+      typeof window.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame(resetHorizontalScroll)
+        : null
+
+    return () => {
+      if (frameId != null && typeof window.cancelAnimationFrame === 'function') {
+        window.cancelAnimationFrame(frameId)
+      }
+    }
+  }, [activeKey, isMobile])
+
   const selectAndClose = (key) => {
     onSelect(key)
     closeDrawer()

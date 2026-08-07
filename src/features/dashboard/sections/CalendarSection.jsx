@@ -614,7 +614,6 @@ function CalendarPrivateLessonDetailModal({
           ) : null}
         </div>
         <div
-          className={teacherPortal ? 'teacher-calendar-weekdays' : undefined}
           style={{
             display: 'flex',
             justifyContent: 'flex-end',
@@ -762,7 +761,7 @@ export default function CalendarSection(props) {
         style={{ marginBottom: 24 }}
       >
         <div
-          className={teacherPortal ? 'teacher-calendar-grid' : undefined}
+          className={teacherPortal ? 'teacher-calendar-toolbar' : undefined}
           style={{
             display: 'flex',
             justifyContent: 'space-between',
@@ -856,6 +855,7 @@ export default function CalendarSection(props) {
         </div>
 
         <div
+          className={teacherPortal ? 'teacher-calendar-weekdays' : undefined}
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(7, 1fr)',
@@ -881,6 +881,7 @@ export default function CalendarSection(props) {
         </div>
 
         <div
+          className={teacherPortal ? 'teacher-calendar-days' : undefined}
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(7, 1fr)',

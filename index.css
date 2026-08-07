@@ -341,19 +341,39 @@ a:focus-visible {
   margin-bottom: 1rem;
 }
 .dashboard--mobile {
+  width: 100%;
+  min-width: 0;
   height: 100dvh;
   max-width: 100vw;
+  box-sizing: border-box;
   flex-direction: column;
   overflow: hidden;
 }
 .dashboard--mobile .main {
+  width: 100%;
   min-width: 0;
   max-width: 100%;
+  margin: 0;
+  align-self: stretch;
+  box-sizing: border-box;
   padding: 1rem 0.85rem calc(1.25rem + env(safe-area-inset-bottom, 0px));
   overflow-x: hidden;
 }
 .dashboard--mobile .main-header {
   margin-bottom: 1rem;
+}
+.dashboard--mobile
+  :where(
+    .main-header,
+    .activity-section,
+    .teacher-calendar-month,
+    .today-schedule-panel,
+    [data-testid="reservation-notifications-panel"]
+  ) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .dashboard--desktop .main { min-width: 0; }
 
@@ -380,21 +400,50 @@ a:focus-visible {
   min-height: 44px;
 }
 
+.dashboard--mobile.dashboard--teacher .teacher-calendar-toolbar {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
 .dashboard--mobile.dashboard--teacher .teacher-calendar-weekdays,
-.dashboard--mobile.dashboard--teacher .teacher-calendar-grid {
+.dashboard--mobile.dashboard--teacher .teacher-calendar-days {
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
   gap: 4px !important;
 }
 
-.dashboard--mobile.dashboard--teacher .teacher-calendar-grid [data-testid="calendar-day-button"] {
+.dashboard--mobile.dashboard--teacher
+  .teacher-calendar-days
+  [data-testid="calendar-day-button"] {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   min-height: 52px !important;
   padding: 6px !important;
+  overflow: hidden;
 }
 
 .dashboard--mobile.dashboard--teacher
-  .teacher-calendar-grid
+  .teacher-calendar-days
   [data-testid="calendar-day-preview-row"] {
   display: none;
+}
+
+.dashboard--mobile.dashboard--teacher .today-schedule-summary-grid {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.dashboard--mobile.dashboard--teacher .today-schedule-summary-card {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .dashboard--mobile.dashboard--teacher .teacher-responsive-table > .table-head {
