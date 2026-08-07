@@ -1161,6 +1161,7 @@ export default function CalendarSection(props) {
       data-shared-handler-source={teacherPortal ? 'calendarSectionProps.lessons' : undefined}
     >
       <div
+        className={teacherPortal ? 'teacher-selected-date-header' : undefined}
         style={{
           display: 'flex',
           justifyContent: 'space-between',

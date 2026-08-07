@@ -18,6 +18,17 @@ import {
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8')
 
+test('document declares one iPhone-safe viewport contract', () => {
+  const html = read('index.html')
+  const viewportTags = html.match(/<meta\s+name="viewport"[\s\S]*?\/>/g) || []
+
+  assert.equal(viewportTags.length, 1)
+  assert.match(
+    viewportTags[0],
+    /content="width=device-width, initial-scale=1\.0, viewport-fit=cover"/
+  )
+})
+
 function getDialogOpeningTags(source, testId, refName) {
   const testIdIndex = source.indexOf(`data-testid="${testId}"`)
   assert.ok(testIdIndex >= 0, `missing dialog test id: ${testId}`)
@@ -229,7 +240,7 @@ test('teacher dialogs retain semantic and focus-management contracts', () => {
   assert.match(calendar, /initialFocus: closeRef\.current/)
 })
 
-test('mobile CSS defines touch, focus, card, overflow, and full-screen sheet contracts', () => {
+test('mobile CSS defines touch, focus, card, geometry, and full-screen sheet contracts', () => {
   const css = read('index.css')
 
   assert.match(css, /\.dashboard--mobile\.dashboard--teacher/)
@@ -239,13 +250,17 @@ test('mobile CSS defines touch, focus, card, overflow, and full-screen sheet con
   assert.match(css, /grid-template-columns: minmax\(0, 1fr\) !important/)
   assert.match(css, /content: attr\(data-label\)/)
   assert.match(css, /\.teacher-dialog-panel[\s\S]*height: 100%/)
-  assert.match(css, /\.dashboard--mobile \.main[\s\S]*overflow-x: hidden/)
+  assert.match(
+    css,
+    /\.dashboard--mobile \.main\s*\{[\s\S]*?inline-size: auto;[\s\S]*?min-inline-size: 0;[\s\S]*?max-inline-size: 100%;/
+  )
 })
 
 test('mobile dashboard containment is scoped and preserves desktop box models', () => {
   const css = read('index.css')
   const today = read('src/features/dashboard/components/TodaySchedulePanel.jsx')
   const bodyRule = css.match(/\nbody\s*\{([^}]*)\}/)?.[1] || ''
+  const htmlBodyRootRule = css.match(/html,\s*body,\s*#root\s*\{([^}]*)\}/)?.[1] || ''
 
   assert.match(
     css,
@@ -255,7 +270,7 @@ test('mobile dashboard containment is scoped and preserves desktop box models', 
   assert.doesNotMatch(mobileDashboardRule, /100vw/)
   assert.match(
     css,
-    /\.dashboard--mobile \.main\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?margin: 0;[\s\S]*?align-self: stretch;[\s\S]*?box-sizing: border-box;[\s\S]*?overflow-x: hidden;/
+    /\.dashboard--mobile \.main\s*\{[\s\S]*?inline-size: auto;[\s\S]*?min-inline-size: 0;[\s\S]*?max-inline-size: 100%;[\s\S]*?margin: 0;[\s\S]*?align-self: stretch;[\s\S]*?box-sizing: border-box;/
   )
   for (const marker of [
     '.main-header',
@@ -271,6 +286,11 @@ test('mobile dashboard containment is scoped and preserves desktop box models', 
     /:where\([\s\S]*?\)\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
   )
   assert.equal(/\bwidth\s*:/.test(bodyRule), false)
+  assert.doesNotMatch(bodyRule + htmlBodyRootRule, /overflow(?:-x)?:\s*(?:hidden|clip)/)
+  assert.doesNotMatch(
+    css.match(/\.dashboard--mobile \.main\s*\{([^}]*)\}/)?.[1] || '',
+    /overflow-x:\s*(?:hidden|clip)/
+  )
   assert.match(today, /gridTemplateColumns: 'repeat\(4, minmax\(0, 1fr\)\)'/)
 })
 
@@ -287,8 +307,9 @@ test('mobile shell header applies one safe-area contract with contained touch ta
   assert.match(headerRule, /width: 100%/)
   assert.match(headerRule, /min-width: 0/)
   assert.match(headerRule, /box-sizing: border-box/)
-  assert.match(headerRule, /padding-inline: 16px/)
   assert.match(headerRule, /padding-top: max\(8px, env\(safe-area-inset-top, 0px\)\)/)
+  assert.match(headerRule, /padding-right: max\(12px, env\(safe-area-inset-right, 0px\)\)/)
+  assert.match(headerRule, /padding-left: max\(12px, env\(safe-area-inset-left, 0px\)\)/)
   assert.match(headerRule, /min-height: calc\(56px \+ env\(safe-area-inset-top, 0px\)\)/)
   assert.match(headerRule, /position: sticky/)
   assert.match(headerRule, /grid-template-columns: 44px minmax\(0, 1fr\) 44px/)
@@ -298,9 +319,10 @@ test('mobile shell header applies one safe-area contract with contained touch ta
   }
 })
 
-test('mobile reservation notification header contains wrapping and fixed metadata', () => {
+test('mobile reservation and selected-date headers contain wrapping and fixed actions', () => {
   const css = read('index.css')
   const dashboard = read('Dashboard.jsx')
+  const calendar = read('src/features/dashboard/sections/CalendarSection.jsx')
 
   assert.match(
     dashboard,
@@ -308,7 +330,7 @@ test('mobile reservation notification header contains wrapping and fixed metadat
   )
   assert.match(
     css,
-    /\[data-testid="reservation-notifications-panel"\][\s\S]*?> div:first-child\s*\{[\s\S]*?display: grid !important;[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: 12px !important;[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
+    /\[data-testid="reservation-notifications-panel"\][\s\S]*?> div:first-child,[\s\S]*?\.teacher-selected-date-header\s*\{[\s\S]*?display: grid !important;[\s\S]*?grid-template-columns: minmax\(0, 1fr\) auto;[\s\S]*?gap: 12px !important;[\s\S]*?width: auto;[\s\S]*?inline-size: auto;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
   )
   assert.match(
     css,
@@ -317,6 +339,10 @@ test('mobile reservation notification header contains wrapping and fixed metadat
   assert.match(
     css,
     /\[data-testid="reservation-notifications-panel"\][\s\S]*?> div:first-child[\s\S]*?> :last-child\s*\{[\s\S]*?flex-shrink: 0;[\s\S]*?white-space: nowrap;/
+  )
+  assert.match(
+    calendar,
+    /className=\{teacherPortal \? 'teacher-selected-date-header' : undefined\}/
   )
 })
 
@@ -367,7 +393,7 @@ test('teacher calendar and today summary use stable responsive class roles', () 
   )
   assert.match(
     css,
-    /\.teacher-calendar-days\s*\[data-testid="calendar-day-button"\]\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0 !important;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;[\s\S]*?min-height: 52px !important;[\s\S]*?padding: 6px !important;[\s\S]*?padding-inline: 4px !important;[\s\S]*?overflow: hidden;/
+    /\.teacher-calendar-days\s*\[data-testid="calendar-day-button"\]\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0 !important;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;[\s\S]*?min-height: 52px !important;[\s\S]*?padding: 4px !important;[\s\S]*?margin: 0 !important;/
   )
   assert.match(
     css,
@@ -413,9 +439,13 @@ test('mobile teacher calendar uses fixed controls and shrinkable seven-column gr
     css,
     /\.teacher-calendar-weekdays > \*\s*\{[\s\S]*?text-align: center;[\s\S]*?overflow: hidden;[\s\S]*?white-space: nowrap;/
   )
-  assert.match(
-    css,
-    /\.dashboard--mobile\.dashboard--teacher,[\s\S]*?\.dashboard--mobile\.dashboard--teacher \.main\s*\{[\s\S]*?overflow-x: hidden;/
+  const mobileTeacherRootRule =
+    css.match(/\.dashboard--mobile\.dashboard--teacher\s*(?:,|\{)([^}]*)\}/)?.[1] || ''
+  const mobileTeacherMainRule =
+    css.match(/\.dashboard--mobile\.dashboard--teacher \.main\s*\{([^}]*)\}/)?.[1] || ''
+  assert.doesNotMatch(
+    mobileTeacherRootRule + mobileTeacherMainRule,
+    /overflow-x:\s*(?:hidden|clip)/
   )
 })
 
