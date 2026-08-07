@@ -1,5 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { getStudentName, getTeacherName } from '../dashboardViewUtils.js'
+import { useTranslation } from '../../../i18n/LocalizationProvider.jsx'
+import { installDialogFocusContainment } from '../../../preferences/layout.js'
 
 const ACTION_LABELS = {
   complete: '수업완료',
@@ -190,7 +192,12 @@ function FixedPrivateLessonOutcomeMode({
   onFixedOutcomePreview,
   onFixedOutcomeCommit,
   onClose,
+  teacherPortal = false,
 }) {
+  const { t } = useTranslation()
+  const dialogRef = useRef(null)
+  const closeRef = useRef(null)
+  const text = (key, fallback) => (teacherPortal ? t(key) : fallback)
   const ids = getFixedOutcomeTargetIds(target)
   const preview = fixedOutcomePreviewResult || null
   const payload = fixedOutcomePreviewPayload || null
@@ -234,13 +241,21 @@ function FixedPrivateLessonOutcomeMode({
     locked
   const errorPlan = fixedOutcomeCommitError?.normalizedPlan || {}
   const successPlan = fixedOutcomeCommitResult?.normalizedPlan || {}
+  useEffect(() => {
+    return installDialogFocusContainment({
+      container: dialogRef.current,
+      initialFocus: closeRef.current,
+      onClose: () => {
+        if (!interactionBusy) onClose?.()
+      },
+    })
+  }, [interactionBusy, onClose])
 
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="fixed-private-lesson-outcome-modal-title"
+      role="presentation"
       data-testid="fixed-private-lesson-outcome-modal"
+      className="teacher-dialog-backdrop"
       onClick={(event) => {
         if (event.target === event.currentTarget && !interactionBusy) onClose?.()
       }}
@@ -256,6 +271,13 @@ function FixedPrivateLessonOutcomeMode({
       }}
     >
       <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="fixed-private-lesson-outcome-modal-title"
+        tabIndex={-1}
+        className="teacher-dialog-panel teacher-outcome-sheet"
+        onClick={(event) => event.stopPropagation()}
         style={{
           width: 'min(820px, 100%)',
           maxHeight: '88vh',
@@ -271,14 +293,17 @@ function FixedPrivateLessonOutcomeMode({
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
           <div>
             <h2 id="fixed-private-lesson-outcome-modal-title" style={{ margin: 0 }}>
-              고정 1:1 회차 결과 처리
+              {text('teacher.outcome.title', '고정 1:1 회차 결과 처리')}
             </h2>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 14 }}>
-              고정 회차의 3-way 링크와 원장 전환을 서버에서 미리 확인한 뒤 전용 최종 확인으로
-              처리합니다.
+              {text(
+                'teacher.outcome.description',
+                '고정 회차의 3-way 링크와 원장 전환을 서버에서 미리 확인한 뒤 처리합니다.'
+              )}
             </p>
           </div>
           <button
+            ref={closeRef}
             type="button"
             onClick={onClose}
             disabled={interactionBusy}
@@ -292,7 +317,7 @@ function FixedPrivateLessonOutcomeMode({
               cursor: interactionBusy ? 'not-allowed' : 'pointer',
             }}
           >
-            닫기
+            {text('teacher.common.close', '닫기')}
           </button>
         </div>
 
@@ -322,8 +347,10 @@ function FixedPrivateLessonOutcomeMode({
               color: '#ffc9c9',
             }}
           >
-            관리자이거나, 활성 교사 멤버십에 canManageOwnLessonDeductions 권한이 있고 담당
-            선생님 별칭이 일치해야 합니다.
+            {text(
+              'teacher.outcome.localGateError',
+              '관리자이거나, 활성 교사 멤버십에 canManageOwnLessonDeductions 권한이 있고 담당 선생님 별칭이 일치해야 합니다.'
+            )}
           </section>
         ) : null}
 
@@ -335,10 +362,12 @@ function FixedPrivateLessonOutcomeMode({
             padding: 14,
           }}
         >
-          <legend style={{ padding: '0 6px', fontWeight: 700 }}>처리 유형</legend>
+          <legend style={{ padding: '0 6px', fontWeight: 700 }}>
+            {text('teacher.outcome.actionType', '처리 유형')}
+          </legend>
           {[
-            ['complete', '수업완료'],
-            ['no_show', '노쇼'],
+            ['complete', text('teacher.outcome.complete', '수업완료')],
+            ['no_show', text('teacher.outcome.noShow', '노쇼')],
           ].map(([value, label]) => (
             <label
               key={value}
@@ -374,7 +403,9 @@ function FixedPrivateLessonOutcomeMode({
             cursor: !fixedLocalGatePassed || interactionBusy || locked ? 'not-allowed' : 'pointer',
           }}
         >
-          {fixedOutcomePreviewBusy ? '고정 회차 미리보기 중...' : '고정 회차 서버 미리보기'}
+          {fixedOutcomePreviewBusy
+            ? text('teacher.outcome.previewing', '고정 회차 미리보기 중...')
+            : text('teacher.outcome.preview', '고정 회차 서버 미리보기')}
         </button>
 
         {fixedOutcomePreviewError ? (
@@ -389,7 +420,7 @@ function FixedPrivateLessonOutcomeMode({
               color: '#ffc9c9',
             }}
           >
-            <strong>고정 회차 미리보기 실패</strong>
+            <strong>{text('teacher.outcome.previewFailed', '고정 회차 미리보기 실패')}</strong>
             <p style={{ margin: '8px 0 0 0' }}>{fixedOutcomePreviewError}</p>
           </section>
         ) : null}
@@ -407,7 +438,11 @@ function FixedPrivateLessonOutcomeMode({
                 padding: 14,
               }}
             >
-              <strong>{previewPassed ? '고정 회차 미리보기 통과' : '고정 회차 처리 차단'}</strong>
+              <strong>
+                {previewPassed
+                  ? text('teacher.outcome.previewPassed', '고정 회차 미리보기 통과')
+                  : text('teacher.outcome.previewBlocked', '고정 회차 처리 차단')}
+              </strong>
               <p style={{ margin: '8px 0 0 0', fontSize: 13, opacity: 0.82 }}>
                 requestId: {requestId || '-'} · actionType: {preview.actionType || actionType}
               </p>
@@ -463,8 +498,10 @@ function FixedPrivateLessonOutcomeMode({
                   color: '#ffe1a8',
                 }}
               >
-                legacy 원장 전환: 기존 lesson 기여분을 reservation 원장으로 옮기므로 package net
-                delta zero(순변화 0)일 수 있습니다.
+                {text(
+                  'teacher.outcome.legacyWarning',
+                  'legacy 원장 전환: 기존 lesson 기여분을 reservation 원장으로 옮기므로 package net delta zero(순변화 0)일 수 있습니다.'
+                )}
               </section>
             ) : null}
 
@@ -484,10 +521,14 @@ function FixedPrivateLessonOutcomeMode({
                   padding: 14,
                 }}
               >
-                <h3 style={{ margin: 0, fontSize: 15 }}>고정 회차 실제 처리 전 최종 확인</h3>
+                <h3 style={{ margin: 0, fontSize: 15 }}>
+                  {text('teacher.outcome.finalTitle', '고정 회차 실제 처리 전 최종 확인')}
+                </h3>
                 <p style={{ margin: '8px 0 0 0', color: '#ffe1a8', fontSize: 13 }}>
-                  lesson/reservation 상태, slot 원장 표식, 수강권 횟수와 차감 기록을 함께
-                  변경합니다. 결과가 표시될 때까지 반복 클릭하거나 창을 닫지 마세요.
+                  {text(
+                    'teacher.outcome.finalDescription',
+                    'lesson/reservation 상태, slot 원장 표식, 수강권 횟수와 차감 기록을 함께 변경합니다. 결과가 표시될 때까지 반복 클릭하거나 창을 닫지 마세요.'
+                  )}
                 </p>
                 <label
                   style={{
@@ -505,7 +546,10 @@ function FixedPrivateLessonOutcomeMode({
                     disabled={interactionBusy || locked}
                     data-testid="fixed-private-lesson-outcome-commit-checkbox"
                   />
-                  미리보기의 대상, 원장 분류, 횟수 변화와 차감 기록을 확인했습니다.
+                  {text(
+                    'teacher.outcome.confirm',
+                    '미리보기의 대상, 원장 분류, 횟수 변화와 차감 기록을 확인했습니다.'
+                  )}
                 </label>
                 <button
                   type="button"
@@ -524,7 +568,9 @@ function FixedPrivateLessonOutcomeMode({
                     opacity: commitDisabled ? 0.68 : 1,
                   }}
                 >
-                  {fixedOutcomeCommitBusy ? '고정 회차 실제 처리 중...' : '고정 회차 결과 확정'}
+                  {fixedOutcomeCommitBusy
+                    ? text('teacher.outcome.committing', '고정 회차 실제 처리 중...')
+                    : text('teacher.outcome.commit', '고정 회차 결과 확정')}
                 </button>
               </section>
             ) : null}
@@ -551,15 +597,25 @@ function FixedPrivateLessonOutcomeMode({
             }}
           >
             <div>
-              <strong>고정 회차 실제 처리 실패</strong>
+              <strong>{text('teacher.outcome.commitFailed', '고정 회차 실제 처리 실패')}</strong>
               <p style={{ margin: '8px 0 0 0' }}>{fixedOutcomeCommitError.message}</p>
               <p style={{ margin: '8px 0 0 0', fontSize: 13 }}>
-                {getFixedOutcomeErrorGuidance(fixedOutcomeCommitError)}
+                {teacherPortal
+                  ? fixedOutcomeCommitError.retryWithSamePayload === true
+                    ? t('teacher.outcome.retrySamePayload')
+                    : t('teacher.outcome.retryFreshPreview')
+                  : getFixedOutcomeErrorGuidance(fixedOutcomeCommitError)}
               </p>
               <p style={{ margin: '8px 0 0 0', fontSize: 13, opacity: 0.82 }}>
                 {fixedOutcomeCommitError.retryWithSamePayload === true
-                  ? '보존됨: 동일 requestId / planHash / preview payload'
-                  : '폐기됨: 새 미리보기와 새 requestId 필요'}
+                  ? text(
+                      'teacher.outcome.payloadPreserved',
+                      '보존됨: 동일 requestId / planHash / preview payload'
+                    )
+                  : text(
+                      'teacher.outcome.payloadDiscarded',
+                      '폐기됨: 새 미리보기와 새 requestId 필요'
+                    )}
               </p>
             </div>
             <FieldBlock
@@ -611,7 +667,12 @@ function FixedPrivateLessonOutcomeMode({
             }}
           >
             <div>
-              <strong>고정 회차 실제 처리가 완료되었습니다</strong>
+              <strong>
+                {text(
+                  'teacher.outcome.commitSucceeded',
+                  '고정 회차 실제 처리가 완료되었습니다'
+                )}
+              </strong>
               <p style={{ margin: '8px 0 0 0', fontSize: 13, opacity: 0.82 }}>
                 batchId: {fixedOutcomeCommitResult.batchId || '-'} · idempotentReplay:{' '}
                 {fixedOutcomeCommitResult.idempotentReplay === true ? 'true' : 'false'}
@@ -640,7 +701,10 @@ function FixedPrivateLessonOutcomeMode({
             <FieldBlock label="normalizedPlan" value={successPlan} />
             <FieldBlock label="nextStep" value={fixedOutcomeCommitResult.nextStep} />
             <p style={{ margin: 0, fontSize: 13, opacity: 0.82 }}>
-              이 요청은 성공 상태로 잠겼습니다. 새 작업은 창을 닫은 뒤 시작하세요.
+              {text(
+                'teacher.outcome.successLocked',
+                '이 요청은 성공 상태로 잠겼습니다. 새 작업은 창을 닫은 뒤 시작하세요.'
+              )}
             </p>
           </section>
         ) : null}
@@ -690,6 +754,7 @@ export default function PrivateLessonStatusActionModal({
   onFixedOutcomeCommit,
   onCommit,
   onClose,
+  teacherPortal = false,
 }) {
   const [commitConfirmed, setCommitConfirmed] = useState(false)
   if (!target) return null
@@ -713,6 +778,7 @@ export default function PrivateLessonStatusActionModal({
         onFixedOutcomePreview={onFixedOutcomePreview}
         onFixedOutcomeCommit={onFixedOutcomeCommit}
         onClose={onClose}
+        teacherPortal={teacherPortal}
       />
     )
   }

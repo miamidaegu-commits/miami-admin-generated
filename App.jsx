@@ -8,6 +8,8 @@ import StudentBookingPage from "./StudentBookingPage";
 import Unauthorized from "./Unauthorized";
 import ProtectedRoute from "./ProtectedRoute";
 import PublicClassIntroPage from "./src/features/public/PublicClassIntroPage.jsx";
+import { LocalizationProvider } from "./src/i18n/LocalizationProvider.jsx";
+import { LayoutProvider } from "./src/preferences/LayoutProvider.jsx";
 import { auth, functions } from "./firebase";
 
 /** 운영에서는 false 유지. 개발 중에만 선생님 생성 툴바(uid / teacherName / Create Teacher)를 표시합니다. */
@@ -90,31 +92,35 @@ export default function App() {
 
   return (
     <AuthProvider>
-      <BrowserRouter>
-        {ENABLE_DEV_TEACHER_TOOLBAR ? <AdminTeacherCreationPanel /> : null}
-        <Routes>
-          <Route path="/" element={<Login />} />
-          <Route path="/login" element={<Login />} />
-          <Route path="/classes" element={<PublicClassIntroPage />} />
-          <Route path="/unauthorized" element={<Unauthorized />} />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute allowedRoles={['admin', 'teacher']}>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/student-booking"
-            element={
-              <ProtectedRoute allowedRoles={['student']}>
-                <StudentBookingPage />
-              </ProtectedRoute>
-            }
-          />
-        </Routes>
-      </BrowserRouter>
+      <LocalizationProvider>
+        <LayoutProvider>
+          <BrowserRouter>
+            {ENABLE_DEV_TEACHER_TOOLBAR ? <AdminTeacherCreationPanel /> : null}
+            <Routes>
+              <Route path="/" element={<Login />} />
+              <Route path="/login" element={<Login />} />
+              <Route path="/classes" element={<PublicClassIntroPage />} />
+              <Route path="/unauthorized" element={<Unauthorized />} />
+              <Route
+                path="/dashboard"
+                element={
+                  <ProtectedRoute allowedRoles={['admin', 'teacher']}>
+                    <Dashboard />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/student-booking"
+                element={
+                  <ProtectedRoute allowedRoles={['student']}>
+                    <StudentBookingPage />
+                  </ProtectedRoute>
+                }
+              />
+            </Routes>
+          </BrowserRouter>
+        </LayoutProvider>
+      </LocalizationProvider>
     </AuthProvider>
   );
 }

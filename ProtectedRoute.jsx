@@ -1,12 +1,14 @@
 import { Navigate } from 'react-router-dom'
 import { useAuth } from './AuthContext'
 import { debugLog } from './src/utils/debugLog.js'
+import { useTranslation } from './src/i18n/LocalizationProvider.jsx'
 
 export default function ProtectedRoute({
   children,
   allowedRoles = ['admin', 'teacher'],
 }) {
   const { user, role, loading } = useAuth()
+  const { t } = useTranslation()
   
   debugLog('[ProtectedRoute]', {
     hasUser: Boolean(user),
@@ -19,6 +21,7 @@ export default function ProtectedRoute({
     return (
       <div className="loader-wrap">
         <div className="loader" />
+        <span className="sr-only">{t('common.loading')}</span>
       </div>
     )
   }

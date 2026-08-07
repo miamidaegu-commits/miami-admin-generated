@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslation } from '../../../i18n/LocalizationProvider.jsx'
+import { installDialogFocusContainment } from '../../../preferences/layout.js'
 import {
   formatLessonDateLabel,
   formatLessonSessionNumber,
@@ -17,7 +19,8 @@ import {
   findPrivatePackageForTeacherContext,
   findStudentPrivatePackageContexts,
 } from '../privatePackageHelpers.js'
-import { formatPrivatePackageCancelUsageSummary } from '../../booking/studentPrivateCancelAllowance.js'
+import { formatPrivateReservationHistoryLabels } from '../privateReservationHistoryFormatter.js'
+import { computePrivatePackageCancelAllowance } from '../../booking/studentPrivateCancelAllowance.js'
 import { resolveGroupLessonSubject } from '../groupClassRoomUtils.js'
 import { rowMatchesTeacherScope } from '../teacherLessonRosterHelpers.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
@@ -155,27 +158,6 @@ function isFixedPrivateOutcomeCalendarRow(lesson) {
   return Boolean(lessonId && reservationId && slotId && packageId)
 }
 
-function isTeacherUnavailablePrivateReason(value) {
-  return [
-    'teacher_absent',
-    'teacher_unavailable',
-    'teacher_unavailable_closed',
-    'teacher_absence',
-    'teacher_no_show',
-    'closed',
-    'academy_closed',
-    'holiday',
-    'class_closure',
-  ].includes(String(value || '').trim().toLowerCase())
-}
-
-function isReleasedFixedPrivateSlot(slot) {
-  return (
-    slot?.releasedFromFixed === true ||
-    String(slot?.slotType || '').trim() === 'released_fixed'
-  )
-}
-
 function normalizePrivateReservationLinkText(value) {
   return String(value ?? '')
     .trim()
@@ -272,78 +254,6 @@ function mergeCalendarReservationCancellationFromLesson(reservation, linkedLesso
   }
 }
 
-function isStudentSeatReleasedPrivateReservation(row) {
-  const status = String(row?.status || '').trim().toLowerCase()
-  const cancellationType = String(row?.cancellationType || '').trim().toLowerCase()
-  return (
-    (status === 'cancelled' || status === 'canceled') &&
-    cancellationType === 'seat_released' &&
-    getPrivateReservationCancelActorLabel(row) === '학생 취소'
-  )
-}
-
-function getPrivateReservationHistoryStatusLabel(row, slot) {
-  if (isStudentSeatReleasedPrivateReservation(row)) return '학생 취소'
-  const status = String(row?.status || '').trim().toLowerCase()
-  if (status === 'cancelled' || status === 'canceled') {
-    const reason = row?.cancellationReason || row?.cancelledReason || slot?.releaseReason
-    if (isTeacherUnavailablePrivateReason(reason)) return '예약 취소 · 수업불가 닫힘'
-    if (isReleasedFixedPrivateSlot(slot) || slot?.isBookable === true) {
-      return '예약 취소 · 예약 가능 공개'
-    }
-    return '예약 취소'
-  }
-  return '예약 완료'
-}
-
-function getPrivateReservationCancelActorLabel(row) {
-  const status = String(row?.status || '').trim().toLowerCase()
-  if (status !== 'cancelled' && status !== 'canceled') return ''
-  const actor = String(
-    row?.cancelledByRole ||
-      row?.canceledByRole ||
-      row?.cancelledBy ||
-      row?.canceledBy ||
-      row?.source ||
-      ''
-  )
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '')
-  const reason = String(row?.cancellationReason || row?.cancelledReason || '')
-    .trim()
-    .toLowerCase()
-  if (isTeacherUnavailablePrivateReason(reason)) return '선생님 휴강/수업불가'
-  if (actor.includes('student') || reason.includes('student')) return '학생 취소'
-  if (actor.includes('teacher') || reason.includes('teacher')) return '선생님 취소'
-  if (
-    actor.includes('admin') ||
-    actor.includes('owner') ||
-    actor.includes('staff') ||
-    actor.includes('dashboard') ||
-    reason.includes('admin')
-  ) {
-    return '관리자 취소'
-  }
-  return ''
-}
-
-function formatPrivateReservationCancelledAt(row) {
-  const millis = calendarTimestampToMillis(row?.cancelledAt || row?.canceledAt)
-  if (millis == null) return ''
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Seoul',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(new Date(millis))
-  const byType = new Map(parts.map((part) => [part.type, part.value]))
-  return `${byType.get('year')}-${byType.get('month')}-${byType.get('day')} ${byType.get('hour')}:${byType.get('minute')}`
-}
-
 function getPrivateReservationHistoryPackage({
   reservation,
   linkedLesson,
@@ -376,29 +286,6 @@ function getPrivateReservationHistoryPackage({
       linkedLesson?.teacherName ||
       linkedLesson?.teacher,
   })
-}
-
-function getPrivateReservationHistoryDetailLabel(row, pkg) {
-  if (!getPrivateReservationCancelActorLabel(row)) return ''
-  if (!isStudentSeatReleasedPrivateReservation(row)) {
-    return [getPrivateReservationCancelActorLabel(row), formatPrivateReservationCancelledAt(row)]
-      .filter(Boolean)
-      .join(' · ')
-  }
-
-  const labels = []
-  const cancelledAt = formatPrivateReservationCancelledAt(row)
-  if (cancelledAt) labels.push(`취소 처리일: ${cancelledAt}`)
-  if (row?.noDeduction === true) labels.push('수강권 차감 없음')
-  if (pkg && String(pkg.packageType || '').trim() === 'private') {
-    const cancelUsageLabel = formatPrivatePackageCancelUsageSummary(pkg)
-    if (cancelUsageLabel) {
-      labels.push(
-        cancelUsageLabel.includes('취소 사용') ? cancelUsageLabel : `취소 사용 ${cancelUsageLabel}`
-      )
-    }
-  }
-  return labels.filter(Boolean).join(' · ')
 }
 
 function parseStorageDateToLocalDate(value) {
@@ -629,7 +516,20 @@ function CalendarPrivateLessonDetailModal({
   onClose,
   onToggleDeduction,
   onOpenPackageEdit,
+  teacherPortal = false,
 }) {
+  const { t } = useTranslation()
+  const dialogRef = useRef(null)
+  const closeRef = useRef(null)
+  const text = (key, fallback, values) => (teacherPortal ? t(key, values) : fallback)
+  useEffect(() => {
+    if (!detail) return undefined
+    return installDialogFocusContainment({
+      container: dialogRef.current,
+      initialFocus: closeRef.current,
+      onClose,
+    })
+  }, [detail, onClose])
   if (!detail) return null
   const canRunDeductionAction =
     detail.canManagePrivateLessonDeductions &&
@@ -638,10 +538,9 @@ function CalendarPrivateLessonDetailModal({
   const canEditPackageCount = detail.canEditPackageCount && detail.contextPackage
   return (
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="calendar-private-lesson-detail-title"
+      role="presentation"
       data-testid="calendar-private-lesson-detail-modal"
+      className="teacher-dialog-backdrop"
       style={{
         position: 'fixed',
         inset: 0,
@@ -657,6 +556,12 @@ function CalendarPrivateLessonDetailModal({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="calendar-private-lesson-detail-title"
+        tabIndex={-1}
+        className="teacher-dialog-panel"
         style={{
           width: '100%',
           maxWidth: 460,
@@ -673,23 +578,23 @@ function CalendarPrivateLessonDetailModal({
           id="calendar-private-lesson-detail-title"
           style={{ margin: '0 0 12px 0', fontSize: '1.1rem' }}
         >
-          수업 차감 상세
+          {text('teacher.calendar.detail.title', '수업 차감 상세')}
         </h2>
         <div style={{ display: 'grid', gap: 8, fontSize: 13, lineHeight: 1.5 }}>
-          <div>학생: {detail.studentName || '-'}</div>
+          <div>{text('teacher.common.student', '학생')}: {detail.studentName || '-'}</div>
           <div>
-            일시: {formatLessonDateLabel(detail.lesson)} {formatLessonTimeLabel(detail.lesson)}
+            {text('teacher.calendar.detail.dateTime', '일시')}: {formatLessonDateLabel(detail.lesson)} {formatLessonTimeLabel(detail.lesson)}
           </div>
-          <div>과목: {detail.subject || '-'}</div>
-          <div>상태: {detail.statusLabel}</div>
-          <div>남은 횟수: {detail.remainingLessons}</div>
+          <div>{text('teacher.common.subject', '과목')}: {detail.subject || '-'}</div>
+          <div>{text('teacher.common.status', '상태')}: {detail.statusLabel}</div>
+          <div>{text('teacher.calendar.detail.remaining', '남은 횟수')}: {detail.remainingLessons}</div>
           {detail.packageUsage ? (
             <>
-              <div>총 횟수: {detail.packageUsage.totalCount}</div>
-              <div>사용 횟수: {detail.packageUsage.usedDeductedCount}</div>
-              <div>예정 고정수업: {detail.packageUsage.futureFixedAllocatedCount}</div>
-              <div>예약된 보충수업: {detail.packageUsage.activeFutureReservationAllocatedCount}</div>
-              <div>보충 가능: {detail.packageUsage.makeupAvailableCount}</div>
+              <div>{text('teacher.calendar.detail.total', '총 횟수')}: {detail.packageUsage.totalCount}</div>
+              <div>{text('teacher.calendar.detail.used', '사용 횟수')}: {detail.packageUsage.usedDeductedCount}</div>
+              <div>{text('teacher.calendar.detail.futureFixed', '예정 고정수업')}: {detail.packageUsage.futureFixedAllocatedCount}</div>
+              <div>{text('teacher.calendar.detail.reservedMakeup', '예약된 보충수업')}: {detail.packageUsage.activeFutureReservationAllocatedCount}</div>
+              <div>{text('teacher.calendar.detail.makeup', '보충 가능')}: {detail.packageUsage.makeupAvailableCount}</div>
             </>
           ) : null}
           {detail.actionReason ? (
@@ -709,6 +614,7 @@ function CalendarPrivateLessonDetailModal({
           ) : null}
         </div>
         <div
+          className={teacherPortal ? 'teacher-calendar-weekdays' : undefined}
           style={{
             display: 'flex',
             justifyContent: 'flex-end',
@@ -757,6 +663,7 @@ function CalendarPrivateLessonDetailModal({
             </button>
           ) : null}
           <button
+            ref={closeRef}
             type="button"
             onClick={onClose}
             style={{
@@ -768,7 +675,7 @@ function CalendarPrivateLessonDetailModal({
               cursor: 'pointer',
             }}
           >
-            닫기
+            {text('teacher.common.close', '닫기')}
           </button>
         </div>
       </div>
@@ -781,6 +688,55 @@ function CalendarPrivateLessonDetailModal({
  * view="lessons": 전체/선택일 수업 목록 + 상단 액션(캘린더 탭에서만 일부 노출)
  */
 export default function CalendarSection(props) {
+  const { language, t } = useTranslation()
+  const teacherPortal = props.teacherPortal === true
+  const text = (key, fallback, values) => (teacherPortal ? t(key, values) : fallback)
+  const localizedDate = (value, options) => {
+    if (!teacherPortal || !value) return ''
+    const date = value instanceof Date ? value : new Date(`${value}T00:00:00`)
+    if (Number.isNaN(date.getTime())) return ''
+    return new Intl.DateTimeFormat(language === 'en' ? 'en-US' : 'ko-KR', options).format(date)
+  }
+  const knownLabel = (value) => {
+    if (!teacherPortal) return value
+    const keyByLabel = {
+      '예정': 'teacher.calendar.status.scheduled',
+      '완료': 'teacher.calendar.status.completed',
+      '노쇼': 'teacher.calendar.status.noShow',
+      '예약 완료': 'teacher.calendar.status.reserved',
+      '자동 차감 완료': 'teacher.calendar.status.autoDeducted',
+      '정상 차감': 'teacher.calendar.status.deducted',
+      '차감취소': 'teacher.calendar.status.deductionCancelled',
+      '휴강 · 차감 없음': 'teacher.calendar.status.cancelledNoDeduction',
+      '원 수업 휴강 · 차감 없음': 'teacher.calendar.status.cancelledNoDeduction',
+      '수강권 등록 필요': 'teacher.calendar.status.packageRequired',
+      '수강권 연결 필요': 'teacher.calendar.status.packageLinkRequired',
+      '수강권 연결됨': 'teacher.calendar.status.packageLinked',
+      '수강권 자동 연결': 'teacher.calendar.status.packageAutoLinked',
+      '소진': 'teacher.calendar.status.depleted',
+      '권한이 없습니다': 'teacher.calendar.permissionDenied',
+      '아직 차감된 수업이 아닙니다': 'teacher.calendar.notDeductedYet',
+      '학생 직접 예약: 가능': 'teacher.calendar.studentBookingEnabled',
+      '학생 직접 예약: 비활성': 'teacher.calendar.studentBookingDisabled',
+      '좌석: 예약 가능': 'teacher.calendar.seatOpen',
+      '좌석: 마감': 'teacher.calendar.seatClosed',
+      '자리 공개됨': 'teacher.private.status.seatReleased',
+      '수업 취소': 'teacher.private.status.lessonCancelled',
+    }
+    const key = keyByLabel[String(value || '').trim()]
+    if (key) return t(key)
+    const raw = String(value || '')
+    const makeupMatch = raw.match(/^보충 가능 (\d+)회$/)
+    if (makeupMatch) {
+      return t('teacher.calendar.status.makeupAvailable', { count: makeupMatch[1] })
+    }
+    const sessionMatch = raw.match(/^(\d+)회차$/)
+    if (sessionMatch) {
+      return t('teacher.calendar.sessionNumber', { count: sessionMatch[1] })
+    }
+    const minutesMatch = raw.match(/^(\d+)분$/)
+    return minutesMatch ? t('teacher.common.minutes', { count: minutesMatch[1] }) : value
+  }
   if (props.view === 'month') {
     const {
       setCalendarMonth,
@@ -800,8 +756,13 @@ export default function CalendarSection(props) {
     const showTeacherFilter = isAdmin && calendarTeacherFilterOptions.length > 0
 
     return (
-      <section className="activity-section" style={{ marginBottom: 24 }}>
+      <section
+        className={`activity-section${teacherPortal ? ' teacher-calendar-month' : ''}`}
+        data-testid={teacherPortal ? 'teacher-calendar-month' : undefined}
+        style={{ marginBottom: 24 }}
+      >
         <div
+          className={teacherPortal ? 'teacher-calendar-grid' : undefined}
           style={{
             display: 'flex',
             justifyContent: 'space-between',
@@ -812,6 +773,8 @@ export default function CalendarSection(props) {
           }}
         >
           <button
+            type="button"
+            aria-label={text('teacher.calendar.previousMonth', '이전 달')}
             onClick={() =>
               setCalendarMonth(
                 (prev) => new Date(prev.getFullYear(), prev.getMonth() - 1, 1)
@@ -831,7 +794,9 @@ export default function CalendarSection(props) {
 
           <div style={{ display: 'grid', gap: 8, justifyItems: 'center' }}>
             <h2 className="section-title" style={{ margin: 0 }}>
-              {calendarMonthLabel}
+              {teacherPortal
+                ? localizedDate(calendarMonth, { year: 'numeric', month: 'long' })
+                : calendarMonthLabel}
             </h2>
             {showTeacherFilter ? (
               <label
@@ -870,6 +835,8 @@ export default function CalendarSection(props) {
           </div>
 
           <button
+            type="button"
+            aria-label={text('teacher.calendar.nextMonth', '다음 달')}
             onClick={() =>
               setCalendarMonth(
                 (prev) => new Date(prev.getFullYear(), prev.getMonth() + 1, 1)
@@ -898,9 +865,17 @@ export default function CalendarSection(props) {
             opacity: 0.8,
           }}
         >
-          {['일', '월', '화', '수', '목', '금', '토'].map((day) => (
-            <div key={day} style={{ textAlign: 'center' }}>
-              {day}
+          {[
+            ['sun', '일'],
+            ['mon', '월'],
+            ['tue', '화'],
+            ['wed', '수'],
+            ['thu', '목'],
+            ['fri', '금'],
+            ['sat', '토'],
+          ].map(([key, day]) => (
+            <div key={key} style={{ textAlign: 'center' }}>
+              {text(`teacher.calendar.weekday.${key}`, day)}
             </div>
           ))}
         </div>
@@ -924,6 +899,7 @@ export default function CalendarSection(props) {
                 key={dateKey}
                 data-testid="calendar-day-button"
                 data-date={dateKey}
+                aria-label={`${dateKey}, ${text('teacher.calendar.lessonCount', `수업 ${count}개`, { count })}`}
                 onClick={() => {
                   setSelectedDate(day)
                   setShowOnlySelectedDate(true)
@@ -948,7 +924,7 @@ export default function CalendarSection(props) {
                       opacity: 0.9,
                     }}
                   >
-                    수업 {count}개
+                    {text('teacher.calendar.lessonCount', `수업 ${count}개`, { count })}
                   </div>
                 ) : null}
                 {previews.slice(0, 2).map((preview) => (
@@ -1039,8 +1015,8 @@ export default function CalendarSection(props) {
       : displayedLessons
   const emptyLessonMessage =
     activeSection === 'groups' && showOnlySelectedDate
-      ? '선택한 날짜의 단체반 수업이 없습니다.'
-      : '등록된 수업이 없습니다.'
+      ? text('teacher.calendar.empty', '선택한 날짜의 단체반 수업이 없습니다.')
+      : text('teacher.calendar.empty', '등록된 수업이 없습니다.')
   const privateSlotById = useMemo(() => {
     return new Map(
       (Array.isArray(privateLessonSlots) ? privateLessonSlots : []).map((slot) => [
@@ -1079,8 +1055,7 @@ export default function CalendarSection(props) {
           return null
         }
         const duration = Number(reservation.durationMinutes || slot?.durationMinutes || 0)
-        // Apply linked student seat_released cancellation before active reservations render as 예약 완료.
-        // The reservation record should show 학생 취소 / 취소 처리일 / 수강권 차감 없음.
+        // Apply a linked student seat release before formatting the reservation-history labels.
         // Link matching covers lessonId/fixedLessonId plus reservationId/slotId/date-time fallbacks.
         const linkedCancelledLesson =
           getCalendarPrivateReservationLinkKeys(reservation, slot)
@@ -1096,10 +1071,16 @@ export default function CalendarSection(props) {
           studentPackages,
           academyId: effectiveReservation.academyId || linkedCancelledLesson?.academyId,
         })
-        const detailLabel = getPrivateReservationHistoryDetailLabel(
-          effectiveReservation,
-          historyPackage
-        )
+        const cancelUsage =
+          historyPackage && String(historyPackage.packageType || '').trim() === 'private'
+            ? computePrivatePackageCancelAllowance(historyPackage)
+            : null
+        const historyLabels = formatPrivateReservationHistoryLabels({
+          row: effectiveReservation,
+          slot,
+          cancelUsage,
+          text,
+        })
         return {
           id: String(
             effectiveReservation.id ||
@@ -1123,12 +1104,12 @@ export default function CalendarSection(props) {
           subject:
             String(effectiveReservation.subject || '').trim() ||
             String(slot?.subject || '').trim() ||
-            '1:1 수업',
-          durationLabel: Number.isFinite(duration) && duration > 0 ? `${duration}분` : '-',
-          statusLabel: getPrivateReservationHistoryStatusLabel(effectiveReservation, slot),
-          cancelActorLabel: getPrivateReservationCancelActorLabel(effectiveReservation),
-          cancelledAtLabel: formatPrivateReservationCancelledAt(effectiveReservation),
-          detailLabel,
+            text('teacher.today.type.privateLesson', '1:1 수업'),
+          durationLabel:
+            Number.isFinite(duration) && duration > 0
+              ? text('teacher.common.minutes', `${duration}분`, { count: duration })
+              : '-',
+          ...historyLabels,
         }
       })
       .filter(Boolean)
@@ -1147,12 +1128,19 @@ export default function CalendarSection(props) {
     selectedCalendarTeacher,
     showOnlySelectedDate,
     studentPackages,
+    text,
   ])
   const showGroupSelectedDateControl = activeSection === 'groups'
-  const selectedDateControlLabel = formatSelectedDateControlLabel(
-    selectedDateString,
-    selectedDateDisplayString
-  )
+  const selectedDateLocalizedLabel =
+    localizedDate(selectedDateString, {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      weekday: 'short',
+    }) || selectedDateDisplayString
+  const selectedDateControlLabel = teacherPortal
+    ? selectedDateLocalizedLabel
+    : formatSelectedDateControlLabel(selectedDateString, selectedDateDisplayString)
   const changeSelectedDateBy = (offsetDays) => {
     setSelectedDate?.(offsetStorageDate(selectedDateString, offsetDays))
     setShowOnlySelectedDate(true)
@@ -1165,7 +1153,12 @@ export default function CalendarSection(props) {
   }
 
   return (
-    <section className="activity-section" data-testid="calendar-lessons-section">
+    <section
+      className={`activity-section${teacherPortal ? ' teacher-calendar-agenda' : ''}`}
+      data-testid="calendar-lessons-section"
+      data-shared-data-source={teacherPortal ? 'displayedLessons' : undefined}
+      data-shared-handler-source={teacherPortal ? 'calendarSectionProps.lessons' : undefined}
+    >
       <div
         style={{
           display: 'flex',
@@ -1178,12 +1171,18 @@ export default function CalendarSection(props) {
       >
         <div>
           <h2 className="section-title" style={{ margin: 0 }}>
-            {showOnlySelectedDate ? `${selectedDateDisplayString} 수업` : '전체 수업'}
+            {showOnlySelectedDate
+              ? text(
+                  'teacher.calendar.selectedLessons',
+                  `${selectedDateLocalizedLabel} 수업`,
+                  { date: selectedDateLocalizedLabel }
+                )
+              : text('teacher.calendar.allLessons', '전체 수업')}
           </h2>
           <p style={{ margin: '6px 0 0 0', opacity: 0.75, fontSize: 13 }}>
             {showOnlySelectedDate
-              ? '선택한 날짜의 수업만 표시 중'
-              : '전체 수업 표시 중'}
+              ? text('teacher.calendar.showingSelected', '선택한 날짜의 수업만 표시 중')
+              : text('teacher.calendar.showingAll', '전체 수업 표시 중')}
           </p>
         </div>
 
@@ -1204,7 +1203,7 @@ export default function CalendarSection(props) {
             >
               <button
                 type="button"
-                aria-label="이전 날짜"
+                aria-label={text('teacher.common.previousDate', '이전 날짜')}
                 onClick={() => changeSelectedDateBy(-1)}
                 style={{
                   padding: '8px 10px',
@@ -1215,7 +1214,7 @@ export default function CalendarSection(props) {
                   cursor: 'pointer',
                 }}
               >
-                이전 날짜
+                {text('teacher.common.previousDate', '이전 날짜')}
               </button>
               <label
                 data-testid="group-selected-date-label"
@@ -1227,10 +1226,18 @@ export default function CalendarSection(props) {
                   whiteSpace: 'nowrap',
                 }}
               >
-                <span>선택 날짜: {selectedDateControlLabel}</span>
+                <span>
+                  {text(
+                    'teacher.common.selectedDate',
+                    `선택 날짜: ${selectedDateControlLabel}`,
+                    { date: selectedDateControlLabel }
+                  )}
+                </span>
                 <input
                   type="date"
-                  aria-label="선택 날짜"
+                  aria-label={text('teacher.common.selectedDate', '선택 날짜', {
+                    date: selectedDateControlLabel,
+                  })}
                   value={selectedDateString || ''}
                   onChange={(event) => changeSelectedDateTo(event.target.value)}
                   style={{
@@ -1245,7 +1252,7 @@ export default function CalendarSection(props) {
               </label>
               <button
                 type="button"
-                aria-label="다음 날짜"
+                aria-label={text('teacher.common.nextDate', '다음 날짜')}
                 onClick={() => changeSelectedDateBy(1)}
                 style={{
                   padding: '8px 10px',
@@ -1256,7 +1263,7 @@ export default function CalendarSection(props) {
                   cursor: 'pointer',
                 }}
               >
-                다음 날짜
+                {text('teacher.common.nextDate', '다음 날짜')}
               </button>
             </div>
           ) : null}
@@ -1272,7 +1279,9 @@ export default function CalendarSection(props) {
               cursor: 'pointer',
             }}
           >
-            {showOnlySelectedDate ? '전체 보기' : '선택 날짜만 보기'}
+            {showOnlySelectedDate
+              ? text('teacher.calendar.showAll', '전체 보기')
+              : text('teacher.calendar.showSelected', '선택 날짜만 보기')}
           </button>
 
           {activeSection === 'calendar' && showPrivateLessonAddInCalendar ? (
@@ -1334,11 +1343,14 @@ export default function CalendarSection(props) {
       </div>
 
       {loading ? (
-        <p>불러오는 중...</p>
+        <p>{text('teacher.common.loading', '불러오는 중...')}</p>
       ) : displayedLessonRows.length === 0 ? (
         <p>{emptyLessonMessage}</p>
       ) : (
-        <div className="activity-table">
+        <div
+          className={`activity-table${teacherPortal ? ' teacher-responsive-table teacher-calendar-agenda-list' : ''}`}
+          data-testid={teacherPortal ? 'teacher-calendar-agenda-list' : undefined}
+        >
           <div
             className="table-head"
             style={{
@@ -1346,15 +1358,15 @@ export default function CalendarSection(props) {
                 'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(64px, 0.7fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
             }}
           >
-            <span>날짜</span>
-            <span>시간</span>
-            <span>학생 / 반</span>
-            <span>회차</span>
-            <span>선생님</span>
-            <span>과목</span>
-            <span>남은 횟수</span>
-            <span>상태</span>
-            <span>작업</span>
+            <span>{text('teacher.common.date', '날짜')}</span>
+            <span>{text('teacher.common.time', '시간')}</span>
+            <span>{text('teacher.calendar.header.studentOrClass', '학생 / 반')}</span>
+            <span>{text('teacher.common.session', '회차')}</span>
+            <span>{text('teacher.common.teacher', '선생님')}</span>
+            <span>{text('teacher.common.subject', '과목')}</span>
+            <span>{text('teacher.calendar.header.remaining', '남은 횟수')}</span>
+            <span>{text('teacher.common.status', '상태')}</span>
+            <span>{text('teacher.common.actions', '작업')}</span>
           </div>
 
           {displayedLessonRows.map((lesson) => {
@@ -1462,7 +1474,7 @@ export default function CalendarSection(props) {
               : null
             const privateReservationHasEnded =
               privateReservationEndMillis != null && Date.now() >= privateReservationEndMillis
-            const statusLabel = isGroupRow
+            const statusLabel = knownLabel(isGroupRow
               ? lesson.calendarStatusLabel || '예정'
               : isPrivateReservationRow
                 ? lesson.deductionSource === 'auto'
@@ -1488,7 +1500,7 @@ export default function CalendarSection(props) {
                       ? '수강권 연결 필요'
                       : lessonDateStr && lessonDateStr <= todayString
                       ? '수강권 등록 필요'
-                      : '예정'
+                      : '예정')
             const actionReason = isGroupRow || isPrivateReservationRow
               ? ''
               : !canManagePrivateLessonDeductions
@@ -1590,10 +1602,19 @@ export default function CalendarSection(props) {
               : getStudentName(lesson)
             const meaningHelperText = isPrivateReservationRow
               ? isFixedPrivateSourceRow
-                ? '고정 1:1 회차의 연결 예약입니다. 기존 직접예약 처리 경로는 사용할 수 없습니다.'
-                : '학생이 예약 화면에서 직접 예약한 1:1 수업입니다.'
+                ? text(
+                    'teacher.calendar.fixedReservationHelp',
+                    '고정 1:1 회차의 연결 예약입니다. 기존 직접예약 처리 경로는 사용할 수 없습니다.'
+                  )
+                : text(
+                    'teacher.calendar.directReservationHelp',
+                    '학생이 예약 화면에서 직접 예약한 1:1 수업입니다.'
+                  )
               : fixedPrivateCancellationLabel === '자리 공개됨'
-                ? '다른 학생이 예약할 수 있도록 공개된 원래 고정수업 자리입니다.'
+                ? text(
+                    'teacher.calendar.releasedSeatHelp',
+                    '다른 학생이 예약할 수 있도록 공개된 원래 고정수업 자리입니다.'
+                  )
                 : ''
             const rowGroupName = isGroupRow
               ? String(lesson.groupClassDisplayName || '').trim()
@@ -1619,7 +1640,7 @@ export default function CalendarSection(props) {
                     : lesson.subject || '-',
                   statusLabel,
                   remainingLessons,
-                  actionReason,
+                  actionReason: knownLabel(actionReason),
                   canManagePrivateLessonDeductions,
                   canToggleDeduction:
                     !isFixedPrivateSourceRow &&
@@ -1637,16 +1658,20 @@ export default function CalendarSection(props) {
                 : 'private'
             const groupBookableLabel = isGroupRow
               ? lesson.isBookable === true
-                ? '학생 직접 예약: 가능'
-                : '학생 직접 예약: 비활성'
+                ? text('teacher.calendar.studentBookingEnabled', '학생 직접 예약: 가능')
+                : text('teacher.calendar.studentBookingDisabled', '학생 직접 예약: 비활성')
               : ''
             const groupSeatLabel = isGroupRow
               ? (() => {
                   const capacity = Number(lesson.capacity ?? 0)
                   const bookedCount = Number(lesson.bookedCount ?? 0)
-                  if (!Number.isFinite(capacity) || capacity <= 0) return '좌석: 마감'
-                  if (Number.isFinite(bookedCount) && bookedCount >= capacity) return '좌석: 마감'
-                  return '좌석: 예약 가능'
+                  if (!Number.isFinite(capacity) || capacity <= 0) {
+                    return text('teacher.calendar.seatClosed', '좌석: 마감')
+                  }
+                  if (Number.isFinite(bookedCount) && bookedCount >= capacity) {
+                    return text('teacher.calendar.seatClosed', '좌석: 마감')
+                  }
+                  return text('teacher.calendar.seatOpen', '좌석: 예약 가능')
                 })()
               : ''
             return (
@@ -1681,15 +1706,28 @@ export default function CalendarSection(props) {
                       : undefined,
                 }}
               >
-                <span>{formatLessonDateLabel(lesson)}</span>
-                <span>{formatLessonTimeLabel(lesson)}</span>
-                <span style={{ lineHeight: 1.45 }}>
+                <span data-label={text('teacher.common.date', '날짜')}>
+                  {formatLessonDateLabel(lesson)}
+                </span>
+                <span data-label={text('teacher.common.time', '시간')}>
+                  {formatLessonTimeLabel(lesson)}
+                </span>
+                <span
+                  data-label={text('teacher.calendar.header.studentOrClass', '학생 / 반')}
+                  style={{ lineHeight: 1.45 }}
+                >
                   <span style={badgeStyle}>
-                    {getCalendarLessonBadgeLabel({
-                      isGroupRow,
-                      isPrivateReservationRow,
-                      fixedPrivateCancellationLabel,
-                    })}
+                    {teacherPortal
+                      ? isGroupRow
+                        ? t('teacher.calendar.badge.group')
+                        : isPrivateReservationRow
+                          ? t('teacher.calendar.badge.reservation')
+                          : t('teacher.calendar.badge.private')
+                      : getCalendarLessonBadgeLabel({
+                          isGroupRow,
+                          isPrivateReservationRow,
+                          fixedPrivateCancellationLabel,
+                        })}
                   </span>
                   {nameLabel}
                   {meaningHelperText ? (
@@ -1701,17 +1739,19 @@ export default function CalendarSection(props) {
                     </span>
                   ) : null}
                 </span>
-                <span>{sessionLabel || '-'}</span>
-                <span>
+                <span data-label={text('teacher.common.session', '회차')}>
+                  {knownLabel(sessionLabel) || '-'}
+                </span>
+                <span data-label={text('teacher.common.teacher', '선생님')}>
                   {isGroupRow
                     ? resolveTeacherDisplayName(
                         lesson,
                         teacherSelectOptions,
-                        '선생님 선택 필요'
+                        text('teacher.groups.teacherRequired', '선생님 선택 필요')
                       )
                     : getTeacherName(lesson)}
                 </span>
-                <span>
+                <span data-label={text('teacher.common.subject', '과목')}>
                   {isGroupRow
                     ? resolveGroupLessonSubject({
                         subject: lesson.subject,
@@ -1720,8 +1760,13 @@ export default function CalendarSection(props) {
                       })
                     : lesson.subject || '-'}
                 </span>
-                <span>{remainingLessons}</span>
-                <span style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span data-label={text('teacher.calendar.header.remaining', '남은 횟수')}>
+                  {knownLabel(remainingLessons)}
+                </span>
+                <span
+                  data-label={text('teacher.common.status', '상태')}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
+                >
                   <span>{statusLabel}</span>
                   {groupSeatLabel ? (
                     <span
@@ -1765,11 +1810,15 @@ export default function CalendarSection(props) {
                   ) : null}
                   {!isGroupRow && !isPrivateReservationRow && lesson.deductMemo ? (
                     <span style={{ fontSize: 12, opacity: 0.8 }}>
-                      메모: {lesson.deductMemo}
+                      {text('teacher.calendar.memo', `메모: ${lesson.deductMemo}`, {
+                        memo: lesson.deductMemo,
+                      })}
                     </span>
                   ) : null}
                 </span>
                 <span
+                  data-label={text('teacher.common.actions', '작업')}
+                  className={teacherPortal ? 'teacher-card-actions' : undefined}
                   style={{
                     display: 'flex',
                     flexDirection: 'column',
@@ -1818,8 +1867,8 @@ export default function CalendarSection(props) {
                       }}
                     >
                       {actionReason === '수강권이 연결되어 있지 않습니다'
-                        ? '수강권 연결 필요'
-                        : actionReason}
+                        ? text('teacher.calendar.status.packageLinkRequired', '수강권 연결 필요')
+                        : knownLabel(actionReason)}
                     </span>
                   ) : null}
                   {activeSection === 'calendar' &&
@@ -1949,8 +1998,10 @@ export default function CalendarSection(props) {
                   {isGroupRow ? (
                     <>
                       <span style={{ fontSize: 12, opacity: 0.65 }}>
-                        읽기 전용
-                        {canOpenGroupAttendance ? ' · 클릭해 출결 열기' : ''}
+                        {text('teacher.common.readOnly', '읽기 전용')}
+                        {canOpenGroupAttendance
+                          ? ` · ${text('teacher.calendar.clickAttendance', '클릭해 출결 열기')}`
+                          : ''}
                       </span>
                       {isAdmin && canEditLesson && lesson.status !== 'cancelled' ? (
                         <button
@@ -1971,7 +2022,9 @@ export default function CalendarSection(props) {
                     </>
                   ) : null}
                   {isPrivateReservationRow ? (
-                    <span style={{ fontSize: 12, opacity: 0.65 }}>읽기 전용</span>
+                    <span style={{ fontSize: 12, opacity: 0.65 }}>
+                      {text('teacher.common.readOnly', '읽기 전용')}
+                    </span>
                   ) : null}
                   {canOpenPrivateLessonStatusActionPreview ||
                   canOpenFixedPrivateLessonOutcomePreview ? (
@@ -2011,9 +2064,9 @@ export default function CalendarSection(props) {
                     >
                       {canOpenFixedPrivateLessonOutcomePreview
                         ? isFixedPrivateOutcomeRow
-                          ? '고정수업 결과 처리'
-                          : '고정수업 연결 오류 확인'
-                        : '수업 처리'}
+                          ? text('teacher.calendar.action.processFixed', '고정수업 결과 처리')
+                          : text('teacher.calendar.action.fixedLinkError', '고정수업 연결 오류 확인')
+                        : text('teacher.calendar.action.processLesson', '수업 처리')}
                     </button>
                   ) : null}
                   {activeSection === 'calendar' &&
@@ -2110,22 +2163,34 @@ export default function CalendarSection(props) {
             padding: 16,
           }}
         >
-          <h3 style={{ margin: 0, fontSize: 15 }}>1:1 예약 기록</h3>
+          <h3 style={{ margin: 0, fontSize: 15 }}>
+            {text('teacher.calendar.history.title', '1:1 예약 기록')}
+          </h3>
           <p style={{ margin: '8px 0 0 0', opacity: 0.72, fontSize: 13 }}>
-            선택한 날짜의 학생 직접예약/취소 기록입니다. 현재 수업 목록과 별도로 보관됩니다.
+            {text(
+              'teacher.calendar.history.description',
+              '선택한 날짜의 학생 직접예약/취소 기록입니다. 현재 수업 목록과 별도로 보관됩니다.'
+            )}
           </p>
           {privateReservationHistoryRows.length === 0 ? (
             <p
               data-testid="private-reservation-history-empty"
               style={{ margin: '10px 0 0 0', opacity: 0.72, fontSize: 13 }}
             >
-              선택한 날짜의 1:1 예약 기록이 없습니다.
+              {text(
+                'teacher.calendar.history.empty',
+                '선택한 날짜의 1:1 예약 기록이 없습니다.'
+              )}
             </p>
           ) : (
-            <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+            <div
+              className="teacher-reservation-history-list"
+              style={{ display: 'grid', gap: 8, marginTop: 12 }}
+            >
               {privateReservationHistoryRows.map((row) => (
                 <article
                   key={row.id}
+                  className="teacher-reservation-history-row"
                   data-testid="private-reservation-history-row"
                   data-reservation-id={row.id || undefined}
                   data-student-name={row.studentName || undefined}
@@ -2143,14 +2208,29 @@ export default function CalendarSection(props) {
                     fontSize: 13,
                   }}
                 >
-                  <span>{row.date || '-'}</span>
-                  <span>{row.time || '-'}</span>
-                  <span>{row.studentName || '-'}</span>
-                  <span>{resolveTeacherDisplayName(row)}</span>
-                  <span>{row.subject || '-'}</span>
-                  <span>{row.durationLabel || '-'}</span>
-                  <span>{row.statusLabel || '-'}</span>
+                  <span data-label={text('teacher.common.date', '날짜')}>
+                    {row.date || '-'}
+                  </span>
+                  <span data-label={text('teacher.common.time', '시간')}>
+                    {row.time || '-'}
+                  </span>
+                  <span data-label={text('teacher.common.student', '학생')}>
+                    {row.studentName || '-'}
+                  </span>
+                  <span data-label={text('teacher.common.teacher', '선생님')}>
+                    {resolveTeacherDisplayName(row)}
+                  </span>
+                  <span data-label={text('teacher.common.subject', '과목')}>
+                    {row.subject || '-'}
+                  </span>
+                  <span data-label={text('teacher.common.duration', '수업 시간')}>
+                    {row.durationLabel || '-'}
+                  </span>
+                  <span data-label={text('teacher.common.status', '상태')}>
+                    {row.statusLabel || '-'}
+                  </span>
                   <span
+                    data-label={text('teacher.common.details', '내용')}
                     style={{
                       opacity: row.detailLabel || row.cancelActorLabel || row.cancelledAtLabel ? 1 : 0.62,
                     }}
@@ -2175,6 +2255,7 @@ export default function CalendarSection(props) {
             openStudentPackageEditModal?.(pkg)
             setPrivateLessonDetail(null)
           }}
+          teacherPortal={teacherPortal}
         />
       ) : null}
       {fixedPrivateLessonAction ? (

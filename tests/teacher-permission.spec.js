@@ -499,7 +499,7 @@ async function openTeacherCountEditStudentPackage(page) {
   return { studentDetail, packageCard };
 }
 
-test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관리만 볼 수 있다', async ({
+test('teacher 계정은 캘린더, 1:1 수업 일정, 담당 단체반만 볼 수 있다', async ({
   page,
   browserName,
 }) => {
@@ -512,8 +512,8 @@ test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관�
   await loginAsTeacher(page);
 
   await expect(page.getByRole('button', { name: '캘린더', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '내 단체반 관리', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '1:1 수업 일정', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '담당 단체반', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '캘린더', level: 1 })).toBeVisible();
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '내 1:1 관리', exact: true })).toHaveCount(0);
@@ -527,8 +527,8 @@ test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관�
   await expect(page.getByRole('button', { name: '로그인 초대', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '수강권 추가', exact: true })).toHaveCount(0);
 
-  await page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 주간 1:1 시간표', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '1:1 수업 일정', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '1:1 수업 일정', level: 1 })).toBeVisible();
   await expect(page.getByTestId('private-teacher-weekly-board-section')).toBeVisible({
     timeout: 15000,
   });
@@ -541,9 +541,9 @@ test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관�
   await expect(page.getByRole('button', { name: '예약 취소 후 공개', exact: true })).toHaveCount(0);
 
   const teacherName = await getTeacherNameFromWelcome(page);
-  await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 2 })).toBeVisible();
+  await page.getByRole('button', { name: '담당 단체반', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '담당 단체반', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '담당 단체반', level: 2 })).toBeVisible();
   await expect(page.getByText('결제 횟수')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);
@@ -653,8 +653,8 @@ test('teacher 1:1 화면은 주간 시간표만 읽기 전용으로 보여준다
 
   await loginAsTeacher(page);
 
-  await page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 주간 1:1 시간표', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '1:1 수업 일정', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '1:1 수업 일정', level: 1 })).toBeVisible();
   await expect(page.getByTestId('private-teacher-weekly-board-section')).toBeVisible({
     timeout: 15000,
   });
@@ -690,7 +690,7 @@ test('admin 계정은 전체 단체반 관리를 볼 수 있다', async ({ page,
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toBeVisible();
 });
 
-test('teacher는 내 단체반 관리에서 본인 반을 읽기 전용으로만 볼 수 있다', async ({
+test('teacher는 담당 단체반에서 본인 반을 읽기 전용으로만 볼 수 있다', async ({
   page,
   browserName,
 }) => {
@@ -699,8 +699,8 @@ test('teacher는 내 단체반 관리에서 본인 반을 읽기 전용으로만
   await loginAsTeacher(page);
 
   const teacherName = await getTeacherNameFromWelcome(page);
-  await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '담당 단체반', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '담당 단체반', level: 1 })).toBeVisible();
   const todaySchedulePanel = page.getByTestId('today-schedule-panel');
   await expect(
     todaySchedulePanel.getByRole('heading', { name: '오늘의 단체반 일정', exact: true })

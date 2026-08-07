@@ -26,6 +26,9 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { auth, db, functions as firebaseFunctions } from './firebase'
 import { useAuth } from './AuthContext'
+import AuthenticatedShell from './src/components/AuthenticatedShell.jsx'
+import { useTranslation } from './src/i18n/LocalizationProvider.jsx'
+import { useLayoutMode } from './src/preferences/LayoutProvider.jsx'
 import { debugLog } from './src/utils/debugLog.js'
 import {
   SCHOOL_TIME_ZONE,
@@ -200,12 +203,20 @@ function getNotificationEventCreatedAtMillis(event) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function formatReservationNotificationMessage(event) {
-  const studentName = String(event?.studentName || '').trim() || '학생'
+function formatReservationNotificationMessage(event, t, localize = false) {
+  const studentName =
+    String(event?.studentName || '').trim() ||
+    (localize ? t('teacher.notifications.studentFallback') : '학생')
   const date = String(event?.date || '').trim() || '-'
   const time = String(event?.time || '').trim() || '-'
   if (event?.type === 'private_slot_cancelled') {
+    if (localize) {
+      return t('teacher.notifications.cancelled', { student: studentName, date, time })
+    }
     return `${studentName} 학생이 ${date} ${time} 1:1 수업 예약을 취소했습니다.`
+  }
+  if (localize) {
+    return t('teacher.notifications.booked', { student: studentName, date, time })
   }
   return `${studentName} 학생이 ${date} ${time} 1:1 수업을 예약했습니다.`
 }
@@ -237,7 +248,9 @@ function getPrivateReservationSubjectLabel(reservation, slot = null) {
   )
 }
 
-function ReservationNotificationsPanel({ events, loading }) {
+function ReservationNotificationsPanel({ events, loading, localize = false }) {
+  const { t } = useTranslation()
+  const text = (key, fallback) => (localize ? t(key) : fallback)
   const rows = Array.isArray(events) ? events : []
 
   return (
@@ -256,15 +269,21 @@ function ReservationNotificationsPanel({ events, loading }) {
         }}
       >
         <h2 className="section-title" style={{ margin: 0 }}>
-          예약 알림
+          {text('teacher.notifications.title', '예약 알림')}
         </h2>
-        <span style={{ fontSize: 12, opacity: 0.65 }}>최근 20개</span>
+        <span style={{ fontSize: 12, opacity: 0.65 }}>
+          {text('teacher.notifications.recent', '최근 20개')}
+        </span>
       </div>
 
       {loading ? (
-        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>예약 알림을 불러오는 중입니다.</p>
+        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>
+          {text('teacher.notifications.loading', '예약 알림을 불러오는 중입니다.')}
+        </p>
       ) : rows.length === 0 ? (
-        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>최근 예약 알림이 없습니다.</p>
+        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>
+          {text('teacher.notifications.empty', '최근 예약 알림이 없습니다.')}
+        </p>
       ) : (
         <div style={{ display: 'grid', gap: 8 }}>
           {rows.map((event) => (
@@ -281,7 +300,7 @@ function ReservationNotificationsPanel({ events, loading }) {
                 lineHeight: 1.45,
               }}
             >
-              {formatReservationNotificationMessage(event)}
+              {formatReservationNotificationMessage(event, t, localize)}
             </div>
           ))}
         </div>
@@ -1497,6 +1516,8 @@ function buildGroupPackageCoverageLessons({
 
 export default function Dashboard() {
   const { user, userProfile, currentAcademyId } = useAuth()
+  const { t } = useTranslation()
+  const { resolvedLayout } = useLayoutMode()
   const navigate = useNavigate()
   const [teacherDirectoryMemberships, setTeacherDirectoryMemberships] = useState([])
   const [teacherRecords, setTeacherRecords] = useState([])
@@ -3763,7 +3784,9 @@ export default function Dashboard() {
           !isReleasedFixedPrivateSeatLesson(lesson) &&
           matchesSelectedTeacher(lesson)
       )
-      .map((lesson) => ({
+      .map((lesson) => {
+        const subject = String(lesson.subject || '').trim()
+        return {
         id: `private-lesson-${lesson.id}`,
         date: getLessonStorageDateString(lesson) || todayYmd,
         time: lessonTimeInputValue(lesson) || '-',
@@ -3785,9 +3808,11 @@ export default function Dashboard() {
           })(),
         studentLabel: getStudentName(lesson),
         teacherLabel: getTeacherName(lesson),
-        title: String(lesson.subject || '').trim() || '1:1 수업',
+        title: subject || '1:1 수업',
+        titleIsSystemFallback: !subject,
         statusLabel: lesson.isDeductCancelled === true ? '차감취소' : '수업 예정',
-      }))
+        }
+      })
 
     const groupLessonItems = todayGroupLessons
       .filter((lesson) => {
@@ -3815,6 +3840,7 @@ export default function Dashboard() {
             '선생님 선택 필요'
           ),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
+          titleIsSystemFallback: !className && !subject,
           statusLabel: isNoDeductionCancelledGroupLesson(lesson) ? '휴강 · 차감 없음' : '수업 예정',
         }
       })
@@ -3861,6 +3887,7 @@ export default function Dashboard() {
               '선생님 선택 필요'
             ),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
+          titleIsSystemFallback: !className && !subject,
           statusLabel: '예약 완료',
         }
       })
@@ -3928,6 +3955,7 @@ export default function Dashboard() {
       .map((reservation) => {
         const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
         const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+        const subject = String(reservation.subject || slot?.subject || '').trim()
         return {
           id: `private-reservation-${reservation.id}`,
           date: String(reservation.date || slot?.date || '').trim() || todayYmd,
@@ -3936,7 +3964,8 @@ export default function Dashboard() {
           sourceKind: 'privateReservation',
           studentLabel: getPrivateReservationStudentLabel(reservation, student),
           teacherLabel: getPrivateReservationTeacherLabel(reservation, slot),
-          title: getPrivateReservationSubjectLabel(reservation, slot),
+          title: subject || getPrivateReservationSubjectLabel(reservation, slot),
+          titleIsSystemFallback: !subject,
           statusLabel: '예약 완료',
         }
       })
@@ -8981,89 +9010,48 @@ export default function Dashboard() {
     onClose: closePrivateLessonStatusActionPreview,
   }
 
-  return (
-    <div className="dashboard">
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <span className="logo-icon">⬡</span>
-          <span className="logo-text">Miami Admin</span>
-        </div>
-
-        <nav className="sidebar-nav">
-  {[
-    { key: 'calendar', label: '캘린더' },
-    ...(isAdmin || canUseStudentPackageCountSection ? [{ key: 'students', label: '학생 관리' }] : []),
+  // Preserve the existing role/permission-filtered menu as the single navigation authority.
+  const dashboardMenuItems = [
+    { key: 'calendar', labelKey: 'nav.calendar' },
+    ...(isAdmin || canUseStudentPackageCountSection
+      ? [{ key: 'students', labelKey: 'nav.students' }]
+      : []),
     ...(canManageOwnGroupClasses
-      ? [{ key: 'teacherPrivateSchedule', label: TEACHER_PRIVATE_SCHEDULE_LABEL }]
+      ? [{ key: 'teacherPrivateSchedule', labelKey: 'nav.teacherPrivateSchedule' }]
       : []),
     ...(isAdmin || canManageOwnGroupClasses
-      ? [{ key: 'groups', label: isAdmin ? ADMIN_GROUP_MANAGEMENT_LABEL : TEACHER_GROUP_MANAGEMENT_LABEL }]
+      ? [{ key: 'groups', labelKey: isAdmin ? 'nav.groups.admin' : 'nav.groups.teacher' }]
       : []),
-    ...(isAdmin ? [{ key: 'privateSlots', label: PRIVATE_SLOT_MANAGEMENT_LABEL }] : []),
-    ...(isAdmin ? [{ key: 'lessonRequests', label: '수업 요청 관리' }] : []),
-    ...(isAdmin ? [{ key: 'teachers', label: '선생님 관리' }] : []),
-    ...(isAdmin ? [{ key: 'dailyMaterials', label: '오늘의 영상 관리' }] : []),
-  ].map((item) => (
-    <button
-      key={item.key}
-      type="button"
-      onClick={() => setActiveSection(item.key)}
-      className={`nav-item ${activeSection === item.key ? 'active' : ''}`}
-      style={{
-        width: '100%',
-        textAlign: 'left',
-        background: 'transparent',
-        border: 'none',
-        cursor: 'pointer',
-      }}
+    ...(isAdmin ? [{ key: 'privateSlots', labelKey: 'nav.privateSlots' }] : []),
+    ...(isAdmin ? [{ key: 'lessonRequests', labelKey: 'nav.lessonRequests' }] : []),
+    ...(isAdmin ? [{ key: 'teachers', labelKey: 'nav.teachers' }] : []),
+    ...(isAdmin ? [{ key: 'dailyMaterials', labelKey: 'nav.dailyMaterials' }] : []),
+  ]
+  const activeSectionTitle =
+    t(dashboardMenuItems.find((item) => item.key === activeSection)?.labelKey || 'nav.calendar')
+
+  return (
+    <div
+      className={`dashboard dashboard--${resolvedLayout}${isAdmin ? '' : ' dashboard--teacher'}`}
+      data-portal-role={isAdmin ? 'admin' : 'teacher'}
     >
-      <span className="nav-dot" />
-      {item.label}
-    </button>
-  ))}
-</nav>
-
-        <div className="sidebar-footer">
-          <div className="user-chip">
-            <div className="avatar">{user?.email?.[0]?.toUpperCase() || 'U'}</div>
-            <div className="user-info">
-              <span className="user-email">{user?.email || '-'}</span>
-              <span className="user-role">{userProfile?.role || 'user'}</span>
-            </div>
-          </div>
-
-          <button className="btn-signout" onClick={handleSignOut}>
-            로그아웃
-          </button>
-        </div>
-      </aside>
-
+      <AuthenticatedShell
+        activeKey={activeSection}
+        menuItems={dashboardMenuItems}
+        onLogout={handleSignOut}
+        onSelect={setActiveSection}
+        role={userProfile?.role}
+        title={activeSectionTitle}
+        user={user}
+      >
       <main className="main">
         <header className="main-header">
           <div>
-          <h1 className="page-title">
-	  {activeSection === 'calendar'
-	    ? '캘린더'
-	    : activeSection === 'students'
-	    ? '학생 관리'
-	    : activeSection === 'groups'
-	    ? isAdmin
-        ? ADMIN_GROUP_MANAGEMENT_LABEL
-        : TEACHER_GROUP_MANAGEMENT_LABEL
-      : activeSection === 'teacherPrivateSchedule'
-      ? TEACHER_PRIVATE_SCHEDULE_LABEL
-	    : activeSection === 'teachers'
-	    ? '선생님 관리'
-	    : activeSection === 'lessonRequests'
-	    ? '수업 요청 관리'
-	    : activeSection === 'dailyMaterials'
-	    ? '오늘의 영상 관리'
-	    : PRIVATE_SLOT_MANAGEMENT_LABEL}
-</h1>
+            <h1 className="page-title">{activeSectionTitle}</h1>
             <p className="page-sub" data-testid="dashboard-welcome-subtitle">
               {userProfile?.teacherName
-                ? `${userProfile.teacherName} 님 환영합니다`
-                : `${user?.email || '사용자'} 님, 환영합니다`}
+                ? t('shell.welcomeName', { name: userProfile.teacherName })
+                : t('shell.welcomeUser', { name: user?.email || t('shell.user') })}
             </p>
 	          </div>
 	          </header>
@@ -9081,7 +9069,16 @@ export default function Dashboard() {
                     ? 'default'
                     : 'teacherPrivate'
               }
-              title={activeSection === 'groups' ? '오늘의 단체반 일정' : '오늘의 일정'}
+              localize={!isAdmin}
+              title={
+                activeSection === 'groups'
+                  ? isAdmin
+                    ? '오늘의 단체반 일정'
+                    : t('teacher.today.groupTitle')
+                  : isAdmin
+                    ? '오늘의 일정'
+                    : t('teacher.today.title')
+              }
             />
             {isAdmin && activeSection !== 'teachers' ? (
               <LessonCountStatsPanel
@@ -9097,20 +9094,21 @@ export default function Dashboard() {
             <ReservationNotificationsPanel
               events={reservationNotificationEvents}
               loading={reservationNotificationEventsLoading}
+              localize={!isAdmin}
             />
           ) : null}
 	
 	          {activeSection === 'calendar' && (
-            <CalendarSection {...calendarSectionProps.month} />
+            <CalendarSection {...calendarSectionProps.month} teacherPortal={!isAdmin} />
           )}
           {activeSection === 'students' && (isAdmin || canUseStudentPackageCountSection) ? (
             <StudentsSection {...studentsSectionProps} />
           ) : null}
           {activeSection === 'groups' && (isAdmin || canManageOwnGroupClasses) ? (
-            <GroupsSection {...groupsSectionProps} />
+            <GroupsSection {...groupsSectionProps} teacherPortal={!isAdmin} />
           ) : null}
           {activeSection === 'teacherPrivateSchedule' && canManageOwnGroupClasses ? (
-            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
+            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} teacherPortal />
           ) : null}
 	          {activeSection === 'privateSlots' && isAdmin ? (
 	            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
@@ -9134,10 +9132,11 @@ export default function Dashboard() {
           activeSection !== 'lessonRequests' &&
           activeSection !== 'dailyMaterials' &&
           activeSection !== 'teachers' ? (
-	          <CalendarSection {...calendarSectionProps.lessons} />
+	          <CalendarSection {...calendarSectionProps.lessons} teacherPortal={!isAdmin} />
 	        ) : null}
 
       </main>
+      </AuthenticatedShell>
 
       {privateLessonStatusActionTarget &&
       (isAdmin ||
@@ -9147,7 +9146,10 @@ export default function Dashboard() {
           user,
           userProfile,
         })) ? (
-        <PrivateLessonStatusActionModal {...privateLessonStatusActionModalProps} />
+        <PrivateLessonStatusActionModal
+          {...privateLessonStatusActionModalProps}
+          teacherPortal={!isAdmin}
+        />
       ) : null}
 
       {activeSection === 'students' && isAdmin && studentModal ? (

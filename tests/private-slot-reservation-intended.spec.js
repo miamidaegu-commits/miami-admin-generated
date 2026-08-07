@@ -1201,13 +1201,36 @@ test('student private all-view calendar keeps current week and next week visible
   expect(functionSource).toContain('수강권 기간 밖');
 });
 
-test('student booking page wires mobile friendly private booking layout without changing locators', async () => {
+test('student booking page migrates the legacy layout preference to shared translated controls', async () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'StudentBookingPage.jsx'), 'utf8');
-  expect(source).toContain("STUDENT_BOOKING_VIEW_MODE_STORAGE_KEY = 'studentBookingPreferredViewMode'");
-  expect(source).toContain("STUDENT_BOOKING_MOBILE_MEDIA_QUERY = '(max-width: 720px)'");
+  const layoutSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/preferences/layout.js'),
+    'utf8'
+  );
+  const koSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/i18n/resources/ko.js'),
+    'utf8'
+  );
+  const enSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/i18n/resources/en.js'),
+    'utf8'
+  );
+  expect(layoutSource).toContain(
+    "LEGACY_LAYOUT_STORAGE_KEY = 'studentBookingPreferredViewMode'"
+  );
+  expect(layoutSource).toContain("LAYOUT_STORAGE_KEY = 'miami.layoutMode'");
+  expect(layoutSource).toContain("LEGACY_LAYOUT_MODES = Object.freeze(['auto', 'mobile', 'desktop'])");
+  expect(layoutSource).toContain('storage.setItem(LAYOUT_STORAGE_KEY, legacyValue)');
+  expect(layoutSource).toContain('storage.removeItem?.(LEGACY_LAYOUT_STORAGE_KEY)');
+  expect(layoutSource).toContain("MOBILE_MEDIA_QUERY = `(max-width: ${MOBILE_BREAKPOINT_PX}px)`");
   expect(source).toContain('student-booking-view-mode-toggle');
-  expect(source).toContain('PC 화면으로 보기');
-  expect(source).toContain('모바일 화면으로 보기');
+  expect(source).toContain('useLayoutMode()');
+  expect(source).not.toContain('PC 화면으로 보기');
+  expect(source).not.toContain('모바일 화면으로 보기');
+  expect(koSource).toContain("'settings.layout.desktop': '데스크톱'");
+  expect(koSource).toContain("'settings.layout.mobile': '모바일'");
+  expect(enSource).toContain("'settings.layout.desktop': 'Desktop'");
+  expect(enSource).toContain("'settings.layout.mobile': 'Mobile'");
   expect(source).toContain('STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_TOP');
   expect(source).toContain('env(safe-area-inset-top, 0px)');
   expect(source).toContain('STUDENT_BOOKING_MOBILE_SAFE_AREA_PADDING_BOTTOM');
@@ -1244,8 +1267,9 @@ test('student booking page wires mobile friendly private booking layout without 
   expect(source).toContain("'repeat(3, minmax(0, 1fr))'");
   expect(source).toContain("aria-label={option.label}");
   expect(source).toContain("title={option.label}");
-  expect(source).toContain("mobileLabel: 'PC'");
-  expect(source).toContain("mobileLabel: '모바일'");
+  expect(source).toContain("{ value: 'desktop', label: t('settings.layout.desktop') }");
+  expect(source).toContain("{ value: 'mobile', label: t('settings.layout.mobile') }");
+  expect(source).not.toContain('mobileLabel:');
   expect(source).toContain("whiteSpace: 'normal'");
   expect(source).toContain("gridTemplateColumns: 'repeat(2, minmax(0, 1fr))'");
   expect(source).toContain("gridTemplateColumns: '1fr'");

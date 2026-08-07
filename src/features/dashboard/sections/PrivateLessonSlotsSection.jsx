@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { PRIVATE_WEEKLY_SLOT_WEEKDAYS } from '../../booking/privateWeeklySlotBulk.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
+import { useTranslation } from '../../../i18n/LocalizationProvider.jsx'
 
 function slotStatusLabel(status) {
   if (status === 'reserved') return '예약 완료'
@@ -643,7 +644,43 @@ export default function PrivateLessonSlotsSection({
   busyFixedPrivateLessonCancelId = '',
   onCancelFixedPrivateLesson,
   isAdmin,
+  teacherPortal = false,
 }) {
+  const { t } = useTranslation()
+  const text = (key, fallback, values) => (teacherPortal ? t(key, values) : fallback)
+  const teacherStatusLabel = (row) => {
+    const raw = getPrivateBoardSlotStatusLabel(row)
+    const keyByLabel = {
+      '선생님 수업불가로 닫힘': 'teacher.private.status.teacherClosed',
+      '고정 예약': 'teacher.private.status.assigned',
+      '학생 예약 있음': 'teacher.private.status.reserved',
+      '고정 취소로 예약 가능': 'teacher.private.status.released',
+      '예약 가능': 'teacher.private.status.available',
+    }
+    return teacherPortal && keyByLabel[raw] ? t(keyByLabel[raw]) : raw
+  }
+  const teacherSlotDetail = (row) => {
+    if (!teacherPortal) return getPrivateBoardSlotDetail(row)
+    if (row.fixedLesson) {
+      return `${t('teacher.common.student')}: ${
+        row.fixedLesson.studentName || row.fixedLesson.student || row.fixedLesson.studentId || '-'
+      }`
+    }
+    if (row.reservation && isActivePrivateReservation(row.reservation)) {
+      return `${t('teacher.calendar.badge.reservation')}: ${
+        row.reservation.studentName || row.reservation.studentId || '-'
+      }`
+    }
+    if (
+      row.slot?.releasedFromFixed === true ||
+      String(row.slot?.slotType || '').trim() === 'released_fixed'
+    ) {
+      return `${t('teacher.common.student')}: ${
+        row.slot.fixedStudentName || row.slot.fixedStudentId || '-'
+      }`
+    }
+    return t('teacher.common.none')
+  }
   const [editingEligibilitySlotId, setEditingEligibilitySlotId] = useState('')
   const [editingEligibilityStudentIds, setEditingEligibilityStudentIds] = useState([])
   const [fixedPrivateLessonAction, setFixedPrivateLessonAction] = useState(null)
@@ -1547,7 +1584,7 @@ export default function PrivateLessonSlotsSection({
         }}
       >
         <h2 className="section-title" style={{ margin: 0 }}>
-          1:1 예약 시간 관리
+          {text('teacher.private.title', '1:1 예약 시간 관리')}
         </h2>
       </div>
 
@@ -1612,6 +1649,8 @@ export default function PrivateLessonSlotsSection({
       {isAdmin || selectedPrivateBoardTeacherOption ? (
           <section
             data-testid="private-teacher-weekly-board-section"
+            className={teacherPortal ? 'teacher-private-board' : undefined}
+            data-shared-data-source={teacherPortal ? 'privateBoardRows' : undefined}
             style={{
               display: 'grid',
               gap: 12,
@@ -1624,15 +1663,21 @@ export default function PrivateLessonSlotsSection({
           >
             <div>
               <h3 style={{ margin: 0, fontSize: 16 }}>
-                {showPrivateBoardActions ? '선생님별 1:1 시간표/예약판' : '내 주간 1:1 시간표'}
+                {showPrivateBoardActions
+                  ? '선생님별 1:1 시간표/예약판'
+                  : text('teacher.private.boardTitle', '내 주간 1:1 시간표')}
               </h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
                 {showPrivateBoardActions
                   ? '학생 예약 화면처럼 선생님별 주간 슬롯을 보고, 예약된 수업과 빈 주간 슬롯을 해당 날짜만 수업불가로 닫거나 다시 엽니다.'
-                  : '본인에게 연결된 주간 1:1 시간표와 예약 상태를 읽기 전용으로 확인합니다.'}
+                  : text(
+                      'teacher.private.boardDescription',
+                      '본인에게 연결된 주간 1:1 시간표와 예약 상태를 읽기 전용으로 확인합니다.'
+                    )}
               </p>
             </div>
             <div
+              className={teacherPortal ? 'teacher-private-board-controls' : undefined}
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'minmax(180px, 1fr) minmax(220px, auto)',
@@ -1641,7 +1686,7 @@ export default function PrivateLessonSlotsSection({
               }}
             >
               <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                선생님
+                {text('teacher.common.teacher', '선생님')}
                 <select
                   value={selectedPrivateBoardTeacherOption?.value || ''}
                   data-testid="private-teacher-weekly-board-teacher-select"
@@ -1649,7 +1694,9 @@ export default function PrivateLessonSlotsSection({
                   disabled={!showPrivateBoardActions}
                 >
                   {teacherSelectOptions.length === 0 ? (
-                    <option value="">선생님 없음</option>
+                    <option value="">
+                      {text('teacher.private.teacherEmpty', '선생님 없음')}
+                    </option>
                   ) : null}
                   {teacherSelectOptions.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -1658,7 +1705,10 @@ export default function PrivateLessonSlotsSection({
                   ))}
                 </select>
               </label>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <div
+                className={teacherPortal ? 'teacher-week-navigation' : undefined}
+                style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}
+              >
                 <button
                   type="button"
                   data-testid="private-teacher-weekly-board-prev-week-button"
@@ -1671,7 +1721,7 @@ export default function PrivateLessonSlotsSection({
                     color: 'white',
                   }}
                 >
-                  이전 주
+                  {text('teacher.private.previousWeek', '이전 주')}
                 </button>
                 <button
                   type="button"
@@ -1685,7 +1735,7 @@ export default function PrivateLessonSlotsSection({
                     color: 'white',
                   }}
                 >
-                  이번 주
+                  {text('teacher.private.thisWeek', '이번 주')}
                 </button>
                 <button
                   type="button"
@@ -1699,7 +1749,7 @@ export default function PrivateLessonSlotsSection({
                     color: 'white',
                   }}
                 >
-                  다음 주
+                  {text('teacher.private.nextWeek', '다음 주')}
                 </button>
               </div>
             </div>
@@ -1709,38 +1759,48 @@ export default function PrivateLessonSlotsSection({
               ))}
             </div>
             {privateLessonSlotsLoading || privateLessonReservationsLoading || privateAvailabilityTemplatesLoading ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>예약판을 불러오는 중...</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>
+                {text('teacher.private.loading', '예약판을 불러오는 중...')}
+              </p>
             ) : !selectedPrivateBoardTeacherOption ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>선생님을 먼저 등록해 주세요.</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>
+                {text('teacher.private.teacherRequired', '선생님을 먼저 등록해 주세요.')}
+              </p>
             ) : privateBoardRows.length === 0 ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>해당 주에 표시할 1:1 시간이 없습니다.</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>
+                {text('teacher.private.empty', '해당 주에 표시할 1:1 시간이 없습니다.')}
+              </p>
             ) : (
-              <div className="activity-table">
+              <div
+                className={`activity-table${teacherPortal ? ' teacher-responsive-table teacher-private-cards' : ''}`}
+                data-testid={teacherPortal ? 'teacher-private-card-list' : undefined}
+              >
                 <div
                   className="table-head"
                   style={{ gridTemplateColumns: privateBoardGridTemplate }}
                 >
-                  <span>날짜</span>
-                  <span>시간</span>
-                  <span>상태</span>
-                  <span>내용</span>
-                  <span>출처</span>
+                  <span>{text('teacher.common.date', '날짜')}</span>
+                  <span>{text('teacher.common.time', '시간')}</span>
+                  <span>{text('teacher.common.status', '상태')}</span>
+                  <span>{text('teacher.common.details', '내용')}</span>
+                  <span>{text('teacher.common.source', '출처')}</span>
                   {showPrivateBoardActions ? <span>작업</span> : null}
                 </div>
                 {privateBoardRows.map((row) => {
-                  const statusLabel = getPrivateBoardSlotStatusLabel(row)
-                  const isClosed = statusLabel === '선생님 수업불가로 닫힘'
+                  const rawStatusLabel = getPrivateBoardSlotStatusLabel(row)
+                  const statusLabel = teacherStatusLabel(row)
+                  const isClosed = rawStatusLabel === '선생님 수업불가로 닫힘'
                   const busy =
                     (row.slot?.id && busyPrivateSlotActionId === row.slot.id) ||
                     (row.fixedLesson?.id && busyFixedPrivateLessonCancelId === row.fixedLesson.id)
                   const sourceLabel =
                     row.source === 'fixedLesson'
-                      ? '고정 수업'
+                      ? text('teacher.private.source.fixed', '고정 수업')
                       : row.source === 'template'
-                        ? '주간 시간표'
+                        ? text('teacher.private.source.weekly', '주간 시간표')
                         : row.slot?.isGeneratedFromTemplate
-                          ? '주간 시간표'
-                          : '날짜별 슬롯'
+                          ? text('teacher.private.source.weekly', '주간 시간표')
+                          : text('teacher.private.source.dated', '날짜별 슬롯')
                   return (
                     <div
                       key={row.key}
@@ -1752,17 +1812,25 @@ export default function PrivateLessonSlotsSection({
                       data-time={row.time || ''}
                       style={{ gridTemplateColumns: privateBoardGridTemplate }}
                     >
-                      <span>{row.date || '-'}</span>
-                      <span>{row.time || '-'}</span>
-                      <span data-testid="private-teacher-weekly-board-slot-status">
+                      <span data-label={text('teacher.common.date', '날짜')}>{row.date || '-'}</span>
+                      <span data-label={text('teacher.common.time', '시간')}>{row.time || '-'}</span>
+                      <span
+                        data-label={text('teacher.common.status', '상태')}
+                        data-testid="private-teacher-weekly-board-slot-status"
+                      >
                         {statusLabel}
                       </span>
-                      <span>{getPrivateBoardSlotDetail(row)}</span>
-                      <span>
+                      <span data-label={text('teacher.common.details', '내용')}>
+                        {teacherSlotDetail(row)}
+                      </span>
+                      <span data-label={text('teacher.common.source', '출처')}>
                         {sourceLabel}
                         {row.slot?.openForStudentBooking === true ? (
                           <span style={{ display: 'block', marginTop: 4, opacity: 0.7, fontSize: 12 }}>
-                            학생 직접 예약 허용
+                            {text(
+                              'teacher.private.studentBookingEnabled',
+                              '학생 직접 예약 허용'
+                            )}
                           </span>
                         ) : null}
                       </span>
@@ -1856,7 +1924,10 @@ export default function PrivateLessonSlotsSection({
             <p style={{ margin: 0, opacity: 0.65, fontSize: 12 }}>
               {showPrivateBoardActions
                 ? '“예약 취소 후 공개”는 다른 학생에게 열고, “수업불가로 닫기”는 누구에게도 열지 않습니다. “수업불가 해제”는 해당 날짜/시간만 다시 예약 가능하게 엽니다.'
-                : '이 화면은 읽기 전용입니다. 수업불가 닫기/해제와 예약 조작은 관리자만 할 수 있습니다.'}
+                : text(
+                    'teacher.private.readOnlyHelp',
+                    '이 화면은 읽기 전용입니다. 수업불가 닫기/해제와 예약 조작은 관리자만 할 수 있습니다.'
+                  )}
             </p>
           </section>
       ) : null}
@@ -4592,6 +4663,8 @@ export default function PrivateLessonSlotsSection({
       {isAdmin || selectedPrivateBoardTeacherOption ? (
           <section
             data-testid="private-teacher-weekly-board-section"
+            className={teacherPortal ? 'teacher-private-board' : undefined}
+            data-shared-data-source={teacherPortal ? 'privateBoardRows' : undefined}
             style={{
               display: 'grid',
               gap: 12,
@@ -4604,15 +4677,21 @@ export default function PrivateLessonSlotsSection({
           >
             <div>
               <h3 style={{ margin: 0, fontSize: 16 }}>
-                {showPrivateBoardActions ? '선생님별 1:1 시간표/예약판' : '내 주간 1:1 시간표'}
+                {showPrivateBoardActions
+                  ? '선생님별 1:1 시간표/예약판'
+                  : text('teacher.private.boardTitle', '내 주간 1:1 시간표')}
               </h3>
               <p style={{ margin: '6px 0 0 0', opacity: 0.74, fontSize: 12, lineHeight: 1.5 }}>
                 {showPrivateBoardActions
                   ? '학생 예약 화면처럼 선생님별 주간 슬롯을 보고, 예약된 수업과 빈 주간 슬롯을 해당 날짜만 수업불가로 닫거나 다시 엽니다.'
-                  : '본인에게 연결된 주간 1:1 시간표와 예약 상태를 읽기 전용으로 확인합니다.'}
+                  : text(
+                      'teacher.private.boardDescription',
+                      '본인에게 연결된 주간 1:1 시간표와 예약 상태를 읽기 전용으로 확인합니다.'
+                    )}
               </p>
             </div>
             <div
+              className={teacherPortal ? 'teacher-private-board-controls' : undefined}
               style={{
                 display: 'grid',
                 gridTemplateColumns: 'minmax(180px, 1fr) minmax(220px, auto)',
@@ -4621,7 +4700,7 @@ export default function PrivateLessonSlotsSection({
               }}
             >
               <label style={{ display: 'grid', gap: 6, fontSize: 13 }}>
-                선생님
+                {text('teacher.common.teacher', '선생님')}
                 <select
                   value={selectedPrivateBoardTeacherOption?.value || ''}
                   data-testid="private-teacher-weekly-board-teacher-select"
@@ -4629,7 +4708,9 @@ export default function PrivateLessonSlotsSection({
                   disabled={!showPrivateBoardActions}
                 >
                   {teacherSelectOptions.length === 0 ? (
-                    <option value="">선생님 없음</option>
+                    <option value="">
+                      {text('teacher.private.teacherEmpty', '선생님 없음')}
+                    </option>
                   ) : null}
                   {teacherSelectOptions.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -4638,7 +4719,10 @@ export default function PrivateLessonSlotsSection({
                   ))}
                 </select>
               </label>
-              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <div
+                className={teacherPortal ? 'teacher-week-navigation' : undefined}
+                style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}
+              >
                 <button
                   type="button"
                   data-testid="private-teacher-weekly-board-prev-week-button"
@@ -4651,7 +4735,7 @@ export default function PrivateLessonSlotsSection({
                     color: 'white',
                   }}
                 >
-                  이전 주
+                  {text('teacher.private.previousWeek', '이전 주')}
                 </button>
                 <button
                   type="button"
@@ -4665,7 +4749,7 @@ export default function PrivateLessonSlotsSection({
                     color: 'white',
                   }}
                 >
-                  이번 주
+                  {text('teacher.private.thisWeek', '이번 주')}
                 </button>
                 <button
                   type="button"
@@ -4679,48 +4763,67 @@ export default function PrivateLessonSlotsSection({
                     color: 'white',
                   }}
                 >
-                  다음 주
+                  {text('teacher.private.nextWeek', '다음 주')}
                 </button>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', opacity: 0.72, fontSize: 12 }}>
               {privateBoardWeekDays.map((day) => (
-                <span key={day.date}>{day.label}</span>
+                <span key={day.date}>
+                  {teacherPortal
+                    ? `${day.date} (${text(
+                        `teacher.calendar.weekday.${['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][
+                          new Date(`${day.date}T00:00:00`).getDay()
+                        ]}`,
+                        getWeekdayShortLabel(day.date)
+                      )})`
+                    : day.label}
+                </span>
               ))}
             </div>
             {privateLessonSlotsLoading || privateLessonReservationsLoading || privateAvailabilityTemplatesLoading ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>예약판을 불러오는 중...</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>
+                {text('teacher.private.loading', '예약판을 불러오는 중...')}
+              </p>
             ) : !selectedPrivateBoardTeacherOption ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>선생님을 먼저 등록해 주세요.</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>
+                {text('teacher.private.teacherRequired', '선생님을 먼저 등록해 주세요.')}
+              </p>
             ) : privateBoardRows.length === 0 ? (
-              <p style={{ margin: 0, opacity: 0.76 }}>해당 주에 표시할 1:1 시간이 없습니다.</p>
+              <p style={{ margin: 0, opacity: 0.76 }}>
+                {text('teacher.private.empty', '해당 주에 표시할 1:1 시간이 없습니다.')}
+              </p>
             ) : (
-              <div className="activity-table">
+              <div
+                className={`activity-table${teacherPortal ? ' teacher-responsive-table teacher-private-cards' : ''}`}
+                data-testid={teacherPortal ? 'teacher-private-card-list' : undefined}
+              >
                 <div
                   className="table-head"
                   style={{ gridTemplateColumns: privateBoardGridTemplate }}
                 >
-                  <span>날짜</span>
-                  <span>시간</span>
-                  <span>상태</span>
-                  <span>내용</span>
-                  <span>출처</span>
+                  <span>{text('teacher.common.date', '날짜')}</span>
+                  <span>{text('teacher.common.time', '시간')}</span>
+                  <span>{text('teacher.common.status', '상태')}</span>
+                  <span>{text('teacher.common.details', '내용')}</span>
+                  <span>{text('teacher.common.source', '출처')}</span>
                   {showPrivateBoardActions ? <span>작업</span> : null}
                 </div>
                 {privateBoardRows.map((row) => {
-                  const statusLabel = getPrivateBoardSlotStatusLabel(row)
-                  const isClosed = statusLabel === '선생님 수업불가로 닫힘'
+                  const rawStatusLabel = getPrivateBoardSlotStatusLabel(row)
+                  const statusLabel = teacherStatusLabel(row)
+                  const isClosed = rawStatusLabel === '선생님 수업불가로 닫힘'
                   const busy =
                     (row.slot?.id && busyPrivateSlotActionId === row.slot.id) ||
                     (row.fixedLesson?.id && busyFixedPrivateLessonCancelId === row.fixedLesson.id)
                   const sourceLabel =
                     row.source === 'fixedLesson'
-                      ? '고정 수업'
+                      ? text('teacher.private.source.fixed', '고정 수업')
                       : row.source === 'template'
-                        ? '주간 시간표'
+                        ? text('teacher.private.source.weekly', '주간 시간표')
                         : row.slot?.isGeneratedFromTemplate
-                          ? '주간 시간표'
-                          : '날짜별 슬롯'
+                          ? text('teacher.private.source.weekly', '주간 시간표')
+                          : text('teacher.private.source.dated', '날짜별 슬롯')
                   return (
                     <div
                       key={row.key}
@@ -4732,17 +4835,25 @@ export default function PrivateLessonSlotsSection({
                       data-time={row.time || ''}
                       style={{ gridTemplateColumns: privateBoardGridTemplate }}
                     >
-                      <span>{row.date || '-'}</span>
-                      <span>{row.time || '-'}</span>
-                      <span data-testid="private-teacher-weekly-board-slot-status">
+                      <span data-label={text('teacher.common.date', '날짜')}>{row.date || '-'}</span>
+                      <span data-label={text('teacher.common.time', '시간')}>{row.time || '-'}</span>
+                      <span
+                        data-label={text('teacher.common.status', '상태')}
+                        data-testid="private-teacher-weekly-board-slot-status"
+                      >
                         {statusLabel}
                       </span>
-                      <span>{getPrivateBoardSlotDetail(row)}</span>
-                      <span>
+                      <span data-label={text('teacher.common.details', '내용')}>
+                        {teacherSlotDetail(row)}
+                      </span>
+                      <span data-label={text('teacher.common.source', '출처')}>
                         {sourceLabel}
                         {row.slot?.openForStudentBooking === true ? (
                           <span style={{ display: 'block', marginTop: 4, opacity: 0.7, fontSize: 12 }}>
-                            학생 직접 예약 허용
+                            {text(
+                              'teacher.private.studentBookingEnabled',
+                              '학생 직접 예약 허용'
+                            )}
                           </span>
                         ) : null}
                       </span>
@@ -4836,7 +4947,10 @@ export default function PrivateLessonSlotsSection({
             <p style={{ margin: 0, opacity: 0.65, fontSize: 12 }}>
               {showPrivateBoardActions
                 ? '“예약 취소 후 공개”는 다른 학생에게 열고, “수업불가로 닫기”는 누구에게도 열지 않습니다. “수업불가 해제”는 해당 날짜/시간만 다시 예약 가능하게 엽니다.'
-                : '이 화면은 읽기 전용입니다. 수업불가 닫기/해제와 예약 조작은 관리자만 할 수 있습니다.'}
+                : text(
+                    'teacher.private.readOnlyHelp',
+                    '이 화면은 읽기 전용입니다. 수업불가 닫기/해제와 예약 조작은 관리자만 할 수 있습니다.'
+                  )}
             </p>
           </section>
       ) : null}
