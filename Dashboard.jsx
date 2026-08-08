@@ -160,6 +160,7 @@ import {
   buildTeacherLessonOccurrenceStats,
   formatLessonStatsMonthLabel,
 } from './src/features/dashboard/lessonOccurrenceStats.js'
+import { buildPrivateLessonDashboardStats } from './src/features/dashboard/privateLessonDashboardStats.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -4360,19 +4361,47 @@ export default function Dashboard() {
     [lessonCountStats?.range, teacherLessonCountStats?.range]
   )
 
+  const privateLessonDashboardStats = useMemo(() => {
+    if (isAdmin || !user?.uid) return null
+    const reservationOccurrences = privateLessonReservations.map((reservation) => ({
+      ...reservation,
+      _calendarRowKind: 'privateReservation',
+      packageId: reservation.packageId || reservation.deductionPackageId,
+    }))
+    return buildPrivateLessonDashboardStats({
+      occurrences: [...lessons, ...reservationOccurrences],
+      packages: studentPackages,
+      teacherUid: user.uid,
+      now: new Date(),
+    })
+  }, [isAdmin, lessons, privateLessonReservations, studentPackages, user?.uid])
+
   const todayScheduleSummary = useMemo(() => {
     const items = Array.isArray(todayScheduleItems) ? todayScheduleItems : []
+    const privateSnapshotSummary = privateLessonDashboardStats
+      ? {
+          todayPrivateLessonCount: privateLessonDashboardStats.todayPrivateCount,
+          monthlyPrivateLessonCount: privateLessonDashboardStats.monthlyPrivateCount,
+          deductCancelledCount: privateLessonDashboardStats.deductionCancelledCount,
+          lastLessonCount: privateLessonDashboardStats.finalLessonCount,
+        }
+      : {}
     return {
       ...activeLessonCountStats,
+      ...privateSnapshotSummary,
       privateLessonCount: items.filter(
         (item) =>
           item.sourceKind === 'privateLesson' || item.sourceKind === 'privateReservation'
       ).length,
       groupLessonCount: items.filter((item) => item.sourceKind === 'groupLesson').length,
-      deductCancelledCount: items.filter((item) => item.isDeductCancelled === true).length,
-      lastLessonCount: items.filter((item) => item.isLastLesson === true).length,
+      ...(privateLessonDashboardStats
+        ? {}
+        : {
+            deductCancelledCount: items.filter((item) => item.isDeductCancelled === true).length,
+            lastLessonCount: items.filter((item) => item.isLastLesson === true).length,
+          }),
     }
-  }, [activeLessonCountStats, todayScheduleItems])
+  }, [activeLessonCountStats, privateLessonDashboardStats, todayScheduleItems])
 
   const todaySchedulePanelSummary = useMemo(() => {
     if (activeSection !== 'groups') return todayScheduleSummary
