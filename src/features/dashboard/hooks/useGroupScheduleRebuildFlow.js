@@ -168,6 +168,8 @@ export default function useGroupScheduleRebuildFlow({
         groupClassId: gid,
         groupClassName: g.name || data.groupName || '',
         teacher: normalizeText(g.teacher || ''),
+        teacherUid: g.teacherUid,
+        teacherName: g.teacherName,
         time: String(g.time || '').trim(),
         subject: String(g.subject || '').trim(),
         groupCourseType: g.groupCourseType,

@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
-  addDoc,
-  collection,
   doc,
+  runTransaction,
   serverTimestamp,
-  updateDoc,
   writeBatch,
 } from 'firebase/firestore'
 import { db } from '../../../../firebase'
@@ -19,6 +17,7 @@ import {
 } from '../dashboardViewUtils.js'
 import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
 import { resolveGroupLessonSubject } from '../groupClassRoomUtils.js'
+import { buildGroupLessonCanonicalFields } from '../groupClassTeacherScope.js'
 
 const DEFAULT_GROUP_LESSON_FORM = {
   date: '',
@@ -44,6 +43,21 @@ function createDefaultGroupLessonSeriesForm(overrides = {}) {
   return {
     ...DEFAULT_GROUP_LESSON_SERIES_FORM,
     ...overrides,
+  }
+}
+
+function assertTeacherOwnsSelectedGroupClass({
+  userProfile,
+  canonicalTeacherIdentity,
+  selectedGroupClass,
+}) {
+  if (String(userProfile?.role || '').trim().toLowerCase() !== 'teacher') return
+  if (
+    !canonicalTeacherIdentity ||
+    String(selectedGroupClass?.academyId || '').trim() !== canonicalTeacherIdentity.academyId ||
+    String(selectedGroupClass?.teacherUid || '').trim() !== canonicalTeacherIdentity.teacherUid
+  ) {
+    throw new Error('현재 교사 계정에 속한 단체반만 변경할 수 있습니다.')
   }
 }
 
@@ -106,6 +120,7 @@ export default function useGroupLessonManagementFlow({
   activeSection,
   userProfile,
   currentAcademyId,
+  canonicalTeacherIdentity,
   selectedGroupClass,
   groupLessons,
   createGroupLessonsInDateRange,
@@ -253,29 +268,46 @@ export default function useGroupLessonManagementFlow({
       try {
         const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
         assertSameAcademy(selectedGroupClass, scopedAcademyId, '그룹')
+        assertTeacherOwnsSelectedGroupClass({
+          userProfile,
+          canonicalTeacherIdentity,
+          selectedGroupClass,
+        })
         setBusyGroupLessonId('__add__')
-        await addDoc(collection(db, 'groupLessons'), {
+        const canonicalFields = buildGroupLessonCanonicalFields({
           academyId: scopedAcademyId,
-          groupClassId: selectedGroupClass.id,
-          groupClassName: selectedGroupClass.name || '',
-          teacher: normalizeText(selectedGroupClass.teacher || ''),
+          groupClass: selectedGroupClass,
           date: result.date,
           time: result.time,
-          subject: resolvedSubject,
-          ...(() => {
-            const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
-            return groupCourseType ? { groupCourseType } : {}
-          })(),
-          completed: false,
-          countedStudentIDs: [],
-          attendanceAppliedAt: null,
-          bookingMode: 'fixed',
-          capacity: result.capacity,
-          bookedCount: 0,
-          isBookable: result.isBookable,
-          generationKind: 'manual',
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+          status: 'scheduled',
+        })
+        const lessonRef = doc(db, 'groupLessons', canonicalFields.occurrenceId)
+        await runTransaction(db, async (transaction) => {
+          const existing = await transaction.get(lessonRef)
+          if (existing.exists()) {
+            throw new Error('같은 반·날짜·시간의 수업이 이미 있습니다.')
+          }
+          transaction.set(lessonRef, {
+            ...canonicalFields,
+            groupClassName: selectedGroupClass.name || '',
+            teacher: normalizeText(selectedGroupClass.teacher || ''),
+            teacherName: String(selectedGroupClass.teacherName || '').trim(),
+            subject: resolvedSubject,
+            ...(() => {
+              const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
+              return groupCourseType ? { groupCourseType } : {}
+            })(),
+            completed: false,
+            countedStudentIDs: [],
+            attendanceAppliedAt: null,
+            bookingMode: 'fixed',
+            capacity: result.capacity,
+            bookedCount: 0,
+            isBookable: result.isBookable,
+            generationKind: 'manual',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          })
         })
         closeGroupLessonModal()
       } catch (error) {
@@ -292,6 +324,11 @@ export default function useGroupLessonManagementFlow({
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(selectedGroupClass, scopedAcademyId, '그룹')
       assertSameAcademy(lesson, scopedAcademyId, '그룹 수업')
+      assertTeacherOwnsSelectedGroupClass({
+        userProfile,
+        canonicalTeacherIdentity,
+        selectedGroupClass,
+      })
       const bookedCount = Number(lesson.bookedCount ?? 0)
       if (Number.isFinite(bookedCount) && result.capacity < bookedCount) {
         setGroupLessonFormErrors((prev) => ({
@@ -301,20 +338,45 @@ export default function useGroupLessonManagementFlow({
         return
       }
       setBusyGroupLessonId(lesson.id)
-      await updateDoc(doc(db, 'groupLessons', lesson.id), {
-        groupClassId: selectedGroupClass.id,
-        groupClassName: selectedGroupClass.name || '',
-        teacher: normalizeText(selectedGroupClass.teacher || ''),
+      const canonicalFields = buildGroupLessonCanonicalFields({
+        academyId: scopedAcademyId,
+        groupClass: selectedGroupClass,
         date: result.date,
         time: result.time,
-        subject: resolvedSubject,
-        ...(() => {
-          const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
-          return groupCourseType ? { groupCourseType } : {}
-        })(),
-        capacity: result.capacity,
-        isBookable: result.isBookable,
-        updatedAt: serverTimestamp(),
+        status: String(lesson.status || '').trim() || 'scheduled',
+      })
+      const currentRef = doc(db, 'groupLessons', lesson.id)
+      const canonicalRef = doc(db, 'groupLessons', canonicalFields.occurrenceId)
+      await runTransaction(db, async (transaction) => {
+        const currentSnapshot = await transaction.get(currentRef)
+        if (!currentSnapshot.exists()) throw new Error('수정할 그룹 수업을 찾을 수 없습니다.')
+        const canonicalSnapshot =
+          canonicalFields.occurrenceId === lesson.id
+            ? currentSnapshot
+            : await transaction.get(canonicalRef)
+        if (canonicalFields.occurrenceId !== lesson.id && canonicalSnapshot.exists()) {
+          throw new Error('같은 반·날짜·시간의 수업이 이미 있습니다.')
+        }
+        const updates = {
+          ...canonicalFields,
+          groupClassName: selectedGroupClass.name || '',
+          teacher: normalizeText(selectedGroupClass.teacher || ''),
+          teacherName: String(selectedGroupClass.teacherName || '').trim(),
+          subject: resolvedSubject,
+          ...(() => {
+            const groupCourseType = normalizeGroupCourseType(selectedGroupClass.groupCourseType)
+            return groupCourseType ? { groupCourseType } : {}
+          })(),
+          capacity: result.capacity,
+          isBookable: result.isBookable,
+          updatedAt: serverTimestamp(),
+        }
+        if (canonicalFields.occurrenceId === lesson.id) {
+          transaction.update(currentRef, updates)
+          return
+        }
+        transaction.set(canonicalRef, { ...currentSnapshot.data(), ...updates })
+        transaction.delete(currentRef)
       })
       closeGroupLessonModal()
     } catch (error) {
@@ -386,11 +448,19 @@ export default function useGroupLessonManagementFlow({
 
     try {
       setBusyGroupLessonSeries(true)
+      assertSameAcademy(gc, currentAcademyId, '그룹')
+      assertTeacherOwnsSelectedGroupClass({
+        userProfile,
+        canonicalTeacherIdentity,
+        selectedGroupClass: gc,
+      })
       const batchResult = await createGroupLessonsInDateRange({
         academyId: currentAcademyId,
         groupClassId: gc.id,
         groupClassName: gc.name || '',
         teacher: gc.teacher,
+        teacherUid: gc.teacherUid,
+        teacherName: gc.teacherName,
         time: gc.time,
         subject: resolveGroupLessonSubject({
           subject: gc.subject,

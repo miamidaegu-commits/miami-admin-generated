@@ -14,6 +14,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   startAfter,
   serverTimestamp,
   Timestamp,
@@ -123,6 +124,13 @@ import {
   isValidOperationalAcademyId,
   requireCurrentAcademyId,
 } from './src/features/dashboard/academyScope.js'
+import {
+  buildCanonicalTeacherOption,
+  buildGroupLessonCanonicalFields,
+  buildTeacherGroupClassesQuerySpec,
+  resolveCanonicalTeacherMembershipIdentity,
+  scopeTeacherGroupData,
+} from './src/features/dashboard/groupClassTeacherScope.js'
 import {
   buildStudentGroupAccessPayloadFromGroupStudent,
   deleteStudentGroupAccessBatch,
@@ -1359,6 +1367,8 @@ async function createGroupLessonsInDateRange({
   groupClassId,
   groupClassName,
   teacher,
+  teacherUid,
+  teacherName,
   time,
   subject,
   groupCourseType,
@@ -1378,6 +1388,7 @@ async function createGroupLessonsInDateRange({
     groupCourseType: courseType,
   })
   const teacherNorm = normalizeText(teacher || '')
+  const teacherDisplayName = String(teacherName || teacher || '').trim()
   const capacity = Number(maxStudents)
   const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
 
@@ -1387,16 +1398,7 @@ async function createGroupLessonsInDateRange({
   if (weekdaySet.size === 0 || !timeStr || !courseType) return { created, skippedDup }
 
   const prior = Array.isArray(existingLessons) ? existingLessons : []
-  const commitBatchSize = 20
-  let batch = writeBatch(db)
-  let pendingWrites = 0
-
-  async function commitPendingWrites() {
-    if (pendingWrites === 0) return
-    await batch.commit()
-    batch = writeBatch(db)
-    pendingWrites = 0
-  }
+  const candidates = []
 
   for (const dateStr of iterateYmdRangeInclusive(startYmd, endYmd)) {
     const dt = parseYmdToLocalDate(dateStr)
@@ -1413,14 +1415,24 @@ async function createGroupLessonsInDateRange({
       continue
     }
 
-    const lessonRef = doc(collection(db, 'groupLessons'))
-    batch.set(lessonRef, {
+    const canonicalFields = buildGroupLessonCanonicalFields({
       academyId: scopedAcademyId,
-      groupClassId,
-      groupClassName: groupClassName || '',
-      teacher: teacherNorm,
+      groupClass: {
+        id: groupClassId,
+        academyId: scopedAcademyId,
+        teacherUid,
+      },
       date: dateStr,
       time: timeStr,
+      status: 'scheduled',
+    })
+    candidates.push({
+      ref: doc(db, 'groupLessons', canonicalFields.occurrenceId),
+      data: {
+      ...canonicalFields,
+      groupClassName: groupClassName || '',
+      teacher: teacherNorm,
+      teacherName: teacherDisplayName,
       subject: subjectStr,
       ...(courseType ? { groupCourseType: courseType } : {}),
       completed: false,
@@ -1433,15 +1445,30 @@ async function createGroupLessonsInDateRange({
       generationKind: 'recurring',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+      },
     })
-    created += 1
-    pendingWrites += 1
-    if (pendingWrites >= commitBatchSize) {
-      await commitPendingWrites()
-    }
   }
 
-  await commitPendingWrites()
+  for (const candidateChunk of chunkArray(candidates, 20)) {
+    const result = await runTransaction(db, async (transaction) => {
+      const snapshots = await Promise.all(
+        candidateChunk.map((candidate) => transaction.get(candidate.ref))
+      )
+      let transactionCreated = 0
+      let transactionSkipped = 0
+      snapshots.forEach((snapshot, index) => {
+        if (snapshot.exists()) {
+          transactionSkipped += 1
+          return
+        }
+        transaction.set(candidateChunk[index].ref, candidateChunk[index].data)
+        transactionCreated += 1
+      })
+      return { transactionCreated, transactionSkipped }
+    })
+    created += result.transactionCreated
+    skippedDup += result.transactionSkipped
+  }
 
   return { created, skippedDup }
 }
@@ -1516,7 +1543,7 @@ function buildGroupPackageCoverageLessons({
 }
 
 export default function Dashboard() {
-  const { user, userProfile, currentAcademyId } = useAuth()
+  const { user, userProfile, currentAcademyId, currentMembership } = useAuth()
   const { t } = useTranslation()
   const { resolvedLayout } = useLayoutMode()
   const navigate = useNavigate()
@@ -1718,6 +1745,19 @@ export default function Dashboard() {
   const [studentPrivateBookingStatsLoading, setStudentPrivateBookingStatsLoading] =
     useState(false)
 
+  const canonicalTeacherIdentity = useMemo(() => {
+    if (String(userProfile?.role || '').trim().toLowerCase() !== 'teacher') return null
+    try {
+      return resolveCanonicalTeacherMembershipIdentity({
+        authUid: user?.uid,
+        academyId: currentAcademyId,
+        membership: currentMembership,
+      })
+    } catch {
+      return null
+    }
+  }, [currentAcademyId, currentMembership, user?.uid, userProfile?.role])
+
   useEffect(() => {
     if (userProfile?.role !== 'admin' || !isValidOperationalAcademyId(currentAcademyId)) {
       setTeacherDirectoryMemberships([])
@@ -1779,85 +1819,40 @@ export default function Dashboard() {
   }, [currentAcademyId, userProfile?.role])
 
   const teacherSelectOptions = useMemo(() => {
-    const membershipByTeacherKey = new Map()
-    for (const membership of teacherDirectoryMemberships) {
-      const role = String(membership?.role || '').trim().toLowerCase()
-      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) continue
-      const teacherKey = normalizeText(membership.teacherName || '')
-      if (!teacherKey || membershipByTeacherKey.has(teacherKey)) continue
-      membershipByTeacherKey.set(teacherKey, membership)
-    }
-    const activeTeachers = teacherRecords.filter(
-      (teacher) => String(teacher?.status || 'active') !== 'inactive'
-    )
-    const nameCounts = new Map()
-    activeTeachers.forEach((teacher) => {
-      const name = getTeacherDisplayName(teacher)
-      if (!name) return
-      nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
-    })
-    teacherDirectoryMemberships.forEach((membership) => {
-      const role = String(membership?.role || '').trim().toLowerCase()
-      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) return
-      const name = String(membership?.displayName || membership?.teacherName || '').trim()
-      if (!name) return
-      nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
-    })
-    const map = new Map()
-    for (const teacher of teacherRecords) {
-      if (String(teacher?.status || 'active') === 'inactive') continue
-      const rawName = getTeacherDisplayName(teacher)
-      const teacherKey = getTeacherRecordKey(teacher)
-      const membership = teacherKey ? membershipByTeacherKey.get(teacherKey) : null
-      const teacherUid = String(teacher?.teacherUid || teacher?.uid || membership?.uid || '').trim()
-      const teacherEmail = String(teacher?.teacherEmail || teacher?.email || membership?.email || '').trim()
-      const value = teacherUid || teacherKey || rawName
-      if (!value) continue
-      if (!map.has(value)) {
-        const displayName = rawName || teacherKey || teacherEmail || value
-        map.set(value, {
-          value,
-          label: buildTeacherOptionLabel({
-            displayName,
-            teacherKey,
-            teacherEmail,
-            teacherUid,
-            duplicateName: nameCounts.get(displayName) > 1,
-          }),
-          displayName,
-          teacherKey,
-          teacherUid,
-          teacherEmail,
-        })
+    const teacherRecordsByUid = new Map()
+    teacherRecords.forEach((teacher) => {
+      const teacherUid = String(teacher?.teacherUid || teacher?.uid || '').trim()
+      if (teacherUid && String(teacher?.status || 'active') !== 'inactive') {
+        teacherRecordsByUid.set(teacherUid, teacher)
       }
-    }
-    for (const u of teacherDirectoryMemberships) {
-      const rawName = String(u?.displayName || u?.teacherName || '').trim()
-      if (!rawName) continue
-      const role = String(u?.role || '').trim().toLowerCase()
-      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) continue
-      const teacherKey = normalizeText(u?.teacherName || rawName)
-      const teacherUid = String(u?.uid || '').trim()
-      const teacherEmail = String(u?.email || '').trim()
-      const value = teacherUid || teacherKey || rawName
-      if (!value || map.has(value)) continue
-      map.set(value, {
-        value,
+    })
+    const nameCounts = new Map()
+    const canonicalOptions = teacherDirectoryMemberships
+      .map((membership) =>
+        buildCanonicalTeacherOption({
+          academyId: currentAcademyId,
+          membership,
+          teacherRecord: teacherRecordsByUid.get(String(membership?.uid || '').trim()) || null,
+        })
+      )
+      .filter(Boolean)
+    canonicalOptions.forEach((option) => {
+      nameCounts.set(option.teacherName, (nameCounts.get(option.teacherName) || 0) + 1)
+    })
+    return canonicalOptions
+      .map((option) => ({
+        ...option,
+        teacherKey: normalizeText(option.teacherName),
         label: buildTeacherOptionLabel({
-          displayName: rawName,
-          teacherKey,
-          teacherEmail,
-          teacherUid,
-          duplicateName: nameCounts.get(rawName) > 1,
+          displayName: option.teacherName,
+          teacherKey: normalizeText(option.teacherName),
+          teacherEmail: option.teacherEmail,
+          teacherUid: option.teacherUid,
+          duplicateName: nameCounts.get(option.teacherName) > 1,
         }),
-        displayName: rawName,
-        teacherKey,
-        teacherUid,
-        teacherEmail,
-      })
-    }
-    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ko'))
-  }, [teacherDirectoryMemberships, teacherRecords])
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'ko'))
+  }, [currentAcademyId, teacherDirectoryMemberships, teacherRecords])
 
   const teacherManagementTeachers = useMemo(() => {
     const membershipByTeacherKey = new Map()
@@ -2266,7 +2261,6 @@ export default function Dashboard() {
     if (!userProfile?.role) return
 
     const role = userProfile.role
-    const teacherName = String(userProfile.teacherName ?? '').trim()
 
     let ref
     if (isDashboardAdminProfile(userProfile)) {
@@ -2274,60 +2268,38 @@ export default function Dashboard() {
         collection(db, 'groupClasses'),
         where('academyId', '==', currentAcademyId)
       )
-    } else if (role === 'teacher' && teacherName) {
-      const queryByTeacher = query(
+    } else if (role === 'teacher' && canonicalTeacherIdentity) {
+      const querySpec = buildTeacherGroupClassesQuerySpec(canonicalTeacherIdentity)
+      ref = query(
         collection(db, 'groupClasses'),
-        where('academyId', '==', currentAcademyId),
-        where('teacher', '==', teacherName)
+        ...querySpec.map((constraint) =>
+          where(constraint.field, constraint.operator, constraint.value)
+        )
       )
-      const queryByTeacherName = query(
-        collection(db, 'groupClasses'),
-        where('academyId', '==', currentAcademyId),
-        where('teacherName', '==', teacherName)
-      )
-
       setGroupClassesLoading(true)
-      const rowsByTeacher = new Map()
-      const rowsByTeacherName = new Map()
-      const mergeRows = () => {
-        const rowsById = new Map([...rowsByTeacher, ...rowsByTeacherName])
-        setGroupClasses([...rowsById.values()])
-        setGroupClassesLoading(false)
-      }
-      const unsubTeacher = onSnapshot(
-        queryByTeacher,
+      const unsubscribe = onSnapshot(
+        ref,
         (snapshot) => {
-          rowsByTeacher.clear()
-          snapshot.docs.forEach((docItem) => {
-            rowsByTeacher.set(docItem.id, { id: docItem.id, ...docItem.data() })
+          const rows = snapshot.docs.map((docItem) => ({
+            id: docItem.id,
+            ...docItem.data(),
+          }))
+          const scoped = scopeTeacherGroupData({
+            groupClasses: rows,
+            groupLessons: [],
+            academyId: canonicalTeacherIdentity.academyId,
+            teacherUid: canonicalTeacherIdentity.teacherUid,
           })
-          mergeRows()
+          setGroupClasses(scoped.groupClasses)
+          setGroupClassesLoading(false)
         },
         (error) => {
-          console.error('teacher groupClasses 불러오기 실패:', error)
+          console.error('canonical teacherUid groupClasses 불러오기 실패:', error)
           setGroupClasses([])
           setGroupClassesLoading(false)
         }
       )
-      const unsubTeacherName = onSnapshot(
-        queryByTeacherName,
-        (snapshot) => {
-          rowsByTeacherName.clear()
-          snapshot.docs.forEach((docItem) => {
-            rowsByTeacherName.set(docItem.id, { id: docItem.id, ...docItem.data() })
-          })
-          mergeRows()
-        },
-        (error) => {
-          console.error('teacherName groupClasses 불러오기 실패:', error)
-          setGroupClasses([])
-          setGroupClassesLoading(false)
-        }
-      )
-      return () => {
-        unsubTeacher()
-        unsubTeacherName()
-      }
+      return () => unsubscribe()
     } else {
       setGroupClasses([])
       setGroupClassesLoading(false)
@@ -2351,7 +2323,12 @@ export default function Dashboard() {
       }
     )
     return () => unsubscribe()
-  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [
+    canonicalTeacherIdentity,
+    currentAcademyId,
+    user?.uid,
+    userProfile?.role,
+  ])
 
   useEffect(() => {
     if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId) || !userProfile?.role) {
@@ -2743,13 +2720,25 @@ export default function Dashboard() {
 
     setGroupLessonsLoading(true)
     const groupClassId = selectedGroupClass.id
-    const q = query(
-      collection(db, 'groupLessons'),
-      and(
-        where('academyId', '==', currentAcademyId),
-        or(where('groupClassId', '==', groupClassId), where('groupClassID', '==', groupClassId))
+    const teacherScoped =
+      String(userProfile?.role || '').trim().toLowerCase() === 'teacher' &&
+      canonicalTeacherIdentity
+    const q = teacherScoped
+      ? query(
+          collection(db, 'groupLessons'),
+          where('academyId', '==', currentAcademyId),
+          where('groupClassId', '==', groupClassId)
+        )
+      : query(
+          collection(db, 'groupLessons'),
+          and(
+            where('academyId', '==', currentAcademyId),
+            or(
+              where('groupClassId', '==', groupClassId),
+              where('groupClassID', '==', groupClassId)
+            )
+          )
       )
-    )
 
     const unsubscribe = onSnapshot(
       q,
@@ -2758,7 +2747,17 @@ export default function Dashboard() {
           id: docItem.id,
           ...docItem.data(),
         })).filter(isVisibleGroupLessonForActiveViews)
-        setGroupLessons(rows)
+        if (teacherScoped) {
+          const scoped = scopeTeacherGroupData({
+            groupClasses: [selectedGroupClass],
+            groupLessons: rows,
+            academyId: canonicalTeacherIdentity.academyId,
+            teacherUid: canonicalTeacherIdentity.teacherUid,
+          })
+          setGroupLessons(scoped.groupLessons)
+        } else {
+          setGroupLessons(rows)
+        }
         setGroupLessonsLoading(false)
       },
       (error) => {
@@ -2769,7 +2768,12 @@ export default function Dashboard() {
     )
 
     return () => unsubscribe()
-  }, [currentAcademyId, selectedGroupClass?.id])
+  }, [
+    canonicalTeacherIdentity,
+    currentAcademyId,
+    selectedGroupClass,
+    userProfile?.role,
+  ])
 
   useEffect(() => {
     if (!selectedGroupClass?.id || !isValidOperationalAcademyId(currentAcademyId)) {
@@ -3097,7 +3101,6 @@ export default function Dashboard() {
     }
 
     const role = userProfile.role
-    const teacherName = String(userProfile.teacherName ?? '').trim()
 
     if (role === 'admin') {
       let active = true
@@ -3145,7 +3148,7 @@ export default function Dashboard() {
       }
     }
 
-    if (role === 'teacher' && teacherName) {
+    if (role === 'teacher' && canonicalTeacherIdentity) {
       let active = true
       const ids = groupClasses.map((g) => g.id).filter(Boolean)
       if (ids.length === 0) {
@@ -3183,7 +3186,13 @@ export default function Dashboard() {
             byId.set(row.id, row)
           }
         }
-        setStudentSummaryGroupLessons(Array.from(byId.values()))
+        const scoped = scopeTeacherGroupData({
+          groupClasses,
+          groupLessons: Array.from(byId.values()),
+          academyId: canonicalTeacherIdentity.academyId,
+          teacherUid: canonicalTeacherIdentity.teacherUid,
+        })
+        setStudentSummaryGroupLessons(scoped.groupLessons)
       }
 
       const unsubs = []
@@ -3217,10 +3226,8 @@ export default function Dashboard() {
 
         const qGl = query(
           collection(db, 'groupLessons'),
-          and(
-            where('academyId', '==', currentAcademyId),
-            or(where('groupClassId', 'in', chunk), where('groupClassID', 'in', chunk))
-          )
+          where('academyId', '==', currentAcademyId),
+          where('groupClassId', 'in', chunk)
         )
         getDocs(qGl)
           .then((snapshot) => {
@@ -3251,7 +3258,7 @@ export default function Dashboard() {
 
     setStudentSummaryGroupStudents([])
     setStudentSummaryGroupLessons([])
-	  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName, groupClasses])
+  }, [canonicalTeacherIdentity, currentAcademyId, user?.uid, userProfile?.role, groupClasses])
 
   const todayYmd = getTodayStorageDateString()
 
@@ -3276,13 +3283,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     const role = String(userProfile?.role || '').trim().toLowerCase()
-    const teacherName = String(userProfile?.teacherName || '').trim()
 
     if (
       !user?.uid ||
       !isValidOperationalAcademyId(currentAcademyId) ||
       role !== 'teacher' ||
-      !teacherName
+      !canonicalTeacherIdentity
     ) {
       setTodayDashboardGroupLessons([])
       setTodayDashboardGroupLessonsLoading(false)
@@ -3316,7 +3322,7 @@ export default function Dashboard() {
     )
       .then((results) => {
         if (!active) return
-        const byId = new Map()
+        const candidates = []
         results.forEach((result) => {
           if (result.status !== 'fulfilled') {
             console.error('today teacher groupLessons 불러오기 실패:', result.reason)
@@ -3324,16 +3330,18 @@ export default function Dashboard() {
           }
           result.value.docs.forEach((docItem) => {
             const lesson = { id: docItem.id, ...docItem.data() }
-            const lessonAcademyId = String(lesson.academyId || '').trim()
-            const lessonTeacher = String(lesson.teacher || lesson.teacherName || '').trim()
-            if (lessonAcademyId !== String(currentAcademyId || '').trim()) return
             if (!isVisibleGroupLessonForActiveViews(lesson)) return
             if (String(lesson.date || '').trim() !== todayYmd) return
-            if (lessonTeacher && lessonTeacher !== teacherName) return
-            byId.set(docItem.id, lesson)
+            candidates.push(lesson)
           })
         })
-        setTodayDashboardGroupLessons(Array.from(byId.values()))
+        const scoped = scopeTeacherGroupData({
+          groupClasses,
+          groupLessons: candidates,
+          academyId: canonicalTeacherIdentity.academyId,
+          teacherUid: canonicalTeacherIdentity.teacherUid,
+        })
+        setTodayDashboardGroupLessons(scoped.groupLessons)
         setTodayDashboardGroupLessonsLoading(false)
       })
       .catch((error) => {
@@ -3347,12 +3355,12 @@ export default function Dashboard() {
       active = false
     }
   }, [
+    canonicalTeacherIdentity,
     currentAcademyId,
     groupClasses,
     todayYmd,
     user?.uid,
     userProfile?.role,
-    userProfile?.teacherName,
   ])
 
   const todayGroupLessons = useMemo(() => {
@@ -3488,6 +3496,7 @@ export default function Dashboard() {
     activeSection,
     userProfile,
     currentAcademyId,
+    canonicalTeacherIdentity,
     selectedGroupClass,
     groupLessons,
     createGroupLessonsInDateRange,
@@ -4273,6 +4282,7 @@ export default function Dashboard() {
     activeSection,
     userProfile,
     currentAcademyId,
+    canonicalTeacherIdentity,
     busyGroupId,
     setBusyGroupId,
     selectedDateString,

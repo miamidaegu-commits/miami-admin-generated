@@ -22,9 +22,11 @@ import {
   normalizeGroupWeekdaysFromDoc,
   normalizeText,
   parseYmdToLocalDate,
-  resolveTeacherFormValue,
-  resolveTeacherIdentityFields,
 } from '../dashboardViewUtils.js'
+import {
+  buildGroupClassOwnershipFields,
+  resolveCanonicalTeacherSelection,
+} from '../groupClassTeacherScope.js'
 import { normalizeGroupCourseType } from '../../group-booking/groupCourseTypes.js'
 import {
   countActiveGroupFixedMembers,
@@ -88,32 +90,30 @@ function isAdminProfile(profile) {
   )
 }
 
-function getTeacherOwnGroupKey(profile) {
-  if (String(profile?.role || '').trim().toLowerCase() !== 'teacher') return ''
-  return normalizeText(profile?.teacherName || '')
-}
-
-function groupBelongsToTeacher(group, teacherKey) {
-  if (!teacherKey) return false
-  return (
-    normalizeText(group?.teacher || '') === teacherKey ||
-    normalizeText(group?.teacherName || '') === teacherKey
+function groupBelongsToTeacher(group, teacherIdentity) {
+  return Boolean(
+    teacherIdentity?.academyId &&
+      teacherIdentity?.teacherUid &&
+      String(group?.academyId || '').trim() === teacherIdentity.academyId &&
+      String(group?.teacherUid || '').trim() === teacherIdentity.teacherUid
   )
 }
 
 function resolveGroupTeacherFormValue(group, teacherSelectOptions = []) {
-  return resolveTeacherFormValue(group, teacherSelectOptions)
+  const teacherUid = String(group?.teacherUid || '').trim()
+  if (!teacherUid) return ''
+  const option = (Array.isArray(teacherSelectOptions) ? teacherSelectOptions : []).find(
+    (candidate) =>
+      String(candidate?.teacherUid || '').trim() === teacherUid &&
+      String(candidate?.value || '').trim() === teacherUid
+  )
+  return option ? teacherUid : ''
 }
 
 function teacherIdentityChanged(group, teacherIdentity) {
   return [
-    ['teacher', teacherIdentity.teacher],
-    ['teacherKey', teacherIdentity.teacherKey],
     ['teacherUid', teacherIdentity.teacherUid],
-    ['teacherId', teacherIdentity.teacherId],
     ['teacherName', teacherIdentity.teacherName],
-    ['teacherDisplayName', teacherIdentity.teacherDisplayName],
-    ['displayName', teacherIdentity.displayName],
   ].some(([key, value]) => String(group?.[key] || '').trim() !== String(value || '').trim())
 }
 
@@ -137,6 +137,7 @@ export default function useGroupManagementFlow({
   activeSection,
   userProfile,
   currentAcademyId,
+  canonicalTeacherIdentity,
   busyGroupId,
   setBusyGroupId,
   selectedDateString,
@@ -190,8 +191,7 @@ export default function useGroupManagementFlow({
   }
 
   function openGroupAddModal() {
-    const teacherKey = getTeacherOwnGroupKey(userProfile)
-    if (!isAdminProfile(userProfile) && !teacherKey) {
+    if (!isAdminProfile(userProfile) && !canonicalTeacherIdentity) {
       alert('그룹 관리 권한이 없습니다.')
       return
     }
@@ -199,7 +199,7 @@ export default function useGroupManagementFlow({
     setGroupFormState(
       createDefaultGroupForm({
         startDate: formatLocalDateToYmd(new Date()),
-        teacher: teacherKey || '',
+        teacher: canonicalTeacherIdentity?.teacherUid || '',
         status: 'active',
       })
     )
@@ -208,8 +208,7 @@ export default function useGroupManagementFlow({
   }
 
   function openGroupEditModal(group) {
-    const teacherKey = getTeacherOwnGroupKey(userProfile)
-    if (!isAdminProfile(userProfile) && !groupBelongsToTeacher(group, teacherKey)) {
+    if (!isAdminProfile(userProfile) && !groupBelongsToTeacher(group, canonicalTeacherIdentity)) {
       alert('그룹 관리 권한이 없습니다.')
       return
     }
@@ -227,7 +226,9 @@ export default function useGroupManagementFlow({
     setGroupFormState(
       createDefaultGroupForm({
         name: group.name || '',
-        teacher: teacherKey || resolveGroupTeacherFormValue(group, teacherSelectOptions),
+        teacher:
+          canonicalTeacherIdentity?.teacherUid ||
+          resolveGroupTeacherFormValue(group, teacherSelectOptions),
         maxStudents: groupMaxStudentsToFormString(group.maxStudents),
         status: String(group.status || 'active').trim() === 'inactive' ? 'inactive' : 'active',
         time: String(group.time || '').trim(),
@@ -255,36 +256,51 @@ export default function useGroupManagementFlow({
     setGroupFormErrors(result.errors)
     if (!result.valid) return
 
-    const teacherOwnKey = getTeacherOwnGroupKey(userProfile)
-    const teacherKey = teacherOwnKey || normalizeText(result.teacher)
-    const teacherIdentity = resolveTeacherIdentityFields(
-      teacherKey || result.teacher,
-      teacherSelectOptions
-    )
+    const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+    let teacherIdentity
+    try {
+      teacherIdentity = isAdminProfile(userProfile)
+        ? resolveCanonicalTeacherSelection({
+            academyId: scopedAcademyId,
+            selectedValue: result.teacher,
+            teacherOptions: teacherSelectOptions,
+          })
+        : canonicalTeacherIdentity
+      buildGroupClassOwnershipFields({
+        academyId: scopedAcademyId,
+        teacherIdentity,
+        status: result.status,
+      })
+    } catch (error) {
+      alert(error.message || '현재 학원의 활성 선생님 계정을 선택해주세요.')
+      return
+    }
+    const teacherKey = normalizeText(teacherIdentity.teacherName)
     const canAutoCreateLessons =
       (isAdminProfile(userProfile) || userProfile?.canCreateLessonDirectly === true) &&
       userProfile?.requiresLessonApproval !== true
 
     if (groupModal.type === 'add') {
-      if (!isAdminProfile(userProfile) && !teacherOwnKey) {
+      if (!isAdminProfile(userProfile) && !canonicalTeacherIdentity) {
         alert('그룹 관리 권한이 없습니다.')
         return
       }
       try {
-        const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
         setBusyGroupId('__add__')
-        const docRef = await addDoc(collection(db, 'groupClasses'), {
+        const ownershipFields = buildGroupClassOwnershipFields({
           academyId: scopedAcademyId,
-          name: result.name,
-          teacher: teacherIdentity.teacher,
-          teacherKey: teacherIdentity.teacherKey,
-          teacherUid: teacherIdentity.teacherUid,
-          teacherId: teacherIdentity.teacherId,
-          teacherName: teacherIdentity.teacherName,
-          teacherDisplayName: teacherIdentity.teacherDisplayName,
-          displayName: teacherIdentity.displayName,
-          maxStudents: result.maxStudents,
+          teacherIdentity,
           status: result.status,
+        })
+        const docRef = await addDoc(collection(db, 'groupClasses'), {
+          ...ownershipFields,
+          name: result.name,
+          teacher: teacherKey,
+          teacherKey,
+          teacherId: teacherIdentity.teacherUid,
+          teacherDisplayName: teacherIdentity.teacherName,
+          displayName: teacherIdentity.teacherName,
+          maxStudents: result.maxStudents,
           time: result.time,
           subject: result.subject,
           groupCourseType: result.groupCourseType,
@@ -309,7 +325,8 @@ export default function useGroupManagementFlow({
               academyId: scopedAcademyId,
               groupClassId: newId,
               groupClassName: result.name,
-              teacher: teacherIdentity.teacher,
+              teacher: teacherKey,
+              teacherUid: teacherIdentity.teacherUid,
               teacherName: teacherIdentity.teacherName,
               time: result.time,
               subject: result.subject,
@@ -339,7 +356,7 @@ export default function useGroupManagementFlow({
     }
 
     const { group } = groupModal
-    if (!isAdminProfile(userProfile) && !groupBelongsToTeacher(group, teacherOwnKey)) {
+    if (!isAdminProfile(userProfile) && !groupBelongsToTeacher(group, canonicalTeacherIdentity)) {
       alert('다른 선생님의 반은 수정할 수 없습니다.')
       return
     }
@@ -347,7 +364,6 @@ export default function useGroupManagementFlow({
     const teacherChanged = teacherIdentityChanged(group, teacherIdentity)
 
     try {
-      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       assertSameAcademy(group, scopedAcademyId, '그룹')
       setBusyGroupId(group.id)
       const activeFixedMemberCount = await countActiveGroupFixedMembersFromDb({
@@ -362,17 +378,20 @@ export default function useGroupManagementFlow({
         setBusyGroupId(null)
         return
       }
-      const groupClassUpdate = {
-        name: result.name,
-        teacher: teacherIdentity.teacher,
-        teacherKey: teacherIdentity.teacherKey,
-        teacherUid: teacherIdentity.teacherUid,
-        teacherId: teacherIdentity.teacherId,
-        teacherName: teacherIdentity.teacherName,
-        teacherDisplayName: teacherIdentity.teacherDisplayName,
-        displayName: teacherIdentity.displayName,
-        maxStudents: result.maxStudents,
+      const ownershipFields = buildGroupClassOwnershipFields({
+        academyId: scopedAcademyId,
+        teacherIdentity,
         status: result.status,
+      })
+      const groupClassUpdate = {
+        ...ownershipFields,
+        name: result.name,
+        teacher: teacherKey,
+        teacherKey,
+        teacherId: teacherIdentity.teacherUid,
+        teacherDisplayName: teacherIdentity.teacherName,
+        displayName: teacherIdentity.teacherName,
+        maxStudents: result.maxStudents,
         time: result.time,
         subject: result.subject,
         groupCourseType: result.groupCourseType,
@@ -384,16 +403,14 @@ export default function useGroupManagementFlow({
 
       const savedGroup = {
         ...group,
+        ...ownershipFields,
         name: result.name,
-        teacher: teacherIdentity.teacher,
-        teacherKey: teacherIdentity.teacherKey,
-        teacherUid: teacherIdentity.teacherUid,
-        teacherId: teacherIdentity.teacherId,
-        teacherName: teacherIdentity.teacherName,
-        teacherDisplayName: teacherIdentity.teacherDisplayName,
-        displayName: teacherIdentity.displayName,
+        teacher: teacherKey,
+        teacherKey,
+        teacherId: teacherIdentity.teacherUid,
+        teacherDisplayName: teacherIdentity.teacherName,
+        displayName: teacherIdentity.teacherName,
         maxStudents: result.maxStudents,
-        status: result.status,
         time: result.time,
         subject: result.subject,
         groupCourseType: result.groupCourseType,
@@ -413,13 +430,13 @@ export default function useGroupManagementFlow({
       if (teacherChanged) {
         const todayYmd = getTodayStorageDateString()
         const futureGroupLessonsTeacherUpdate = {
-          teacher: teacherIdentity.teacher,
-          teacherKey: teacherIdentity.teacherKey,
+          teacher: teacherKey,
+          teacherKey,
           teacherUid: teacherIdentity.teacherUid,
-          teacherId: teacherIdentity.teacherId,
+          teacherId: teacherIdentity.teacherUid,
           teacherName: teacherIdentity.teacherName,
-          teacherDisplayName: teacherIdentity.teacherDisplayName,
-          displayName: teacherIdentity.displayName,
+          teacherDisplayName: teacherIdentity.teacherName,
+          displayName: teacherIdentity.teacherName,
           updatedAt: serverTimestamp(),
         }
         const snapshots = await Promise.all([
@@ -457,13 +474,13 @@ export default function useGroupManagementFlow({
             isFutureTeacherSyncTargetGroupLesson(lesson, group.id, todayYmd)
               ? {
                   ...lesson,
-                  teacher: teacherIdentity.teacher,
-                  teacherKey: teacherIdentity.teacherKey,
+                  teacher: teacherKey,
+                  teacherKey,
                   teacherUid: teacherIdentity.teacherUid,
-                  teacherId: teacherIdentity.teacherId,
+                  teacherId: teacherIdentity.teacherUid,
                   teacherName: teacherIdentity.teacherName,
-                  teacherDisplayName: teacherIdentity.teacherDisplayName,
-                  displayName: teacherIdentity.displayName,
+                  teacherDisplayName: teacherIdentity.teacherName,
+                  displayName: teacherIdentity.teacherName,
                 }
               : lesson
           )
@@ -489,7 +506,8 @@ export default function useGroupManagementFlow({
             newGroupCourseType: result.groupCourseType,
             newWeekdays: result.weekdays,
             maxStudents: result.maxStudents,
-            teacher: teacherIdentity.teacher,
+            teacher: teacherKey,
+            teacherUid: teacherIdentity.teacherUid,
             teacherName: teacherIdentity.teacherName,
             requestedFromDate: fromYmd,
           },
