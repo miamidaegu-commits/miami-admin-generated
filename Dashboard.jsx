@@ -77,6 +77,7 @@ import {
 import { resolveGroupLessonSubject } from './src/features/dashboard/groupClassRoomUtils.js'
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
 import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedulePanel.jsx'
+import GroupClassStatusPanel from './src/features/dashboard/components/GroupClassStatusPanel.jsx'
 import LessonCountStatsPanel from './src/features/dashboard/components/LessonCountStatsPanel.jsx'
 import PrivateLessonStatusActionModal from './src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
 import GroupsSection from './src/features/dashboard/sections/GroupsSection.jsx'
@@ -169,6 +170,7 @@ import {
   formatLessonStatsMonthLabel,
 } from './src/features/dashboard/lessonOccurrenceStats.js'
 import { buildPrivateLessonDashboardStats } from './src/features/dashboard/privateLessonDashboardStats.js'
+import { computeGroupClassDashboardStats } from './src/features/dashboard/groupClassDashboardStats.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -4385,6 +4387,17 @@ export default function Dashboard() {
       now: new Date(),
     })
   }, [isAdmin, lessons, privateLessonReservations, studentPackages, user?.uid])
+
+  const groupClassDashboardStats = useMemo(() => {
+    if (isAdmin || !canonicalTeacherIdentity) return null
+    return computeGroupClassDashboardStats({
+      groupClasses,
+      groupLessons: studentSummaryGroupLessons,
+      academyId: canonicalTeacherIdentity.academyId,
+      teacherUid: canonicalTeacherIdentity.teacherUid,
+      now: new Date(),
+    })
+  }, [canonicalTeacherIdentity, groupClasses, isAdmin, studentSummaryGroupLessons])
 
   const todayScheduleSummary = useMemo(() => {
     const items = Array.isArray(todayScheduleItems) ? todayScheduleItems : []
@@ -9096,6 +9109,9 @@ export default function Dashboard() {
 	          </header>
 
           <div style={{ marginBottom: 20 }}>
+            {activeSection === 'groups' && !isAdmin ? (
+              <GroupClassStatusPanel stats={groupClassDashboardStats} />
+            ) : null}
             <TodaySchedulePanel
               items={todaySchedulePanelItems}
               summary={todaySchedulePanelSummary}
