@@ -132,6 +132,7 @@ import {
   resolveCanonicalTeacherMembershipIdentity,
   scopeTeacherGroupData,
 } from './src/features/dashboard/groupClassTeacherScope.js'
+import { buildTeacherPrivateReservationQuerySpec } from './src/features/dashboard/privateLessonReservationTeacherScope.js'
 import {
   buildStudentGroupAccessPayloadFromGroupStudent,
   deleteStudentGroupAccessBatch,
@@ -3004,7 +3005,6 @@ export default function Dashboard() {
     if (!userProfile?.role) return
 
     const isAdminProfile = isDashboardAdminProfile(userProfile)
-    const teacherName = normalizeText(userProfile.teacherName || '')
     if (isAdminProfile) {
       setPrivateLessonReservationsLoading(true)
       const unsubscribe = onSnapshot(
@@ -3037,58 +3037,35 @@ export default function Dashboard() {
         }
       )
       return () => unsubscribe()
-    } else if (isDashboardTeacherProfile(userProfile) && teacherName) {
+    } else if (isDashboardTeacherProfile(userProfile) && canonicalTeacherIdentity) {
       setPrivateLessonReservationsLoading(true)
-      const teacherUid = String(user?.uid || '').trim()
-      const teacherQuerySpecs = [
-        ['teacher', teacherName],
-        ['teacherName', teacherName],
-        ['teacherKey', teacherName],
-        ['teacherUid', teacherUid],
-        ['teacherUID', teacherUid],
-      ].filter(([, value]) => value)
-      const teacherSnapshotsByKey = new Map()
-      const mergeTeacherRows = () => {
-        if (teacherSnapshotsByKey.size < teacherQuerySpecs.length) return
-        const byId = new Map()
-        Array.from(teacherSnapshotsByKey.values()).forEach((snapshot) => {
-          snapshot.docs.forEach((docItem) => {
-            byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
-          })
-        })
-        setPrivateLessonReservations(Array.from(byId.values()))
-        setPrivateLessonReservationsLoading(false)
-      }
-      const queryBase = [
-        where('academyId', '==', currentAcademyId),
-      ]
-      const unsubscribers = teacherQuerySpecs.map(([field, value]) =>
-        onSnapshot(
-          query(
-            collection(db, 'privateLessonReservations'),
-            ...queryBase,
-            where(field, '==', value)
-          ),
-          (snapshot) => {
-            teacherSnapshotsByKey.set(`${field}:${value}`, snapshot)
-            mergeTeacherRows()
-          },
-          (error) => {
-            console.error(`privateLessonReservations(${field}) 불러오기 실패:`, error)
-            teacherSnapshotsByKey.set(`${field}:${value}`, { docs: [] })
-            mergeTeacherRows()
-          }
-        )
+      const querySpec = buildTeacherPrivateReservationQuerySpec(canonicalTeacherIdentity)
+      const unsubscribe = onSnapshot(
+        query(
+          collection(db, 'privateLessonReservations'),
+          ...querySpec.map((constraint) =>
+            where(constraint.field, constraint.operator, constraint.value)
+          )
+        ),
+        (snapshot) => {
+          setPrivateLessonReservations(
+            snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+          )
+          setPrivateLessonReservationsLoading(false)
+        },
+        (error) => {
+          console.error('privateLessonReservations(canonical teacherUid) 불러오기 실패:', error)
+          setPrivateLessonReservations([])
+          setPrivateLessonReservationsLoading(false)
+        }
       )
-      return () => {
-        unsubscribers.forEach((unsubscribe) => unsubscribe())
-      }
+      return () => unsubscribe()
     } else {
       setPrivateLessonReservations([])
       setPrivateLessonReservationsLoading(false)
       return
     }
-  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [canonicalTeacherIdentity, currentAcademyId, user?.uid, userProfile?.role])
 
   useEffect(() => {
     if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
