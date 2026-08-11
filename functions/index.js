@@ -14477,6 +14477,15 @@ exports.createFixedPrivateLessonAssignment = onCall(
         const validation = validateFixedPrivateAssignmentPayload(
             request.data || {},
         );
+        const authAcademyId = normalizeId(
+            request.auth.token && request.auth.token.academyId,
+        );
+        if (!authAcademyId || authAcademyId !== validation.academyId) {
+          throw new HttpsError(
+              "permission-denied",
+              "Authenticated academy does not match request.",
+          );
+        }
         const db = admin.firestore();
         const membership = await requireAcademyAdmin(
             db,
