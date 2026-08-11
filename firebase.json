@@ -18,7 +18,7 @@
         "*.local"
       ],
       "predeploy": [
-        "npm --prefix \"$RESOURCE_DIR\" run lint"
+        "node \"$RESOURCE_DIR/node_modules/eslint/bin/eslint.js\" --no-eslintrc --config \"$RESOURCE_DIR/.eslintrc.js\" --resolve-plugins-relative-to \"$RESOURCE_DIR\" \"$RESOURCE_DIR\""
       ]
     }
   ],
