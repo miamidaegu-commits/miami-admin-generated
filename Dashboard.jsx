@@ -1025,7 +1025,7 @@ function getPrivateSlotTeacherDisplay(slot) {
 }
 
 function isPrivateAvailabilityTemplateForFixedAssignment(template) {
-  return template?.useForFixedAssignment !== false
+  return template?.useForFixedAssignment === true
 }
 
 function getPrivateAvailabilityTemplateUsagePatch({
@@ -1033,25 +1033,21 @@ function getPrivateAvailabilityTemplateUsagePatch({
   openForStudentBooking,
   currentTemplate = null,
 }) {
-  const nextUseForFixedAssignment = useForFixedAssignment !== false
+  const nextUseForFixedAssignment = Boolean(useForFixedAssignment)
   const nextOpenForStudentBooking = openForStudentBooking === true
-  const isDefaultUsage = nextUseForFixedAssignment && !nextOpenForStudentBooking
-  const currentUseForFixedAssignment = currentTemplate?.useForFixedAssignment !== false
   const currentOpenForStudentBooking = currentTemplate?.openForStudentBooking === true
-
-  if (!currentTemplate && isDefaultUsage) return {}
-  if (
-    currentTemplate &&
-    currentUseForFixedAssignment === nextUseForFixedAssignment &&
-    currentOpenForStudentBooking === nextOpenForStudentBooking
-  ) {
-    return {}
-  }
-
-  return {
+  const patch = {
     useForFixedAssignment: nextUseForFixedAssignment,
-    openForStudentBooking: nextOpenForStudentBooking,
   }
+
+  if (!currentTemplate) {
+    if (nextOpenForStudentBooking) patch.openForStudentBooking = true
+    return patch
+  }
+  if (currentOpenForStudentBooking !== nextOpenForStudentBooking) {
+    patch.openForStudentBooking = nextOpenForStudentBooking
+  }
+  return patch
 }
 
 function getPrivateTeacherIdentityKeys(row) {
@@ -5584,7 +5580,9 @@ export default function Dashboard() {
       privateAvailabilityTemplateForm.effectiveStartDate || ''
     ).trim()
     const effectiveEndDate = String(privateAvailabilityTemplateForm.effectiveEndDate || '').trim()
-    const useForFixedAssignment = privateAvailabilityTemplateForm.useForFixedAssignment !== false
+    const useForFixedAssignment = Boolean(
+      privateAvailabilityTemplateForm.useForFixedAssignment
+    )
     const openForStudentBooking = privateAvailabilityTemplateForm.openForStudentBooking === true
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) {
@@ -5656,7 +5654,7 @@ export default function Dashboard() {
     const status = String(privateAvailabilityBulkForm.status || 'active').trim()
     const effectiveStartDate = String(privateAvailabilityBulkForm.effectiveStartDate || '').trim()
     const effectiveEndDate = String(privateAvailabilityBulkForm.effectiveEndDate || '').trim()
-    const useForFixedAssignment = privateAvailabilityBulkForm.useForFixedAssignment !== false
+    const useForFixedAssignment = Boolean(privateAvailabilityBulkForm.useForFixedAssignment)
     const openForStudentBooking = privateAvailabilityBulkForm.openForStudentBooking === true
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (weekdays.length === 0) errors.weekdays = '요일을 하나 이상 선택해주세요.'
@@ -6288,6 +6286,7 @@ export default function Dashboard() {
       setBusyPrivateAvailabilityTemplateId(template.id)
       await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
         status: nextStatus,
+        useForFixedAssignment: template.useForFixedAssignment === true,
         updatedAt: serverTimestamp(),
       })
     } catch (error) {
@@ -6303,7 +6302,7 @@ export default function Dashboard() {
     const status = String(values?.status || 'active').trim()
     const effectiveStartDate = String(values?.effectiveStartDate || '').trim()
     const effectiveEndDate = String(values?.effectiveEndDate || '').trim()
-    const useForFixedAssignment = values?.useForFixedAssignment !== false
+    const useForFixedAssignment = Boolean(values?.useForFixedAssignment)
     const openForStudentBooking = values?.openForStudentBooking === true
 
     if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'

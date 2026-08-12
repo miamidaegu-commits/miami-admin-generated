@@ -312,7 +312,7 @@ function getTemplateAssignmentOptionLabel(template) {
 }
 
 function isTemplateForFixedAssignment(template) {
-  return template?.useForFixedAssignment !== false
+  return template?.useForFixedAssignment === true
 }
 
 function isTemplateOpenForStudentBooking(template) {
@@ -322,6 +322,12 @@ function isTemplateOpenForStudentBooking(template) {
 function getTemplateUsageLabel(template) {
   const labels = []
   if (isTemplateForFixedAssignment(template)) labels.push('고정 수업 배정용')
+  if (
+    template?.useForFixedAssignment !== true &&
+    template?.useForFixedAssignment !== false
+  ) {
+    labels.push('고정 배정 설정 필요')
+  }
   if (isTemplateOpenForStudentBooking(template)) labels.push('학생 직접 예약 허용')
   return labels.join(' · ') || '용도 없음'
 }
@@ -1003,7 +1009,7 @@ export default function PrivateLessonSlotsSection({
       effectiveStartDate: isYmd(template?.effectiveStartDate) ? String(template.effectiveStartDate) : '',
       effectiveEndDate: isYmd(template?.effectiveEndDate) ? String(template.effectiveEndDate) : '',
       status: normalizePrivateWeeklyTemplateStatus(template),
-      useForFixedAssignment: isTemplateForFixedAssignment(template),
+      useForFixedAssignment: template?.useForFixedAssignment !== false,
       openForStudentBooking: isTemplateOpenForStudentBooking(template),
     })
     setEditingAvailabilityTemplateErrors({})
@@ -1525,7 +1531,7 @@ export default function PrivateLessonSlotsSection({
             availabilityTemplateId: template.id,
             isGeneratedFromTemplate: true,
             openForStudentBooking: template.openForStudentBooking === true,
-            useForFixedAssignment: template.useForFixedAssignment !== false,
+            useForFixedAssignment: template.useForFixedAssignment === true,
           }
         rowsByKey.set(key, {
           key,
@@ -2096,7 +2102,7 @@ export default function PrivateLessonSlotsSection({
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <input
                       type="checkbox"
-                      checked={privateAvailabilityBulkForm.useForFixedAssignment !== false}
+                      checked={privateAvailabilityBulkForm.useForFixedAssignment === true}
                       data-testid="private-weekly-bulk-use-fixed-checkbox"
                       onChange={(event) =>
                         setPrivateAvailabilityBulkForm((prev) => ({
@@ -2511,7 +2517,7 @@ export default function PrivateLessonSlotsSection({
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <input
                     type="checkbox"
-                    checked={privateAvailabilityTemplateForm.useForFixedAssignment !== false}
+                    checked={privateAvailabilityTemplateForm.useForFixedAssignment === true}
                     data-testid="private-availability-template-use-fixed-checkbox"
                     onChange={(event) =>
                       setPrivateAvailabilityTemplateForm((prev) => ({
@@ -2819,7 +2825,7 @@ export default function PrivateLessonSlotsSection({
                             <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                               <input
                                 type="checkbox"
-                                checked={editingAvailabilityTemplateForm.useForFixedAssignment !== false}
+                                checked={editingAvailabilityTemplateForm.useForFixedAssignment === true}
                                 data-testid="private-availability-template-edit-use-fixed-checkbox"
                                 onChange={(event) =>
                                   setEditingAvailabilityTemplateForm((prev) => ({
