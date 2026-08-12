@@ -2,6 +2,10 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { PRIVATE_WEEKLY_SLOT_WEEKDAYS } from '../../booking/privateWeeklySlotBulk.js'
 import FixedPrivateLessonActionModal from '../components/FixedPrivateLessonActionModal.jsx'
 import { useTranslation } from '../../../i18n/LocalizationProvider.jsx'
+import {
+  formatFixedPrivateAssignmentBackfillWarning,
+  isPastFixedPrivateAssignmentDate,
+} from '../privateFixedAssignmentBackfill.js'
 
 function slotStatusLabel(status) {
   if (status === 'reserved') return '예약 완료'
@@ -698,6 +702,8 @@ export default function PrivateLessonSlotsSection({
   const [showPastPrivateWeeklyTemplates, setShowPastPrivateWeeklyTemplates] = useState(false)
   const [showPastPrivateLessonSlots, setShowPastPrivateLessonSlots] = useState(false)
   const [showPastFixedPrivateLessons, setShowPastFixedPrivateLessons] = useState(false)
+  const [privateFixedAssignmentBackfillConfirmed, setPrivateFixedAssignmentBackfillConfirmed] =
+    useState(false)
   const [showFixedPrivateRenewalConfirmModal, setShowFixedPrivateRenewalConfirmModal] =
     useState(false)
   const [showFixedRescheduleCommitConfirmModal, setShowFixedRescheduleCommitConfirmModal] =
@@ -711,6 +717,22 @@ export default function PrivateLessonSlotsSection({
   )
   const [showFixedRescheduleScopePreview, setShowFixedRescheduleScopePreview] = useState(false)
   const fixedPrivateLessonsSectionRef = useRef(null)
+  useEffect(() => {
+    setPrivateFixedAssignmentBackfillConfirmed(false)
+  }, [
+    privateFixedSlotAssignmentForm?.templateId,
+    privateFixedSlotAssignmentForm?.studentId,
+    privateFixedSlotAssignmentForm?.packageId,
+    privateFixedSlotAssignmentForm?.subject,
+    privateFixedSlotAssignmentForm?.startDate,
+    privateFixedSlotAssignmentForm?.endDate,
+  ])
+  const privateFixedAssignmentPastDateCount = Number(
+    privateFixedSlotAssignmentPreview?.pastDateCount || 0
+  )
+  const privateFixedAssignmentNeedsBackfillConfirmation =
+    privateFixedAssignmentPastDateCount > 0 &&
+    privateFixedSlotAssignmentPreview?.mode !== 'created'
   const cancelPrivateSlotOrReservationSafely = (slot, reservation, options = {}) => {
     if (isFixedPrivateReservation(reservation, slot)) {
       const lessonId = String(
@@ -4074,7 +4096,7 @@ export default function PrivateLessonSlotsSection({
             <form
               onSubmit={(event) => {
                 event.preventDefault()
-                createPrivateFixedSlotAssignment()
+                createPrivateFixedSlotAssignment(privateFixedAssignmentBackfillConfirmed)
               }}
               style={{ display: 'grid', gap: 12 }}
             >
@@ -4270,6 +4292,39 @@ export default function PrivateLessonSlotsSection({
                 </p>
               ) : null}
 
+              {privateFixedAssignmentNeedsBackfillConfirmation ? (
+                <div
+                  data-testid="private-fixed-assignment-backfill-confirmation"
+                  style={{
+                    display: 'grid',
+                    gap: 8,
+                    padding: 12,
+                    border: '1px solid #8a6428',
+                    borderRadius: 8,
+                    background: '#2a2113',
+                    color: '#f8d99a',
+                    fontSize: 13,
+                  }}
+                >
+                  <strong data-testid="private-fixed-assignment-backfill-warning">
+                    {formatFixedPrivateAssignmentBackfillWarning(
+                      privateFixedAssignmentPastDateCount
+                    )}
+                  </strong>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={privateFixedAssignmentBackfillConfirmed}
+                      onChange={(event) =>
+                        setPrivateFixedAssignmentBackfillConfirmed(event.target.checked)
+                      }
+                      data-testid="private-fixed-assignment-backfill-checkbox"
+                    />
+                    누락된 과거 수업을 보정하는 배정임을 확인했습니다.
+                  </label>
+                </div>
+              ) : null}
+
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                 <button
                   type="button"
@@ -4289,7 +4344,11 @@ export default function PrivateLessonSlotsSection({
                 </button>
                 <button
                   type="submit"
-                  disabled={busyPrivateFixedSlotAssignment}
+                  disabled={
+                    busyPrivateFixedSlotAssignment ||
+                    (privateFixedAssignmentNeedsBackfillConfirmation &&
+                      !privateFixedAssignmentBackfillConfirmed)
+                  }
                   data-testid="private-fixed-assignment-submit-button"
                   style={{
                     padding: '10px 14px',
@@ -4297,7 +4356,12 @@ export default function PrivateLessonSlotsSection({
                     border: '1px solid #456034',
                     background: '#2d4d2d',
                     color: 'white',
-                    cursor: busyPrivateFixedSlotAssignment ? 'not-allowed' : 'pointer',
+                    cursor:
+                      busyPrivateFixedSlotAssignment ||
+                      (privateFixedAssignmentNeedsBackfillConfirmation &&
+                        !privateFixedAssignmentBackfillConfirmed)
+                        ? 'not-allowed'
+                        : 'pointer',
                   }}
                 >
                   {busyPrivateFixedSlotAssignment ? '배정 중...' : '학생 고정 배정'}
@@ -4344,7 +4408,15 @@ export default function PrivateLessonSlotsSection({
                         <span key={date} data-testid="private-fixed-assignment-preview-date">
                           {date} {privateAvailabilityTemplates.find(
                             (row) => row.id === privateFixedSlotAssignmentForm.templateId
-                          )?.time || ''}
+                          )?.time || ''}{' '}
+                          {isPastFixedPrivateAssignmentDate(
+                            date,
+                            privateFixedSlotAssignmentPreview.todayYmd
+                          ) ? (
+                            <strong data-testid="private-fixed-assignment-backfill-marker">
+                              누락 보정
+                            </strong>
+                          ) : null}
                         </span>
                       ))}
                     </div>

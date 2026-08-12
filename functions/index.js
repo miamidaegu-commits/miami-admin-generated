@@ -1154,6 +1154,10 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     teacherId: plan.teacherId,
     teacherEmail: normalizeId(packageData.teacherEmail),
   };
+  const backfillMetadata = validation.backfill === true ? {
+    backfill: true,
+    pastDateCount: validation.pastDateCount,
+  } : {};
   const fixedBase = {
     academyId: validation.academyId,
     studentId: plan.studentId,
@@ -1178,6 +1182,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     fixedPrivateDeductionLedger: "reservation_v1",
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+    ...backfillMetadata,
   };
   const slot = {
     academyId: validation.academyId,
@@ -1204,6 +1209,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
     fixedPrivateDeductionLedger: "reservation_v1",
+    ...backfillMetadata,
     createdByUid: actor.actorUid,
     startAt: startTimestamp,
     reservedAt: now,
@@ -1237,6 +1243,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     packageTeacherKey: plan.teacherKey || teacher.teacher,
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+    ...backfillMetadata,
     durationMinutes: plan.durationMinutes,
     reservedAt: now,
     createdAt: now,
@@ -1779,13 +1786,30 @@ async function runFixedPrivateRenewalWriteTransaction({
   });
 }
 
+function getFixedPrivateAssignmentMode(data) {
+  if (data.commit === true &&
+      data.dryRun === false &&
+      data.previewOnly === false) {
+    return {commit: true, dryRun: false, previewOnly: false};
+  }
+  if (data.commit === false &&
+      data.dryRun === true &&
+      data.previewOnly === true) {
+    return {commit: false, dryRun: true, previewOnly: true};
+  }
+  throw new HttpsError(
+      "failed-precondition",
+      "Assignment requires exact commit mode or read-only preview mode.",
+  );
+}
+
 function validateFixedPrivateAssignmentPayload(data) {
-  if (data.commit !== true ||
-      data.dryRun !== false ||
-      data.previewOnly !== false) {
+  const mode = getFixedPrivateAssignmentMode(data);
+  if (Object.prototype.hasOwnProperty.call(data, "allowPastDates") &&
+      typeof data.allowPastDates !== "boolean") {
     throw new HttpsError(
-        "failed-precondition",
-        "Assignment requires commit true, dryRun false, and previewOnly false.",
+        "invalid-argument",
+        "allowPastDates must be a boolean when provided.",
     );
   }
   const academyId = requireString(data, "academyId");
@@ -1819,12 +1843,7 @@ function validateFixedPrivateAssignmentPayload(data) {
     );
   }
   const today = getSeoulTodayDateString();
-  if (assignableDates.some((date) => date < today)) {
-    throw new HttpsError(
-        "failed-precondition",
-        "Past fixed private assignments are not allowed.",
-    );
-  }
+  const pastDates = assignableDates.filter((date) => date < today);
   const assignmentBatchIdCandidate = sanitizeFixedPrivateRenewalDocId(
       `fixedPrivateAssignment_${academyId}_${requestId}`,
   );
@@ -1837,7 +1856,22 @@ function validateFixedPrivateAssignmentPayload(data) {
     assignmentBatchIdCandidate,
     subject: normalizeId(data.subject) || "1:1 수업",
     assignableDates,
+    allowPastDates: data.allowPastDates === true,
+    backfill: pastDates.length > 0,
+    pastDates,
+    pastDateCount: pastDates.length,
+    today,
+    ...mode,
   };
+}
+
+function assertFixedPrivateAssignmentPastDateContract(validation) {
+  if (validation.pastDateCount > 0 && validation.allowPastDates !== true) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Past fixed private assignments require allowPastDates true.",
+    );
+  }
 }
 
 function buildFixedPrivateAssignmentIds(validation) {
@@ -1878,7 +1912,7 @@ function buildFixedPrivateAssignmentIds(validation) {
 }
 
 function fixedPrivateAssignmentPayloadHash(validation) {
-  return hashFixedPrivateRenewalPayload({
+  const payload = {
     version: 1,
     academyId: validation.academyId,
     requestId: validation.requestId,
@@ -1887,7 +1921,12 @@ function fixedPrivateAssignmentPayloadHash(validation) {
     packageId: validation.packageId,
     subject: validation.subject,
     assignableDates: validation.assignableDates,
-  });
+  };
+  if (validation.backfill) {
+    payload.backfill = true;
+    payload.pastDateCount = validation.pastDateCount;
+  }
+  return hashFixedPrivateRenewalPayload(payload);
 }
 
 function fixedPrivateAssignmentTeacherFromTemplate(template) {
@@ -1996,22 +2035,54 @@ async function assertNoFixedPrivateAssignmentStudentConflicts({
   }
 }
 
+function buildFixedPrivateAssignmentPreviewResult({
+  validation,
+  ids,
+  normalizedPlan,
+}) {
+  return {
+    ok: true,
+    committed: false,
+    previewOnly: true,
+    dryRun: true,
+    commitRequiredForWrite: true,
+    idempotentReplay: false,
+    requestId: validation.requestId,
+    idempotencyKey: validation.requestId,
+    assignmentBatchIdCandidate: ids.batchId,
+    normalizedPlan,
+    wouldCreate: {
+      fixedPrivateAssignmentBatch: 1,
+      lessons: ids.occurrences.length,
+      privateLessonSlots: ids.occurrences.length,
+      privateLessonReservations: ids.occurrences.length,
+    },
+    ...(validation.backfill ? {
+      backfill: true,
+      pastDateCount: validation.pastDateCount,
+    } : {}),
+  };
+}
+
 async function runFixedPrivateAssignmentWriteTransaction({
   db,
   auth,
   membership,
   validation,
+  commit = true,
 }) {
   const ids = buildFixedPrivateAssignmentIds(validation);
   const payloadHash = fixedPrivateAssignmentPayloadHash(validation);
   const actor = buildAdminActorContext(auth, membership);
   return db.runTransaction(async (transaction) => {
-    await guardAcademyWrite({
-      db,
-      transaction,
-      academyId: validation.academyId,
-      writeSurfaceId: "createFixedPrivateLessonAssignment",
-    });
+    if (commit) {
+      await guardAcademyWrite({
+        db,
+        transaction,
+        academyId: validation.academyId,
+        writeSurfaceId: "createFixedPrivateLessonAssignment",
+      });
+    }
     const batchRef = db.collection("fixedPrivateAssignmentBatches")
         .doc(ids.batchId);
     const studentRef = db.collection("privateStudents")
@@ -2053,6 +2124,23 @@ async function runFixedPrivateAssignmentWriteTransaction({
             "Fixed assignment checkpoint is incomplete.",
         );
       }
+      if (!commit) {
+        return {
+          ...buildFixedPrivateAssignmentPreviewResult({
+            validation,
+            ids,
+            normalizedPlan: checkpoint.normalizedPlan || {
+              academyId: validation.academyId,
+              templateId: validation.templateId,
+              studentId: validation.studentId,
+              packageId: validation.packageId,
+              subject: validation.subject,
+              assignableDates: validation.assignableDates,
+            },
+          }),
+          idempotentReplay: true,
+        };
+      }
       return {
         ok: true,
         committed: true,
@@ -2060,6 +2148,10 @@ async function runFixedPrivateAssignmentWriteTransaction({
         requestId: validation.requestId,
         assignmentBatchIdCandidate: ids.batchId,
         created: checkpoint.created || {},
+        ...(validation.backfill ? {
+          backfill: true,
+          pastDateCount: validation.pastDateCount,
+        } : {}),
       };
     }
     const studentData = assertFixedPrivateRenewalStudent({
@@ -2081,7 +2173,11 @@ async function runFixedPrivateAssignmentWriteTransaction({
     const effectiveValidation = {
       academyId: validation.academyId,
       renewalBatchIdCandidate: validation.assignmentBatchIdCandidate,
+      backfill: validation.backfill,
+      pastDateCount: validation.pastDateCount,
       normalizedPlan: {
+        academyId: validation.academyId,
+        templateId: validation.templateId,
         studentId: validation.studentId,
         ...teacher,
         weekday: Number(template.weekday),
@@ -2137,6 +2233,13 @@ async function runFixedPrivateAssignmentWriteTransaction({
       validation,
       effectiveValidation,
     });
+    if (!commit) {
+      return buildFixedPrivateAssignmentPreviewResult({
+        validation,
+        ids,
+        normalizedPlan: effectiveValidation.normalizedPlan,
+      });
+    }
     const now = admin.firestore.FieldValue.serverTimestamp();
     occurrenceRefs.forEach((refs) => {
       const payloads = buildFixedPrivateRenewalOccurrencePayloads({
@@ -2174,6 +2277,11 @@ async function runFixedPrivateAssignmentWriteTransaction({
       status: "completed",
       created,
       actor,
+      normalizedPlan: effectiveValidation.normalizedPlan,
+      ...(validation.backfill ? {
+        backfill: true,
+        pastDateCount: validation.pastDateCount,
+      } : {}),
       createdAt: now,
       updatedAt: now,
     });
@@ -2184,8 +2292,16 @@ async function runFixedPrivateAssignmentWriteTransaction({
       requestId: validation.requestId,
       assignmentBatchIdCandidate: ids.batchId,
       created,
+      ...(validation.backfill ? {
+        backfill: true,
+        pastDateCount: validation.pastDateCount,
+      } : {}),
     };
   });
+}
+
+function runFixedPrivateAssignmentPreviewTransaction(options) {
+  return runFixedPrivateAssignmentWriteTransaction({...options, commit: false});
 }
 
 const FIXED_PRIVATE_RESCHEDULE_SCOPE_MODES = [
@@ -14492,7 +14608,11 @@ exports.createFixedPrivateLessonAssignment = onCall(
             validation.academyId,
             request.auth.uid,
         );
-        return await runFixedPrivateAssignmentWriteTransaction({
+        assertFixedPrivateAssignmentPastDateContract(validation);
+        const operation = validation.commit ?
+          runFixedPrivateAssignmentWriteTransaction :
+          runFixedPrivateAssignmentPreviewTransaction;
+        return await operation({
           db,
           auth: request.auth,
           membership,

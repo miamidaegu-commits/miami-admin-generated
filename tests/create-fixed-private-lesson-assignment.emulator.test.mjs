@@ -53,6 +53,25 @@ function addUtcDays(ymd, days) {
   return date.toISOString().slice(0, 10);
 }
 
+function seoulToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const byType = new Map(parts.map((part) => [part.type, part.value]));
+  return `${byType.get("year")}-${byType.get("month")}-${byType.get("day")}`;
+}
+
+function backfillWeeklyDates() {
+  const today = seoulToday();
+  return {
+    past: addUtcDays(today, -7),
+    future: [7, 14, 21].map((days) => addUtcDays(today, days)),
+  };
+}
+
 function sortRows(rows) {
   return rows.sort((left, right) => left.id.localeCompare(right.id));
 }
@@ -399,15 +418,26 @@ test("T05 dryRun mode is rejected with zero writes", async () => {
   );
 });
 
-test("T06 previewOnly mode is rejected with zero writes", async () => {
-  const fixture = await seedFixture("t06");
-  await expectErrorWithoutWrites(
-      () => createAssignment({
-        auth: fixture.auth,
-        data: {...fixture.data, previewOnly: true},
-      }),
-      "failed-precondition",
-  );
+test("T06 previewOnly backfill succeeds with zero writes", async () => {
+  const {past} = backfillWeeklyDates();
+  const fixture = await seedFixture("t06", {dates: [past]});
+  const beforeState = await snapshotState();
+  const result = await createAssignment({
+    auth: fixture.auth,
+    data: {
+      ...fixture.data,
+      commit: false,
+      dryRun: true,
+      previewOnly: true,
+      allowPastDates: true,
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.committed, false);
+  assert.equal(result.previewOnly, true);
+  assert.equal(result.dryRun, true);
+  assert.deepEqual(result.normalizedPlan.assignableDates, [past]);
+  assert.equal(await snapshotState(), beforeState);
 });
 
 test("T07 commit false is rejected with zero writes", async () => {
@@ -629,3 +659,140 @@ test("T17 mismatched academy auth claim is denied with zero writes", async () =>
       "permission-denied",
   );
 });
+
+test("B01 past dates without allowPastDates reject with all writes zero",
+    async () => {
+      const {past} = backfillWeeklyDates();
+      const fixture = await seedFixture("b01", {dates: [past]});
+      await expectErrorWithoutWrites(
+          () => createAssignment({auth: fixture.auth, data: fixture.data}),
+          "failed-precondition",
+      );
+    });
+
+test("B02 past preview with allowPastDates returns all dates and writes zero",
+    async () => {
+      const {past, future} = backfillWeeklyDates();
+      const dates = [past, ...future];
+      const fixture = await seedFixture("b02", {dates});
+      const beforeState = await snapshotState();
+      const result = await createAssignment({
+        auth: fixture.auth,
+        data: {
+          ...fixture.data,
+          commit: false,
+          dryRun: true,
+          previewOnly: true,
+          allowPastDates: true,
+        },
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.committed, false);
+      assert.equal(result.previewOnly, true);
+      assert.equal(result.dryRun, true);
+      assert.equal(result.backfill, true);
+      assert.equal(result.pastDateCount, 1);
+      assert.deepEqual(result.normalizedPlan.assignableDates, dates);
+      assert.deepEqual(result.wouldCreate, {
+        fixedPrivateAssignmentBatch: 1,
+        lessons: 4,
+        privateLessonSlots: 4,
+        privateLessonReservations: 4,
+      });
+      assert.equal(await snapshotState(), beforeState);
+    });
+
+test("B03 mixed backfill commit creates four linked active records atomically",
+    async () => {
+      const {past, future} = backfillWeeklyDates();
+      const dates = [past, ...future];
+      const fixture = await seedFixture("b03", {dates});
+      const result = await createAssignment({
+        auth: fixture.auth,
+        data: {...fixture.data, allowPastDates: true},
+      });
+      assert.equal(result.backfill, true);
+      assert.equal(result.pastDateCount, 1);
+      const created = await assertCreatedLinks(fixture, result, 4);
+      assert.equal(created.batches[0].data.backfill, true);
+      assert.equal(created.batches[0].data.pastDateCount, 1);
+      for (const row of [
+        ...created.lessons,
+        ...created.slots,
+        ...created.reservations,
+      ]) {
+        assert.equal(row.data.backfill, true);
+        assert.equal(row.data.pastDateCount, 1);
+      }
+      for (const lesson of created.lessons) {
+        assert.equal(lesson.data.status, "active");
+        assert.equal(lesson.data.deductionApplied, false);
+      }
+      for (const reservation of created.reservations) {
+        assert.equal(reservation.data.status, "active");
+        assert.equal(reservation.data.deductionApplied, false);
+      }
+    });
+
+test("B04 same backfill requestId replay creates no duplicate rows", async () => {
+  const {past, future} = backfillWeeklyDates();
+  const fixture = await seedFixture("b04", {dates: [past, ...future]});
+  const data = {...fixture.data, allowPastDates: true};
+  const first = await createAssignment({auth: fixture.auth, data});
+  const beforeReplay = await snapshotState();
+  const replay = await createAssignment({auth: fixture.auth, data});
+  assert.equal(replay.idempotentReplay, true);
+  assert.deepEqual(replay.created, first.created);
+  assert.equal(await snapshotState(), beforeReplay);
+});
+
+test("B05 unauthorized and academy-mismatched backfill requests write zero",
+    async () => {
+      const {past} = backfillWeeklyDates();
+      const unauthorized = await seedFixture("b05-role", {dates: [past]});
+      await expectErrorWithoutWrites(
+          () => createAssignment({
+            auth: {
+              uid: unauthorized.nonAdminUid,
+              token: {
+                academyId: unauthorized.academyId,
+                role: "student",
+              },
+            },
+            data: {...unauthorized.data, allowPastDates: true},
+          }),
+          "permission-denied",
+      );
+
+      const mismatch = await seedFixture("b05-academy", {dates: [past]});
+      await expectErrorWithoutWrites(
+          () => createAssignment({
+            auth: {
+              ...mismatch.auth,
+              token: {
+                ...mismatch.auth.token,
+                academyId: `${mismatch.academyId}-other`,
+              },
+            },
+            data: {...mismatch.data, allowPastDates: true},
+          }),
+          "permission-denied",
+      );
+    });
+
+test("B06 malformed duplicate dates and non-boolean flag reject with writes zero",
+    async () => {
+      const {past} = backfillWeeklyDates();
+      const fixture = await seedFixture("b06", {dates: [past]});
+      const cases = [
+        {...fixture.data, assignableDates: ["not-a-date"], allowPastDates: true},
+        {...fixture.data, assignableDates: [past, past], allowPastDates: true},
+        {...fixture.data, allowPastDates: "true"},
+      ];
+      for (const data of cases) {
+        await expectErrorWithoutWrites(
+            () => createAssignment({auth: fixture.auth, data}),
+            "invalid-argument",
+        );
+      }
+    });

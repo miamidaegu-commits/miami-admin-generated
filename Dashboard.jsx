@@ -74,6 +74,12 @@ import {
   resolveTeacherDisplayName,
   sanitizePhoneForTel,
 } from './src/features/dashboard/dashboardViewUtils.js'
+import {
+  buildFixedPrivateAssignmentCallablePayload,
+  canCommitFixedPrivateAssignmentBackfill,
+  classifyFixedPrivateAssignmentDates,
+  formatFixedPrivateAssignmentBackfillWarning,
+} from './src/features/dashboard/privateFixedAssignmentBackfill.js'
 import { resolveGroupLessonSubject } from './src/features/dashboard/groupClassRoomUtils.js'
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
 import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedulePanel.jsx'
@@ -5901,11 +5907,6 @@ export default function Dashboard() {
       if (dates.length === 0) errors.dateRange = '기간 안에 생성할 수업이 없습니다'
     }
 
-    const pastDates = dates.filter((date) => date < today)
-    if (pastDates.length > 0) {
-      errors.dateRange = '과거 날짜에는 고정 1:1 수업을 생성할 수 없습니다'
-    }
-
     const blockingReasons = []
     const conflictDetails = []
     const duplicateDetails = []
@@ -6038,6 +6039,10 @@ export default function Dashboard() {
       }
     }
 
+    const { pastDates, pastDateCount } = classifyFixedPrivateAssignmentDates(
+      assignableDates,
+      today
+    )
     const uniqueBlockingReasons = Array.from(new Set(blockingReasons))
     const valid = Object.keys(errors).length === 0 && uniqueBlockingReasons.length === 0
     return {
@@ -6051,6 +6056,9 @@ export default function Dashboard() {
       dates: assignableDates,
       requestedDates: dates,
       assignableDates,
+      pastDates,
+      pastDateCount,
+      todayYmd: today,
       excludedDates,
       durationMinutes: safeDurationMinutes,
       blockingReasons: uniqueBlockingReasons,
@@ -6078,22 +6086,68 @@ export default function Dashboard() {
       requestedCount: previewDates.length,
       candidateCount: (plan.requestedDates || []).length,
       excludedCount: (plan.excludedDates || []).length,
+      pastDateCount: plan.pastDateCount || 0,
+      todayYmd: plan.todayYmd,
       canCreate: plan.valid,
     }
   }
 
-  function previewPrivateFixedSlotAssignment() {
+  async function previewPrivateFixedSlotAssignment() {
+    const plan = buildPrivateFixedSlotAssignmentPlan()
+    setPrivateFixedSlotAssignmentErrors(plan.errors)
+    const localPreview = buildPrivateFixedSlotAssignmentPreviewState(plan)
+    setPrivateFixedSlotAssignmentPreview(localPreview)
+    if (!plan.valid) return
+
     try {
-      const plan = buildPrivateFixedSlotAssignmentPlan()
-      setPrivateFixedSlotAssignmentErrors(plan.errors)
-      setPrivateFixedSlotAssignmentPreview(buildPrivateFixedSlotAssignmentPreviewState(plan))
+      setBusyPrivateFixedSlotAssignment(true)
+      const requestId = `fixed-private-assignment-preview-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonAssignment')
+      const payload = buildFixedPrivateAssignmentCallablePayload(
+        {
+          academyId: scopedAcademyId,
+          requestId,
+          templateId: String(plan.template?.id || '').trim(),
+          studentId: String(plan.student?.id || '').trim(),
+          packageId: String(plan.selectedPackage?.id || '').trim(),
+          subject: plan.subject,
+          assignableDates: plan.assignableDates,
+        },
+        { previewOnly: true, pastDateCount: plan.pastDateCount }
+      )
+      const result = await callable(payload)
+      const previewData = result?.data || null
+      if (
+        previewData?.ok !== true ||
+        previewData?.previewOnly !== true ||
+        previewData?.dryRun !== true ||
+        previewData?.committed === true
+      ) {
+        throw new Error('서버가 읽기 전용 고정 배정 미리보기를 반환하지 않았습니다.')
+      }
+      setPrivateFixedSlotAssignmentPreview({
+        ...localPreview,
+        serverPreview: previewData,
+      })
     } catch (error) {
       console.error('고정 1:1 수업 배정 미리보기 실패:', error)
-      alert(`고정 1:1 수업 배정 미리보기 실패: ${error.message}`)
+      setPrivateFixedSlotAssignmentPreview({
+        ...localPreview,
+        canCreate: false,
+        blockingReasons: [
+          ...localPreview.blockingReasons,
+          error?.message || '서버 미리보기에 실패했습니다.',
+        ],
+      })
+    } finally {
+      setBusyPrivateFixedSlotAssignment(false)
     }
   }
 
-  async function createPrivateFixedSlotAssignment() {
+  async function createPrivateFixedSlotAssignment(backfillConfirmed = false) {
     if (!isAdmin) {
       alert('고정 1:1 수업 배정은 관리자만 생성할 수 있습니다.')
       return
@@ -6102,6 +6156,12 @@ export default function Dashboard() {
     setPrivateFixedSlotAssignmentErrors(plan.errors)
     setPrivateFixedSlotAssignmentPreview(buildPrivateFixedSlotAssignmentPreviewState(plan))
     if (!plan.valid) return
+    if (
+      !canCommitFixedPrivateAssignmentBackfill(plan.pastDateCount, backfillConfirmed)
+    ) {
+      alert(formatFixedPrivateAssignmentBackfillWarning(plan.pastDateCount))
+      return
+    }
 
     try {
       setBusyPrivateFixedSlotAssignment(true)
@@ -6110,18 +6170,19 @@ export default function Dashboard() {
         .slice(2, 10)}`
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonAssignment')
-      await callable({
-        academyId: scopedAcademyId,
-        requestId,
-        templateId: String(plan.template?.id || '').trim(),
-        studentId: String(plan.student?.id || '').trim(),
-        packageId: String(plan.selectedPackage?.id || '').trim(),
-        subject: plan.subject,
-        assignableDates: plan.assignableDates,
-        commit: true,
-        dryRun: false,
-        previewOnly: false,
-      })
+      const payload = buildFixedPrivateAssignmentCallablePayload(
+        {
+          academyId: scopedAcademyId,
+          requestId,
+          templateId: String(plan.template?.id || '').trim(),
+          studentId: String(plan.student?.id || '').trim(),
+          packageId: String(plan.selectedPackage?.id || '').trim(),
+          subject: plan.subject,
+          assignableDates: plan.assignableDates,
+        },
+        { pastDateCount: plan.pastDateCount }
+      )
+      await callable(payload)
       setPrivateFixedSlotAssignmentPreview({
         mode: 'created',
         dates: plan.assignableDates,
@@ -6134,6 +6195,8 @@ export default function Dashboard() {
         requestedCount: plan.assignableDates.length,
         candidateCount: (plan.requestedDates || []).length,
         excludedCount: (plan.excludedDates || []).length,
+        pastDateCount: plan.pastDateCount,
+        todayYmd: plan.todayYmd,
         canCreate: false,
       })
       setPrivateFixedSlotAssignmentForm((prev) => ({
