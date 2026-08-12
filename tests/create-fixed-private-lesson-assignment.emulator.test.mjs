@@ -251,7 +251,6 @@ async function seedFixture(label, {
   const auth = {
     uid: adminUid,
     token: {
-      academyId,
       role: "owner",
       name: `Synthetic Admin ${key}`,
     },
@@ -357,7 +356,7 @@ test("T02 non-admin is denied with zero writes", async () => {
       () => createAssignment({
         auth: {
           uid: fixture.nonAdminUid,
-          token: {academyId: fixture.academyId, role: "student"},
+          token: {role: "student"},
         },
         data: fixture.data,
       }),
@@ -645,17 +644,14 @@ test("T16 invalid assignableDates variants reject with zero writes", async () =>
   }
 });
 
-test("T17 mismatched academy auth claim is denied with zero writes", async () => {
+test("T17 valid role without requested academy membership writes zero",
+    async () => {
   const fixture = await seedFixture("t17");
-  const mismatchedAuth = {
-    ...fixture.auth,
-    token: {
-      ...fixture.auth.token,
-      academyId: `${fixture.academyId}-other`,
-    },
-  };
+  await db.collection("academyMemberships")
+      .doc(`${fixture.academyId}_${fixture.adminUid}`)
+      .delete();
   await expectErrorWithoutWrites(
-      () => createAssignment({auth: mismatchedAuth, data: fixture.data}),
+      () => createAssignment({auth: fixture.auth, data: fixture.data}),
       "permission-denied",
   );
 });
@@ -754,10 +750,7 @@ test("B05 unauthorized and academy-mismatched backfill requests write zero",
           () => createAssignment({
             auth: {
               uid: unauthorized.nonAdminUid,
-              token: {
-                academyId: unauthorized.academyId,
-                role: "student",
-              },
+              token: {role: "student"},
             },
             data: {...unauthorized.data, allowPastDates: true},
           }),
@@ -765,16 +758,11 @@ test("B05 unauthorized and academy-mismatched backfill requests write zero",
       );
 
       const mismatch = await seedFixture("b05-academy", {dates: [past]});
+      const other = await seedFixture("b05-academy-other", {dates: [past]});
       await expectErrorWithoutWrites(
           () => createAssignment({
-            auth: {
-              ...mismatch.auth,
-              token: {
-                ...mismatch.auth.token,
-                academyId: `${mismatch.academyId}-other`,
-              },
-            },
-            data: {...mismatch.data, allowPastDates: true},
+            auth: mismatch.auth,
+            data: {...other.data, allowPastDates: true},
           }),
           "permission-denied",
       );
@@ -795,4 +783,142 @@ test("B06 malformed duplicate dates and non-boolean flag reject with writes zero
             "invalid-argument",
         );
       }
+    });
+
+test("M01 canonical role only and active membership preview writes zero",
+    async () => {
+      const fixture = await seedFixture("m01");
+      const beforeState = await snapshotState();
+      const result = await createAssignment({
+        auth: fixture.auth,
+        data: {
+          ...fixture.data,
+          commit: false,
+          dryRun: true,
+          previewOnly: true,
+        },
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.committed, false);
+      assert.equal(result.previewOnly, true);
+      assert.equal(result.dryRun, true);
+      assert.equal(result.normalizedPlan.academyId, fixture.academyId);
+      assert.equal(await snapshotState(), beforeState);
+    });
+
+test("M02 academy A membership cannot authorize academy B request",
+    async () => {
+      const academyA = await seedFixture("m02-a");
+      const academyB = await seedFixture("m02-b");
+      await expectErrorWithoutWrites(
+          () => createAssignment({
+            auth: academyA.auth,
+            data: {
+              ...academyB.data,
+              commit: false,
+              dryRun: true,
+              previewOnly: true,
+            },
+          }),
+          "permission-denied",
+      );
+    });
+
+test("M03 active A and B memberships authorize scoped previews with zero writes",
+    async () => {
+      const academyA = await seedFixture("m03-a");
+      const academyB = await seedFixture("m03-b");
+      await db.collection("academyMemberships")
+          .doc(`${academyB.academyId}_${academyA.adminUid}`)
+          .set({
+            academyId: academyB.academyId,
+            uid: academyA.adminUid,
+            role: "owner",
+            status: "active",
+            displayName: `Synthetic Multi Academy ${academyA.key}`,
+          });
+      const previewData = (fixture) => ({
+        ...fixture.data,
+        commit: false,
+        dryRun: true,
+        previewOnly: true,
+      });
+
+      const beforeAcademyA = await snapshotState();
+      const academyAResult = await createAssignment({
+        auth: academyA.auth,
+        data: previewData(academyA),
+      });
+      assert.equal(academyAResult.ok, true);
+      assert.equal(academyAResult.committed, false);
+      assert.equal(
+          academyAResult.normalizedPlan.academyId,
+          academyA.academyId,
+      );
+      assert.equal(await snapshotState(), beforeAcademyA);
+
+      const beforeAcademyB = await snapshotState();
+      const academyBResult = await createAssignment({
+        auth: academyA.auth,
+        data: previewData(academyB),
+      });
+      assert.equal(academyBResult.ok, true);
+      assert.equal(academyBResult.committed, false);
+      assert.equal(
+          academyBResult.normalizedPlan.academyId,
+          academyB.academyId,
+      );
+      assert.equal(await snapshotState(), beforeAcademyB);
+    });
+
+test("M04 active membership without allowed role is denied with zero writes",
+    async () => {
+      const fixture = await seedFixture("m04");
+      await expectErrorWithoutWrites(
+          () => createAssignment({
+            auth: {
+              uid: fixture.adminUid,
+              token: {role: "student"},
+            },
+            data: {
+              ...fixture.data,
+              commit: false,
+              dryRun: true,
+              previewOnly: true,
+            },
+          }),
+          "permission-denied",
+      );
+    });
+
+test("M05 mixed past and future preview returns four and writes zero",
+    async () => {
+      const {past, future} = backfillWeeklyDates();
+      const dates = [past, ...future];
+      const fixture = await seedFixture("m05", {dates});
+      const beforeState = await snapshotState();
+      const result = await createAssignment({
+        auth: fixture.auth,
+        data: {
+          ...fixture.data,
+          commit: false,
+          dryRun: true,
+          previewOnly: true,
+          allowPastDates: true,
+        },
+      });
+      assert.equal(result.ok, true);
+      assert.equal(result.committed, false);
+      assert.equal(result.previewOnly, true);
+      assert.equal(result.dryRun, true);
+      assert.equal(result.backfill, true);
+      assert.equal(result.pastDateCount, 1);
+      assert.deepEqual(result.normalizedPlan.assignableDates, dates);
+      assert.deepEqual(result.wouldCreate, {
+        fixedPrivateAssignmentBatch: 1,
+        lessons: 4,
+        privateLessonSlots: 4,
+        privateLessonReservations: 4,
+      });
+      assert.equal(await snapshotState(), beforeState);
     });

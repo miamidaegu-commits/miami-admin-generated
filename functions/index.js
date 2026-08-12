@@ -14593,13 +14593,14 @@ exports.createFixedPrivateLessonAssignment = onCall(
         const validation = validateFixedPrivateAssignmentPayload(
             request.data || {},
         );
-        const authAcademyId = normalizeId(
-            request.auth.token && request.auth.token.academyId,
-        );
-        if (!authAcademyId || authAcademyId !== validation.academyId) {
+        const authRole = request.auth.token &&
+          typeof request.auth.token.role === "string" ?
+          request.auth.token.role.trim().toLowerCase() :
+          "";
+        if (!["owner", "admin"].includes(authRole)) {
           throw new HttpsError(
               "permission-denied",
-              "Authenticated academy does not match request.",
+              "Authenticated owner/admin role required.",
           );
         }
         const db = admin.firestore();
