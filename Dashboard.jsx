@@ -111,7 +111,9 @@ import PrivateLessonModal from './src/features/dashboard/modals/PrivateLessonMod
 import PrivateLessonEditModal from './src/features/dashboard/modals/PrivateLessonEditModal.jsx'
 import useStudentsSectionViewModel from './src/features/dashboard/hooks/useStudentsSectionViewModel.js'
 import useGroupsSectionViewModel from './src/features/dashboard/hooks/useGroupsSectionViewModel.js'
-import useCalendarSectionViewModel from './src/features/dashboard/hooks/useCalendarSectionViewModel.js'
+import useCalendarSectionViewModel, {
+  buildCalendarTeacherFilterOptions,
+} from './src/features/dashboard/hooks/useCalendarSectionViewModel.js'
 import useGroupScheduleRebuildFlow from './src/features/dashboard/hooks/useGroupScheduleRebuildFlow.js'
 import useGroupLessonManagementFlow from './src/features/dashboard/hooks/useGroupLessonManagementFlow.js'
 import useGroupAttendanceFlow from './src/features/dashboard/hooks/useGroupAttendanceFlow.js'
@@ -3600,6 +3602,7 @@ export default function Dashboard() {
   })
 
   const isAdmin = isDashboardAdminProfile(userProfile)
+  const includeOpenPrivateSlots = isAdmin
   const canViewPaymentFields = canViewBillingFields(userProfile)
   const teacherGroupClassKey = normalizeText(userProfile?.teacherName || '')
   const canManageOwnGroupClasses =
@@ -3621,67 +3624,14 @@ export default function Dashboard() {
   const busyGroupStudentId = busyRemovingGroupStudentId || busyAddingGroupStudentId
 
   const calendarTeacherFilterOptions = useMemo(() => {
-    const optionByValue = new Map()
-    const valueByIdentityKey = new Map()
-
-    const addTeacherCandidate = (row, preferredDisplayName = '') => {
-      if (!row) return
-      const identityKeys = getPrivateTeacherIdentityKeys(row)
-      if (identityKeys.length === 0) return
-      const existingValue = identityKeys
-        .map((key) => valueByIdentityKey.get(key))
-        .find(Boolean)
-      const value = existingValue || identityKeys[0]
-      const displayName = String(
-        preferredDisplayName ||
-          row.name ||
-          row.displayName ||
-          row.teacherName ||
-          row.teacher ||
-          row.teacherKey ||
-          row.teacherEmail ||
-          value
-      ).trim()
-      if (!displayName) return
-      if (!optionByValue.has(value)) {
-        const teacherUid = String(
-          row.teacherUid ||
-            row.teacherUID ||
-            row.teacherMembershipUid ||
-            row.uid ||
-            ''
-        ).trim()
-        const teacherKey = normalizeText(row.teacherKey || row.teacher || row.teacherName || '')
-        optionByValue.set(value, {
-          value,
-          label: displayName,
-          displayName,
-          name: displayName,
-          teacher: String(row.teacher || teacherKey || displayName).trim(),
-          teacherName: String(row.teacherName || row.teacher || displayName).trim(),
-          teacherKey,
-          teacherUid,
-          teacherUID: teacherUid,
-          teacherId: String(row.teacherId || row.teacherID || row.id || '').trim(),
-          teacherEmail: String(row.teacherEmail || row.email || '').trim(),
-        })
-      }
-      identityKeys.forEach((key) => valueByIdentityKey.set(key, value))
-    }
-
-    teacherManagementTeachers.forEach((teacher) => {
-      if (String(teacher?.status || 'active') === 'inactive') return
-      addTeacherCandidate(teacher, getTeacherDisplayName(teacher))
+    return buildCalendarTeacherFilterOptions({
+      teacherManagementTeachers,
+      lessons,
+      groupClasses,
+      groupLessons: studentSummaryGroupLessons,
+      privateLessonSlots,
+      privateLessonReservations,
     })
-    lessons.forEach((lesson) => addTeacherCandidate(lesson))
-    groupClasses.forEach((groupClass) => addTeacherCandidate(groupClass))
-    studentSummaryGroupLessons.forEach((groupLesson) => addTeacherCandidate(groupLesson))
-    privateLessonSlots.forEach((slot) => addTeacherCandidate(slot))
-    privateLessonReservations.forEach((reservation) => addTeacherCandidate(reservation))
-
-    return [...optionByValue.values()].sort((a, b) =>
-      String(a.label || '').localeCompare(String(b.label || ''), 'ko')
-    )
   }, [
     groupClasses,
     lessons,
@@ -3699,18 +3649,24 @@ export default function Dashboard() {
     if (!hasSelectedTeacher) setCalendarTeacherFilterValue('')
   }, [calendarTeacherFilterOptions, calendarTeacherFilterValue])
 
+  const selectedCalendarTeacherUid =
+    isAdmin && calendarTeacherFilterValue ? calendarTeacherFilterValue : null
   const selectedCalendarTeacher = useMemo(() => {
-    if (!isAdmin || !calendarTeacherFilterValue) return null
+    if (!selectedCalendarTeacherUid) return null
     return (
-      calendarTeacherFilterOptions.find((option) => option.value === calendarTeacherFilterValue) ||
-      null
+      calendarTeacherFilterOptions.find(
+        (option) => option.value === selectedCalendarTeacherUid
+      ) || null
     )
-  }, [calendarTeacherFilterOptions, calendarTeacherFilterValue, isAdmin])
+  }, [calendarTeacherFilterOptions, selectedCalendarTeacherUid])
 
   const selectedCalendarTeacherScope = useMemo(() => {
-    if (!selectedCalendarTeacher) return null
-    return getTeacherScopeFromRecord(selectedCalendarTeacher)
-  }, [selectedCalendarTeacher])
+    if (!selectedCalendarTeacherUid) return null
+    return {
+      teacherUid: selectedCalendarTeacherUid,
+      teacherUID: selectedCalendarTeacherUid,
+    }
+  }, [selectedCalendarTeacherUid])
 
   const todayGroupLessonById = useMemo(() => {
     return new Map(todayGroupLessons.map((lesson) => [lesson.id, lesson]))
@@ -4293,8 +4249,8 @@ export default function Dashboard() {
     lessonsCountByDate,
     lessonsPreviewByDate,
     displayedLessons,
-    calendarCombinedLessons,
-    allCalendarCombinedLessons,
+    calendarInstructionalLessons,
+    allCalendarInstructionalLessons,
   } =
     useCalendarSectionViewModel({
       lessons,
@@ -4305,28 +4261,37 @@ export default function Dashboard() {
       selectedDateString,
       showOnlySelectedDate,
       userProfile,
-      selectedCalendarTeacher,
+      selectedCalendarTeacherUid,
+      includeOpenPrivateSlots,
+      currentAcademyId,
+      calendarMonth,
     })
 
   const lessonCountStats = useMemo(
     () =>
       buildLessonOccurrenceStats({
-        rows: calendarCombinedLessons,
+        rows: calendarInstructionalLessons,
         monthDate: calendarMonth,
         todayYmd,
       }),
-    [calendarCombinedLessons, calendarMonth, todayYmd]
+    [calendarInstructionalLessons, calendarMonth, todayYmd]
   )
 
   const teacherLessonCountStats = useMemo(() => {
     if (!isAdmin) return null
     return buildTeacherLessonOccurrenceStats({
-      rows: allCalendarCombinedLessons,
+      rows: allCalendarInstructionalLessons,
       teachers: calendarTeacherFilterOptions,
       monthDate: calendarMonth,
       todayYmd,
     })
-  }, [allCalendarCombinedLessons, calendarMonth, calendarTeacherFilterOptions, isAdmin, todayYmd])
+  }, [
+    allCalendarInstructionalLessons,
+    calendarMonth,
+    calendarTeacherFilterOptions,
+    isAdmin,
+    todayYmd,
+  ])
 
   const activeLessonCountStats = useMemo(
     () => flattenLessonOccurrenceStats(lessonCountStats),
@@ -6841,6 +6806,9 @@ export default function Dashboard() {
       openStudentPackageEditModal,
       canEditStudentPackageCountsForPackage,
       onOpenFixedRescheduleScopePreview: openCalendarFixedRescheduleScopePreview,
+      onOpenPrivateSlotManagement: includeOpenPrivateSlots
+        ? () => setActiveSection('privateSlots')
+        : undefined,
     },
   }
 

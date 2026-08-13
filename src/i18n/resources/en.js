@@ -128,6 +128,7 @@ const en = {
   'teacher.calendar.showAll': 'Show all',
   'teacher.calendar.showSelected': 'Show selected date',
   'teacher.calendar.empty': 'No lessons to display.',
+  'teacher.calendar.openPrivateSlot.title': 'Private lesson available',
   'teacher.calendar.header.studentOrClass': 'Student / class',
   'teacher.calendar.header.remaining': 'Remaining',
   'teacher.calendar.badge.group': 'Group',

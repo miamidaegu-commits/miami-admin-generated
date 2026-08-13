@@ -3,6 +3,8 @@ import {
   getGroupLessonGroupId,
   getLessonDate,
   getLessonStorageDateString,
+  getCalendarDays,
+  getStorageDateStringFromDate,
   getTodayStorageDateString,
   formatLessonSessionNumber,
   getStudentName,
@@ -12,11 +14,11 @@ import {
   isNoDeductionCancelledGroupLesson,
   normalizeText,
 } from '../dashboardViewUtils.js'
+import { rowMatchesTeacherScope } from '../teacherLessonRosterHelpers.js'
 import {
-  getTeacherScopeFromRecord,
-  rowMatchesTeacherScope,
-} from '../teacherLessonRosterHelpers.js'
-import { isCountablePrivateReservationStatus } from '../lessonOccurrenceStats.js'
+  isCountableLessonOccurrence,
+  isCountablePrivateReservationStatus,
+} from '../lessonOccurrenceStats.js'
 
 /**
  * 캘린더 탭 전용: 개인/그룹 수업 통합·필터·일자별 집계 등 읽기 전용 파생 상태.
@@ -107,6 +109,486 @@ function sortCalendarRows(rows) {
     return aDate.getTime() - bDate.getTime()
   })
   return all
+}
+
+const OPEN_PRIVATE_SLOT_MIN_DURATION_MINUTES = 10
+const OPEN_PRIVATE_SLOT_MAX_DURATION_MINUTES = 240
+const OPEN_PRIVATE_SLOT_LINK_FIELDS = [
+  'reservationId',
+  'privateLessonReservationId',
+  'privateReservationId',
+  'reservation',
+  'reservationRef',
+  'lessonId',
+  'fixedLessonId',
+  'privateLessonId',
+  'sourceLessonId',
+  'lesson',
+  'lessonRef',
+]
+const OPEN_PRIVATE_SLOT_FIXED_TEMPLATE_FIELDS = [
+  'availabilityTemplateId',
+  'privateLessonAvailabilityTemplateId',
+  'templateId',
+  'fixedStudentId',
+  'fixedStudentName',
+  'fixedPrivateAssignmentBatchId',
+  'fixedPrivateDeductionLedger',
+  'packageId',
+  'deductionPackageId',
+  'linkedPackageId',
+  'fixedPrivatePackageId',
+]
+const OPEN_PRIVATE_SLOT_RELEASE_FIELDS = [
+  'releasedByStudentId',
+  'releasedFromFixedLessonId',
+  'releasedAt',
+  'releasedBy',
+  'releasedByUid',
+  'releasedByRole',
+  'releasedByName',
+  'releaseReason',
+]
+const OPEN_PRIVATE_SLOT_CLOSED_FIELDS = [
+  'blockedAt',
+  'blockReason',
+  'closedReason',
+  'unavailableReason',
+  'cancellationReason',
+  'cancelledReason',
+]
+const NON_RENDERABLE_PRIVATE_EVENT_STATUSES = new Set([
+  'cancelled',
+  'canceled',
+  'void',
+  'released',
+  'seat_released',
+  'reversed',
+  'inactive',
+])
+const PRIVATE_EVENT_SLOT_ID_FIELDS = ['slotId', 'privateLessonSlotId', 'privateSlotId']
+const PRIVATE_EVENT_TEACHER_UID_FIELDS = ['teacherUid', 'teacherUID']
+const CALENDAR_TEACHER_OPTION_UID_FIELDS = [
+  'teacherUid',
+  'teacherUID',
+  'teacherMembershipUid',
+]
+const CALENDAR_TEACHER_OPTION_LABEL_FIELDS = [
+  'name',
+  'displayName',
+  'teacherName',
+  'teacher',
+  'teacherKey',
+  'teacherEmail',
+  'email',
+]
+
+function hasOwn(record, field) {
+  return Object.prototype.hasOwnProperty.call(record, field)
+}
+
+function timestampToMillis(value) {
+  if (!value) return null
+  if (Array.isArray(value)) return null
+  try {
+    if (typeof value.toMillis === 'function') {
+      const millis = value.toMillis()
+      return typeof millis === 'number' && Number.isFinite(millis) && Number.isInteger(millis)
+        ? millis
+        : null
+    }
+    if (typeof value.toDate === 'function') {
+      const date = value.toDate()
+      const millis = date instanceof Date ? date.getTime() : NaN
+      return Number.isFinite(millis) && Number.isInteger(millis) ? millis : null
+    }
+  } catch {
+    return null
+  }
+  if (value instanceof Date) {
+    const millis = value.getTime()
+    return Number.isFinite(millis) && Number.isInteger(millis) ? millis : null
+  }
+  if (typeof value === 'object' && value.seconds != null) {
+    const seconds = value.seconds
+    const nanoseconds = hasOwn(value, 'nanoseconds') ? value.nanoseconds : 0
+    if (
+      typeof seconds !== 'number' ||
+      !Number.isFinite(seconds) ||
+      !Number.isInteger(seconds) ||
+      typeof nanoseconds !== 'number' ||
+      !Number.isFinite(nanoseconds) ||
+      !Number.isInteger(nanoseconds) ||
+      nanoseconds < 0 ||
+      nanoseconds > 999999999
+    ) {
+      return null
+    }
+    const millis = seconds * 1000 + nanoseconds / 1000000
+    return Number.isFinite(millis) && Number.isInteger(millis) ? millis : null
+  }
+  return null
+}
+
+function canonicalKstDateTimeMillis(dateValue, timeValue) {
+  const date = String(dateValue || '')
+  const time = String(timeValue || '')
+  const dateMatch = date.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  const timeMatch = time.match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  if (!dateMatch || !timeMatch) return null
+  const year = Number(dateMatch[1])
+  const month = Number(dateMatch[2])
+  const day = Number(dateMatch[3])
+  const hour = Number(timeMatch[1])
+  const minute = Number(timeMatch[2])
+  const millis = Date.UTC(year, month - 1, day, hour - 9, minute, 0, 0)
+  const kst = new Date(millis + 9 * 60 * 60 * 1000)
+  if (
+    kst.getUTCFullYear() !== year ||
+    kst.getUTCMonth() + 1 !== month ||
+    kst.getUTCDate() !== day ||
+    kst.getUTCHours() !== hour ||
+    kst.getUTCMinutes() !== minute
+  ) {
+    return null
+  }
+  return millis
+}
+
+function formatKstTimeFromMillis(millis) {
+  const kst = new Date(millis + 9 * 60 * 60 * 1000)
+  return `${String(kst.getUTCHours()).padStart(2, '0')}:${String(
+    kst.getUTCMinutes()
+  ).padStart(2, '0')}`
+}
+
+function getCanonicalPrivateEventTeacherUid(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return ''
+  const uids = new Set()
+  let aliasCount = 0
+  for (const field of PRIVATE_EVENT_TEACHER_UID_FIELDS) {
+    if (!hasOwn(row, field)) continue
+    aliasCount += 1
+    const uid = row[field]
+    if (typeof uid !== 'string' || !uid || uid !== uid.trim()) return ''
+    uids.add(uid)
+  }
+  return aliasCount > 0 && uids.size === 1 ? [...uids][0] : ''
+}
+
+function getCanonicalCalendarTeacherOptionUid(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return ''
+  const uids = new Set()
+  let aliasCount = 0
+  for (const field of CALENDAR_TEACHER_OPTION_UID_FIELDS) {
+    if (!hasOwn(row, field)) continue
+    aliasCount += 1
+    const uid = row[field]
+    if (typeof uid !== 'string' || !uid || uid !== uid.trim()) return ''
+    uids.add(uid)
+  }
+  return aliasCount > 0 && uids.size === 1 ? [...uids][0] : ''
+}
+
+function getCalendarTeacherOptionLabelCandidate(row) {
+  for (const [rank, field] of CALENDAR_TEACHER_OPTION_LABEL_FIELDS.entries()) {
+    const value = row?.[field]
+    if (typeof value !== 'string') continue
+    const label = value.trim()
+    if (label) return { label, rank }
+  }
+  return { label: '-', rank: CALENDAR_TEACHER_OPTION_LABEL_FIELDS.length }
+}
+
+export function buildCalendarTeacherFilterOptions({
+  teacherManagementTeachers = [],
+  lessons = [],
+  groupClasses = [],
+  groupLessons = [],
+  privateLessonSlots = [],
+  privateLessonReservations = [],
+} = {}) {
+  const candidates = [
+    ...(Array.isArray(teacherManagementTeachers)
+      ? teacherManagementTeachers.filter((row) => row?.status !== 'inactive')
+      : []),
+    ...(Array.isArray(lessons) ? lessons : []),
+    ...(Array.isArray(groupClasses) ? groupClasses : []),
+    ...(Array.isArray(groupLessons) ? groupLessons : []),
+    ...(Array.isArray(privateLessonSlots) ? privateLessonSlots : []),
+    ...(Array.isArray(privateLessonReservations) ? privateLessonReservations : []),
+  ]
+  const optionByUid = new Map()
+
+  candidates.forEach((row) => {
+    const uid = getCanonicalCalendarTeacherOptionUid(row)
+    if (!uid) return
+    const candidate = getCalendarTeacherOptionLabelCandidate(row)
+    const current = optionByUid.get(uid)
+    if (
+      !current ||
+      candidate.rank < current.rank ||
+      (candidate.rank === current.rank &&
+        candidate.label.localeCompare(current.label, 'ko') < 0)
+    ) {
+      optionByUid.set(uid, { ...candidate, uid })
+    }
+  })
+
+  return [...optionByUid.values()]
+    .sort((a, b) => {
+      const labelOrder = a.label.localeCompare(b.label, 'ko')
+      return labelOrder || a.uid.localeCompare(b.uid, 'en')
+    })
+    .map(({ uid, label }) => ({
+      value: uid,
+      label,
+      teacherUid: uid,
+      teacherUID: uid,
+    }))
+}
+
+function hasMalformedOrPresentLink(slot, field) {
+  if (!hasOwn(slot, field)) return false
+  return typeof slot[field] !== 'string' || slot[field] !== ''
+}
+
+function hasFixedTemplateReleasedOrClosedMarker(slot) {
+  const slotType = hasOwn(slot, 'slotType') ? slot.slotType : ''
+  if (typeof slotType !== 'string' || !['', 'open'].includes(slotType)) return true
+
+  for (const field of OPEN_PRIVATE_SLOT_FIXED_TEMPLATE_FIELDS) {
+    if (!hasOwn(slot, field)) continue
+    if (typeof slot[field] !== 'string' || slot[field] !== '') return true
+  }
+  for (const field of OPEN_PRIVATE_SLOT_RELEASE_FIELDS) {
+    if (!hasOwn(slot, field)) continue
+    if (typeof slot[field] === 'string' && slot[field] === '') continue
+    return true
+  }
+  for (const field of OPEN_PRIVATE_SLOT_CLOSED_FIELDS) {
+    if (!hasOwn(slot, field)) continue
+    if (slot[field] === null || slot[field] === '') continue
+    return true
+  }
+  for (const field of [
+    'isGeneratedFromTemplate',
+    'releasedFromFixed',
+    'releasedForPrivateBooking',
+    'isSeatReleased',
+  ]) {
+    if (hasOwn(slot, field) && slot[field] !== false) return true
+  }
+  if (hasOwn(slot, 'openForStudentBooking') || hasOwn(slot, 'useForFixedAssignment')) {
+    return true
+  }
+  return false
+}
+
+function getLinkedSlotIds(row) {
+  const ids = new Set()
+  PRIVATE_EVENT_SLOT_ID_FIELDS.map((field) => row?.[field]).forEach((value) => {
+    const id = typeof value === 'string' ? value.trim() : ''
+    if (id) ids.add(id)
+  })
+  return ids
+}
+
+function isGroupCalendarSource(row) {
+  return (
+    row?._calendarRowKind === 'group' ||
+    String(row?.lessonType || row?.type || row?.packageType || '')
+      .trim()
+      .toLowerCase() === 'group'
+  )
+}
+
+function hasNonRenderablePrivateEventStatus(row) {
+  if (row?.status == null || row.status === '') return false
+  if (typeof row.status !== 'string') return true
+  return NON_RENDERABLE_PRIVATE_EVENT_STATUSES.has(row.status.trim().toLowerCase())
+}
+
+export function isRenderableCalendarPrivateReservation(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+  if (typeof row.status !== 'string' || hasNonRenderablePrivateEventStatus(row)) return false
+  return (
+    isCountablePrivateReservationStatus(row.status) &&
+    isCountableLessonOccurrence({ ...row, _calendarRowKind: 'privateReservation' })
+  )
+}
+
+function isActiveRenderableCalendarPrivateLesson(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return false
+  if (hasNonRenderablePrivateEventStatus(row)) return false
+  return isCountableLessonOccurrence(row)
+}
+
+function buildOpenPrivateSlotDedupeState(lessons, privateLessonReservations) {
+  const linkedSlotIds = new Set()
+  const legacyRows = []
+  const sources = [
+    ...(Array.isArray(lessons) ? lessons : []).map((row) => ({
+      row,
+      renderable: isActiveRenderableCalendarPrivateLesson(row),
+    })),
+    ...(Array.isArray(privateLessonReservations) ? privateLessonReservations : []).map((row) => ({
+      row,
+      renderable: isRenderableCalendarPrivateReservation(row),
+    })),
+  ]
+  sources.forEach(({ row, renderable }) => {
+    if (!renderable || isGroupCalendarSource(row)) return
+    const rowSlotIds = getLinkedSlotIds(row)
+    if (rowSlotIds.size > 0) {
+      rowSlotIds.forEach((id) => linkedSlotIds.add(id))
+      return
+    }
+    const date = String(getLessonStorageDateString(row) || row.date || '').trim()
+    const time = String(row.time || '').trim()
+    const teacherUid = getCanonicalPrivateEventTeacherUid(row)
+    if (date && time && teacherUid) {
+      legacyRows.push({ date, time, teacherUid })
+    }
+  })
+  return { linkedSlotIds, legacyRows }
+}
+
+export function excludeOpenPrivateSlotsFromInstructionalStatistics(rows) {
+  return (Array.isArray(rows) ? rows : []).filter(
+    (row) => row?._calendarRowKind !== 'openPrivateSlot' && row?.type !== 'openPrivateSlot'
+  )
+}
+
+export function buildOpenDatedPrivateSlotCalendarRows({
+  includeOpenPrivateSlots = false,
+  privateLessonSlots = [],
+  lessons = [],
+  privateLessonReservations = [],
+  academyId,
+  rangeStartDate,
+  rangeEndDate,
+  selectedTeacherUid = null,
+} = {}) {
+  if (includeOpenPrivateSlots !== true) return []
+  const scopedAcademyId = typeof academyId === 'string' ? academyId.trim() : ''
+  const startDate = String(rangeStartDate || '')
+  const endDate = String(rangeEndDate || '')
+  if (
+    !scopedAcademyId ||
+    canonicalKstDateTimeMillis(startDate, '00:00') == null ||
+    canonicalKstDateTimeMillis(endDate, '00:00') == null ||
+    endDate < startDate
+  ) {
+    return []
+  }
+
+  const { linkedSlotIds, legacyRows } = buildOpenPrivateSlotDedupeState(
+    lessons,
+    privateLessonReservations
+  )
+  const rows = []
+
+  ;(Array.isArray(privateLessonSlots) ? privateLessonSlots : []).forEach((slot) => {
+    if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return
+    const slotId = typeof slot.id === 'string' ? slot.id.trim() : ''
+    if (
+      !slotId ||
+      typeof slot.academyId !== 'string' ||
+      slot.academyId !== scopedAcademyId
+    ) {
+      return
+    }
+    if (slot.status !== 'open' || slot.reservedCount !== 0) return
+    if (
+      slot.reservedStudentId !== '' ||
+      slot.reservedAt !== null ||
+      slot.reservationId !== ''
+    ) {
+      return
+    }
+    if (OPEN_PRIVATE_SLOT_LINK_FIELDS.some((field) => hasMalformedOrPresentLink(slot, field))) {
+      return
+    }
+    if (hasFixedTemplateReleasedOrClosedMarker(slot)) return
+    const teacherUid = getCanonicalPrivateEventTeacherUid(slot)
+    if (!teacherUid) return
+    if (selectedTeacherUid !== null) {
+      if (
+        typeof selectedTeacherUid !== 'string' ||
+        !selectedTeacherUid ||
+        selectedTeacherUid !== selectedTeacherUid.trim() ||
+        teacherUid !== selectedTeacherUid
+      ) {
+        return
+      }
+    }
+
+    const date = typeof slot.date === 'string' ? slot.date : ''
+    const time = typeof slot.time === 'string' ? slot.time : ''
+    const canonicalStartMillis = canonicalKstDateTimeMillis(date, time)
+    const storedStartMillis = timestampToMillis(slot.startAt)
+    const durationMinutes = slot.durationMinutes
+    if (
+      canonicalStartMillis == null ||
+      storedStartMillis !== canonicalStartMillis ||
+      !Number.isInteger(durationMinutes) ||
+      durationMinutes < OPEN_PRIVATE_SLOT_MIN_DURATION_MINUTES ||
+      durationMinutes > OPEN_PRIVATE_SLOT_MAX_DURATION_MINUTES ||
+      date < startDate ||
+      date > endDate
+    ) {
+      return
+    }
+    if (linkedSlotIds.has(slotId)) return
+    if (
+      legacyRows.some(
+        ({ date: legacyDate, time: legacyTime, teacherUid: legacyTeacherUid }) =>
+          legacyDate === date &&
+          legacyTime === time &&
+          legacyTeacherUid === teacherUid
+      )
+    ) {
+      return
+    }
+
+    const endMillis = storedStartMillis + durationMinutes * 60 * 1000
+    rows.push({
+      id: `open-private-slot:${slotId}`,
+      _calendarRowKind: 'openPrivateSlot',
+      type: 'openPrivateSlot',
+      lessonType: 'private',
+      academyId: scopedAcademyId,
+      date,
+      time,
+      startAt: slot.startAt,
+      startMillis: storedStartMillis,
+      endAt: new Date(endMillis),
+      endMillis,
+      durationMinutes,
+      timeRangeLabel: `${formatKstTimeFromMillis(storedStartMillis)}–${formatKstTimeFromMillis(
+        endMillis
+      )}`,
+      teacher: String(slot.teacher || slot.teacherName || '').trim(),
+      teacherName: String(slot.teacherName || slot.teacher || '').trim(),
+      teacherKey: String(slot.teacherKey || '').trim(),
+      teacherUid,
+      teacherId: String(slot.teacherId || slot.teacherID || '').trim(),
+      teacherDisplayName: String(slot.teacherDisplayName || '').trim(),
+      displayName: String(slot.displayName || '').trim(),
+      subject: String(slot.subject || '').trim(),
+      slotId,
+      privateLessonSlotId: slotId,
+      slotStatus: 'open',
+      status: 'open',
+      readOnly: true,
+      isReadOnly: true,
+    })
+  })
+
+  return rows.sort(
+    (a, b) => a.startMillis - b.startMillis || a.id.localeCompare(b.id, 'en')
+  )
 }
 
 function isStudentFixedPrivateSeatReleasedCancellation(lesson) {
@@ -202,7 +684,7 @@ function buildCalendarPrivateReservationRows({
 }) {
   const rows = Array.isArray(privateLessonReservations) ? privateLessonReservations : []
   return rows
-    .filter((reservation) => isCountablePrivateReservationStatus(reservation.status))
+    .filter(isRenderableCalendarPrivateReservation)
     .filter((reservation) => {
       if (!selectedCalendarTeacherScope) return true
       const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
@@ -277,13 +759,35 @@ export default function useCalendarSectionViewModel({
   selectedDateString,
   showOnlySelectedDate,
   userProfile,
-  selectedCalendarTeacher = null,
+  selectedCalendarTeacherUid = null,
+  includeOpenPrivateSlots = false,
+  currentAcademyId,
+  calendarMonth,
 }) {
   const todayYmd = getTodayStorageDateString()
   const selectedCalendarTeacherScope = useMemo(() => {
-    if (userProfile?.role !== 'admin' || !selectedCalendarTeacher) return null
-    return getTeacherScopeFromRecord(selectedCalendarTeacher)
-  }, [selectedCalendarTeacher, userProfile?.role])
+    if (
+      includeOpenPrivateSlots !== true ||
+      typeof selectedCalendarTeacherUid !== 'string' ||
+      !selectedCalendarTeacherUid
+    ) {
+      return null
+    }
+    return {
+      teacherUid: selectedCalendarTeacherUid,
+      teacherUID: selectedCalendarTeacherUid,
+    }
+  }, [includeOpenPrivateSlots, selectedCalendarTeacherUid])
+  const selectedOpenSlotTeacherUid = useMemo(() => {
+    return includeOpenPrivateSlots === true ? selectedCalendarTeacherUid : null
+  }, [includeOpenPrivateSlots, selectedCalendarTeacherUid])
+  const calendarRange = useMemo(() => {
+    const days = getCalendarDays(calendarMonth instanceof Date ? calendarMonth : new Date())
+    return {
+      startDate: getStorageDateStringFromDate(days[0]),
+      endDate: getStorageDateStringFromDate(days[days.length - 1]),
+    }
+  }, [calendarMonth])
 
   const activeGroupClassById = useMemo(() => {
     return new Map(
@@ -491,10 +995,63 @@ export default function useCalendarSectionViewModel({
     privateSlotById,
   ])
 
+  const calendarOpenPrivateSlotRows = useMemo(() => {
+    return buildOpenDatedPrivateSlotCalendarRows({
+      includeOpenPrivateSlots,
+      privateLessonSlots,
+      lessons: visibleLessons,
+      privateLessonReservations,
+      academyId: currentAcademyId,
+      rangeStartDate: calendarRange.startDate,
+      rangeEndDate: calendarRange.endDate,
+      selectedTeacherUid: selectedOpenSlotTeacherUid,
+    })
+  }, [
+    calendarRange.endDate,
+    calendarRange.startDate,
+    currentAcademyId,
+    includeOpenPrivateSlots,
+    selectedOpenSlotTeacherUid,
+    privateLessonReservations,
+    privateLessonSlots,
+    visibleLessons,
+  ])
+
+  const allCalendarOpenPrivateSlotRows = useMemo(() => {
+    return buildOpenDatedPrivateSlotCalendarRows({
+      includeOpenPrivateSlots,
+      privateLessonSlots,
+      lessons: sortedLessons,
+      privateLessonReservations,
+      academyId: currentAcademyId,
+      rangeStartDate: calendarRange.startDate,
+      rangeEndDate: calendarRange.endDate,
+      selectedTeacherUid: null,
+    })
+  }, [
+    calendarRange.endDate,
+    calendarRange.startDate,
+    currentAcademyId,
+    includeOpenPrivateSlots,
+    privateLessonReservations,
+    privateLessonSlots,
+    sortedLessons,
+  ])
+
   const calendarCombinedLessons = useMemo(() => {
     const priv = visibleLessons.map((l) => ({ ...l, _calendarRowKind: 'private' }))
-    return sortCalendarRows([...priv, ...calendarGroupLessonRows, ...calendarPrivateReservationRows])
-  }, [visibleLessons, calendarGroupLessonRows, calendarPrivateReservationRows])
+    return sortCalendarRows([
+      ...priv,
+      ...calendarGroupLessonRows,
+      ...calendarPrivateReservationRows,
+      ...calendarOpenPrivateSlotRows,
+    ])
+  }, [
+    visibleLessons,
+    calendarGroupLessonRows,
+    calendarPrivateReservationRows,
+    calendarOpenPrivateSlotRows,
+  ])
 
   const allCalendarCombinedLessons = useMemo(() => {
     const priv = sortedLessons.map((l) => ({ ...l, _calendarRowKind: 'private' }))
@@ -502,8 +1059,24 @@ export default function useCalendarSectionViewModel({
       ...priv,
       ...allCalendarGroupLessonRows,
       ...allCalendarPrivateReservationRows,
+      ...allCalendarOpenPrivateSlotRows,
     ])
-  }, [sortedLessons, allCalendarGroupLessonRows, allCalendarPrivateReservationRows])
+  }, [
+    sortedLessons,
+    allCalendarGroupLessonRows,
+    allCalendarPrivateReservationRows,
+    allCalendarOpenPrivateSlotRows,
+  ])
+
+  const calendarInstructionalLessons = useMemo(
+    () => excludeOpenPrivateSlotsFromInstructionalStatistics(calendarCombinedLessons),
+    [calendarCombinedLessons]
+  )
+
+  const allCalendarInstructionalLessons = useMemo(
+    () => excludeOpenPrivateSlotsFromInstructionalStatistics(allCalendarCombinedLessons),
+    [allCalendarCombinedLessons]
+  )
 
   const displayedLessons = useMemo(() => {
     if (showOnlySelectedDate) {
@@ -536,6 +1109,7 @@ export default function useCalendarSectionViewModel({
       const current = map.get(dateKey) || []
       const isGroupRow = lesson._calendarRowKind === 'group'
       const isPrivateReservationRow = lesson._calendarRowKind === 'privateReservation'
+      const isOpenPrivateSlotRow = lesson._calendarRowKind === 'openPrivateSlot'
       const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
       const isReleasedFixedPrivateRow =
         !isGroupRow &&
@@ -550,6 +1124,8 @@ export default function useCalendarSectionViewModel({
         label: [
           isGroupRow
             ? lesson.groupClassDisplayName || '단체수업'
+            : isOpenPrivateSlotRow
+              ? lesson.timeRangeLabel
             : isPrivateReservationRow
               ? '학생예약'
               : isReleasedFixedPrivateRow
@@ -584,8 +1160,11 @@ export default function useCalendarSectionViewModel({
     visibleGroupLessons,
     calendarGroupLessonRows,
     calendarPrivateReservationRows,
+    calendarOpenPrivateSlotRows,
     calendarCombinedLessons,
     allCalendarCombinedLessons,
+    calendarInstructionalLessons,
+    allCalendarInstructionalLessons,
     displayedLessons,
     lessonsCountByDate,
     lessonsPreviewByDate,

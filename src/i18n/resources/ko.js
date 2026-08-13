@@ -128,6 +128,7 @@ const ko = {
   'teacher.calendar.showAll': '전체 보기',
   'teacher.calendar.showSelected': '선택 날짜만 보기',
   'teacher.calendar.empty': '표시할 수업이 없습니다.',
+  'teacher.calendar.openPrivateSlot.title': '개인수업 예약 가능',
   'teacher.calendar.header.studentOrClass': '학생 / 반',
   'teacher.calendar.header.remaining': '남은 횟수',
   'teacher.calendar.badge.group': '단체',

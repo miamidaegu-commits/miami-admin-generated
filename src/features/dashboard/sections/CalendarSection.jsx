@@ -944,7 +944,12 @@ export default function CalendarSection(props) {
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {preview.label}
+                    {preview.kind === 'openPrivateSlot'
+                      ? `${text(
+                          'teacher.calendar.openPrivateSlot.title',
+                          '개인수업 예약 가능'
+                        )} · ${preview.label}`
+                      : preview.label}
                   </div>
                 ))}
                 {previews.length > 2 ? (
@@ -1007,6 +1012,7 @@ export default function CalendarSection(props) {
     onOpenFixedRescheduleScopePreview,
     onOpenPrivateLessonStatusActionPreview,
     canOpenFixedPrivateLessonOutcome = () => false,
+    onOpenPrivateSlotManagement,
   } = props
   const [privateLessonDetail, setPrivateLessonDetail] = useState(null)
   const [fixedPrivateLessonAction, setFixedPrivateLessonAction] = useState(null)
@@ -1374,6 +1380,127 @@ export default function CalendarSection(props) {
           {displayedLessonRows.map((lesson) => {
             const isGroupRow = lesson._calendarRowKind === 'group'
             const isPrivateReservationRow = lesson._calendarRowKind === 'privateReservation'
+            const isOpenPrivateSlotRow = lesson._calendarRowKind === 'openPrivateSlot'
+            if (isOpenPrivateSlotRow) {
+              const canNavigateToPrivateSlots =
+                typeof onOpenPrivateSlotManagement === 'function'
+              const openSlotTitle = text(
+                'teacher.calendar.openPrivateSlot.title',
+                '개인수업 예약 가능'
+              )
+              const availableLabel = text('student.status.available', '예약 가능')
+              const openSlotTeacher = resolveTeacherDisplayName(
+                lesson,
+                teacherSelectOptions,
+                '-'
+              )
+              const openSlotBadgeStyle = {
+                display: 'inline-block',
+                fontSize: 10,
+                fontWeight: 600,
+                lineHeight: 1.3,
+                padding: '2px 6px',
+                borderRadius: 4,
+                marginRight: 6,
+                verticalAlign: 'middle',
+                border: '1px solid rgba(60, 140, 90, 0.55)',
+                background: 'rgba(60, 120, 90, 0.35)',
+                color: 'inherit',
+                whiteSpace: 'nowrap',
+              }
+              const openPrivateSlotNavigate = () => {
+                if (canNavigateToPrivateSlots) onOpenPrivateSlotManagement(lesson)
+              }
+              return (
+                <div
+                  key={lesson.id}
+                  className="table-row"
+                  data-testid="calendar-lesson-row"
+                  data-row-kind="openPrivateSlot"
+                  data-lesson-kind="openPrivateSlot"
+                  data-lesson-id={lesson.id}
+                  data-slot-id={lesson.slotId}
+                  data-date={lesson.date}
+                  data-time={lesson.time}
+                  data-read-only="true"
+                  role={canNavigateToPrivateSlots ? 'link' : undefined}
+                  tabIndex={canNavigateToPrivateSlots ? 0 : undefined}
+                  aria-label={
+                    canNavigateToPrivateSlots
+                      ? `${openSlotTitle}, ${lesson.timeRangeLabel}, ${openSlotTeacher}`
+                      : undefined
+                  }
+                  onClick={canNavigateToPrivateSlots ? openPrivateSlotNavigate : undefined}
+                  onKeyDown={
+                    canNavigateToPrivateSlots
+                      ? (event) => {
+                          if (event.key !== 'Enter' && event.key !== ' ') return
+                          event.preventDefault()
+                          openPrivateSlotNavigate()
+                        }
+                      : undefined
+                  }
+                  style={{
+                    gridTemplateColumns:
+                      'minmax(96px, 1fr) minmax(72px, 0.85fr) minmax(120px, 1.25fr) minmax(64px, 0.7fr) minmax(80px, 1fr) minmax(72px, 1fr) minmax(72px, 0.85fr) minmax(96px, 1fr) minmax(140px, auto)',
+                    cursor: canNavigateToPrivateSlots ? 'pointer' : 'default',
+                    background: canNavigateToPrivateSlots
+                      ? 'rgba(60, 120, 90, 0.08)'
+                      : undefined,
+                  }}
+                >
+                  <span data-label={text('teacher.common.date', '날짜')}>
+                    {formatLessonDateLabel(lesson)}
+                  </span>
+                  <span data-label={text('teacher.common.time', '시간')}>
+                    {lesson.timeRangeLabel}
+                  </span>
+                  <span
+                    data-label={text('teacher.calendar.header.studentOrClass', '학생 / 반')}
+                    style={{ lineHeight: 1.45 }}
+                  >
+                    <span style={openSlotBadgeStyle}>
+                      {text('teacher.calendar.badge.private', '1:1')}
+                    </span>
+                    {openSlotTitle}
+                  </span>
+                  <span data-label={text('teacher.common.session', '회차')}>
+                    {knownLabel(`${lesson.durationMinutes}분`)}
+                  </span>
+                  <span data-label={text('teacher.common.teacher', '선생님')}>
+                    {openSlotTeacher}
+                  </span>
+                  <span data-label={text('teacher.common.subject', '과목')}>-</span>
+                  <span data-label={text('teacher.calendar.header.remaining', '남은 횟수')}>
+                    —
+                  </span>
+                  <span data-label={text('teacher.common.status', '상태')}>
+                    <span
+                      data-testid="calendar-open-private-slot-available-badge"
+                      style={{
+                        width: 'fit-content',
+                        padding: '2px 7px',
+                        borderRadius: 999,
+                        border: '1px solid #4c7a5c',
+                        background: 'rgba(52, 110, 70, 0.28)',
+                        color: '#bde8c7',
+                        fontSize: 12,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {availableLabel}
+                    </span>
+                  </span>
+                  <span
+                    data-label={text('teacher.common.actions', '작업')}
+                    className={teacherPortal ? 'teacher-card-actions' : undefined}
+                    style={{ fontSize: 12, opacity: 0.65 }}
+                  >
+                    {text('teacher.common.readOnly', '읽기 전용')}
+                  </span>
+                </div>
+              )
+            }
             const isFixedPrivateSourceRow = isFixedPrivateSourceRecord(lesson)
             const canUseGenericPrivateLessonCrud =
               !isGroupRow && !isPrivateReservationRow && !isFixedPrivateSourceRow

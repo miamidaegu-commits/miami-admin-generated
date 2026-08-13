@@ -7,7 +7,7 @@ export const EXPECTED_WRITE_SURFACE_IDENTITY_DIGEST =
   "7b95e17be6e052c3ee161ad35d46709ef01f939e2c50b3f22ae5f9edb12900e8";
 export const EXPECTED_WRITE_SOURCE_COUNT = 21;
 export const EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST =
-  "8f63180960dde64a252f12c68fbe6fed938333d1325514660e0a972b6b06209b";
+  "053d245b072b76b172589461b843158429b7f440da40483ba281cecbaf033304";
 
 export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   Object.freeze({
@@ -16,11 +16,11 @@ export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   }),
   Object.freeze({
     sourceFile: "Dashboard.jsx",
-    sha256: "366546bf91e46b2bd7261d8824c6ec0f049443ba0bd916d5ce78e2c22f4e59b2",
+    sha256: "feed12f3c28bde9d1345dc7a362b95d28745181df601faa601459931d788fc9c",
   }),
   Object.freeze({
     sourceFile: "functions/index.js",
-    sha256: "754e1f559a28ca1721c5b732ede0acce91dfbb409ada6153de93092d1209db49",
+    sha256: "69e66e039786098f1264458ca2262e6f0cc499bb31c6f90cc2d31f94be92b977",
   }),
   Object.freeze({
     sourceFile: "lessonApi.js",
@@ -33,15 +33,15 @@ export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupLessonManagementFlow.js",
-    sha256: "336e947bc93a7e3efd29f61e8eea4c39a7fb8a8eb1e9663362807ec5c1cac94d",
+    sha256: "bc75505ce2d3df5d79e7d1ac955ad862f606b8cb7849ba2577159c590fdfed77",
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupManagementFlow.js",
-    sha256: "08f3b99a0e148ba9b5b49b0826a926d4180c91998c4718025ef0606c82d00df7",
+    sha256: "60e987edc589a9c1dff4ca37bc440634a8cb0da9eff2a9c4010536a7c22e66c8",
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupScheduleRebuildFlow.js",
-    sha256: "f79928d61b51d91808dfd53143c6a00065672299e470885e79baf6b23b9803f3",
+    sha256: "e43dcf23e50c61d76146dba938e0d58c2f63de7f2b27a45395f33da8e520d0bc",
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupStudentAddFlow.js",
