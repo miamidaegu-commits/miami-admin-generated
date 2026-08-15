@@ -19,6 +19,10 @@ import {
   findPrivatePackageForTeacherContext,
   findStudentPrivatePackageContexts,
 } from '../privatePackageHelpers.js'
+import {
+  formatOpenPrivateSlotCompactPreviewText,
+  getCalendarDayCountLabelDescriptor,
+} from '../hooks/useCalendarSectionViewModel.js'
 import { formatPrivateReservationHistoryLabels } from '../privateReservationHistoryFormatter.js'
 import { computePrivatePackageCancelAllowance } from '../../booking/studentPrivateCancelAllowance.js'
 import { resolveGroupLessonSubject } from '../groupClassRoomUtils.js'
@@ -892,6 +896,12 @@ export default function CalendarSection(props) {
             const dateKey = getStorageDateStringFromDate(day)
             const count = lessonsCountByDate.get(dateKey) || 0
             const previews = lessonsPreviewByDate?.get(dateKey) || []
+            const countLabelDescriptor = getCalendarDayCountLabelDescriptor({ count, previews })
+            const countLabel = text(
+              countLabelDescriptor.key,
+              countLabelDescriptor.fallback,
+              { count }
+            )
             const isCurrentMonth = day.getMonth() === calendarMonth.getMonth()
             const isSelected = isSameStorageDate(day, selectedDate)
 
@@ -900,7 +910,7 @@ export default function CalendarSection(props) {
                 key={dateKey}
                 data-testid="calendar-day-button"
                 data-date={dateKey}
-                aria-label={`${dateKey}, ${text('teacher.calendar.lessonCount', `수업 ${count}개`, { count })}`}
+                aria-label={`${dateKey}, ${countLabel}`}
                 onClick={() => {
                   setSelectedDate(day)
                   setShowOnlySelectedDate(true)
@@ -925,7 +935,7 @@ export default function CalendarSection(props) {
                       opacity: 0.9,
                     }}
                   >
-                    {text('teacher.calendar.lessonCount', `수업 ${count}개`, { count })}
+                    {countLabel}
                   </div>
                 ) : null}
                 {previews.slice(0, 2).map((preview) => (
@@ -945,10 +955,13 @@ export default function CalendarSection(props) {
                     }}
                   >
                     {preview.kind === 'openPrivateSlot'
-                      ? `${text(
-                          'teacher.calendar.openPrivateSlot.title',
-                          '개인수업 예약 가능'
-                        )} · ${preview.label}`
+                      ? formatOpenPrivateSlotCompactPreviewText(
+                          text(
+                            'teacher.calendar.openPrivateSlot.title',
+                            '개인수업 예약 가능'
+                          ),
+                          preview.label
+                        )
                       : preview.label}
                   </div>
                 ))}

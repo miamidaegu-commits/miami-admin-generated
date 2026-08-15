@@ -4,15 +4,20 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  buildCalendarVisibleEventCountByDate,
   buildCalendarTeacherFilterOptions,
   buildOpenDatedPrivateSlotCalendarRows,
   excludeOpenPrivateSlotsFromInstructionalStatistics,
+  formatCalendarCompactPreviewLabel,
+  formatOpenPrivateSlotCompactPreviewText,
+  getCalendarDayCountLabelDescriptor,
 } from '../src/features/dashboard/hooks/useCalendarSectionViewModel.js'
 import {
   buildLessonOccurrenceStats,
   buildTeacherLessonOccurrenceStats,
 } from '../src/features/dashboard/lessonOccurrenceStats.js'
 import { canViewBillingFields } from '../src/features/dashboard/billingPermissions.js'
+import { translate } from '../src/i18n/core.js'
 import en from '../src/i18n/resources/en.js'
 import ko from '../src/i18n/resources/ko.js'
 
@@ -64,6 +69,11 @@ function project({
     rangeStartDate,
     rangeEndDate,
   })
+}
+
+function calendarDayCountLabel(language, count, previews) {
+  const descriptor = getCalendarDayCountLabelDescriptor({ count, previews })
+  return translate(language, descriptor.key, { count })
 }
 
 test('A — valid open dated slot projects stable read-only calendar metadata', () => {
@@ -705,15 +715,134 @@ test('G — projection remains additive to the existing lesson/group/fixed calen
   )
 })
 
-test('H — Korean/English title and reused available badge keys preserve parity', () => {
+test('H — mixed, open-only, and lesson-only day summaries use visible counts without changing stats', () => {
+  const instructionalLesson = {
+    id: 'lesson-summary',
+    _calendarRowKind: 'private',
+    date: '2026-08-10',
+    time: '21:00',
+    studentId: 'student-a',
+    studentName: 'Student A',
+    teacherUid: 'uid-teacher-a',
+    status: 'active',
+  }
+  const [openPrivateSlot] = project({
+    privateLessonSlots: [
+      validSlot({
+        time: '22:00',
+        startAt: new Date('2026-08-10T13:00:00.000Z'),
+      }),
+    ],
+  })
+  const statsArgs = {
+    monthDate: new Date('2026-08-01T00:00:00.000Z'),
+    todayYmd: '2026-08-10',
+  }
+  const mixedRows = [instructionalLesson, openPrivateSlot]
+  const mixedCount = buildCalendarVisibleEventCountByDate(mixedRows).get('2026-08-10')
+  const mixedPreviews = mixedRows.map((row) => ({ kind: row._calendarRowKind }))
+  const mixedInstructionalRows =
+    excludeOpenPrivateSlotsFromInstructionalStatistics(mixedRows)
+
+  assert.equal(mixedCount, 2)
+  assert.equal(calendarDayCountLabel('ko', mixedCount, mixedPreviews), '일정 2개')
+  assert.equal(calendarDayCountLabel('en', mixedCount, mixedPreviews), '2 events')
+  assert.equal(
+    buildLessonOccurrenceStats({ rows: mixedInstructionalRows, ...statsArgs }).today.total,
+    1
+  )
+
+  const openOnlyRows = [openPrivateSlot]
+  const openOnlyCount = buildCalendarVisibleEventCountByDate(openOnlyRows).get('2026-08-10')
+  const openOnlyPreviews = [{ kind: openPrivateSlot._calendarRowKind }]
+  const openOnlyInstructionalRows =
+    excludeOpenPrivateSlotsFromInstructionalStatistics(openOnlyRows)
+  assert.equal(openOnlyCount, 1)
+  assert.equal(calendarDayCountLabel('ko', openOnlyCount, openOnlyPreviews), '일정 1개')
+  assert.equal(calendarDayCountLabel('en', openOnlyCount, openOnlyPreviews), '1 event')
+  assert.equal(
+    buildLessonOccurrenceStats({ rows: openOnlyInstructionalRows, ...statsArgs }).today.total,
+    0
+  )
+
+  const lessonOnlyRows = [instructionalLesson]
+  const lessonOnlyCount = buildCalendarVisibleEventCountByDate(lessonOnlyRows).get('2026-08-10')
+  assert.equal(
+    calendarDayCountLabel('ko', lessonOnlyCount, [{ kind: 'private' }]),
+    '수업 1개'
+  )
+})
+
+test('I — compact open-slot text is exact once while ordinary, group, and fixed labels stay unchanged', () => {
+  const [openPrivateSlot] = project({
+    privateLessonSlots: [
+      validSlot({
+        time: '22:00',
+        startAt: new Date('2026-08-10T13:00:00.000Z'),
+      }),
+    ],
+  })
+  const openTimeRange = formatCalendarCompactPreviewLabel(openPrivateSlot)
+  const koOpenText = formatOpenPrivateSlotCompactPreviewText(
+    ko['teacher.calendar.openPrivateSlot.title'],
+    openTimeRange
+  )
+  const enOpenText = formatOpenPrivateSlotCompactPreviewText(
+    en['teacher.calendar.openPrivateSlot.title'],
+    openTimeRange
+  )
+  assert.equal(openTimeRange, '22:00–23:00')
+  assert.equal(koOpenText, '개인수업 예약 가능 · 22:00–23:00')
+  assert.equal(enOpenText, 'Private lesson available · 22:00–23:00')
+  assert.doesNotMatch(koOpenText, /22:00–23:00 · 22:00/)
+  assert.doesNotMatch(enOpenText, /22:00–23:00 · 22:00/)
+
+  assert.equal(
+    formatCalendarCompactPreviewLabel({
+      id: 'ordinary',
+      _calendarRowKind: 'private',
+      studentName: 'Student A',
+      time: '09:00',
+      sessionNumber: 2,
+    }),
+    'Student A · 09:00 · 2회차'
+  )
+  assert.equal(
+    formatCalendarCompactPreviewLabel({
+      id: 'group',
+      _calendarRowKind: 'group',
+      groupClassDisplayName: 'Group A',
+      time: '10:00',
+      sessionNumber: 3,
+    }),
+    'Group A · 10:00 · 3회차'
+  )
+  assert.equal(
+    formatCalendarCompactPreviewLabel({
+      id: 'fixed',
+      _calendarRowKind: 'private',
+      sourceType: 'fixed-private-slot-assignment',
+      studentName: 'Student B',
+      time: '11:00',
+      sessionNumber: 4,
+    }),
+    'Student B · 11:00 · 4회차'
+  )
+})
+
+test('J — Korean/English title, event counts, and reused available badge keys preserve parity', () => {
   assert.deepEqual(Object.keys(en).sort(), Object.keys(ko).sort())
   assert.equal(en['teacher.calendar.openPrivateSlot.title'], 'Private lesson available')
   assert.equal(ko['teacher.calendar.openPrivateSlot.title'], '개인수업 예약 가능')
+  assert.equal(en['teacher.calendar.eventCount.one'], '{{count}} event')
+  assert.equal(en['teacher.calendar.eventCount.other'], '{{count}} events')
+  assert.equal(ko['teacher.calendar.eventCount.one'], '일정 {{count}}개')
+  assert.equal(ko['teacher.calendar.eventCount.other'], '일정 {{count}}개')
   assert.equal(en['student.status.available'], 'Available')
   assert.equal(ko['student.status.available'], '예약 가능')
 })
 
-test('I — click wiring only navigates through the existing Dashboard section setter', () => {
+test('K — click wiring only navigates through the existing Dashboard section setter', () => {
   const calendarSource = fs.readFileSync(
     path.join(repositoryRoot, 'src/features/dashboard/sections/CalendarSection.jsx'),
     'utf8'
@@ -755,7 +884,7 @@ test('I — click wiring only navigates through the existing Dashboard section s
   )
 })
 
-test('J — source contract stays read-only and contains no backend, write action, or CSS path', () => {
+test('L — source contract stays read-only and contains no backend, write action, or CSS path', () => {
   const hookSource = fs.readFileSync(
     path.join(repositoryRoot, 'src/features/dashboard/hooks/useCalendarSectionViewModel.js'),
     'utf8'

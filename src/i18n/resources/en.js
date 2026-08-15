@@ -120,6 +120,8 @@ const en = {
   'teacher.calendar.weekday.fri': 'Fri',
   'teacher.calendar.weekday.sat': 'Sat',
   'teacher.calendar.lessonCount': '{{count}} lessons',
+  'teacher.calendar.eventCount.one': '{{count}} event',
+  'teacher.calendar.eventCount.other': '{{count}} events',
   'teacher.calendar.sessionNumber': 'Session {{count}}',
   'teacher.calendar.selectedLessons': 'Lessons on {{date}}',
   'teacher.calendar.allLessons': 'All lessons',

@@ -120,6 +120,8 @@ const ko = {
   'teacher.calendar.weekday.fri': '금',
   'teacher.calendar.weekday.sat': '토',
   'teacher.calendar.lessonCount': '수업 {{count}}개',
+  'teacher.calendar.eventCount.one': '일정 {{count}}개',
+  'teacher.calendar.eventCount.other': '일정 {{count}}개',
   'teacher.calendar.sessionNumber': '{{count}}회차',
   'teacher.calendar.selectedLessons': '{{date}} 수업',
   'teacher.calendar.allLessons': '전체 수업',

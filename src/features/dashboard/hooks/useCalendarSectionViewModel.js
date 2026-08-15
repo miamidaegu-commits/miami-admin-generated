@@ -460,6 +460,70 @@ export function excludeOpenPrivateSlotsFromInstructionalStatistics(rows) {
   )
 }
 
+export function buildCalendarVisibleEventCountByDate(rows) {
+  const map = new Map()
+  ;(Array.isArray(rows) ? rows : []).forEach((row) => {
+    const dateKey = getLessonStorageDateString(row)
+    if (!dateKey) return
+    map.set(dateKey, (map.get(dateKey) || 0) + 1)
+  })
+  return map
+}
+
+export function getCalendarDayCountLabelDescriptor({ count, previews = [] } = {}) {
+  const hasOpenPrivateSlot = (Array.isArray(previews) ? previews : []).some(
+    (preview) => preview?.kind === 'openPrivateSlot'
+  )
+  if (hasOpenPrivateSlot) {
+    return {
+      key:
+        count === 1
+          ? 'teacher.calendar.eventCount.one'
+          : 'teacher.calendar.eventCount.other',
+      fallback: `일정 ${count}개`,
+    }
+  }
+  return {
+    key: 'teacher.calendar.lessonCount',
+    fallback: `수업 ${count}개`,
+  }
+}
+
+export function formatCalendarCompactPreviewLabel(lesson) {
+  const isGroupRow = lesson?._calendarRowKind === 'group'
+  const isPrivateReservationRow = lesson?._calendarRowKind === 'privateReservation'
+  const isOpenPrivateSlotRow = lesson?._calendarRowKind === 'openPrivateSlot'
+  const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
+  const isReleasedFixedPrivateRow =
+    !isGroupRow &&
+    !isPrivateReservationRow &&
+    (cancellationType === 'seat_released' || lesson?.isSeatReleased === true)
+  const studentName = getStudentName(lesson)
+
+  if (isOpenPrivateSlotRow) return String(lesson?.timeRangeLabel || '').trim()
+
+  return [
+    isGroupRow
+      ? lesson?.groupClassDisplayName || '단체수업'
+      : isPrivateReservationRow
+        ? '학생예약'
+        : isReleasedFixedPrivateRow
+          ? '자리공개'
+          : studentName,
+    isPrivateReservationRow || isReleasedFixedPrivateRow ? studentName : '',
+    lesson?.time || '',
+    isPrivateReservationRow || isReleasedFixedPrivateRow
+      ? ''
+      : formatLessonSessionNumber(lesson),
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+export function formatOpenPrivateSlotCompactPreviewText(title, timeRangeLabel) {
+  return [title, timeRangeLabel].map((value) => String(value || '').trim()).filter(Boolean).join(' · ')
+}
+
 export function buildOpenDatedPrivateSlotCalendarRows({
   includeOpenPrivateSlots = false,
   privateLessonSlots = [],
@@ -1088,17 +1152,10 @@ export default function useCalendarSectionViewModel({
     return calendarCombinedLessons
   }, [showOnlySelectedDate, calendarCombinedLessons, selectedDateString])
 
-  const lessonsCountByDate = useMemo(() => {
-    const map = new Map()
-
-    calendarCombinedLessons.forEach((lesson) => {
-      const dateKey = getLessonStorageDateString(lesson)
-      if (!dateKey) return
-      map.set(dateKey, (map.get(dateKey) || 0) + 1)
-    })
-
-    return map
-  }, [calendarCombinedLessons])
+  const lessonsCountByDate = useMemo(
+    () => buildCalendarVisibleEventCountByDate(calendarCombinedLessons),
+    [calendarCombinedLessons]
+  )
 
   const lessonsPreviewByDate = useMemo(() => {
     const map = new Map()
@@ -1107,38 +1164,12 @@ export default function useCalendarSectionViewModel({
       const dateKey = getLessonStorageDateString(lesson)
       if (!dateKey) return
       const current = map.get(dateKey) || []
-      const isGroupRow = lesson._calendarRowKind === 'group'
-      const isPrivateReservationRow = lesson._calendarRowKind === 'privateReservation'
-      const isOpenPrivateSlotRow = lesson._calendarRowKind === 'openPrivateSlot'
-      const cancellationType = String(lesson?.cancellationType || '').trim().toLowerCase()
-      const isReleasedFixedPrivateRow =
-        !isGroupRow &&
-        !isPrivateReservationRow &&
-        (cancellationType === 'seat_released' || lesson?.isSeatReleased === true)
-      const studentName = getStudentName(lesson)
       current.push({
         id: lesson.id,
         kind: lesson._calendarRowKind || 'private',
         teacherName: getTeacherName(lesson),
         time: lesson.time || '',
-        label: [
-          isGroupRow
-            ? lesson.groupClassDisplayName || '단체수업'
-            : isOpenPrivateSlotRow
-              ? lesson.timeRangeLabel
-            : isPrivateReservationRow
-              ? '학생예약'
-              : isReleasedFixedPrivateRow
-                ? '자리공개'
-                : studentName,
-          isPrivateReservationRow || isReleasedFixedPrivateRow ? studentName : '',
-          lesson.time || '',
-          isPrivateReservationRow || isReleasedFixedPrivateRow
-            ? ''
-            : formatLessonSessionNumber(lesson),
-        ]
-          .filter(Boolean)
-          .join(' · '),
+        label: formatCalendarCompactPreviewLabel(lesson),
       })
       map.set(dateKey, current)
     })
