@@ -760,12 +760,12 @@ export default function CalendarSection(props) {
 
     return (
       <section
-        className={`activity-section${teacherPortal ? ' teacher-calendar-month' : ''}`}
+        className={`activity-section calendar-month${teacherPortal ? ' teacher-calendar-month' : ''}`}
         data-testid={teacherPortal ? 'teacher-calendar-month' : undefined}
         style={{ marginBottom: 24 }}
       >
         <div
-          className={teacherPortal ? 'teacher-calendar-toolbar' : undefined}
+          className={`calendar-month-toolbar${teacherPortal ? ' teacher-calendar-toolbar' : ''}`}
           style={{
             display: 'flex',
             justifyContent: 'space-between',
@@ -795,7 +795,10 @@ export default function CalendarSection(props) {
             ←
           </button>
 
-          <div style={{ display: 'grid', gap: 8, justifyItems: 'center' }}>
+          <div
+            className="calendar-month-toolbar-center"
+            style={{ display: 'grid', gap: 8, justifyItems: 'center' }}
+          >
             <h2 className="section-title" style={{ margin: 0 }}>
               {teacherPortal
                 ? localizedDate(calendarMonth, { year: 'numeric', month: 'long' })
@@ -803,6 +806,7 @@ export default function CalendarSection(props) {
             </h2>
             {showTeacherFilter ? (
               <label
+                className="calendar-teacher-filter"
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -813,6 +817,7 @@ export default function CalendarSection(props) {
               >
                 <span>표시할 선생님</span>
                 <select
+                  className="calendar-teacher-filter-select"
                   data-testid="calendar-teacher-filter-select"
                   aria-label="표시할 선생님"
                   value={calendarTeacherFilterValue}
@@ -859,7 +864,7 @@ export default function CalendarSection(props) {
         </div>
 
         <div
-          className={teacherPortal ? 'teacher-calendar-weekdays' : undefined}
+          className={`calendar-month-weekdays${teacherPortal ? ' teacher-calendar-weekdays' : ''}`}
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(7, 1fr)',
@@ -885,7 +890,7 @@ export default function CalendarSection(props) {
         </div>
 
         <div
-          className={teacherPortal ? 'teacher-calendar-days' : undefined}
+          className={`calendar-month-days${teacherPortal ? ' teacher-calendar-days' : ''}`}
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(7, 1fr)',
@@ -902,6 +907,22 @@ export default function CalendarSection(props) {
               countLabelDescriptor.fallback,
               { count }
             )
+            const openPrivateSlotCount = previews.filter(
+              (preview) => preview.kind === 'openPrivateSlot'
+            ).length
+            const openPrivateSlotTitle = text(
+              'teacher.calendar.openPrivateSlot.title',
+              '개인수업 예약 가능'
+            )
+            const availableLabel = text('student.status.available', '예약 가능')
+            const previewAriaLabels = previews.map((preview) =>
+              preview.kind === 'openPrivateSlot'
+                ? formatOpenPrivateSlotCompactPreviewText(
+                    openPrivateSlotTitle,
+                    preview.label
+                  )
+                : preview.label
+            )
             const isCurrentMonth = day.getMonth() === calendarMonth.getMonth()
             const isSelected = isSameStorageDate(day, selectedDate)
 
@@ -910,7 +931,7 @@ export default function CalendarSection(props) {
                 key={dateKey}
                 data-testid="calendar-day-button"
                 data-date={dateKey}
-                aria-label={`${dateKey}, ${countLabel}`}
+                aria-label={[dateKey, countLabel, ...previewAriaLabels].filter(Boolean).join(', ')}
                 onClick={() => {
                   setSelectedDate(day)
                   setShowOnlySelectedDate(true)
@@ -926,9 +947,16 @@ export default function CalendarSection(props) {
                   cursor: 'pointer',
                 }}
               >
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{day.getDate()}</div>
+                <div
+                  className="calendar-day-number"
+                  style={{ fontSize: 14, fontWeight: 600 }}
+                >
+                  {day.getDate()}
+                </div>
                 {count > 0 ? (
                   <div
+                    className="calendar-day-count"
+                    data-testid="calendar-day-visible-count"
                     style={{
                       marginTop: 8,
                       fontSize: 12,
@@ -937,6 +965,16 @@ export default function CalendarSection(props) {
                   >
                     {countLabel}
                   </div>
+                ) : null}
+                {openPrivateSlotCount > 0 ? (
+                  <span
+                    className="calendar-day-open-slot-indicator"
+                    data-testid="calendar-day-open-slot-indicator"
+                    data-open-slot-count={openPrivateSlotCount}
+                    aria-hidden="true"
+                  >
+                    {availableLabel}
+                  </span>
                 ) : null}
                 {previews.slice(0, 2).map((preview) => (
                   <div
@@ -1174,13 +1212,13 @@ export default function CalendarSection(props) {
 
   return (
     <section
-      className={`activity-section${teacherPortal ? ' teacher-calendar-agenda' : ''}`}
+      className={`activity-section calendar-agenda${teacherPortal ? ' teacher-calendar-agenda' : ''}`}
       data-testid="calendar-lessons-section"
       data-shared-data-source={teacherPortal ? 'displayedLessons' : undefined}
       data-shared-handler-source={teacherPortal ? 'calendarSectionProps.lessons' : undefined}
     >
       <div
-        className={teacherPortal ? 'teacher-selected-date-header' : undefined}
+        className={`calendar-selected-date-header${teacherPortal ? ' teacher-selected-date-header' : ''}`}
         style={{
           display: 'flex',
           justifyContent: 'space-between',
@@ -1369,7 +1407,7 @@ export default function CalendarSection(props) {
         <p>{emptyLessonMessage}</p>
       ) : (
         <div
-          className={`activity-table${teacherPortal ? ' teacher-responsive-table teacher-calendar-agenda-list' : ''}`}
+          className={`activity-table calendar-agenda-list${teacherPortal ? ' teacher-responsive-table teacher-calendar-agenda-list' : ''}`}
           data-testid={teacherPortal ? 'teacher-calendar-agenda-list' : undefined}
         >
           <div
@@ -2148,7 +2186,10 @@ export default function CalendarSection(props) {
                       {isAdmin && canEditLesson && lesson.status !== 'cancelled' ? (
                         <button
                           type="button"
-                          onClick={() => onOpenGroupLessonNoDeductionCancel?.(lesson)}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            onOpenGroupLessonNoDeductionCancel?.(lesson)
+                          }}
                           style={{
                             padding: '6px 10px',
                             borderRadius: 8,
@@ -2296,6 +2337,7 @@ export default function CalendarSection(props) {
       )}
       {activeSection === 'calendar' && showOnlySelectedDate ? (
         <section
+          className="calendar-reservation-history-section"
           data-testid="private-reservation-history-section"
           style={{
             marginTop: 18,
@@ -2326,13 +2368,13 @@ export default function CalendarSection(props) {
             </p>
           ) : (
             <div
-              className="teacher-reservation-history-list"
+              className="calendar-reservation-history-list teacher-reservation-history-list"
               style={{ display: 'grid', gap: 8, marginTop: 12 }}
             >
               {privateReservationHistoryRows.map((row) => (
                 <article
                   key={row.id}
-                  className="teacher-reservation-history-row"
+                  className="calendar-reservation-history-row teacher-reservation-history-row"
                   data-testid="private-reservation-history-row"
                   data-reservation-id={row.id || undefined}
                   data-student-name={row.studentName || undefined}

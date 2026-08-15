@@ -18,6 +18,107 @@ import {
 const root = path.resolve(import.meta.dirname, '..')
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8')
 
+function findMatchingCssBrace(source, openingBraceIndex) {
+  let depth = 0
+  let quote = ''
+  let inComment = false
+
+  for (let index = openingBraceIndex; index < source.length; index += 1) {
+    const character = source[index]
+    const nextCharacter = source[index + 1]
+
+    if (inComment) {
+      if (character === '*' && nextCharacter === '/') {
+        inComment = false
+        index += 1
+      }
+      continue
+    }
+    if (quote) {
+      if (character === '\\') {
+        index += 1
+      } else if (character === quote) {
+        quote = ''
+      }
+      continue
+    }
+    if (character === '/' && nextCharacter === '*') {
+      inComment = true
+      index += 1
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      continue
+    }
+    if (character === '{') depth += 1
+    if (character === '}') {
+      depth -= 1
+      if (depth === 0) return index
+    }
+  }
+
+  assert.fail(`unterminated CSS block at offset ${openingBraceIndex}`)
+}
+
+function findEnclosingCssConditions(source, ruleStart) {
+  const conditions = []
+  const atRulePattern = /@(media|supports|container|layer)\b[^{;]*\{/g
+  let match
+
+  while ((match = atRulePattern.exec(source)) !== null) {
+    if (match.index >= ruleStart) break
+    const openingBraceIndex = atRulePattern.lastIndex - 1
+    const closingBraceIndex = findMatchingCssBrace(source, openingBraceIndex)
+    if (closingBraceIndex > ruleStart) {
+      conditions.push(match[0].slice(0, -1).trim())
+    }
+  }
+
+  return conditions
+}
+
+function findExactCssRules(source, selector) {
+  const opening = `${selector} {`
+  const rules = []
+  let searchStart = 0
+
+  while (searchStart < source.length) {
+    const ruleStart = source.indexOf(opening, searchStart)
+    if (ruleStart < 0) break
+    const lineStart = source.lastIndexOf('\n', ruleStart - 1) + 1
+    if (source.slice(lineStart, ruleStart).trim() !== '') {
+      searchStart = ruleStart + opening.length
+      continue
+    }
+    const openingBraceIndex = ruleStart + opening.length - 1
+    const closingBraceIndex = findMatchingCssBrace(source, openingBraceIndex)
+    rules.push({
+      body: source.slice(openingBraceIndex + 1, closingBraceIndex),
+      conditions: findEnclosingCssConditions(source, ruleStart),
+      start: ruleStart,
+      end: closingBraceIndex + 1,
+    })
+    searchStart = closingBraceIndex + 1
+  }
+
+  return rules
+}
+
+function getExactCssRuleBody(source, selector) {
+  const rules = findExactCssRules(source, selector)
+  assert.equal(rules.length, 1, `expected one exact CSS selector: ${selector}`)
+  return rules[0].body
+}
+
+function getExactSourceSlice(source, startMarker, endMarker) {
+  const start = source.indexOf(startMarker)
+  assert.ok(start >= 0, `missing source marker: ${startMarker}`)
+  const end = source.indexOf(endMarker, start + startMarker.length)
+  assert.ok(end > start, `missing source marker: ${endMarker}`)
+  return source.slice(start, end)
+}
+
 test('document declares one iPhone-safe viewport contract', () => {
   const html = read('index.html')
   const viewportTags = html.match(/<meta\s+name="viewport"[\s\S]*?\/>/g) || []
@@ -342,7 +443,7 @@ test('mobile reservation and selected-date headers contain wrapping and fixed ac
   )
   assert.match(
     calendar,
-    /className=\{teacherPortal \? 'teacher-selected-date-header' : undefined\}/
+    /className=\{`calendar-selected-date-header\$\{teacherPortal \? ' teacher-selected-date-header' : ''\}`\}/
   )
 })
 
@@ -367,9 +468,38 @@ test('teacher calendar and today summary use stable responsive class roles', () 
   const calendar = read('src/features/dashboard/sections/CalendarSection.jsx')
   const today = read('src/features/dashboard/components/TodaySchedulePanel.jsx')
   const css = read('index.css')
-  const toolbarIndex = calendar.indexOf("'teacher-calendar-toolbar'")
-  const weekdaysIndex = calendar.indexOf("'teacher-calendar-weekdays'")
-  const daysIndex = calendar.indexOf("'teacher-calendar-days'")
+  const teacherCalendarGridSelector =
+    '.dashboard--mobile.dashboard--teacher .teacher-calendar-weekdays,\n' +
+      '.dashboard--mobile.dashboard--teacher .teacher-calendar-days'
+  const teacherCalendarGridRules = findExactCssRules(css, teacherCalendarGridSelector)
+  const teacherCalendarBaseRules = teacherCalendarGridRules.filter(
+    ({ body }) => /width: 100%;/.test(body) && !/display: grid !important;/.test(body)
+  )
+  const teacherCalendarMobileRules = teacherCalendarGridRules.filter(
+    ({ body }) =>
+      /display: grid !important;/.test(body) &&
+      /grid-template-columns: repeat\(7, minmax\(0, 1fr\)\) !important;/.test(body)
+  )
+  assert.equal(teacherCalendarGridRules.length, 2)
+  assert.equal(teacherCalendarBaseRules.length, 1)
+  assert.equal(teacherCalendarMobileRules.length, 1)
+  const teacherCalendarBaseRule = teacherCalendarBaseRules[0]
+  const teacherCalendarGridRule = teacherCalendarMobileRules[0]
+  assert.deepEqual(teacherCalendarBaseRule.conditions, [])
+  assert.deepEqual(teacherCalendarGridRule.conditions, [])
+  assert.match(
+    teacherCalendarBaseRule.body,
+    /width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
+  )
+  const toolbarIndex = calendar.indexOf(
+    "className={`calendar-month-toolbar${teacherPortal ? ' teacher-calendar-toolbar' : ''}`}"
+  )
+  const weekdaysIndex = calendar.indexOf(
+    "className={`calendar-month-weekdays${teacherPortal ? ' teacher-calendar-weekdays' : ''}`}"
+  )
+  const daysIndex = calendar.indexOf(
+    "className={`calendar-month-days${teacherPortal ? ' teacher-calendar-days' : ''}`}"
+  )
   const dayButtonIndex = calendar.indexOf('data-testid="calendar-day-button"')
   const previewIndex = calendar.indexOf('data-testid="calendar-day-preview-row"')
 
@@ -383,9 +513,15 @@ test('teacher calendar and today summary use stable responsive class roles', () 
   assert.equal((calendar.match(/teacher-calendar-days/g) || []).length, 1)
   assert.doesNotMatch(calendar + css, /teacher-calendar-grid/)
   assert.match(calendar, /gridTemplateColumns: 'repeat\(7, 1fr\)'/)
+  assert.match(teacherCalendarGridRule.body, /display: grid !important;/)
   assert.match(
-    css,
-    /\.teacher-calendar-weekdays,\s*\.dashboard--mobile\.dashboard--teacher \.teacher-calendar-days\s*\{[\s\S]*?grid-template-columns: repeat\(7, minmax\(0, 1fr\)\) !important;[\s\S]*?gap: 4px !important;/
+    teacherCalendarGridRule.body,
+    /grid-template-columns: repeat\(7, minmax\(0, 1fr\)\) !important;/
+  )
+  assert.match(teacherCalendarGridRule.body, /gap: 4px !important;/)
+  assert.match(
+    teacherCalendarGridRule.body,
+    /width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;[\s\S]*?box-sizing: border-box;/
   )
   assert.match(
     css,
@@ -409,6 +545,156 @@ test('teacher calendar and today summary use stable responsive class roles', () 
   assert.match(
     css,
     /\.today-schedule-summary-card\s*\{[\s\S]*?min-width: 0;[\s\S]*?overflow-wrap: anywhere;/
+  )
+})
+
+test('calendar responsive production contract links mobile cards to desktop detail rows', () => {
+  const calendar = read('src/features/dashboard/sections/CalendarSection.jsx')
+  const css = read('index.css')
+  const dashboard = read('Dashboard.jsx')
+  const layout = read('src/preferences/layout.js')
+  const layoutProvider = read('src/preferences/LayoutProvider.jsx')
+  const monthMarkup = getExactSourceSlice(
+    calendar,
+    "if (props.view === 'month') {",
+    '\n  const {\n    activeSection,'
+  )
+  const openPrivateSlotMarkup = getExactSourceSlice(
+    calendar,
+    'if (isOpenPrivateSlotRow) {',
+    'const isFixedPrivateSourceRow ='
+  )
+  const detailRowsMarkup = getExactSourceSlice(
+    calendar,
+    'const isFixedPrivateSourceRow =',
+    '\n          })}\n        </div>'
+  )
+  const groupActionMarkup = getExactSourceSlice(
+    detailRowsMarkup,
+    '{isGroupRow ? (',
+    '{isPrivateReservationRow ? ('
+  )
+  const mobileGridRule = getExactCssRuleBody(
+    css,
+    '.dashboard--mobile .calendar-month-weekdays,\n' +
+      '.dashboard--mobile .calendar-month-days'
+  )
+  const mobileAgendaHeadRule = getExactCssRuleBody(
+    css,
+    '.dashboard--mobile .calendar-agenda-list > .table-head'
+  )
+  const mobileAgendaRowRule = getExactCssRuleBody(
+    css,
+    '.dashboard--mobile .calendar-agenda-list > .table-row'
+  )
+  const mobileAgendaLabelRule = getExactCssRuleBody(
+    css,
+    '.dashboard--mobile\n' +
+      '  .calendar-agenda-list\n' +
+      '  > .table-row\n' +
+      '  > [data-label]'
+  )
+  const desktopTableRule = getExactCssRuleBody(css, '.activity-table')
+  const desktopRowRule = getExactCssRuleBody(css, '.table-head, .table-row')
+  const bodyRule = getExactCssRuleBody(css, 'body')
+  const htmlBodyRootRule = getExactCssRuleBody(css, 'html, body, #root')
+
+  assert.match(
+    monthMarkup,
+    /className=\{`activity-section calendar-month\$\{teacherPortal \? ' teacher-calendar-month' : ''\}`\}/
+  )
+  assert.match(
+    monthMarkup,
+    /className=\{`calendar-month-weekdays\$\{teacherPortal \? ' teacher-calendar-weekdays' : ''\}`\}/
+  )
+  assert.match(
+    monthMarkup,
+    /className=\{`calendar-month-days\$\{teacherPortal \? ' teacher-calendar-days' : ''\}`\}/
+  )
+  assert.match(
+    calendar,
+    /className=\{`activity-table calendar-agenda-list\$\{teacherPortal \? ' teacher-responsive-table teacher-calendar-agenda-list' : ''\}`\}/
+  )
+  assert.match(mobileGridRule, /display: grid !important;/)
+  assert.match(
+    mobileGridRule,
+    /grid-template-columns: repeat\(7, minmax\(0, 1fr\)\) !important;/
+  )
+  assert.match(mobileGridRule, /gap: 4px !important;/)
+
+  assert.match(mobileAgendaHeadRule, /display: none;/)
+  assert.match(mobileAgendaRowRule, /display: grid !important;/)
+  assert.match(
+    mobileAgendaRowRule,
+    /grid-template-columns: minmax\(0, 1fr\) !important;/
+  )
+  assert.match(mobileAgendaRowRule, /border-radius: 12px;/)
+  assert.match(
+    mobileAgendaLabelRule,
+    /grid-template-columns: minmax\(88px, 0\.4fr\) minmax\(0, 1fr\);/
+  )
+  assert.match(mobileAgendaLabelRule, /overflow-wrap: anywhere;/)
+  assert.match(desktopTableRule, /overflow: hidden;/)
+  assert.match(desktopRowRule, /display: grid;/)
+  assert.match(
+    calendar,
+    /gridTemplateColumns:\s*'minmax\(96px, 1fr\) minmax\(72px, 0\.85fr\) minmax\(120px, 1\.25fr\) minmax\(64px, 0\.7fr\) minmax\(80px, 1fr\) minmax\(72px, 1fr\) minmax\(72px, 0\.85fr\) minmax\(96px, 1fr\) minmax\(140px, auto\)'/
+  )
+  assert.match(calendar, /className="table-head"/)
+  assert.match(calendar, /className="table-row"/)
+
+  assert.match(layout, /export const MOBILE_BREAKPOINT_PX = 720/)
+  assert.match(
+    layout,
+    /export const MOBILE_MEDIA_QUERY = `\(max-width: \$\{MOBILE_BREAKPOINT_PX\}px\)`/
+  )
+  assert.match(layoutProvider, /window\.matchMedia\(MOBILE_MEDIA_QUERY\)/)
+  assert.match(
+    layoutProvider,
+    /const resolvedLayout = resolveLayoutMode\(layoutMode, autoMatchesMobile\)/
+  )
+  assert.match(dashboard, /className=\{`dashboard dashboard--\$\{resolvedLayout\}/)
+
+  assert.match(
+    detailRowsMarkup,
+    /canOpenGroupAttendance\s*\? \(\) => onOpenCalendarGroupLessonAttendance\?\.\(lesson\)/
+  )
+  assert.equal((groupActionMarkup.match(/<button/g) || []).length, 1)
+  assert.match(groupActionMarkup, /type="button"/)
+  assert.match(
+    groupActionMarkup,
+    /onClick=\{\(event\) => \{\s*event\.stopPropagation\(\)\s*onOpenGroupLessonNoDeductionCancel\?\.\(lesson\)\s*\}\}/
+  )
+  assert.doesNotMatch(groupActionMarkup, /preventDefault/)
+
+  assert.match(openPrivateSlotMarkup, /data-read-only="true"/)
+  assert.match(openPrivateSlotMarkup, /onOpenPrivateSlotManagement\(lesson\)/)
+  assert.doesNotMatch(
+    openPrivateSlotMarkup,
+    /handleDeductionToggle|openStudentPackageEditModal|openPrivateLessonEditModal|handleDeletePrivateLesson|onOpenGroupLessonNoDeductionCancel|onMarkPrivateReservationOutcome|onCancelFixedPrivateLesson/
+  )
+
+  assert.match(
+    monthMarkup,
+    /const showTeacherFilter = isAdmin && calendarTeacherFilterOptions\.length > 0/
+  )
+  assert.match(monthMarkup, /<option value="">전체 선생님<\/option>/)
+  assert.match(
+    dashboard,
+    /const isAdmin = isDashboardAdminProfile\(userProfile\)[\s\S]*?const includeOpenPrivateSlots = isAdmin/
+  )
+  assert.match(
+    dashboard,
+    /buildLessonOccurrenceStats\(\{[\s\S]*?rows: calendarInstructionalLessons/
+  )
+  assert.match(
+    dashboard,
+    /buildTeacherLessonOccurrenceStats\(\{[\s\S]*?rows: allCalendarInstructionalLessons/
+  )
+
+  assert.doesNotMatch(
+    bodyRule + htmlBodyRootRule,
+    /(?:^|\n)\s*overflow(?:-x)?\s*:\s*(?:hidden|clip)\s*;/
   )
 })
 
@@ -752,8 +1038,14 @@ test('remediation preserves the desktop eight-column history grid and adds a sha
   const css = read('index.css')
 
   assert.equal((calendar.match(/privateReservationHistoryRows\.map/g) || []).length, 1)
-  assert.match(calendar, /className="teacher-reservation-history-list"/)
-  assert.match(calendar, /className="teacher-reservation-history-row"/)
+  assert.match(
+    calendar,
+    /className="calendar-reservation-history-list teacher-reservation-history-list"/
+  )
+  assert.match(
+    calendar,
+    /className="calendar-reservation-history-row teacher-reservation-history-row"/
+  )
   assert.match(
     calendar,
     /gridTemplateColumns:\s*'minmax\(84px, 0\.85fr\)[\s\S]*?minmax\(112px, 1fr\)'/

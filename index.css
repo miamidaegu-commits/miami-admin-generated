@@ -548,6 +548,250 @@ a:focus-visible {
   display: none;
 }
 
+.calendar-day-open-slot-indicator {
+  display: none;
+}
+
+.dashboard--mobile
+  :where(
+    .calendar-month,
+    .calendar-month-toolbar,
+    .calendar-month-toolbar-center,
+    .calendar-month-weekdays,
+    .calendar-month-days,
+    .calendar-agenda,
+    .calendar-agenda-list,
+    .calendar-reservation-history-section,
+    .calendar-reservation-history-list
+  ) {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard--mobile .calendar-month-toolbar {
+  display: grid !important;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  gap: 8px !important;
+}
+
+.dashboard--mobile .calendar-month-toolbar > button {
+  width: 44px;
+  min-width: 44px;
+  max-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  max-height: 44px;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.dashboard--mobile .calendar-month-toolbar-center,
+.dashboard--mobile .calendar-month-toolbar-center .section-title {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.dashboard--mobile .calendar-month-toolbar-center .section-title {
+  width: 100%;
+  text-align: center;
+  white-space: normal;
+}
+
+.dashboard--mobile .calendar-teacher-filter {
+  display: grid !important;
+  grid-template-columns: max-content minmax(0, 1fr);
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard--mobile .calendar-teacher-filter > span {
+  white-space: nowrap;
+}
+
+.dashboard--mobile .calendar-teacher-filter-select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard--mobile .calendar-month-weekdays,
+.dashboard--mobile .calendar-month-days {
+  display: grid !important;
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+  gap: 4px !important;
+}
+
+.dashboard--mobile .calendar-month-weekdays > *,
+.dashboard--mobile .calendar-month-days > * {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard--mobile .calendar-month-weekdays > * {
+  overflow: hidden;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.dashboard--mobile
+  .calendar-month-days
+  [data-testid="calendar-day-button"] {
+  width: 100%;
+  min-width: 0 !important;
+  max-width: 100%;
+  min-height: 64px !important;
+  margin: 0 !important;
+  padding: 4px !important;
+  overflow: hidden;
+}
+
+.dashboard--mobile .calendar-month-days .calendar-day-number {
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.dashboard--mobile .calendar-month-days .calendar-day-count {
+  display: block;
+  min-width: 0;
+  margin-top: 4px !important;
+  overflow: hidden;
+  font-size: 10px !important;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard--mobile
+  .calendar-month-days
+  [data-testid="calendar-day-preview-row"] {
+  display: none;
+}
+
+.dashboard--mobile .calendar-day-open-slot-indicator {
+  display: inline-flex;
+  max-width: 100%;
+  margin-top: 3px;
+  padding: 1px 3px;
+  overflow: hidden;
+  border: 1px solid rgba(76, 122, 92, 0.8);
+  border-radius: 999px;
+  background: rgba(52, 110, 70, 0.28);
+  color: #bde8c7;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard--mobile .calendar-selected-date-header {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px !important;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard--mobile .calendar-selected-date-header > * {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-wrap: anywhere;
+}
+
+.dashboard--mobile .calendar-selected-date-header > :last-child {
+  justify-content: flex-start;
+}
+
+.dashboard--mobile .calendar-selected-date-header button {
+  max-width: 100%;
+  white-space: normal;
+}
+
+.dashboard--mobile .calendar-agenda-list > .table-head {
+  display: none;
+}
+
+.dashboard--mobile .calendar-agenda-list > .table-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  gap: 8px !important;
+  min-width: 0;
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface2);
+}
+
+.dashboard--mobile
+  .calendar-agenda-list
+  > .table-row
+  > [data-label] {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.4fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.dashboard--mobile
+  .calendar-agenda-list
+  > .table-row
+  > [data-label]::before {
+  content: attr(data-label);
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.dashboard--mobile .calendar-reservation-history-row {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) !important;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard--mobile
+  .calendar-reservation-history-row
+  > [data-label] {
+  display: grid;
+  grid-template-columns: minmax(88px, 0.38fr) minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.dashboard--mobile
+  .calendar-reservation-history-row
+  > [data-label]::before {
+  content: attr(data-label);
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
 .dashboard--mobile.dashboard--teacher .today-schedule-summary-grid {
   width: 100%;
   min-width: 0;

@@ -912,3 +912,132 @@ test('L — source contract stays read-only and contains no backend, write actio
   assert.doesNotMatch(calendarSource, /firebase\/(firestore|functions)/)
   assert.match(calendarSource, /data-read-only="true"/)
 })
+
+test('M — mobile admin calendar containment preserves desktop and T06 behavior contracts', () => {
+  const calendarSource = fs.readFileSync(
+    path.join(repositoryRoot, 'src/features/dashboard/sections/CalendarSection.jsx'),
+    'utf8'
+  )
+  const css = fs.readFileSync(path.join(repositoryRoot, 'index.css'), 'utf8')
+  const layoutSource = fs.readFileSync(
+    path.join(repositoryRoot, 'src/preferences/layout.js'),
+    'utf8'
+  )
+  const mobileCalendarCssStart = css.indexOf('.calendar-day-open-slot-indicator {')
+  const mobileCalendarCssEnd = css.indexOf(
+    '.dashboard--mobile.dashboard--teacher .today-schedule-summary-grid'
+  )
+  const mobileCalendarCss = css.slice(mobileCalendarCssStart, mobileCalendarCssEnd)
+  const openRowBlock = calendarSource.slice(
+    calendarSource.indexOf('if (isOpenPrivateSlotRow) {'),
+    calendarSource.indexOf('const isFixedPrivateSourceRow =')
+  )
+
+  assert.match(layoutSource, /export const MOBILE_BREAKPOINT_PX = 720/)
+  assert.match(layoutSource, /MOBILE_MEDIA_QUERY = `\(max-width: \$\{MOBILE_BREAKPOINT_PX\}px\)`/)
+  assert.doesNotMatch(mobileCalendarCss, /@media/)
+
+  for (const className of [
+    'calendar-month',
+    'calendar-month-toolbar',
+    'calendar-month-toolbar-center',
+    'calendar-teacher-filter',
+    'calendar-teacher-filter-select',
+    'calendar-month-weekdays',
+    'calendar-month-days',
+    'calendar-agenda',
+    'calendar-selected-date-header',
+    'calendar-agenda-list',
+    'calendar-reservation-history-section',
+    'calendar-reservation-history-list',
+    'calendar-reservation-history-row',
+  ]) {
+    assert.match(calendarSource, new RegExp(className))
+    assert.match(mobileCalendarCss, new RegExp(className))
+  }
+
+  assert.match(
+    mobileCalendarCss,
+    /\.dashboard--mobile[\s\S]*?\.calendar-month-toolbar\s*\{[\s\S]*?grid-template-columns: 44px minmax\(0, 1fr\) 44px;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-teacher-filter\s*\{[\s\S]*?grid-template-columns: max-content minmax\(0, 1fr\);[\s\S]*?min-width: 0;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-teacher-filter-select\s*\{[\s\S]*?width: 100%;[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-month-weekdays,[\s\S]*?\.calendar-month-days\s*\{[\s\S]*?grid-template-columns: repeat\(7, minmax\(0, 1fr\)\) !important;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-month-weekdays > \*,[\s\S]*?\.calendar-month-days > \*\s*\{[\s\S]*?min-width: 0;[\s\S]*?max-width: 100%;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-month-days[\s\S]*?\[data-testid="calendar-day-preview-row"\]\s*\{[\s\S]*?display: none;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-day-open-slot-indicator\s*\{[\s\S]*?display: inline-flex;[\s\S]*?max-width: 100%;[\s\S]*?white-space: nowrap;/
+  )
+  assert.match(
+    calendarSource,
+    /data-testid="calendar-day-visible-count"[\s\S]*?\{countLabel\}/
+  )
+  assert.match(
+    calendarSource,
+    /data-testid="calendar-day-open-slot-indicator"[\s\S]*?data-open-slot-count=\{openPrivateSlotCount\}[\s\S]*?\{availableLabel\}/
+  )
+  assert.match(
+    calendarSource,
+    /const previewAriaLabels = previews\.map[\s\S]*?aria-label=\{\[dateKey, countLabel, \.\.\.previewAriaLabels\]/
+  )
+
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-agenda-list > \.table-head\s*\{[\s\S]*?display: none;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-agenda-list > \.table-row\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) !important;[\s\S]*?min-width: 0;/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /\.calendar-reservation-history-row\s*\{[\s\S]*?grid-template-columns: minmax\(0, 1fr\) !important;[\s\S]*?max-width: 100%;/
+  )
+  assert.match(mobileCalendarCss, /content: attr\(data-label\)/)
+
+  for (const label of [
+    "text('teacher.common.date', '날짜')",
+    "text('teacher.common.time', '시간')",
+    "text('teacher.common.session', '회차')",
+    "text('teacher.common.teacher', '선생님')",
+    "text('teacher.common.status', '상태')",
+    "text('teacher.common.actions', '작업')",
+  ]) {
+    assert.match(openRowBlock, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+  }
+  assert.match(openRowBlock, /openSlotTitle/)
+  assert.match(openRowBlock, /lesson\.timeRangeLabel/)
+  assert.match(openRowBlock, /lesson\.durationMinutes/)
+  assert.match(openRowBlock, /availableLabel/)
+  assert.match(openRowBlock, /data-read-only="true"/)
+  assert.match(openRowBlock, /onOpenPrivateSlotManagement\(lesson\)/)
+
+  assert.match(calendarSource, /gridTemplateColumns: 'repeat\(7, 1fr\)'/)
+  assert.match(
+    calendarSource,
+    /gridTemplateColumns:\s*'minmax\(96px, 1fr\)[\s\S]*?minmax\(140px, auto\)'/
+  )
+  assert.match(
+    mobileCalendarCss,
+    /^\.calendar-day-open-slot-indicator\s*\{\s*display: none;\s*\}/
+  )
+  assert.doesNotMatch(mobileCalendarCss, /(?:^|\s)(?:html|body)\s*\{/)
+  assert.doesNotMatch(mobileCalendarCss, /overflow-x:\s*(?:hidden|clip)/)
+  assert.doesNotMatch(mobileCalendarCss, /100vw/)
+})
