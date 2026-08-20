@@ -106,13 +106,25 @@ function getRuntimeProjectId() {
     "";
 }
 
+function isLoopbackFirestoreEmulatorHost() {
+  const host = process.env.FIRESTORE_EMULATOR_HOST;
+  if (typeof host !== "string") return false;
+  const match =
+    /^(?:127\.0\.0\.1|localhost):([1-9][0-9]{0,4})$/.exec(host);
+  if (!match) return false;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port <= 65535;
+}
+
 function requireWriteGuardRuntimeProjectId() {
   const projectId = getRuntimeProjectId();
-  const productionRuntime = projectId === PRODUCTION_PROJECT_ID;
+  const cloudRuntime =
+    process.env.FIRESTORE_EMULATOR_HOST === undefined &&
+    (projectId === PRODUCTION_PROJECT_ID || projectId === E2E_PROJECT_ID);
   const emulatorRuntime =
-    Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
+    isLoopbackFirestoreEmulatorHost() &&
     projectId === EMULATOR_PROJECT_ID;
-  if (!productionRuntime && !emulatorRuntime) {
+  if (!cloudRuntime && !emulatorRuntime) {
     throw new HttpsError(
         "failed-precondition",
         "Backend writes are blocked because the runtime project is unknown.",
@@ -14730,9 +14742,7 @@ exports.createFixedPrivateLessonAssignment = onCall(
       cpu: 1,
       concurrency: 80,
       maxInstances: 10,
-      serviceAccount:
-        "academy-private-writer-runtime@" +
-        "daegu-miami-production.iam.gserviceaccount.com",
+      serviceAccount: "academy-private-writer-runtime@",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,
@@ -21540,9 +21550,7 @@ exports.commitFixedPrivateLessonOutcomeAction = onCall(
       cpu: 1,
       concurrency: 80,
       maxInstances: 10,
-      serviceAccount:
-        "academy-private-writer-runtime@" +
-        "daegu-miami-production.iam.gserviceaccount.com",
+      serviceAccount: "academy-private-writer-runtime@",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,

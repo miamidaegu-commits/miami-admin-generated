@@ -71,7 +71,7 @@ test("registry v2 adds the exact reservation reversal transaction writer", () =>
   );
   assert.equal(
       sourcePins.get("functions/index.js"),
-      "3958a7e6fda3ef9a55e80716218a7066705b61ca0c9d7a82eb9f484120a8fdc5",
+      "ebb830fa80cc23bbb1d4da9e9ef48fb9728dfb68646a4c9e12f2bc3a5c47d1c8",
   );
 });
 

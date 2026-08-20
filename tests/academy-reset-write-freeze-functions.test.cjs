@@ -139,10 +139,14 @@ function runtimeProjectContract(env) {
   const productionDeclaration = indexSource.match(
       /const PRODUCTION_PROJECT_ID = "daegu-miami-production";/,
   );
+  const e2eDeclaration = indexSource.match(
+      /const E2E_PROJECT_ID = "miami-e2e";/,
+  );
   const emulatorDeclaration = indexSource.match(
       /const EMULATOR_PROJECT_ID = "demo-miami-e2e";/,
   );
   assert.ok(productionDeclaration);
+  assert.ok(e2eDeclaration);
   assert.ok(emulatorDeclaration);
   class TestHttpsError extends Error {
     constructor(code, message, details) {
@@ -157,9 +161,11 @@ function runtimeProjectContract(env) {
       [
         "\"use strict\";",
         productionDeclaration[0],
+        e2eDeclaration[0],
         emulatorDeclaration[0],
         extractFunctionSource("getProjectIdFromFirebaseConfig"),
         extractFunctionSource("getRuntimeProjectId"),
+        extractFunctionSource("isLoopbackFirestoreEmulatorHost"),
         extractFunctionSource("requireWriteGuardRuntimeProjectId"),
         "return {getRuntimeProjectId, requireWriteGuardRuntimeProjectId};",
       ].join("\n"),
@@ -603,11 +609,23 @@ test("unknown runtime projects fail closed before backend write guards", () => {
   assert.notEqual(declaration, -1);
   const body = extractBalancedFunctionBody(indexSource, declaration);
   assert.match(body, /projectId === PRODUCTION_PROJECT_ID/);
-  assert.match(body, /Boolean\(process\.env\.FIRESTORE_EMULATOR_HOST\)/);
+  assert.match(body, /projectId === E2E_PROJECT_ID/);
+  assert.match(
+      body,
+      /process\.env\.FIRESTORE_EMULATOR_HOST === undefined/,
+  );
+  assert.match(body, /isLoopbackFirestoreEmulatorHost\(\)/);
   assert.match(body, /projectId === EMULATOR_PROJECT_ID/);
   assert.match(body, /new HttpsError\(/);
   assert.match(body, /unknown_runtime_project/);
   assert.doesNotMatch(body, /startsWith|includes|\/\^demo-/);
+  const loopbackBody = extractBalancedFunctionBody(
+      indexSource,
+      indexSource.indexOf("function isLoopbackFirestoreEmulatorHost()"),
+  );
+  assert.match(loopbackBody, /127\\\.0\\\.0\\\.1\|localhost/);
+  assert.match(loopbackBody, /port <= 65535/);
+  assert.doesNotMatch(loopbackBody, /0\.0\.0\.0|\.\*|\[\^/);
   assert.match(
       indexSource,
       /assertAcademyResetWriteAllowed\(\{[\s\S]*?projectId:\s*requireWriteGuardRuntimeProjectId\(\)/,
@@ -618,74 +636,128 @@ test("unknown runtime projects fail closed before backend write guards", () => {
   );
 });
 
-test("runtime project identity contract is exact and emulator-bound", () => {
-  const productionProject = "daegu-miami-production";
-  const emulatorProject = "demo-miami-e2e";
-  const emulatorHost = "127.0.0.1:8080";
-  const matchingEnv = (projectId, extras = {}) => ({
+const PRODUCTION_RUNTIME_PROJECT = "daegu-miami-production";
+const DEV_RUNTIME_PROJECT = "miami-e2e";
+const EMULATOR_RUNTIME_PROJECT = "demo-miami-e2e";
+const LOOPBACK_EMULATOR_HOST = "127.0.0.1:8080";
+
+function matchingRuntimeEnv(projectId, extras = {}) {
+  return {
     GCLOUD_PROJECT: projectId,
     GOOGLE_CLOUD_PROJECT: projectId,
     FIREBASE_CONFIG: JSON.stringify({projectId}),
     ...extras,
-  });
-  const requireProject = (env) =>
-    runtimeProjectContract(env).requireWriteGuardRuntimeProjectId();
-  const expectUnknownRuntime = (env) => {
-    assert.throws(
-        () => requireProject(env),
-        (error) => {
-          assert.equal(error.code, "failed-precondition");
-          assert.equal(error.details?.reason, "unknown_runtime_project");
-          return true;
-        },
-    );
   };
+}
 
-  assert.equal(
-      requireProject(matchingEnv(productionProject)),
-      productionProject,
+function requireRuntimeProject(env) {
+  return runtimeProjectContract(env).requireWriteGuardRuntimeProjectId();
+}
+
+function expectUnknownRuntime(env) {
+  assert.throws(
+      () => requireRuntimeProject(env),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "unknown_runtime_project");
+        return true;
+      },
   );
+}
+
+test("I03 — Production cloud runtime is allowed exactly", () => {
   assert.equal(
-      requireProject(matchingEnv(emulatorProject, {
-        FIRESTORE_EMULATOR_HOST: emulatorHost,
-      })),
-      emulatorProject,
+      requireRuntimeProject(matchingRuntimeEnv(PRODUCTION_RUNTIME_PROJECT)),
+      PRODUCTION_RUNTIME_PROJECT,
   );
+  expectUnknownRuntime(matchingRuntimeEnv(PRODUCTION_RUNTIME_PROJECT, {
+    FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST,
+  }));
+});
 
-  expectUnknownRuntime(matchingEnv(emulatorProject));
-  expectUnknownRuntime(matchingEnv("miami-e2e", {
-    FIRESTORE_EMULATOR_HOST: emulatorHost,
+test("I04 — miami-e2e cloud runtime is allowed exactly", () => {
+  assert.equal(
+      requireRuntimeProject(matchingRuntimeEnv(DEV_RUNTIME_PROJECT)),
+      DEV_RUNTIME_PROJECT,
+  );
+  for (const env of [
+    {GCLOUD_PROJECT: DEV_RUNTIME_PROJECT},
+    {GOOGLE_CLOUD_PROJECT: DEV_RUNTIME_PROJECT},
+    {FIREBASE_CONFIG: JSON.stringify({projectId: DEV_RUNTIME_PROJECT})},
+  ]) {
+    assert.equal(requireRuntimeProject(env), DEV_RUNTIME_PROJECT);
+  }
+  expectUnknownRuntime(matchingRuntimeEnv(DEV_RUNTIME_PROJECT, {
+    FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST,
   }));
-  expectUnknownRuntime(matchingEnv("demo-other", {
-    FIRESTORE_EMULATOR_HOST: emulatorHost,
-  }));
-  expectUnknownRuntime(matchingEnv("foreign-project", {
-    FIRESTORE_EMULATOR_HOST: emulatorHost,
-  }));
+});
 
+test("I05 — demo emulator requires strict loopback evidence", () => {
+  for (const host of [
+    "127.0.0.1:1",
+    LOOPBACK_EMULATOR_HOST,
+    "localhost:65535",
+  ]) {
+    assert.equal(
+        requireRuntimeProject(matchingRuntimeEnv(EMULATOR_RUNTIME_PROJECT, {
+          FIRESTORE_EMULATOR_HOST: host,
+        })),
+        EMULATOR_RUNTIME_PROJECT,
+    );
+  }
+});
+
+test("I06 — demo without valid loopback evidence is rejected", () => {
+  for (const host of [
+    undefined,
+    "",
+    "0.0.0.0:8080",
+    "192.168.1.10:8080",
+    "127.0.0.1:0",
+    "127.0.0.1:08080",
+    "127.0.0.1:65536",
+    "localhost",
+  ]) {
+    const env = matchingRuntimeEnv(EMULATOR_RUNTIME_PROJECT);
+    if (host !== undefined) env.FIRESTORE_EMULATOR_HOST = host;
+    expectUnknownRuntime(env);
+  }
+});
+
+test("I07 — unknown cloud projects are rejected without broad matching", () => {
+  for (const projectId of [
+    "foreign-project",
+    "demo-other",
+    "miami-e2e-copy",
+    PRODUCTION_RUNTIME_PROJECT.toUpperCase(),
+    ` ${PRODUCTION_RUNTIME_PROJECT}`,
+    `${DEV_RUNTIME_PROJECT} `,
+  ]) {
+    expectUnknownRuntime(matchingRuntimeEnv(projectId));
+  }
+});
+
+test("I08 — conflicting or malformed project sources are rejected", () => {
   expectUnknownRuntime({
-    ...matchingEnv(productionProject),
-    GOOGLE_CLOUD_PROJECT: emulatorProject,
+    ...matchingRuntimeEnv(PRODUCTION_RUNTIME_PROJECT),
+    GOOGLE_CLOUD_PROJECT: DEV_RUNTIME_PROJECT,
   });
   expectUnknownRuntime({
-    ...matchingEnv(emulatorProject, {
-      FIRESTORE_EMULATOR_HOST: emulatorHost,
+    ...matchingRuntimeEnv(EMULATOR_RUNTIME_PROJECT, {
+      FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST,
     }),
     FIREBASE_CONFIG: JSON.stringify({projectId: "foreign-project"}),
   });
+  expectUnknownRuntime({
+    GCLOUD_PROJECT: DEV_RUNTIME_PROJECT,
+    FIREBASE_CONFIG: "{",
+  });
+});
 
-  for (const projectId of [
-    productionProject.toUpperCase(),
-    emulatorProject.toUpperCase(),
-    ` ${productionProject}`,
-    `${productionProject} `,
-    ` ${emulatorProject}`,
-    `${emulatorProject} `,
-  ]) {
-    expectUnknownRuntime(matchingEnv(projectId, {
-      FIRESTORE_EMULATOR_HOST: emulatorHost,
-    }));
-  }
+test("I09 — missing project identity is rejected", () => {
+  expectUnknownRuntime({});
+  expectUnknownRuntime({FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST});
+  expectUnknownRuntime({FIREBASE_CONFIG: "{}"});
 });
 
 test("write helper declarations are pinned to the exact inventory", () => {

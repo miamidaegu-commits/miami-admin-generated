@@ -6,6 +6,38 @@ Staging/e2e project: `miami-e2e`
 
 This runbook prepares production without deleting data, resetting data, weakening tenant safety, or changing Firestore rules and Cloud Functions business logic.
 
+## Same-project writer runtime and Dev write guard
+
+The reviewed local toolchain is Firebase CLI `15.13.0` with
+`firebase-functions` `7.2.3`. For Gen2 endpoint discovery, the exact source
+option `academy-private-writer-runtime@` remains a short-form service-account
+value until the CLI combines it with the selected endpoint project. It resolves
+to `academy-private-writer-runtime@daegu-miami-production.iam.gserviceaccount.com`
+for Production and
+`academy-private-writer-runtime@miami-e2e.iam.gserviceaccount.com` for Dev.
+Source must not embed either full writer email.
+
+The observed current Dev and Production writer identities both use the
+platform role `roles/datastore.user`. This observed-state parity is not the
+Production reset/freeze target state: `academyPrivateWriterRuntimeV1` remains
+the exact custom-role target required by `academy_private_runtime_iam.v9`.
+Current platform-role evidence must not be substituted for that target-state
+receipt or used to weaken its validator.
+
+Before a Dev deployment, independently confirm that the exact
+`academy-private-writer-runtime@miami-e2e.iam.gserviceaccount.com` identity is
+enabled, has `roles/datastore.user`, and has no user-managed key, and that the
+deployer has `roles/iam.serviceAccountUser` for that identity. The only approved
+future Dev target set for this alignment is:
+
+```sh
+firebase deploy --only functions:createFixedPrivateLessonAssignment,functions:commitFixedPrivateLessonOutcomeAction --project miami-e2e
+```
+
+This command is scope documentation, not deployment authorization. The Preview
+Function remains bound to its full Production Preview identity and is excluded
+from the Dev target set.
+
 ## Academy private Functions IAM gate
 
 The Academy private Preview → Assignment → Outcome deployment contract is not
