@@ -9,7 +9,10 @@ import {fileURLToPath, pathToFileURL} from "node:url";
 import {
   ACADEMY_RESET_WRITE_SURFACE_REGISTRY,
   EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST,
+  EXPECTED_WRITE_SURFACE_IDENTITY_DIGEST,
   WRITE_SOURCE_SHA256_ALLOWLIST,
+  WRITE_SURFACE_REGISTRY_VERSION,
+  writeSurfaceIdentityDigest,
 } from "../functions/scripts/academy-reset-write-surface-registry.mjs";
 import {
   APPROVED_PROVIDER_ADAPTER_ID,
@@ -1474,7 +1477,7 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
   const validation = validate(evidence);
   const {providerResult: genuineProviderResult, providerRuntimeContext} =
     await genuineRuntimeFor(evidence);
-  assert.equal(validation.writerCount, 58);
+  assert.equal(validation.writerCount, 59);
   const first = buildDeterministicWriteFreezeProof(evidence, {
     providerRuntimeContext,
   });
@@ -1485,6 +1488,32 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
   assert.deepEqual(first, second);
   assert.equal(first.writeFreezeVerified, true);
   assert.equal(first.schemaVersion, WRITE_FREEZE_PROOF_VERSION);
+  assert.equal(
+      first.writeSurfaceRegistryVersion,
+      "academy_reset_write_surface.v2",
+  );
+  assert.equal(first.writeSurfaceRegistryVersion, WRITE_SURFACE_REGISTRY_VERSION);
+  assert.equal(
+      writeSurfaceIdentityDigest(ACADEMY_RESET_WRITE_SURFACE_REGISTRY),
+      EXPECTED_WRITE_SURFACE_IDENTITY_DIGEST,
+  );
+  assert.equal(
+      first.writeSurfaceRegistryDigest,
+      sha256Canonical(ACADEMY_RESET_WRITE_SURFACE_REGISTRY),
+  );
+  assert.equal(first.writeSourceIdentityCount, 21);
+  assert.equal(
+      first.writeSourceIdentityDigest,
+      EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST,
+  );
+  assert.equal(first.writerCount, 59);
+  assert.equal(
+      CRITICAL_RUNTIME_SOURCE_PATHS.filter(
+          (sourcePath) =>
+            sourcePath === "functions/academy-reset-write-freeze.js",
+      ).length,
+      1,
+  );
   assert.deepEqual(first.unfreezeOrder, UNFREEZE_ORDER);
   assert.deepEqual(first.rollbackUnfreezeOrder, ROLLBACK_UNFREEZE_ORDER);
   assert.match(first.providerObservationDigest, /^[a-f0-9]{64}$/);

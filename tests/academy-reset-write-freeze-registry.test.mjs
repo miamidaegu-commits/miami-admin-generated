@@ -10,6 +10,7 @@ import {
   RESET_COLLECTIONS,
   WRITE_SOURCE_SHA256_ALLOWLIST,
   WRITE_SURFACE_COUNTS,
+  WRITE_SURFACE_REGISTRY_VERSION,
   assertWriteSourceIdentityAllowlist,
   assertWriteSurfaceRegistry,
   writeSourceIdentityDigest,
@@ -18,18 +19,60 @@ import {
 } from "../functions/scripts/academy-reset-write-surface-registry.mjs";
 
 test("registry pins 29 reset collections and exact writer category counts", () => {
+  assert.equal(
+      WRITE_SURFACE_REGISTRY_VERSION,
+      "academy_reset_write_surface.v2",
+  );
   assert.equal(RESET_COLLECTIONS.length, 29);
   assert.equal(new Set(RESET_COLLECTIONS).size, 29);
-  assert.equal(WRITE_SURFACE_COUNTS.writerCount, 58);
-  assert.equal(EXPECTED_WRITE_SURFACE_COUNT, 58);
+  assert.equal(WRITE_SURFACE_COUNTS.writerCount, 59);
+  assert.equal(EXPECTED_WRITE_SURFACE_COUNT, 59);
   assert.equal(EXPECTED_WRITE_SOURCE_COUNT, 21);
   assert.deepEqual(WRITE_SURFACE_COUNTS.categoryCounts, {
     client_direct_writer: 20,
     callable_writer: 21,
-    transaction_writer: 12,
+    transaction_writer: 13,
     scheduled_writer: 1,
     auth_global_writer: 4,
   });
+});
+
+test("registry v2 adds the exact reservation reversal transaction writer", () => {
+  const helperName = "reversePrivateReservationOutcomeInTransaction";
+  const entries = ACADEMY_RESET_WRITE_SURFACE_REGISTRY.filter(
+      ({entryHelper}) => entryHelper === helperName,
+  );
+  assert.deepEqual(entries, [{
+    category: "transaction_writer",
+    sourceFile: "functions/index.js",
+    entryHelper: helperName,
+    collections: [
+      "studentPackages", "privateLessonReservations", "creditTransactions",
+    ],
+    operationClass: ["create", "update", "transaction"],
+    scope: "academy_scoped_admin_sdk_transaction",
+    guardRequirement:
+      "authorized actor, guarded academy, and exact reversal evidence",
+  }]);
+  const identities =
+    ACADEMY_RESET_WRITE_SURFACE_REGISTRY.map(writeSurfaceIdentity);
+  assert.equal(new Set(identities).size, 59);
+  assert.equal(identities.filter((identity) =>
+    identity.includes("*") || identity.toLowerCase().includes("default"),
+  ).length, 0);
+
+  const sourcePins = new Map(
+      WRITE_SOURCE_SHA256_ALLOWLIST.map(({sourceFile, sha256}) =>
+        [sourceFile, sha256]),
+  );
+  assert.equal(
+      sourcePins.get("Dashboard.jsx"),
+      "ff667ff46a653768f8699a630b61fa65565a19d6f04852069294e5d4bbd31b2c",
+  );
+  assert.equal(
+      sourcePins.get("functions/index.js"),
+      "0c3629a77f6d4af46068a8413daf3ee8aa0621a9d885c4d73a929f9e4d6e0c67",
+  );
 });
 
 test("every writer has machine-readable exact metadata", () => {
@@ -52,7 +95,7 @@ test("every writer has machine-readable exact metadata", () => {
       EXPECTED_WRITE_SURFACE_IDENTITIES.length,
       ACADEMY_RESET_WRITE_SURFACE_REGISTRY.length,
   );
-  assert.equal(assertWriteSurfaceRegistry().writerCount, 58);
+  assert.equal(assertWriteSurfaceRegistry().writerCount, 59);
   assert.equal(
       writeSurfaceIdentityDigest(ACADEMY_RESET_WRITE_SURFACE_REGISTRY),
       EXPECTED_WRITE_SURFACE_IDENTITY_DIGEST,

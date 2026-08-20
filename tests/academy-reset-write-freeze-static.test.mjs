@@ -9,7 +9,9 @@ import * as writeFreezeContract from
 import {
   ACADEMY_RESET_WRITE_SURFACE_REGISTRY,
   EXPECTED_WRITE_SOURCE_COUNT,
+  EXPECTED_WRITE_SURFACE_COUNT,
   WRITE_SOURCE_SHA256_ALLOWLIST,
+  WRITE_SURFACE_REGISTRY_VERSION,
 } from "../functions/scripts/academy-reset-write-surface-registry.mjs";
 import {
   EXPECTED_DEPLOYED_FUNCTION_NAMES,
@@ -426,6 +428,81 @@ test("every registered transaction helper is present and mutating", () => {
   assert.match(
       functionsSource,
       /\btransaction\.(?:create|set|update|delete)\s*\(/,
+  );
+});
+
+test("reversal helper is exactly represented by both v2 current owners", () => {
+  const helperName = "reversePrivateReservationOutcomeInTransaction";
+  assert.equal(
+      WRITE_SURFACE_REGISTRY_VERSION,
+      "academy_reset_write_surface.v2",
+  );
+  assert.equal(EXPECTED_WRITE_SURFACE_COUNT, 59);
+  assert.equal(
+      ACADEMY_RESET_WRITE_SURFACE_REGISTRY.filter(
+          ({category}) => category === "transaction_writer",
+      ).length,
+      13,
+  );
+  assert.equal(
+      (backendFreezeSource.match(
+          /"academy_reset_write_surface_inventory\.v2"/g,
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      (backendFreezeSource.match(/"academy_reset_write_freeze\.v1"/g) || [])
+          .length,
+      1,
+  );
+  assert.equal(
+      inventoryList("writeHelpers").filter((name) => name === helperName)
+          .length,
+      1,
+  );
+
+  const helperStart = functionsSource.indexOf(`async function ${helperName}(`);
+  const helperEnd = functionsSource.indexOf(
+      "\nexports.reversePrivateReservationOutcome = onCall(",
+      helperStart,
+  );
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+  const helperSource = functionsSource.slice(helperStart, helperEnd);
+  const mutations = [...helperSource.matchAll(
+      /transaction\.(create|set|update|delete)\(\s*([A-Za-z][A-Za-z0-9]*)/g,
+  )].map((match) => `${match[1]}:${match[2]}`);
+  assert.deepEqual(mutations, [
+    "update:packageRef",
+    "update:reservationRef",
+    "update:originalCreditRef",
+    "create:reversalCreditRef",
+  ]);
+  for (const reference of [
+    'const packageRef = db.collection("studentPackages").doc(packageId);',
+    '.collection("privateLessonReservations")',
+    'const originalCreditRef = db.collection("creditTransactions")',
+    'const reversalCreditRef = db.collection("creditTransactions")',
+  ]) {
+    assert.equal(helperSource.includes(reference), true, reference);
+  }
+  assert.equal(
+      (functionsSource.match(
+          /^async function reversePrivateReservationOutcomeInTransaction\(/gm,
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      (functionsSource.match(
+          /return await reversePrivateReservationOutcomeInTransaction\(/g,
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      functionsSource.includes(
+          "return `reverse_${normalizeId(deductionId)}`;",
+      ),
+      true,
   );
 });
 

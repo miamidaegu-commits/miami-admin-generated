@@ -282,8 +282,9 @@ test('private reservation outcome helper extraction preserves legacy behavior sh
   expect(callableBlock).toContain('requireString(data, "reservationId")');
   expect(callableBlock).toContain('const outcome = requireString(data, "outcome")');
   expect(callableBlock).toContain('["completed", "no_show"].includes(outcome)');
-  expect(callableBlock).toContain('canMarkPrivateReservationOutcome');
   expect(callableBlock).toContain('db.runTransaction');
+  expect(callableBlock).toContain('.collection("academyMemberships")');
+  expect(callableBlock).toContain('buildPrivateLessonOutcomeActorFromMembership');
   expect(callableBlock).toContain('applyPrivateReservationOutcomeWithDeductionInTransaction(');
   expect(callableBlock).not.toContain('transaction.update(packageRef');
   expect(callableBlock).not.toContain('transaction.set(creditRef');
@@ -302,6 +303,106 @@ test('private reservation outcome helper extraction preserves legacy behavior sh
   expect(functionsSource).toContain('exports.previewPrivateLessonOutcomeAction');
   expect(functionsSource).toContain('exports.commitPrivateLessonOutcomeAction');
   expect(reverseBlock).not.toContain('applyPrivateReservationOutcomeWithDeductionInTransaction');
+});
+
+test('direct private regular absence contract stays canonical and bounded', () => {
+  const functionsSource = readSource('functions/index.js');
+  const dashboardSource = readSource('Dashboard.jsx');
+  const calendarSource = readSource('src/features/dashboard/sections/CalendarSection.jsx');
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  );
+  const koSource = readSource('src/i18n/resources/ko.js');
+  const enSource = readSource('src/i18n/resources/en.js');
+  const writerBlock = boundedSource(
+    functionsSource,
+    'async function applyPrivateReservationOutcomeWithDeductionInTransaction(',
+    'exports.markPrivateReservationOutcome = onCall('
+  );
+  const reversalBlock = boundedSource(
+    functionsSource,
+    'function buildPrivateReservationOutcomeReversalCreditId(',
+    'exports.bootstrapAdmin = onCall('
+  );
+
+  [
+    'status: "no_show"',
+    'private_reservation_no_show_deduct',
+    'deltaCount: -1',
+    'buildDeductionKey',
+    'isAutoDeductedPrivateReservationOutcomeReclassification',
+    'deduction_evidence_conflict',
+    'transaction.update(packageRef',
+    'transaction.update(reservationRef',
+    'transaction.set(creditRef',
+  ].forEach((token) => expect(writerBlock).toContain(token));
+  expect(functionsSource).toContain('reuse_existing_auto_deduction');
+  expect(functionsSource).toContain('reuse_existing_active_deduction');
+  expect(functionsSource).toContain(
+    'buildPrivateReservationOutcomeDeductionCycleIdentity'
+  );
+  expect(writerBlock).not.toContain('makeupCredit');
+  expect(writerBlock).not.toContain('makeupCredits');
+
+  [
+    'reversePrivateReservationOutcomeInTransaction',
+    'buildPrivateReservationOutcomeReversalCreditId',
+    'reversalOfTransactionId',
+    'originalDeductionCreditTransactionId',
+    'originalOutcomeStatus',
+    'deductionReversed: true',
+    'buildPrivateReservationOutcomeReversalPlanHash',
+    'mixed_reversal_request_shape',
+    'buildLegacyPrivateReservationReversalRequestId',
+    'deltaCount: 1',
+    'transaction.create(reversalCreditRef',
+  ].forEach((token) => expect(reversalBlock).toContain(token));
+  expect(reversalBlock).not.toContain('makeupCredit');
+
+  [
+    "target.regularAbsenceFromAuto === true",
+    "'reverse_deduction'",
+    "'reversePrivateReservationOutcome'",
+    'requestId,',
+    'planHash,',
+    'activeDeductionId:',
+    'reason,',
+  ].forEach((token) => expect(dashboardSource).toContain(token));
+  [
+    'private-lesson-regular-absence-reversal-button',
+    'private-lesson-auto-deduction-absence-button',
+    "teacher.calendar.action.processAbsence",
+    "teacher.calendar.action.cancelAbsence",
+    "teacher.calendar.status.absent",
+    "teacher.calendar.status.unallocated.one",
+    "teacher.calendar.status.unallocated.other",
+    'makeupAvailableCount',
+    'canUseLegacyPrivateReservationActions',
+    'isPrivateReservationRow',
+    'isFixedPrivateSourceRow',
+  ].forEach((token) => expect(calendarSource).toContain(token));
+  [
+    "no_show: '결석'",
+    "reverse_deduction: '결석 취소'",
+    'private-lesson-outcome-package-impact-wording',
+    '추가 수강권 차감 없음',
+    '과거 차감·복원 기록은 보존됩니다',
+    'reuse_existing_auto_deduction',
+    'reuse_existing_active_deduction',
+  ].forEach((token) => expect(modalSource).toContain(token));
+
+  expect(koSource).toContain(
+    "'teacher.calendar.status.unallocated.one': '미배정 수강권 {{count}}회'"
+  );
+  expect(koSource).toContain(
+    "'teacher.calendar.status.unallocated.other': '미배정 수강권 {{count}}회'"
+  );
+  expect(enSource).toContain(
+    "'teacher.calendar.status.unallocated.one': '1 unallocated lesson'"
+  );
+  expect(enSource).toContain(
+    "'teacher.calendar.status.unallocated.other': '{{count}} unallocated lessons'"
+  );
 });
 
 test('private reservation outcome helper extraction keeps protected files unchanged', () => {

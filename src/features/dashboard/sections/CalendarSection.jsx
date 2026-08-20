@@ -508,7 +508,7 @@ function getPrivatePackageStateLabel({
 
   const makeupAvailableCount = Number(packageUsage?.makeupAvailableCount)
   if (Number.isFinite(makeupAvailableCount)) {
-    return `보충 가능 ${Math.max(0, makeupAvailableCount)}회`
+    return `미배정 수강권 ${Math.max(0, makeupAvailableCount)}회`
   }
 
   return hasDirectPackageLink ? '수강권 연결됨' : '수강권 자동 연결'
@@ -706,6 +706,7 @@ export default function CalendarSection(props) {
       '예정': 'teacher.calendar.status.scheduled',
       '완료': 'teacher.calendar.status.completed',
       '노쇼': 'teacher.calendar.status.noShow',
+      '결석': 'teacher.calendar.status.absent',
       '예약 완료': 'teacher.calendar.status.reserved',
       '자동 차감 완료': 'teacher.calendar.status.autoDeducted',
       '정상 차감': 'teacher.calendar.status.deducted',
@@ -729,9 +730,15 @@ export default function CalendarSection(props) {
     const key = keyByLabel[String(value || '').trim()]
     if (key) return t(key)
     const raw = String(value || '')
-    const makeupMatch = raw.match(/^보충 가능 (\d+)회$/)
-    if (makeupMatch) {
-      return t('teacher.calendar.status.makeupAvailable', { count: makeupMatch[1] })
+    const unallocatedMatch = raw.match(/^미배정 수강권 (\d+)회$/)
+    if (unallocatedMatch) {
+      const count = Number(unallocatedMatch[1])
+      return t(
+        count === 1
+          ? 'teacher.calendar.status.unallocated.one'
+          : 'teacher.calendar.status.unallocated.other',
+        { count }
+      )
     }
     const sessionMatch = raw.match(/^(\d+)회차$/)
     if (sessionMatch) {
@@ -1657,15 +1664,15 @@ export default function CalendarSection(props) {
             const statusLabel = knownLabel(isGroupRow
               ? lesson.calendarStatusLabel || '예정'
               : isPrivateReservationRow
-                ? lesson.deductionSource === 'auto'
+                ? privateReservationStatus === 'no_show'
+                  ? '결석'
+                  : lesson.deductionSource === 'auto'
                   ? '자동 차감 완료'
                   : lesson.deductionApplied === true
                     ? '정상 차감'
                     : privateReservationStatus === 'completed'
                       ? '완료'
-                      : privateReservationStatus === 'no_show'
-                        ? '노쇼'
-                        : '예약 완료'
+                      : '예약 완료'
                 : isNoDeductionPrivateLesson
                   ? fixedPrivateCancellationLabel || '원 수업 휴강 · 차감 없음'
                   : lesson.isDeductCancelled
@@ -1698,7 +1705,7 @@ export default function CalendarSection(props) {
                       : isDeductedPrivateLesson
                         ? ''
                       : packageUsage && Number(packageUsage.makeupAvailableCount || 0) <= 0
-                        ? '보충 가능 0회'
+                        ? '미배정 수강권 0회'
                         : '아직 차감된 수업이 아닙니다'
             const canEditPackageCount =
               !isGroupRow &&
@@ -1730,10 +1737,39 @@ export default function CalendarSection(props) {
             const canOpenPrivateLessonStatusActionPreview =
               activeSection === 'calendar' &&
               isAdmin &&
+              isPrivateReservationRow &&
               canUseLegacyPrivateReservationActions &&
               Boolean(privateReservationId) &&
+              Boolean(matchedStudentId) &&
               PRIVATE_LESSON_STATUS_ACTION_ACTIVE_STATUSES.has(privateReservationActionStatus) &&
               !PRIVATE_LESSON_STATUS_ACTION_FINAL_STATUSES.has(privateReservationActionStatus) &&
+              lesson.deleted !== true &&
+              lesson.archived !== true &&
+              lesson.releasedForPrivateBooking !== true
+            const canOpenPrivateLessonAutoDeductionAbsencePreview =
+              activeSection === 'calendar' &&
+              isAdmin &&
+              isPrivateReservationRow &&
+              canUseLegacyPrivateReservationActions &&
+              Boolean(privateReservationId) &&
+              Boolean(matchedStudentId) &&
+              privateReservationActionStatus === 'completed' &&
+              lesson.deductionApplied === true &&
+              String(lesson.deductionSource || '').trim().toLowerCase() === 'auto' &&
+              lesson.deductionReversed !== true &&
+              !lesson.outcomeReversedAt &&
+              lesson.deleted !== true &&
+              lesson.archived !== true &&
+              lesson.releasedForPrivateBooking !== true
+            const canOpenPrivateLessonAbsenceReversalPreview =
+              activeSection === 'calendar' &&
+              isAdmin &&
+              isPrivateReservationRow &&
+              canUseLegacyPrivateReservationActions &&
+              Boolean(privateReservationId) &&
+              Boolean(matchedStudentId) &&
+              privateReservationActionStatus === 'no_show' &&
+              lesson.deductionApplied === true &&
               lesson.deleted !== true &&
               lesson.archived !== true &&
               lesson.releasedForPrivateBooking !== true
@@ -2210,18 +2246,33 @@ export default function CalendarSection(props) {
                     </span>
                   ) : null}
                   {canOpenPrivateLessonStatusActionPreview ||
+                  canOpenPrivateLessonAutoDeductionAbsencePreview ||
+                  canOpenPrivateLessonAbsenceReversalPreview ||
                   canOpenFixedPrivateLessonOutcomePreview ? (
                     <button
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation()
-                        onOpenPrivateLessonStatusActionPreview?.(lesson)
+                        onOpenPrivateLessonStatusActionPreview?.({
+                          ...lesson,
+                          regularAbsenceFromAuto:
+                            canOpenPrivateLessonAutoDeductionAbsencePreview,
+                        })
                       }}
-                      disabled={canOpenFixedPrivateLessonOutcomePreview && rowLessonActionBusy}
+                      disabled={
+                        (canOpenFixedPrivateLessonOutcomePreview ||
+                          canOpenPrivateLessonAbsenceReversalPreview ||
+                          canOpenPrivateLessonAutoDeductionAbsencePreview) &&
+                        (rowLessonActionBusy || reservationOutcomeBusy)
+                      }
                       data-testid={
                         canOpenFixedPrivateLessonOutcomePreview
                           ? 'fixed-private-lesson-outcome-preview-button'
-                          : 'private-lesson-status-action-preview-button'
+                          : canOpenPrivateLessonAbsenceReversalPreview
+                            ? 'private-lesson-regular-absence-reversal-button'
+                            : canOpenPrivateLessonAutoDeductionAbsencePreview
+                              ? 'private-lesson-auto-deduction-absence-button'
+                            : 'private-lesson-status-action-preview-button'
                       }
                       data-fixed-private-outcome={
                         canOpenFixedPrivateLessonOutcomePreview ? 'true' : undefined
@@ -2240,7 +2291,10 @@ export default function CalendarSection(props) {
                         background: '#1e3a2d',
                         color: 'white',
                         cursor:
-                          canOpenFixedPrivateLessonOutcomePreview && rowLessonActionBusy
+                          (canOpenFixedPrivateLessonOutcomePreview ||
+                            canOpenPrivateLessonAbsenceReversalPreview ||
+                            canOpenPrivateLessonAutoDeductionAbsencePreview) &&
+                          (rowLessonActionBusy || reservationOutcomeBusy)
                             ? 'not-allowed'
                             : 'pointer',
                       }}
@@ -2249,7 +2303,11 @@ export default function CalendarSection(props) {
                         ? isFixedPrivateOutcomeRow
                           ? text('teacher.calendar.action.processFixed', '고정수업 결과 처리')
                           : text('teacher.calendar.action.fixedLinkError', '고정수업 연결 오류 확인')
-                        : text('teacher.calendar.action.processLesson', '수업 처리')}
+                        : canOpenPrivateLessonAbsenceReversalPreview
+                          ? text('teacher.calendar.action.cancelAbsence', '결석 취소')
+                          : canOpenPrivateLessonAutoDeductionAbsencePreview
+                            ? text('teacher.calendar.action.processAbsence', '결석 처리')
+                          : text('teacher.calendar.action.processLesson', '수업 처리')}
                     </button>
                   ) : null}
                   {activeSection === 'calendar' &&
@@ -2274,21 +2332,6 @@ export default function CalendarSection(props) {
                           >
                             {reservationCompleteBusy ? '처리 중...' : '완료 처리'}
                           </button>
-                          <button
-                            type="button"
-                            onClick={() => onMarkPrivateReservationOutcome?.(lesson, 'no_show')}
-                            disabled={reservationOutcomeBusy}
-                            style={{
-                              padding: '6px 10px',
-                              borderRadius: 8,
-                              border: '1px solid #553333',
-                              background: '#4a2a2a',
-                              color: 'white',
-                              cursor: reservationOutcomeBusy ? 'not-allowed' : 'pointer',
-                            }}
-                          >
-                            {reservationNoShowBusy ? '처리 중...' : '노쇼 처리'}
-                          </button>
                         </>
                       ) : (
                         <button
@@ -2312,7 +2355,7 @@ export default function CalendarSection(props) {
                   {activeSection === 'calendar' &&
                   isAdmin &&
                   canUseLegacyPrivateReservationActions &&
-                  ['completed', 'no_show'].includes(privateReservationStatus) ? (
+                  privateReservationStatus === 'completed' ? (
                     <button
                       type="button"
                       onClick={() => onReversePrivateReservationOutcome?.(lesson)}

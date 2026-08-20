@@ -153,7 +153,7 @@ test('outcome commit validates a fresh plan before the unchanged writer', () => 
   });
 });
 
-test('legacy outcome writer, mark callable, and reverse callable are exact', () => {
+test('bounded outcome writer, legacy mark callable, and reverse callable are exact', () => {
   const functionsSource = readSource('functions/index.js');
   const writeHelperBlock = boundedSource(
     functionsSource,
@@ -172,53 +172,48 @@ test('legacy outcome writer, mark callable, and reverse callable are exact', () 
   );
 
   expect(sha256(writeHelperBlock)).toBe(
-    '7754c1adf5877720576d5e50a6873ebb6a5f2f050723c3940d02f984f1232e35'
+    '7108dcc7dbc543154c83c5ecfa1957b072522b16f299b76af146827f805fcf5e'
   );
   expect(sha256(markBlock)).toBe(
-    'd9f323cb7b215aab6492cdf61b143a067fe1839d5ec00ed0355c978dacebfd99'
+    '8f635967cdc9a3a7b081d41eb91c4fbded92a40964b2b7b8762badecd2a7aab3'
   );
   expect(sha256(reverseBlock)).toBe(
-    '6f558931bdfcf56849d5aae04325ba79ef5771b2222d5825b95f5e000a2be023'
+    '9be37d7d33e3ad44bbd206c56dc7adf5dbb35710bc81a28dadac69fb09804d71'
   );
 });
 
 test('outcome commit changes stay inside backend and targeted tests', () => {
   const allowedPaths = new Set([
-    'AuthContext.jsx',
     'Dashboard.jsx',
-    'firestore.rules',
+    'firebase.a1-outcome-emulator.json',
+    'functions/academy-reset-write-freeze.js',
     'functions/index.js',
+    'functions/scripts/academy-reset-write-surface-registry.mjs',
     'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
-    'src/features/dashboard/hooks/usePrivateLessonFlow.js',
     'src/features/dashboard/sections/CalendarSection.jsx',
-    'src/features/dashboard/sections/PrivateLessonSlotsSection.jsx',
-    'scripts/run-fixed-private-outcome-ledger-audit.mjs',
-    'tests/fixed-private-lesson-outcome-audit.emulator.cjs',
-    'tests/fixed-private-lesson-outcome-action.emulator.cjs',
-    'tests/fixed-private-lesson-outcome-action.spec.js',
-    'tests/fixed-private-lesson-outcome-frontend.spec.js',
-    'tests/fixed-private-outcome-audit-runner.test.mjs',
-    'tests/fixed-private-outcome-audit-v2.spec.js',
-    'tests/fixed-private-remediation-evidence-v1.spec.js',
-    'tests/fixed-private-remediation-evidence.emulator.cjs',
-    'tests/fixed-private-remediation-manifest-runner.test.mjs',
-    'tests/private-fixed-slot-assignment.spec.js',
-    'tests/private-lesson-outcome-actions.spec.js',
+    'src/i18n/resources/en.js',
+    'src/i18n/resources/ko.js',
+    'tests/academy-reset-write-freeze-functions.test.cjs',
+    'tests/academy-reset-write-freeze-registry.test.mjs',
+    'tests/academy-reset-write-freeze-static.test.mjs',
+    'tests/academy-reset-write-freeze-verifier.test.mjs',
     'tests/private-lesson-outcome-commit.spec.js',
     'tests/private-lesson-outcome-commit.emulator.cjs',
-    'tests/private-lesson-status-actions.spec.js',
+    'tests/private-lesson-outcome-emulator-contract.test.mjs',
     'tests/private-reservation-outcome.spec.js',
   ]);
   const changedPaths = execFileSync(
     'git',
-    ['diff', '--name-only', 'origin/product-version', '--'],
+    ['status', '--porcelain=v1'],
     { cwd: process.cwd(), encoding: 'utf8' }
   )
     .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .map((line) => line.slice(3).trim())
+    .filter(Boolean)
+    .sort();
 
-  expect(changedPaths.every((changedPath) => allowedPaths.has(changedPath))).toBe(true);
+  expect(changedPaths).toEqual([...allowedPaths].sort());
+  expect([...allowedPaths].some((changedPath) => changedPath.includes('*'))).toBe(false);
 });
 
 test('outcome commit source passes Node syntax check', () => {

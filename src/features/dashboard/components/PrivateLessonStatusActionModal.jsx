@@ -5,7 +5,8 @@ import { installDialogFocusContainment } from '../../../preferences/layout.js'
 
 const ACTION_LABELS = {
   complete: '수업완료',
-  no_show: '노쇼',
+  no_show: '결석',
+  reverse_deduction: '결석 취소',
 }
 
 function formatJson(value) {
@@ -178,6 +179,8 @@ function FixedPrivateLessonOutcomeMode({
   target,
   actionType,
   setActionType,
+  reversalReason,
+  setReversalReason,
   fixedLocalGatePassed,
   fixedOutcomePreviewBusy,
   fixedOutcomePreviewError,
@@ -757,6 +760,8 @@ export default function PrivateLessonStatusActionModal({
   teacherPortal = false,
 }) {
   const [commitConfirmed, setCommitConfirmed] = useState(false)
+  const { t } = useTranslation()
+  const text = (key, fallback) => (teacherPortal ? t(key) : fallback)
   if (!target) return null
   if (fixedOccurrenceMode) {
     return (
@@ -791,6 +796,7 @@ export default function PrivateLessonStatusActionModal({
     ? outcomePreviewResult.warnings
     : []
   const row = target || {}
+  const isRegularAbsenceReversal = actionType === 'reverse_deduction'
   const reservationId = String(row.reservationId || row.privateReservationId || row.id || '').trim()
   const currentStatus = preview?.currentState?.status || row.status || '-'
   const proposedStatus =
@@ -798,7 +804,12 @@ export default function PrivateLessonStatusActionModal({
     preview?.proposedState?.lesson?.status ||
     preview?.normalizedPlan?.targetStatus ||
     '-'
-  const previewPassed = preview?.ok === true && preview?.allowed === true && blockedReasons.length === 0
+  const reversalPlanHash = String(preview?.planHash || '').trim()
+  const previewPassed =
+    preview?.ok === true &&
+    preview?.allowed === true &&
+    blockedReasons.length === 0 &&
+    (!isRegularAbsenceReversal || /^[a-f0-9]{64}$/.test(reversalPlanHash))
   const hasPackageOrCreditWriteRequirement = blockedReasons.includes(
     'package_or_credit_write_required'
   )
@@ -813,6 +824,21 @@ export default function PrivateLessonStatusActionModal({
     !outcomeCommitResult
   const outcomePackageImpact = outcomePreviewResult?.packageImpact || {}
   const outcomeCreditTransactionPreview = outcomePreviewResult?.creditTransactionPreview || {}
+  const reusesExistingDeduction = [
+    'reuse_existing_auto_deduction',
+    'reuse_existing_active_deduction',
+  ].includes(outcomePreviewResult?.normalizedPlan?.deductionMode)
+  const additionalPackageDeduction = Number(
+    outcomePackageImpact.additionalPackageDeduction ??
+      (outcomePackageImpact.remainingCountDelta === -1 ? 1 : 0)
+  )
+  const outcomePackageImpactText =
+    additionalPackageDeduction === 0
+      ? text(
+          'teacher.outcome.packageImpact.noAdditional',
+          '추가 수강권 차감 없음 · 기존 활성 차감 기록을 유지합니다.'
+        )
+      : text('teacher.outcome.packageImpact.deduct.one', '수강권 1회를 차감합니다.')
   const outcomePreviewBlocked =
     Boolean(outcomePreviewResult) &&
     (outcomePreviewResult.ok !== true ||
@@ -838,7 +864,8 @@ export default function PrivateLessonStatusActionModal({
     outcomePreviewResult.ok === true &&
     outcomePreviewResult.allowed === true &&
     outcomeBlockedReasons.length === 0 &&
-    outcomeCreditTransactionPreview.duplicateExists !== true &&
+    (outcomeCreditTransactionPreview.duplicateExists !== true ||
+      reusesExistingDeduction) &&
     Boolean(outcomePackageImpact?.packageId) &&
     Boolean(outcomePreviewPlanHash) &&
     outcomePreviewMatchesCurrentTargetAndAction
@@ -856,6 +883,7 @@ export default function PrivateLessonStatusActionModal({
     !previewPassed ||
     !previewPayload ||
     !commitConfirmed ||
+    (isRegularAbsenceReversal && String(reversalReason || '').trim().length < 2) ||
     previewBusy ||
     outcomePreviewBusy ||
     outcomeCommitBusy ||
@@ -959,6 +987,10 @@ export default function PrivateLessonStatusActionModal({
           }}
         >
           <legend style={{ padding: '0 6px', fontWeight: 700 }}>처리 유형</legend>
+          {isRegularAbsenceReversal ? (
+            <strong data-testid="private-lesson-regular-absence-reversal-label">결석 취소</strong>
+          ) : (
+            <>
           <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 18 }}>
             <input
               type="radio"
@@ -1001,8 +1033,10 @@ export default function PrivateLessonStatusActionModal({
               }
               data-testid="private-lesson-status-action-type-no-show"
             />
-            노쇼
+            결석
           </label>
+            </>
+          )}
         </fieldset>
 
         <div style={{ marginTop: 14, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -1075,10 +1109,15 @@ export default function PrivateLessonStatusActionModal({
               padding: 14,
             }}
           >
-            <strong>수강권 차감이 필요한 수업입니다</strong>
+            <strong>
+              {row.regularAbsenceFromAuto === true
+                ? '기존 자동 차감을 유지하고 결석으로 변경합니다'
+                : '수강권 차감이 필요한 수업입니다'}
+            </strong>
             <p style={{ margin: '8px 0 0 0', color: '#ffe1a8', fontSize: 13, lineHeight: 1.5 }}>
-              이 수업은 수강권 차감과 차감 기록 생성이 필요한 수업입니다. 차감 포함
-              미리보기에서 변경 내용을 먼저 확인하세요.
+              {row.regularAbsenceFromAuto === true
+                ? '이미 적용된 수강권 1회 차감과 기존 차감 기록을 재사용합니다. 추가 차감이나 보충 크레딧은 만들지 않습니다.'
+                : '이 수업은 수강권 차감과 차감 기록 생성이 필요한 수업입니다. 차감 포함 미리보기에서 변경 내용을 먼저 확인하세요.'}
             </p>
             <button
               type="button"
@@ -1176,6 +1215,14 @@ export default function PrivateLessonStatusActionModal({
                 {' · '}requestId:{' '}
                 {outcomePreviewResult.requestId || outcomePreviewPayload?.requestId || '-'}
               </p>
+              {!outcomePreviewBlocked ? (
+                <p
+                  data-testid="private-lesson-outcome-package-impact-wording"
+                  style={{ margin: '8px 0 0 0', color: '#c9f7d8', fontSize: 13 }}
+                >
+                  {outcomePackageImpactText}
+                </p>
+              ) : null}
               {outcomePreviewBlocked ? (
                 <p style={{ margin: '8px 0 0 0', color: '#ffd2a8', fontSize: 13 }}>
                   실제 처리는 제공하지 않습니다. 차단 사유를 확인하고 서버 기준 미리보기부터
@@ -1276,8 +1323,15 @@ export default function PrivateLessonStatusActionModal({
           >
             <h3 style={{ margin: 0, fontSize: 15 }}>차감 포함 실제 처리 전 최종 확인</h3>
             <p style={{ margin: '8px 0 0 0', color: '#ffe1a8', fontSize: 13, lineHeight: 1.55 }}>
-              실제 처리하면 예약 상태가 변경되고, 수강권 1회가 차감되며, 차감 기록이
-              생성됩니다.
+              {reusesExistingDeduction
+                ? text(
+                    'teacher.outcome.packageImpact.noAdditionalDetail',
+                    '실제 처리하면 예약 상태만 변경됩니다. 기존 활성 차감은 유지되며 추가 차감이나 새 차감 기록은 만들지 않습니다.'
+                  )
+                : text(
+                    'teacher.outcome.packageImpact.deductDetail.one',
+                    '실제 처리하면 예약 상태가 변경되고, 수강권 1회가 차감되며, 차감 기록이 생성됩니다.'
+                  )}
             </p>
             <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13 }}>
               같은 요청을 반복해서 누르지 마세요. 처리 결과가 나타날 때까지 창을 닫지 마세요.
@@ -1371,6 +1425,9 @@ export default function PrivateLessonStatusActionModal({
               <FieldBlock label="target / payload" value={{ target: preview.target, payload: previewPayload }} />
             </div>
 
+            {isRegularAbsenceReversal ? (
+              <FieldBlock label="planHash" value={preview.planHash} />
+            ) : null}
             <FieldBlock label="nextStep" value={preview.nextStep} />
 
             {hasPackageOrCreditWriteRequirement ? (
@@ -1399,10 +1456,18 @@ export default function PrivateLessonStatusActionModal({
                   padding: 14,
                 }}
               >
-                <h3 style={{ margin: 0, fontSize: 15 }}>실제 처리 전 최종 확인</h3>
+                <h3 style={{ margin: 0, fontSize: 15 }}>
+                  {isRegularAbsenceReversal ? '결석 취소 전 최종 확인' : '실제 처리 전 최종 확인'}
+                </h3>
                 <p style={{ margin: '8px 0 0 0', opacity: 0.82, fontSize: 13, lineHeight: 1.5 }}>
-                  실제 처리 버튼을 누르면 예약 상태가 {ACTION_LABELS[actionType] || actionType}로
-                  저장됩니다. 차감취소/차감복구/완료취소는 이번 단계에 포함하지 않습니다.
+                  {isRegularAbsenceReversal
+                    ? text(
+                        'teacher.outcome.packageImpact.restore.one',
+                        '결석 취소를 확정하면 수강권 1회가 복구됩니다. 과거 차감·복원 기록은 보존됩니다.'
+                      )
+                    : `실제 처리 버튼을 누르면 예약 상태가 ${
+                        ACTION_LABELS[actionType] || actionType
+                      }로 저장됩니다. 결석 처리는 수강권 1회만 차감하며 보충 크레딧은 만들지 않습니다.`}
                 </p>
                 <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 13 }}>
                   {'같은 요청을 반복해서 누르지 마세요. 변경이 필요하면 서버 기준 미리보기를 다시 실행하세요.'}
@@ -1412,6 +1477,20 @@ export default function PrivateLessonStatusActionModal({
                     서버 미리보기를 통과하고 처리 차단 사유가 없어야 실제 처리를 실행할 수
                     있습니다.
                   </p>
+                ) : null}
+                {isRegularAbsenceReversal ? (
+                  <label
+                    style={{ display: 'grid', gap: 6, marginTop: 12, fontSize: 13 }}
+                  >
+                    결석 취소 사유
+                    <textarea
+                      value={reversalReason || ''}
+                      onChange={(event) => setReversalReason?.(event.target.value)}
+                      disabled={commitBusy || Boolean(commitResult)}
+                      rows={3}
+                      data-testid="private-lesson-regular-absence-reversal-reason"
+                    />
+                  </label>
                 ) : null}
                 <label
                   style={{
@@ -1430,7 +1509,9 @@ export default function PrivateLessonStatusActionModal({
                     disabled={!previewPassed || commitBusy || Boolean(commitResult)}
                     data-testid="private-lesson-status-action-commit-confirm"
                   />
-                  이 미리보기 결과로 실제 수업 상태를 처리합니다.
+                  {isRegularAbsenceReversal
+                    ? '수강권 1회 복구와 보충 크레딧 0회를 확인했습니다.'
+                    : '이 미리보기 결과로 실제 수업 상태를 처리합니다.'}
                 </label>
                 <button
                   type="button"
@@ -1449,7 +1530,15 @@ export default function PrivateLessonStatusActionModal({
                     opacity: commitDisabled ? 0.68 : 1,
                   }}
                 >
-                  {commitBusy ? '실제 처리 중...' : '위 내용으로 수업 처리'}
+                  {commitBusy
+                    ? isRegularAbsenceReversal
+                      ? '결석 취소 중...'
+                      : '실제 처리 중...'
+                    : isRegularAbsenceReversal
+                      ? '결석 취소'
+                      : actionType === 'no_show'
+                        ? '결석 처리'
+                        : '위 내용으로 수업 처리'}
                 </button>
               </section>
             )}

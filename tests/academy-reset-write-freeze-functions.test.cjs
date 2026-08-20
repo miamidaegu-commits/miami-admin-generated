@@ -34,6 +34,15 @@ const freezeGuardSource = fs.readFileSync(
     ),
     "utf8",
 );
+const writeSurfaceRegistrySource = fs.readFileSync(
+    path.join(
+        repositoryRoot,
+        "functions",
+        "scripts",
+        "academy-reset-write-surface-registry.mjs",
+    ),
+    "utf8",
+);
 
 const READ_ONLY_CALLABLES = Object.freeze([
   "listGroupLessonAvailability",
@@ -234,11 +243,16 @@ async function expectFreeze(promise, reason) {
 test("write inventory is deeply frozen and has exact category counts", () => {
   assert.equal(Object.isFrozen(WRITE_SURFACE_INVENTORY), true);
   assert.equal(WRITE_SURFACE_INVENTORY.version, WRITE_SURFACE_INVENTORY_VERSION);
+  assert.equal(
+      WRITE_SURFACE_INVENTORY_VERSION,
+      "academy_reset_write_surface_inventory.v2",
+  );
+  assert.equal(RESET_WRITE_FREEZE_SCHEMA_VERSION, "academy_reset_write_freeze.v1");
   const expectedCounts = {
     writeCallables: 25,
     transactionCallables: 19,
     scheduledWriters: 1,
-    writeHelpers: 12,
+    writeHelpers: 13,
     provisioningAuthCallables: 4,
     authOperations: 4,
   };
@@ -255,6 +269,24 @@ test("write inventory is deeply frozen and has exact category counts", () => {
         `${category} contains a duplicate`,
     );
   }
+  assert.deepEqual(WRITE_SURFACE_INVENTORY.writeHelpers, [
+    "setMergeWithTimestamps",
+    "createStudentAccessSummaryDocsIfMissing",
+    "runFixedPrivateRenewalWriteTransaction",
+    "runFixedPrivateAssignmentWriteTransaction",
+    "runFixedPrivateRescheduleWriteTransaction",
+    "commitPrivateLessonStatusAction",
+    "autoDeductPrivateReservation",
+    "autoDeductGroupStudent",
+    "createPrivateSlotNotification",
+    "commitPrivateLessonOutcomeAction",
+    "commitFixedPrivateLessonOutcomeAction",
+    "applyPrivateReservationOutcomeWithDeductionInTransaction",
+    "reversePrivateReservationOutcomeInTransaction",
+  ]);
+  assert.doesNotThrow(() => assertRegisteredWriteSurface(
+      "reversePrivateReservationOutcomeInTransaction",
+  ));
   assert.deepEqual(
       sorted(WRITE_SURFACE_INVENTORY.provisioningAuthCallables),
       sorted(["bootstrapAdmin", "setUserRole", "linkStudentAccount",
@@ -319,6 +351,22 @@ test("transaction and non-transaction callable allowlists are exact", () => {
 
 test("all 20 transaction runners guard before their first transaction read", () => {
   const runnerMatches = [...indexSource.matchAll(/runTransaction\s*\(/g)];
+  const delegatedReadHelperByRunner = new Map([
+    [
+      "markPrivateReservationOutcome",
+      "applyPrivateReservationOutcomeWithDeductionInTransaction",
+    ],
+    [
+      "reversePrivateReservationOutcome",
+      "reversePrivateReservationOutcomeInTransaction",
+    ],
+  ]);
+  assert.equal(delegatedReadHelperByRunner.size, 2);
+  assert.equal(new Set(delegatedReadHelperByRunner.values()).size, 2);
+  assert.equal(
+      delegatedReadHelperByRunner.get("reversePrivateReservationOutcome"),
+      "reversePrivateReservationOutcomeInTransaction",
+  );
   assert.equal(runnerMatches.length, 20);
   for (let index = 0; index < runnerMatches.length; index += 1) {
     const start = runnerMatches[index].index;
@@ -327,15 +375,43 @@ test("all 20 transaction runners guard before their first transaction read", () 
     const transactionBody = indexSource.slice(start, end);
     const guardIndex = transactionBody.indexOf("guardAcademyWrite({");
     const firstReadIndex = transactionBody.indexOf("transaction.get(");
-    const delegatedTransactionRead = transactionBody.includes(
-        "applyPrivateReservationOutcomeWithDeductionInTransaction(",
-    );
+    const runnerSurfaceId = transactionBody.match(
+        /writeSurfaceId:\s*"([^"]+)"/,
+    )?.[1];
+    const delegatedHelperName =
+      delegatedReadHelperByRunner.get(runnerSurfaceId);
+    const delegatedHelperCallIndex = delegatedHelperName ?
+      transactionBody.indexOf(`return await ${delegatedHelperName}(`) :
+      -1;
+    const delegatedTransactionRead = delegatedHelperCallIndex !== -1;
     assert.notEqual(guardIndex, -1, `transaction ${index + 1} has no guard`);
     assert.equal(
         firstReadIndex !== -1 || delegatedTransactionRead,
         true,
         `transaction ${index + 1} has no direct or delegated read`,
     );
+    if (delegatedHelperName) {
+      assert.notEqual(
+          delegatedHelperCallIndex,
+          -1,
+          `${runnerSurfaceId} does not call ${delegatedHelperName}`,
+      );
+      assert.ok(
+          guardIndex < delegatedHelperCallIndex,
+          `${runnerSurfaceId} calls ${delegatedHelperName} before its guard`,
+      );
+      const helperDeclaration = indexSource.indexOf(
+          `async function ${delegatedHelperName}(`,
+      );
+      assert.notEqual(helperDeclaration, -1, delegatedHelperName);
+      const helperBody =
+        extractBalancedFunctionBody(indexSource, helperDeclaration);
+      assert.notEqual(
+          helperBody.indexOf("transaction.get("),
+          -1,
+          `${delegatedHelperName} has no transaction read`,
+      );
+    }
     if (firstReadIndex !== -1) {
       assert.ok(
           guardIndex < firstReadIndex,
@@ -343,6 +419,39 @@ test("all 20 transaction runners guard before their first transaction read", () 
       );
     }
   }
+  const reversalRunner = "reversePrivateReservationOutcome";
+  const reversalHelper = "reversePrivateReservationOutcomeInTransaction";
+  assert.equal(
+      indexSource.split(`exports.${reversalRunner} = onCall(`).length - 1,
+      1,
+  );
+  assert.equal(
+      indexSource.split(`async function ${reversalHelper}(`).length - 1,
+      1,
+  );
+  assert.equal(
+      indexSource.split(`return await ${reversalHelper}(`).length - 1,
+      1,
+  );
+  const reversalHelperDeclaration =
+    indexSource.indexOf(`async function ${reversalHelper}(`);
+  const reversalHelperBody =
+    extractBalancedFunctionBody(indexSource, reversalHelperDeclaration);
+  assert.equal(
+      reversalHelperBody.indexOf("transaction.get(") <
+        reversalHelperBody.indexOf("transaction.update("),
+      true,
+  );
+  assert.equal(
+      WRITE_SURFACE_INVENTORY.writeHelpers.filter(
+          (helperName) => helperName === reversalHelper,
+      ).length,
+      1,
+  );
+  assert.equal(
+      writeSurfaceRegistrySource.split(`"${reversalHelper}"`).length - 1,
+      1,
+  );
   const transactionGuardIds = [
     ...indexSource.matchAll(
         /transaction,\s*\n\s*academyId(?::[^,\n]+)?,\s*\n\s*writeSurfaceId:\s*"([^"]+)"/g,
@@ -580,6 +689,19 @@ test("runtime project identity contract is exact and emulator-bound", () => {
 });
 
 test("write helper declarations are pinned to the exact inventory", () => {
+  const newHelperName = "reversePrivateReservationOutcomeInTransaction";
+  assert.equal(
+      WRITE_SURFACE_INVENTORY.writeHelpers.filter(
+          (helperName) => helperName === newHelperName,
+      ).length,
+      1,
+  );
+  assert.equal(
+      (indexSource.match(
+          /^async function reversePrivateReservationOutcomeInTransaction\(/gm,
+      ) || []).length,
+      1,
+  );
   for (const helperName of WRITE_SURFACE_INVENTORY.writeHelpers) {
     assert.match(
         indexSource,

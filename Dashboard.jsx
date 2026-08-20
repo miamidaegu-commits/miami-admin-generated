@@ -1618,6 +1618,7 @@ export default function Dashboard() {
   const [busyPrivateReservationOutcomeId, setBusyPrivateReservationOutcomeId] = useState('')
   const [privateLessonStatusActionTarget, setPrivateLessonStatusActionTarget] = useState(null)
   const [privateLessonStatusActionMode, setPrivateLessonStatusActionMode] = useState('complete')
+  const [privateLessonReversalReason, setPrivateLessonReversalReason] = useState('')
   const [privateLessonStatusActionPreview, setPrivateLessonStatusActionPreview] = useState(null)
   const [privateLessonStatusActionPreviewBusy, setPrivateLessonStatusActionPreviewBusy] =
     useState(false)
@@ -4167,6 +4168,7 @@ export default function Dashboard() {
     fixedPrivateOutcomePreviewBusyRef.current = false
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonReversalReason('')
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
@@ -6579,7 +6581,9 @@ export default function Dashboard() {
     const actionLabel = isNoShow ? '노쇼 처리' : '완료 처리'
     if (
       !window.confirm(
-        `${actionLabel}하고 수강권 1회를 차감할까요?\n${label || '1:1 예약'}`
+        `${actionLabel}할까요? 서버가 현재 활성 차감 기록을 확인해 실제 수강권 영향을 결정합니다.\n${
+          label || '1:1 예약'
+        }`
       )
     ) {
       return
@@ -6590,11 +6594,19 @@ export default function Dashboard() {
       assertSameAcademy(reservation, scopedAcademyId, '1:1 예약')
       setBusyPrivateReservationOutcomeId(`${reservation.id}:${outcome}`)
       const callable = httpsCallable(firebaseFunctions, 'markPrivateReservationOutcome')
-      await callable({
+      const result = await callable({
         academyId: scopedAcademyId,
         reservationId: reservation.id,
         outcome,
       })
+      const additionalPackageDeduction = Number(
+        result?.data?.additionalPackageDeduction ?? 1
+      )
+      alert(
+        additionalPackageDeduction === 0
+          ? '처리가 완료되었습니다. 추가 수강권 차감은 없고 기존 활성 차감 기록을 유지했습니다.'
+          : `처리가 완료되었습니다. 수강권 ${additionalPackageDeduction}회가 차감되었습니다.`
+      )
     } catch (error) {
       console.error('1:1 예약 처리 실패:', error)
       alert(`1:1 예약 처리 실패: ${error.message || '알 수 없는 오류'}`)
@@ -6627,11 +6639,17 @@ export default function Dashboard() {
       assertSameAcademy(reservation, scopedAcademyId, '1:1 예약')
       setBusyPrivateReservationOutcomeId(`${reservation.id}:reverse`)
       const callable = httpsCallable(firebaseFunctions, 'reversePrivateReservationOutcome')
-      await callable({
+      const result = await callable({
         academyId: scopedAcademyId,
         reservationId: reservation.id,
         reason: trimmedReason,
       })
+      const restoredPackageLessons = Number(
+        result?.data?.restoredPackageLessons ??
+          result?.data?.packageImpact?.restoredPackageLessons ??
+          0
+      )
+      alert(`처리가 취소되었습니다. 수강권 ${restoredPackageLessons}회가 복구되었습니다.`)
     } catch (error) {
       console.error('1:1 예약 처리 취소 실패:', error)
       alert(`1:1 예약 처리 취소 실패: ${error.message || '알 수 없는 오류'}`)
@@ -6882,7 +6900,14 @@ export default function Dashboard() {
       return
     }
     setPrivateLessonStatusActionTarget(target)
-    setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonStatusActionMode(
+      target.regularAbsenceFromAuto === true
+        ? 'no_show'
+        : String(target.status || '').trim().toLowerCase() === 'no_show'
+        ? 'reverse_deduction'
+        : 'complete'
+    )
+    setPrivateLessonReversalReason('')
     clearPrivateLessonStatusActionPreview()
   }
 
@@ -6901,6 +6926,7 @@ export default function Dashboard() {
     }
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonReversalReason('')
     clearPrivateLessonStatusActionPreview()
   }
 
@@ -6914,7 +6940,12 @@ export default function Dashboard() {
     ) {
       return
     }
-    const safeActionType = actionType === 'no_show' ? 'no_show' : 'complete'
+    const safeActionType =
+      actionType === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : actionType === 'no_show'
+          ? 'no_show'
+          : 'complete'
     setPrivateLessonStatusActionMode(safeActionType)
     clearPrivateLessonStatusActionPreview()
   }
@@ -6931,7 +6962,12 @@ export default function Dashboard() {
     }
 
     const target = privateLessonStatusActionTarget || {}
-    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const actionType =
+      privateLessonStatusActionMode === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : privateLessonStatusActionMode === 'no_show'
+          ? 'no_show'
+          : 'complete'
     clearPrivateLessonOutcomePreview()
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
@@ -8698,9 +8734,63 @@ export default function Dashboard() {
       if (blockedReasons.length > 0) {
         throw new Error('처리 차단 사유가 있는 수업은 실제 처리할 수 없습니다.')
       }
-      const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+      const actionType =
+        privateLessonStatusActionMode === 'reverse_deduction'
+          ? 'reverse_deduction'
+          : privateLessonStatusActionMode === 'no_show'
+            ? 'no_show'
+            : 'complete'
       if (privateLessonStatusActionPreviewPayload.actionType !== actionType) {
         throw new Error('선택한 처리 유형이 미리보기 payload와 일치하지 않습니다.')
+      }
+
+      privateLessonStatusActionCommitBusyRef.current = true
+      setPrivateLessonStatusActionCommitBusy(true)
+      setPrivateLessonStatusActionCommitError('')
+      setPrivateLessonStatusActionCommitResult(null)
+      if (actionType === 'reverse_deduction') {
+        const reason = String(privateLessonReversalReason || '').trim()
+        const planHash = String(previewData.planHash || '').trim()
+        const reservationId = String(
+          privateLessonStatusActionTarget?.reservationId ||
+            privateLessonStatusActionTarget?.privateReservationId ||
+            privateLessonStatusActionTarget?.id ||
+            ''
+        ).trim()
+        if (!reservationId || privateLessonStatusActionPreviewPayload.reservationId !== reservationId) {
+          throw new Error('결석 취소 대상 예약이 미리보기와 일치하지 않습니다.')
+        }
+        if (reason.length < 2) {
+          throw new Error('결석 취소 사유를 2자 이상 입력해 주세요.')
+        }
+        if (!/^[a-f0-9]{64}$/.test(planHash)) {
+          throw new Error('결석 취소 미리보기 planHash가 없습니다.')
+        }
+        const callable = httpsCallable(firebaseFunctions, 'reversePrivateReservationOutcome')
+        const normalizedPlan = previewData.normalizedPlan || {}
+        const result = await callable({
+          academyId: privateLessonStatusActionPreviewPayload.academyId,
+          reservationId,
+          requestId,
+          planHash,
+          packageId: normalizedPlan.packageId,
+          activeDeductionId: normalizedPlan.activeDeductionId,
+          reversalCreditTransactionId: normalizedPlan.reversalCreditTransactionId,
+          reason,
+        })
+        const commitData = result?.data || null
+        if (
+          commitData?.ok !== true ||
+          commitData?.committed !== true ||
+          commitData?.reversed !== true ||
+          commitData?.requestId !== requestId ||
+          commitData?.planHash !== planHash ||
+          commitData?.actionType !== 'reverse_deduction'
+        ) {
+          throw new Error('서버 결석 취소 결과가 유효하지 않습니다.')
+        }
+        setPrivateLessonStatusActionCommitResult(commitData)
+        return
       }
 
       const payload = {
@@ -8712,10 +8802,6 @@ export default function Dashboard() {
         previewOnly: false,
       }
 
-      privateLessonStatusActionCommitBusyRef.current = true
-      setPrivateLessonStatusActionCommitBusy(true)
-      setPrivateLessonStatusActionCommitError('')
-      setPrivateLessonStatusActionCommitResult(null)
       const callable = httpsCallable(firebaseFunctions, 'commitPrivateLessonStatusAction')
       const result = await callable(payload)
       const commitData = result?.data || null
@@ -8753,6 +8839,10 @@ export default function Dashboard() {
       : []
     const creditTransactionPreview = previewData.creditTransactionPreview || {}
     const packageImpact = previewData.packageImpact
+    const reusesExistingDeduction = [
+      'reuse_existing_auto_deduction',
+      'reuse_existing_active_deduction',
+    ].includes(String(previewData.normalizedPlan?.deductionMode || ''))
     const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
     const target = privateLessonStatusActionTarget || {}
     const reservationId = String(
@@ -8790,7 +8880,7 @@ export default function Dashboard() {
       if (previewBlockedReasons.length > 0) {
         throw new Error('차감 포함 처리 차단 사유가 있는 수업은 실제 처리할 수 없습니다.')
       }
-      if (creditTransactionPreview.duplicateExists === true) {
+      if (creditTransactionPreview.duplicateExists === true && !reusesExistingDeduction) {
         throw new Error('이미 존재하는 차감 기록이 있어 실제 처리를 실행할 수 없습니다.')
       }
       if (!packageImpact || typeof packageImpact !== 'object' || !packageImpact.packageId) {
@@ -9032,6 +9122,8 @@ export default function Dashboard() {
     }),
     actionType: privateLessonStatusActionMode,
     setActionType: selectPrivateLessonStatusActionMode,
+    reversalReason: privateLessonReversalReason,
+    setReversalReason: setPrivateLessonReversalReason,
     preview: privateLessonStatusActionPreview,
     previewBusy: privateLessonStatusActionPreviewBusy,
     previewError: privateLessonStatusActionPreviewError,
