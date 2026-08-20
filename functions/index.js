@@ -6045,7 +6045,9 @@ function buildPrivateLessonStatusPackageImpact({actionType, target}) {
 }
 
 function hasPrivateLessonStatusDeductionEvidence(target) {
-  return Boolean(getPrivateLessonStatusCanonicalActiveDeductionEvidence(target));
+  return Boolean(
+      getPrivateLessonStatusCanonicalActiveDeductionEvidence(target),
+  );
 }
 
 function getPrivateLessonStatusCanonicalActiveDeductionEvidence(target) {
@@ -20446,8 +20448,9 @@ function isAutoDeductedPrivateReservationOutcomeReclassification({
 }) {
   const currentStatus = normalizeId(reservation && reservation.status)
       .toLowerCase();
-  const deductionSource = normalizeId(reservation && reservation.deductionSource)
-      .toLowerCase();
+  const deductionSource = normalizeId(
+      reservation && reservation.deductionSource,
+  ).toLowerCase();
   const outcomeActorRole = normalizeId(
       reservation && reservation.outcomeActorRole,
   ).toLowerCase();
@@ -21043,12 +21046,12 @@ async function resolvePrivateReservationOutcomePreviewTarget({
         Number.isFinite(usedCount)) {
       deductionCycleIdentity =
         buildPrivateReservationOutcomeDeductionCycleIdentity({
-        academyId,
-        studentId: normalizeId(reservation.studentId),
-        packageId: packageDoc.id,
-        reservationId,
-        reservation,
-      });
+          academyId,
+          studentId: normalizeId(reservation.studentId),
+          packageId: packageDoc.id,
+          reservationId,
+          reservation,
+        });
       creditTransactionId = normalizeId(
           deductionCycleIdentity.creditTransactionId,
       );
@@ -21937,12 +21940,12 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
     normalizePositiveAttempt(reservation.deductionAttemptNumber) + 1;
   const deductionCycleIdentity =
     buildPrivateReservationOutcomeDeductionCycleIdentity({
-    academyId,
-    reservationId,
-    studentId,
-    packageId: packageRef.id,
-    reservation,
-  });
+      academyId,
+      reservationId,
+      studentId,
+      packageId: packageRef.id,
+      reservation,
+    });
   if (deductionCycleIdentity.invalidReason ||
       !deductionCycleIdentity.creditTransactionId) {
     throw new HttpsError(
@@ -22349,7 +22352,9 @@ function buildPrivateReservationOutcomeReversalPlan({
       reservation.deductionApplied !== true ||
       alreadyReversed) {
     blockedReasons.push(
-        alreadyReversed ? "deduction_already_reversed" : "outcome_not_reversible",
+        alreadyReversed ?
+          "deduction_already_reversed" :
+          "outcome_not_reversible",
     );
   }
   if (!packageData) {
