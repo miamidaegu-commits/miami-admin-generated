@@ -34,9 +34,35 @@ future Dev target set for this alignment is:
 firebase deploy --only functions:createFixedPrivateLessonAssignment,functions:commitFixedPrivateLessonOutcomeAction --project miami-e2e
 ```
 
-This command is scope documentation, not deployment authorization. The Preview
-Function remains bound to its full Production Preview identity and is excluded
-from the Dev target set.
+This command is scope documentation, not deployment authorization.
+
+## Same-project Preview runtime gate
+
+The Gen2 Preview source uses the exact same-project short form
+`academy-private-preview-rt@`. The deployment tooling expands that value only
+to the project-local Service Account in the selected deployment project; active
+runtime source must not embed a full Preview Service Account email.
+
+For Dev `miami-e2e`, the prerequisite is prepared: the exact
+`academy-private-preview-rt@miami-e2e.iam.gserviceaccount.com` identity is
+enabled, has `roles/datastore.viewer`, and has zero user-managed keys. The
+deployer must have `roles/iam.serviceAccountUser` (ActAs) on that identity.
+No key, environment variable, or secret-based Service Account credential is
+used.
+
+The Production Preview Function and
+`academy-private-preview-rt@daegu-miami-production.iam.gserviceaccount.com`
+Service Account are currently absent. Their setup is a separate
+future deployment gate. Before any Production Preview deployment, require that
+exact identity to be enabled, grant the v9 target-state
+custom role `academyBackendReadOnly`, grant the deployer
+`roles/iam.serviceAccountUser` (ActAs), and verify zero user-managed keys. The
+Dev `roles/datastore.viewer` prerequisite is observed Dev state only and must
+not replace, merge with, or weaken the Production custom-role target.
+
+Production reset and write operations remain prohibited by default. This
+Preview runtime alignment does not authorize deployment, reset, or write
+commands.
 
 ## Academy private Functions IAM gate
 

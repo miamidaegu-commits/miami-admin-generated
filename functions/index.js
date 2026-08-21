@@ -21518,9 +21518,7 @@ exports.previewFixedPrivateLessonOutcomeAction = onCall(
       cpu: 1,
       concurrency: 80,
       maxInstances: 10,
-      serviceAccount:
-        "academy-private-preview-rt@" +
-        "daegu-miami-production.iam.gserviceaccount.com",
+      serviceAccount: "academy-private-preview-rt@",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,

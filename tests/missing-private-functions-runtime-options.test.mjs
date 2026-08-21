@@ -10,7 +10,23 @@ const repositoryRoot = path.resolve(
     "..",
 );
 const functionsPath = path.join(repositoryRoot, "functions", "index.js");
+const dashboardPath = path.join(repositoryRoot, "Dashboard.jsx");
+const deployRunbookPath = path.join(
+    repositoryRoot,
+    "docs",
+    "production-deploy-runbook.md",
+);
+const runtimeIamContractPath = path.join(
+    repositoryRoot,
+    "functions",
+    "scripts",
+    "academy-private-runtime-iam-contract.mjs",
+);
 const functionsSource = fs.readFileSync(functionsPath, "utf8");
+const dashboardSource = fs.readFileSync(dashboardPath, "utf8");
+const deployRunbookSource = fs.readFileSync(deployRunbookPath, "utf8");
+const runtimeIamContractSource =
+  fs.readFileSync(runtimeIamContractPath, "utf8");
 const BASE_FUNCTIONS_SHA256 =
   "fb81864df591de5b484773cd66110ae0c39a3aee0470deec8f927cd9244f9910";
 const TARGETS = Object.freeze([
@@ -24,11 +40,23 @@ const FULL_PRODUCTION_WRITER_RUNTIME_SERVICE_ACCOUNT =
   "daegu-miami-production.iam.gserviceaccount.com";
 const FULL_DEV_WRITER_RUNTIME_SERVICE_ACCOUNT =
   "academy-private-writer-runtime@miami-e2e.iam.gserviceaccount.com";
-const PREVIEW_RUNTIME_SERVICE_ACCOUNT =
+const PREVIEW_RUNTIME_SERVICE_ACCOUNT = "academy-private-preview-rt@";
+const FULL_PRODUCTION_PREVIEW_RUNTIME_SERVICE_ACCOUNT =
   "academy-private-preview-rt@" +
   "daegu-miami-production.iam.gserviceaccount.com";
+const FULL_DEV_PREVIEW_RUNTIME_SERVICE_ACCOUNT =
+  "academy-private-preview-rt@miami-e2e.iam.gserviceaccount.com";
 const COMPUTE_DEFAULT_SERVICE_ACCOUNT =
   "884850632328-compute@developer.gserviceaccount.com";
+const PREVIEW_HELPER_CALL_GRAPH = Object.freeze([
+  "validateFixedPrivateOutcomeActionPayload",
+  "resolveFixedPrivateOutcomeTarget",
+  "resolvePrivateLessonStatusActor",
+  "resolveFixedPrivateOutcomePermission",
+  "buildFixedPrivateOutcomePlan",
+  "buildFixedPrivateOutcomePlanHash",
+  "summarizeFixedPrivateOutcomeTarget",
+]);
 const LEGACY_REQUEST_HANDLER_SHA256_BY_TARGET = Object.freeze({
   createFixedPrivateLessonAssignment:
     "8b6eca90695112b1b1788d0e48f7ad846e291824ad51fe315bbc953b034e726b",
@@ -183,24 +211,66 @@ function assertLiteralServiceAccountCannotBeOverridden(source) {
   assert.doesNotMatch(source, /\.\.\./, "options spread");
 }
 
-function functionBody(declaration) {
-  const declarationIndex = functionsSource.indexOf(declaration);
+function functionBody(declaration, source = functionsSource) {
+  const declarationIndex = source.indexOf(declaration);
   assert.notEqual(declarationIndex, -1, declaration);
-  const declarationTail = functionsSource.slice(declarationIndex);
+  const declarationTail = source.slice(declarationIndex);
   const bodyOpening = declarationTail.match(/\)\s*\{/);
   assert.ok(bodyOpening, declaration);
   const start = declarationIndex + bodyOpening.index +
     bodyOpening[0].lastIndexOf("{");
-  const end = findBalancedEnd(functionsSource, start, "{", "}");
-  return functionsSource.slice(start, end);
+  const end = findBalancedEnd(source, start, "{", "}");
+  return source.slice(start, end);
 }
 
-test("I01 — Production source uses writer short form without full email", () => {
+function assertWriteFree(source, label) {
+  const forbiddenWrites = [
+    "runTransaction(",
+    "writeBatch(",
+    "bulkWriter(",
+    "transaction.set(",
+    "transaction.create(",
+    "transaction.update(",
+    "transaction.delete(",
+    ".set(",
+    ".create(",
+    ".update(",
+    ".delete(",
+    "admin.auth().",
+  ];
+  for (const token of forbiddenWrites) {
+    assert.equal(source.includes(token), false, `${label}: ${token}`);
+  }
+}
+
+test("P01 — Preview serviceAccount uses the exact short form", () => {
   for (const functionName of TARGETS) {
     const range = callableOptionsRange(functionName);
     assertExactTargetOptions(functionName, evaluateOptions(range));
     assertLiteralServiceAccountCannotBeOverridden(optionsSource(range));
   }
+  const previewRange = callableOptionsRange(
+      "previewFixedPrivateLessonOutcomeAction",
+  );
+  assert.equal(
+      evaluateOptions(previewRange).serviceAccount,
+      PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+  );
+  assert.equal(
+      optionsSource(previewRange).includes(
+          `serviceAccount: "${PREVIEW_RUNTIME_SERVICE_ACCOUNT}"`,
+      ),
+      true,
+  );
+});
+
+test("P02 — active source excludes the Production Preview full email", () => {
+  assert.equal(
+      functionsSource.includes(
+          FULL_PRODUCTION_PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+      ),
+      false,
+  );
   for (const functionName of [
     "createFixedPrivateLessonAssignment",
     "commitFixedPrivateLessonOutcomeAction",
@@ -214,13 +284,24 @@ test("I01 — Production source uses writer short form without full email", () =
   }
 });
 
-test("I02 — Dev uses the same short form without a full Dev email", () => {
+test("P03 — active source contains no hard-coded Dev full email", () => {
+  assert.equal(
+      expandSameProjectServiceAccount(
+          PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+          "miami-e2e",
+      ),
+      FULL_DEV_PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+  );
   assert.equal(
       expandSameProjectServiceAccount(
           WRITER_RUNTIME_SERVICE_ACCOUNT,
           "miami-e2e",
       ),
       FULL_DEV_WRITER_RUNTIME_SERVICE_ACCOUNT,
+  );
+  assert.equal(
+      functionsSource.includes(FULL_DEV_PREVIEW_RUNTIME_SERVICE_ACCOUNT),
+      false,
   );
   for (const functionName of [
     "createFixedPrivateLessonAssignment",
@@ -232,7 +313,7 @@ test("I02 — Dev uses the same short form without a full Dev email", () => {
   }
 });
 
-test("I10 — Production writer identity is not reused in Dev", () => {
+test("P07 — short forms do not reuse a cross-project runtime identity", () => {
   const productionIdentity = expandSameProjectServiceAccount(
       WRITER_RUNTIME_SERVICE_ACCOUNT,
       "daegu-miami-production",
@@ -244,9 +325,29 @@ test("I10 — Production writer identity is not reused in Dev", () => {
   assert.equal(productionIdentity, FULL_PRODUCTION_WRITER_RUNTIME_SERVICE_ACCOUNT);
   assert.equal(devIdentity, FULL_DEV_WRITER_RUNTIME_SERVICE_ACCOUNT);
   assert.notEqual(productionIdentity, devIdentity);
+  const productionPreviewIdentity = expandSameProjectServiceAccount(
+      PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+      "daegu-miami-production",
+  );
+  const devPreviewIdentity = expandSameProjectServiceAccount(
+      PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+      "miami-e2e",
+  );
+  assert.equal(
+      productionPreviewIdentity,
+      FULL_PRODUCTION_PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+  );
+  assert.equal(devPreviewIdentity, FULL_DEV_PREVIEW_RUNTIME_SERVICE_ACCOUNT);
+  assert.notEqual(productionPreviewIdentity, devPreviewIdentity);
+  assert.equal(
+      optionsSource(callableOptionsRange(
+          "previewFixedPrivateLessonOutcomeAction",
+      )).includes(".iam.gserviceaccount.com"),
+      false,
+  );
 });
 
-test("I11 — exact affected exports share the intended runtime identity", () => {
+test("P04 — affected export is exactly the one Preview callable", () => {
   const optionsByTarget = Object.fromEntries(
       TARGETS.map((functionName) => [
         functionName,
@@ -268,6 +369,15 @@ test("I11 — exact affected exports share the intended runtime identity", () =>
   for (const options of Object.values(optionsByTarget)) {
     assert.notEqual(options.serviceAccount, COMPUTE_DEFAULT_SERVICE_ACCOUNT);
   }
+  const exportNames = [...functionsSource.matchAll(
+      /^exports\.([A-Za-z0-9_]+)\s*=\s*onCall\(/gm,
+  )].map((match) => match[1]);
+  assert.deepEqual(
+      exportNames.filter((functionName) =>
+        optionsSource(callableOptionsRange(functionName))
+            .includes(PREVIEW_RUNTIME_SERVICE_ACCOUNT)),
+      ["previewFixedPrivateLessonOutcomeAction"],
+  );
 
   const ranges = TARGETS
       .map(callableOptionsRange)
@@ -288,7 +398,7 @@ test("I11 — exact affected exports share the intended runtime identity", () =>
   );
 });
 
-test("runtime identity contract rejects malformed or overridden values", () => {
+test("P08 — no default identity, spread, override, or fallback", () => {
   const writerName = "createFixedPrivateLessonAssignment";
   const previewName = "previewFixedPrivateLessonOutcomeAction";
   const writerOptions = EXPECTED_OPTIONS_BY_TARGET[writerName];
@@ -332,9 +442,21 @@ test("runtime identity contract rejects malformed or overridden values", () => {
           "{serviceAccount: \"first\", serviceAccount: \"later\"}",
       ),
   );
+  for (const functionName of TARGETS) {
+    const source = optionsSource(callableOptionsRange(functionName));
+    assertLiteralServiceAccountCannotBeOverridden(source);
+    assert.notEqual(
+        evaluateOptions(callableOptionsRange(functionName)).serviceAccount,
+        COMPUTE_DEFAULT_SERVICE_ACCOUNT,
+    );
+    assert.doesNotMatch(
+        source,
+        /process\.env|\?\?|\|\||default.*serviceAccount|serviceAccount.*default/i,
+    );
+  }
 });
 
-test("no unrelated function source changed from the approved base", () => {
+test("P05 — Dev viewer and Production custom-role targets stay separate", () => {
   const ranges = TARGETS
       .map(callableOptionsRange)
       .sort((left, right) => right.start - left.start);
@@ -346,9 +468,29 @@ test("no unrelated function source changed from the approved base", () => {
       normalized.slice(range.end);
   }
   assert.equal(sha256(normalized), BASE_FUNCTIONS_SHA256);
+  for (const token of [
+    FULL_DEV_PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+    "enabled",
+    "roles/datastore.viewer",
+    "roles/iam.serviceAccountUser",
+    "zero user-managed keys",
+    "custom role `academyBackendReadOnly`",
+  ]) {
+    assert.equal(deployRunbookSource.includes(token), true, token);
+  }
+  assert.equal(
+      runtimeIamContractSource.includes(
+          "export const READ_ONLY_ROLE_ID = \"academyBackendReadOnly\"",
+      ),
+      true,
+  );
+  assert.equal(
+      runtimeIamContractSource.includes("roles/datastore.viewer"),
+      false,
+  );
 });
 
-test("I12 — legacy API request contract remains byte-exact", () => {
+test("P11 — handler SHA, request tokens, and legacy API stay byte-exact", () => {
   assert.deepEqual(
       Object.keys(LEGACY_REQUEST_HANDLER_SHA256_BY_TARGET).sort(),
       [...TARGETS].sort(),
@@ -360,9 +502,34 @@ test("I12 — legacy API request contract remains byte-exact", () => {
         functionName,
     );
   }
+  const previewHandler = requestHandlerSource(
+      "previewFixedPrivateLessonOutcomeAction",
+  );
+  for (const token of [
+    "if (!request.auth)",
+    "throw new HttpsError(\"unauthenticated\", \"auth_required\")",
+    "db: admin.firestore()",
+    "auth: request.auth",
+    "data: request.data || {}",
+    "throw asHttpsError(error)",
+  ]) {
+    assert.equal(previewHandler.includes(token), true, token);
+  }
 });
 
-test("both target writers retain their exact freeze guards", () => {
+test("P06 — writer identity and role stay separate from Preview", () => {
+  assert.notEqual(
+      WRITER_RUNTIME_SERVICE_ACCOUNT,
+      PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+  );
+  for (const token of [
+    "roles/datastore.user",
+    "academyPrivateWriterRuntimeV1",
+    "roles/datastore.viewer",
+    "academyBackendReadOnly",
+  ]) {
+    assert.equal(deployRunbookSource.includes(token), true, token);
+  }
   const assignment = functionBody(
       "async function runFixedPrivateAssignmentWriteTransaction(",
   );
@@ -395,24 +562,90 @@ test("both target writers retain their exact freeze guards", () => {
   );
 });
 
-test("fixed private outcome preview remains write-free", () => {
+test("P09 — no service-account key, env, or secret credential contract", () => {
+  const previewOptions = optionsSource(callableOptionsRange(
+      "previewFixedPrivateLessonOutcomeAction",
+  ));
+  assert.doesNotMatch(
+      previewOptions,
+      /process\.env|GOOGLE_APPLICATION_CREDENTIALS|privateKey|serviceAccountKey|secret/i,
+  );
+  assert.deepEqual(
+      Object.keys(evaluateOptions(callableOptionsRange(
+          "previewFixedPrivateLessonOutcomeAction",
+      ))).sort(),
+      Object.keys(
+          EXPECTED_OPTIONS_BY_TARGET.previewFixedPrivateLessonOutcomeAction,
+      ).sort(),
+  );
+  assert.equal(
+      deployRunbookSource.includes("zero user-managed keys"),
+      true,
+  );
+});
+
+test("P10 — full Preview helper graph and UI stay write-free dry-run", () => {
   const preview = functionBody(
       "async function previewFixedPrivateLessonOutcomeAction(",
   );
-  const forbiddenWrites = [
-    "runTransaction(",
-    "writeBatch(",
-    "transaction.set(",
-    "transaction.create(",
-    "transaction.update(",
-    "transaction.delete(",
-    ".set(",
-    ".create(",
-    ".update(",
-    ".delete(",
-    "admin.auth().",
-  ];
-  for (const token of forbiddenWrites) {
-    assert.equal(preview.includes(token), false, token);
+  for (const helperName of PREVIEW_HELPER_CALL_GRAPH) {
+    assert.equal(preview.includes(`${helperName}(`), true, helperName);
+    assertWriteFree(
+        functionBody(`function ${helperName}(`),
+        helperName,
+    );
   }
+  assertWriteFree(preview, "previewFixedPrivateLessonOutcomeAction");
+  for (const token of [
+    "dryRun: true",
+    "previewOnly: true",
+    "commit: false",
+  ]) {
+    assert.equal(preview.includes(token), true, token);
+  }
+
+  const uiPreview = functionBody(
+      "async function previewFixedPrivateLessonOutcomeActionOnServer(",
+      dashboardSource,
+  );
+  for (const token of [
+    "'previewFixedPrivateLessonOutcomeAction'",
+    "dryRun: true",
+    "previewOnly: true",
+    "commit: false",
+    "previewData.dryRun !== true",
+    "previewData.previewOnly !== true",
+    "previewData.commit !== false",
+  ]) {
+    assert.equal(uiPreview.includes(token), true, token);
+  }
+  assert.equal(
+      uiPreview.match(/'previewFixedPrivateLessonOutcomeAction'/g)?.length,
+      1,
+  );
+  assert.doesNotMatch(
+      uiPreview,
+      /addDoc\(|setDoc\(|updateDoc\(|deleteDoc\(|writeBatch\(|runTransaction\(/,
+  );
+});
+
+test("P12 — Production Preview setup remains a future deployment gate", () => {
+  const tokens = [
+    "Production Preview Function",
+    FULL_PRODUCTION_PREVIEW_RUNTIME_SERVICE_ACCOUNT,
+    "currently absent",
+    "future deployment gate",
+    "custom role `academyBackendReadOnly`",
+    "roles/iam.serviceAccountUser",
+    "zero user-managed keys",
+  ];
+  for (const token of tokens) {
+    assert.equal(deployRunbookSource.includes(token), true, token);
+  }
+  assert.equal(
+      runtimeIamContractSource.includes(
+          "export const READ_ONLY_ROLE_ID = \"academyBackendReadOnly\"",
+      ),
+      true,
+  );
 });
