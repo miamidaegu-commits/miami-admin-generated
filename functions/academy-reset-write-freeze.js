@@ -86,6 +86,7 @@ const WRITE_SURFACE_INVENTORY = Object.freeze({
     "commitPrivateLessonOutcomeAction",
     "commitFixedPrivateLessonOutcomeAction",
     "applyPrivateReservationOutcomeWithDeductionInTransaction",
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction",
     "reversePrivateReservationOutcomeInTransaction",
   ]),
   provisioningAuthCallables: frozenList([

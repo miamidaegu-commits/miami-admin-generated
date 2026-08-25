@@ -433,16 +433,18 @@ test("every registered transaction helper is present and mutating", () => {
 
 test("reversal helper is exactly represented by both v2 current owners", () => {
   const helperName = "reversePrivateReservationOutcomeInTransaction";
+  const accountingHelperName =
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction";
   assert.equal(
       WRITE_SURFACE_REGISTRY_VERSION,
       "academy_reset_write_surface.v2",
   );
-  assert.equal(EXPECTED_WRITE_SURFACE_COUNT, 59);
+  assert.equal(EXPECTED_WRITE_SURFACE_COUNT, 60);
   assert.equal(
       ACADEMY_RESET_WRITE_SURFACE_REGISTRY.filter(
           ({category}) => category === "transaction_writer",
       ).length,
-      13,
+      14,
   );
   assert.equal(
       (backendFreezeSource.match(
@@ -460,6 +462,12 @@ test("reversal helper is exactly represented by both v2 current owners", () => {
           .length,
       1,
   );
+  assert.equal(
+      inventoryList("writeHelpers").filter(
+          (name) => name === accountingHelperName,
+      ).length,
+      1,
+  );
 
   const helperStart = functionsSource.indexOf(`async function ${helperName}(`);
   const helperEnd = functionsSource.indexOf(
@@ -472,12 +480,38 @@ test("reversal helper is exactly represented by both v2 current owners", () => {
   const mutations = [...helperSource.matchAll(
       /transaction\.(create|set|update|delete)\(\s*([A-Za-z][A-Za-z0-9]*)/g,
   )].map((match) => `${match[1]}:${match[2]}`);
-  assert.deepEqual(mutations, [
+  assert.deepEqual(mutations, ["update:reservationRef"]);
+
+  const accountingHelperStart = functionsSource.indexOf(
+      `function ${accountingHelperName}(`,
+  );
+  const accountingHelperEnd = functionsSource.indexOf(
+      "\nfunction buildPrivateReservationOutcomeReversalPlan(",
+      accountingHelperStart,
+  );
+  assert.notEqual(accountingHelperStart, -1);
+  assert.notEqual(accountingHelperEnd, -1);
+  const accountingHelperSource = functionsSource.slice(
+      accountingHelperStart,
+      accountingHelperEnd,
+  );
+  const accountingMutations = [...accountingHelperSource.matchAll(
+      /transaction\.(create|set|update|delete)\(\s*([A-Za-z][A-Za-z0-9]*)/g,
+  )].map((match) => `${match[1]}:${match[2]}`);
+  assert.deepEqual(accountingMutations, [
     "update:packageRef",
-    "update:reservationRef",
     "update:originalCreditRef",
     "create:reversalCreditRef",
   ]);
+  assert.deepEqual(
+      [...mutations, ...accountingMutations].sort(),
+      [
+        "update:packageRef",
+        "update:reservationRef",
+        "update:originalCreditRef",
+        "create:reversalCreditRef",
+      ].sort(),
+  );
   for (const reference of [
     'const packageRef = db.collection("studentPackages").doc(packageId);',
     '.collection("privateLessonReservations")',
@@ -486,6 +520,36 @@ test("reversal helper is exactly represented by both v2 current owners", () => {
   ]) {
     assert.equal(helperSource.includes(reference), true, reference);
   }
+  assert.equal(
+      (helperSource.match(new RegExp(`${accountingHelperName}\\(`, "g")) || [])
+          .length,
+      1,
+  );
+  const fixedCommitStart = functionsSource.indexOf(
+      "async function commitFixedPrivateLessonOutcomeAction(",
+  );
+  const fixedCommitEnd = functionsSource.indexOf(
+      "\nexports.previewFixedPrivateLessonOutcomeAction = onCall(",
+      fixedCommitStart,
+  );
+  assert.notEqual(fixedCommitStart, -1);
+  assert.notEqual(fixedCommitEnd, -1);
+  const fixedCommitSource = functionsSource.slice(
+      fixedCommitStart,
+      fixedCommitEnd,
+  );
+  assert.equal(
+      (fixedCommitSource.match(
+          new RegExp(`${accountingHelperName}\\(`, "g"),
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      (functionsSource.match(
+          new RegExp(`^\\s+${accountingHelperName}\\(`, "gm"),
+      ) || []).length,
+      2,
+  );
   assert.equal(
       (functionsSource.match(
           /^async function reversePrivateReservationOutcomeInTransaction\(/gm,
@@ -497,6 +561,57 @@ test("reversal helper is exactly represented by both v2 current owners", () => {
           /return await reversePrivateReservationOutcomeInTransaction\(/g,
       ) || []).length,
       1,
+  );
+  assert.equal(
+      (functionsSource.match(
+          /^function applyPrivateReservationOutcomeReversalAccountingInTransaction\(/gm,
+      ) || []).length,
+      1,
+  );
+  assert.match(
+      accountingHelperSource,
+      /transaction\.update\(originalCreditRef,\s*\{[\s\S]*reversalCreditTransactionId/,
+  );
+  assert.doesNotMatch(
+      accountingHelperSource,
+      /transaction\.delete\(originalCreditRef/,
+  );
+  assert.doesNotMatch(
+      accountingHelperSource,
+      /\b(?:packageRef|originalCreditRef|reversalCreditRef)\.(?:create|set|update|delete)\(/,
+  );
+  assert.doesNotMatch(
+      helperSource,
+      /\breservationRef\.(?:create|set|update|delete)\(/,
+  );
+  const directExportStart = functionsSource.indexOf(
+      "\nexports.reversePrivateReservationOutcome = onCall(",
+  );
+  const directExportEnd = functionsSource.indexOf(
+      "\nexports.bootstrapAdmin = onCall(",
+      directExportStart,
+  );
+  assert.notEqual(directExportStart, -1);
+  assert.notEqual(directExportEnd, -1);
+  const directExportSource = functionsSource.slice(
+      directExportStart,
+      directExportEnd,
+  );
+  assert.ok(
+      directExportSource.indexOf("db.runTransaction") <
+        directExportSource.indexOf("guardAcademyWrite"),
+  );
+  assert.ok(
+      directExportSource.indexOf("guardAcademyWrite") <
+        directExportSource.indexOf(`${helperName}(`),
+  );
+  assert.ok(
+      fixedCommitSource.indexOf("db.runTransaction") <
+        fixedCommitSource.indexOf("guardAcademyWrite"),
+  );
+  assert.ok(
+      fixedCommitSource.indexOf("guardAcademyWrite") <
+        fixedCommitSource.indexOf(`${accountingHelperName}(`),
   );
   assert.equal(
       functionsSource.includes(

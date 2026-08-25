@@ -28,7 +28,7 @@ const deployRunbookSource = fs.readFileSync(deployRunbookPath, "utf8");
 const runtimeIamContractSource =
   fs.readFileSync(runtimeIamContractPath, "utf8");
 const BASE_FUNCTIONS_SHA256 =
-  "fb81864df591de5b484773cd66110ae0c39a3aee0470deec8f927cd9244f9910";
+  "b0d7750c240940cc538a31de69b70433ebaf6de052b220c670ce7e2add3ded8b";
 const TARGETS = Object.freeze([
   "createFixedPrivateLessonAssignment",
   "previewFixedPrivateLessonOutcomeAction",

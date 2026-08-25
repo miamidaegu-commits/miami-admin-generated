@@ -172,7 +172,7 @@ test('bounded outcome writer, legacy mark callable, and reverse callable are exa
   );
 
   expect(sha256(writeHelperBlock)).toBe(
-    '7108dcc7dbc543154c83c5ecfa1957b072522b16f299b76af146827f805fcf5e'
+    '1e30b0d4bf75bae307662247c1b50391a1020ca8235e5a95685ba068d895fa91'
   );
   expect(sha256(markBlock)).toBe(
     '8f635967cdc9a3a7b081d41eb91c4fbded92a40964b2b7b8762badecd2a7aab3'
@@ -185,22 +185,25 @@ test('bounded outcome writer, legacy mark callable, and reverse callable are exa
 test('outcome commit changes stay inside backend and targeted tests', () => {
   const allowedPaths = new Set([
     'Dashboard.jsx',
-    'firebase.a1-outcome-emulator.json',
     'functions/academy-reset-write-freeze.js',
     'functions/index.js',
     'functions/scripts/academy-reset-write-surface-registry.mjs',
     'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx',
+    'src/features/dashboard/dashboardViewUtils.js',
     'src/features/dashboard/sections/CalendarSection.jsx',
+    'src/features/dashboard/sections/StudentsSection.jsx',
     'src/i18n/resources/en.js',
     'src/i18n/resources/ko.js',
     'tests/academy-reset-write-freeze-functions.test.cjs',
     'tests/academy-reset-write-freeze-registry.test.mjs',
     'tests/academy-reset-write-freeze-static.test.mjs',
     'tests/academy-reset-write-freeze-verifier.test.mjs',
+    'tests/fixed-private-lesson-outcome-action.emulator.cjs',
+    'tests/fixed-private-lesson-outcome-action.spec.js',
+    'tests/fixed-private-lesson-outcome-frontend.spec.js',
+    'tests/missing-private-functions-runtime-options.test.mjs',
     'tests/private-lesson-outcome-commit.spec.js',
-    'tests/private-lesson-outcome-commit.emulator.cjs',
     'tests/private-lesson-outcome-emulator-contract.test.mjs',
-    'tests/private-reservation-outcome.spec.js',
   ]);
   const changedPaths = execFileSync(
     'git',

@@ -535,6 +535,9 @@ test('context changes defer a full reset until every commit finishes', () => {
 test('fixed privateReservation fixtures are rejected while normal direct fixtures keep legacy flow', () => {
   const dashboardSource = readSource('Dashboard.jsx')
   const calendarSource = readSource('src/features/dashboard/sections/CalendarSection.jsx')
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  )
   const calendarGuards = boundedSource(
     calendarSource,
     'function isFixedPrivateSourceRecord(',
@@ -575,11 +578,108 @@ test('fixed privateReservation fixtures are rejected while normal direct fixture
     "{activeSection === 'calendar' &&\n                  isAdmin &&\n                  canUseLegacyPrivateReservationActions",
     '</span>\n              </div>'
   )
+  const sharedDirectButton = boundedSource(
+    calendarSource,
+    '{canOpenPrivateLessonStatusActionPreview ||',
+    "{activeSection === 'calendar' &&\n                  isAdmin &&\n                  canUseLegacyPrivateReservationActions"
+  )
+  const calendarWiring = boundedSource(
+    dashboardSource,
+    'const calendarSectionProps = {',
+    'function clearPrivateLessonStatusActionCommitState('
+  )
+  const sharedOpener = boundedSource(
+    dashboardSource,
+    'function openPrivateLessonStatusActionPreview(',
+    'function closePrivateLessonStatusActionPreview('
+  )
+  const statusPreviewHandler = boundedSource(
+    dashboardSource,
+    'async function previewPrivateLessonStatusActionOnServer(',
+    'async function previewPrivateLessonOutcomeActionOnServer('
+  )
+  const outcomePreviewHandler = boundedSource(
+    dashboardSource,
+    'async function previewPrivateLessonOutcomeActionOnServer(',
+    'async function previewFixedPrivateLessonOutcomeActionOnServer('
+  )
+  const statusCommitHandler = boundedSource(
+    dashboardSource,
+    'async function commitPrivateLessonStatusActionOnServer(',
+    'async function commitPrivateLessonOutcomeActionOnServer('
+  )
+  const outcomeCommitHandler = boundedSource(
+    dashboardSource,
+    'async function commitPrivateLessonOutcomeActionOnServer(',
+    'async function commitFixedPrivateLessonOutcomeActionOnServer('
+  )
+  const modalWiring = boundedSource(
+    dashboardSource,
+    'const privateLessonStatusActionModalProps = {',
+    '// Preserve the existing role/permission-filtered menu as the single navigation authority.'
+  )
+  const noShowOption = boundedSource(
+    modalSource,
+    'value="no_show"',
+    'data-testid="private-lesson-status-action-preview-submit"'
+  )
+  const directSharedFlow = [
+    sharedOpener,
+    statusPreviewHandler,
+    outcomePreviewHandler,
+    statusCommitHandler,
+    outcomeCommitHandler,
+  ].join('\n')
+
   expect(directPreviewGate).toContain('canUseLegacyPrivateReservationActions')
+  expect(directPreviewGate).toContain('Boolean(privateReservationId)')
+  expect(directPreviewGate).toContain('Boolean(matchedStudentId)')
+  expect(sharedDirectButton).toContain('canOpenPrivateLessonStatusActionPreview')
+  expect(sharedDirectButton).toContain(
+    'onOpenPrivateLessonStatusActionPreview?.({\n                          ...lesson,'
+  )
+  expect(sharedDirectButton).toContain(
+    "text('teacher.calendar.action.processLesson', '수업 처리')"
+  )
+  expect(calendarWiring).toContain(
+    'onOpenPrivateLessonStatusActionPreview: openPrivateLessonStatusActionPreview'
+  )
   expect(legacyButtons.match(/canUseLegacyPrivateReservationActions/g)).toHaveLength(2)
   expect(legacyButtons).toContain("onMarkPrivateReservationOutcome?.(lesson, 'completed')")
-  expect(legacyButtons).toContain("onMarkPrivateReservationOutcome?.(lesson, 'no_show')")
+  expect(legacyButtons).not.toContain("onMarkPrivateReservationOutcome?.(lesson, 'no_show')")
   expect(legacyButtons).toContain('onReversePrivateReservationOutcome?.(lesson)')
+  expect(sharedOpener).toContain('const fixedTarget = isFixedPrivateSourceRecord(target)')
+  expect(sharedOpener).toContain(': !isAdmin)')
+  expect(noShowOption).toContain("checked={actionType === 'no_show'}")
+  expect(noShowOption).toContain("setActionType?.('no_show')")
+  expect(modalWiring).toContain('onPreview: previewPrivateLessonStatusActionOnServer')
+  expect(modalWiring).toContain('onOutcomePreview: previewPrivateLessonOutcomeActionOnServer')
+  expect(modalWiring).toContain('onOutcomeCommit: commitPrivateLessonOutcomeActionOnServer')
+  expect(modalWiring).toContain('onCommit: commitPrivateLessonStatusActionOnServer')
+  expect(statusPreviewHandler).toContain("actionType =")
+  expect(statusPreviewHandler).toContain("privateLessonStatusActionMode === 'no_show'")
+  expect(statusPreviewHandler).toContain(
+    "httpsCallable(firebaseFunctions, 'previewPrivateLessonStatusAction')"
+  )
+  expect(outcomePreviewHandler).toContain(
+    "httpsCallable(firebaseFunctions, 'previewPrivateLessonOutcomeAction')"
+  )
+  expect(statusCommitHandler).toContain(
+    "httpsCallable(firebaseFunctions, 'commitPrivateLessonStatusAction')"
+  )
+  expect(statusCommitHandler).toContain(
+    "httpsCallable(firebaseFunctions, 'reversePrivateReservationOutcome')"
+  )
+  expect(outcomeCommitHandler).toContain(
+    "httpsCallable(firebaseFunctions, 'commitPrivateLessonOutcomeAction')"
+  )
+  expect(statusCommitHandler).toContain('privateLessonStatusActionCommitBusyRef.current')
+  expect(outcomeCommitHandler).toContain('privateLessonOutcomeCommitBusyRef.current')
+  expect(statusCommitHandler).toContain('flushDeferredPrivateLessonActionContextReset()')
+  expect(outcomeCommitHandler).toContain('flushDeferredPrivateLessonActionContextReset()')
+  expect(directSharedFlow).not.toMatch(
+    /\b(?:setDoc|addDoc|updateDoc|deleteDoc|writeBatch)\s*\(/
+  )
 
   const markHandler = boundedSource(
     dashboardSource,
@@ -671,4 +771,317 @@ test('generic private lesson edit and delete reject fixed sources but preserve n
   expect(deleteHandler).toContain('고정수업 취소 흐름')
   expect(submitEditHandler).toContain("doc(db, 'lessons', lesson.id)")
   expect(deleteHandler).toContain("doc(db, 'lessons', lesson.id)")
+})
+
+test('F11 fixed no-show reversal UI is admin-only, server-previewed, and independently locked', () => {
+  const dashboardSource = readSource('Dashboard.jsx')
+  const calendarSource = readSource('src/features/dashboard/sections/CalendarSection.jsx')
+  const modalSource = readSource(
+    'src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
+  )
+  const studentsSource = readSource('src/features/dashboard/sections/StudentsSection.jsx')
+  const calendarGuardSource = boundedSource(
+    calendarSource,
+    'function isFixedPrivateSourceRecord(',
+    'function normalizePrivateReservationLinkText('
+  )
+  const guards = new Function(
+    `${calendarGuardSource}; return {
+      isFixedPrivateNoShowReversalCalendarTarget,
+    };`
+  )()
+  const valid = {
+    id: 'fixed-lesson-1',
+    sourceType: 'fixed-private-slot-assignment',
+    packageType: 'private',
+    reservationId: 'fixed-reservation-1',
+    slotId: 'fixed-slot-1',
+    packageId: 'private-package-1',
+    deductionPackageId: 'private-package-1',
+    status: 'no_show',
+    deductionApplied: true,
+    deductionCreditTransactionId: 'fixed-deduction-1',
+    deductionTransactionId: 'fixed-deduction-1',
+    deductionReversed: false,
+    outcomeReversedAt: null,
+  }
+
+  expect(
+    guards.isFixedPrivateNoShowReversalCalendarTarget({ lesson: valid, isAdmin: true })
+  ).toBe(true)
+  expect(
+    guards.isFixedPrivateNoShowReversalCalendarTarget({ lesson: valid, isAdmin: false })
+  ).toBe(false)
+  expect(
+    guards.isFixedPrivateNoShowReversalCalendarTarget({
+      lesson: { ...valid, status: 'completed' },
+      isAdmin: true,
+    })
+  ).toBe(false)
+  expect(
+    guards.isFixedPrivateNoShowReversalCalendarTarget({
+      lesson: { ...valid, deductionCreditTransactionId: '' },
+      isAdmin: true,
+    })
+  ).toBe(false)
+  expect(
+    guards.isFixedPrivateNoShowReversalCalendarTarget({
+      lesson: { ...valid, deductionTransactionId: 'different-deduction' },
+      isAdmin: true,
+    })
+  ).toBe(false)
+  expect(
+    guards.isFixedPrivateNoShowReversalCalendarTarget({
+      lesson: { ...valid, deductionReversed: true },
+      isAdmin: true,
+    })
+  ).toBe(false)
+  expect(
+    guards.isFixedPrivateNoShowReversalCalendarTarget({
+      lesson: { ...valid, sourceType: 'student-direct-booking' },
+      isAdmin: true,
+    })
+  ).toBe(false)
+
+  const openHandler = boundedSource(
+    dashboardSource,
+    'function openPrivateLessonStatusActionPreview(',
+    'function closePrivateLessonStatusActionPreview('
+  )
+  const previewHandler = boundedSource(
+    dashboardSource,
+    'async function previewFixedPrivateLessonOutcomeActionOnServer()',
+    'const studentsSectionProps = {'
+  )
+  const commitHandler = boundedSource(
+    dashboardSource,
+    'async function commitFixedPrivateLessonOutcomeActionOnServer()',
+    'const privateLessonStatusActionModalProps = {'
+  )
+  expect(calendarSource).toContain('fixed-private-no-show-reversal-button')
+  expect(calendarSource).toContain("t('teacher.calendar.action.cancelFixedNoShow')")
+  expect(calendarSource).toContain("t('teacher.calendar.action.restoreOneLessonCredit')")
+  expect(calendarSource).toContain('fixedNoShowReversal: true')
+  expect(calendarSource).toContain('calendar-package-count-edit-button')
+  expect(openHandler).toContain('fixedNoShowReversal && !isAdmin')
+  expect(openHandler).toContain("'reverse_deduction'")
+  expect(previewHandler).toContain(
+    "privateLessonStatusActionMode === 'reverse_deduction'"
+  )
+  expect(previewHandler).toContain("'previewFixedPrivateLessonOutcomeAction'")
+  expect(commitHandler).toContain(
+    "privateLessonStatusActionMode === 'reverse_deduction'"
+  )
+  expect(commitHandler).toContain('...fixedPrivateOutcomePreviewPayload')
+  expect(commitHandler).toContain('planHash: fixedPrivateOutcomePreviewPlanHash')
+  expect(commitHandler).toContain("'commitFixedPrivateLessonOutcomeAction'")
+  expect(commitHandler).toContain('fixedPrivateOutcomeCommitBusyRef.current')
+  expect(commitHandler).toContain('fixedPrivateOutcomeCommitResult')
+  expect(commitHandler).toContain('setFixedPrivateOutcomeCommitResult(commitData)')
+  expect(commitHandler).toContain('flushDeferredPrivateLessonActionContextReset()')
+  expect(modalSource).toContain('fixed-private-no-show-reversal-mode')
+  expect(modalSource).toContain('fixed-private-no-show-reversal-package-impact')
+  expect(modalSource).toContain('packageImpact.currentUsedCount')
+  expect(modalSource).toContain('packageImpact.nextUsedCount')
+  expect(modalSource).toContain('packageImpact.currentRemainingCount')
+  expect(modalSource).toContain('packageImpact.nextRemainingCount')
+  expect(modalSource).toContain('creditPreview.deltaCount')
+  expect(modalSource).toContain('fixedOutcomeCommitConfirmed !== true')
+  expect(modalSource).toContain('previewMatchesTargetAndAction')
+  expect(dashboardSource).toContain("collection(db, 'studentPackages')")
+  expect(dashboardSource).toContain("collection(db, 'lessons')")
+  expect(dashboardSource).toContain("collection(db, 'privateLessonReservations')")
+  expect(studentsSource).toContain("collection(db, 'creditTransactions')")
+  expect(dashboardSource).toContain('onSnapshot(')
+  expect(studentsSource).toContain('onSnapshot(')
+})
+
+test('F12 fixed history labels prioritize source metadata and keep only legacy delta fallback', () => {
+  const utilsSource = readSource('src/features/dashboard/dashboardViewUtils.js')
+  const studentsSource = readSource('src/features/dashboard/sections/StudentsSection.jsx')
+  const koSource = readSource('src/i18n/resources/ko.js')
+  const enSource = readSource('src/i18n/resources/en.js')
+  const utilityBlock = boundedSource(
+    utilsSource,
+    'export function formatCreditTransactionDeltaCountDisplay(',
+    'export const GROUP_RECURRENCE_WEEKDAY_TOGGLES'
+  ).replaceAll('export function', 'function')
+  const utility = new Function(
+    `${utilityBlock}; return {
+      getCreditTransactionSourceHistoryKind,
+      formatCreditTransactionActionTypeLabel,
+    };`
+  )()
+  const statusBlock = boundedSource(
+    studentsSource,
+    'function creditTransactionHistoryStatus(',
+    'function buildStudentInvitationMessage('
+  )
+  const actionLabelBlock = boundedSource(
+    studentsSource,
+    'const fixedActionLabelKey =',
+    'return {'
+  )
+  const status = new Function(
+    'getCreditTransactionSourceHistoryKind',
+    'formatCreditTransactionActionTypeLabel',
+    `${statusBlock}; return creditTransactionHistoryStatus;`
+  )(
+    utility.getCreditTransactionSourceHistoryKind,
+    utility.formatCreditTransactionActionTypeLabel
+  )
+  const resourceValue = (source, key) => {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const match = source.match(new RegExp(`^\\s*'${escapedKey}':\\s*'([^']*)',?$`, 'm'))
+    expect(match, `${key} translation`).not.toBeNull()
+    return match[1]
+  }
+  const translate = (key) => resourceValue(koSource, key)
+  const base = {
+    sourceType: 'fixedPrivateReservation',
+    packageType: 'private',
+  }
+
+  expect(
+    utility.getCreditTransactionSourceHistoryKind({
+      ...base,
+      actionType: 'fixed_private_no_show_deduct',
+      deltaCount: 1,
+    })
+  ).toBe('fixed_no_show')
+  expect(
+    utility.getCreditTransactionSourceHistoryKind({
+      ...base,
+      actionType: 'fixed_private_completed_deduct',
+      deltaCount: 1,
+    })
+  ).toBe('fixed_completed')
+  expect(
+    utility.getCreditTransactionSourceHistoryKind({
+      ...base,
+      actionType: 'fixed_private_no_show_deduct_reversal',
+      deltaCount: -1,
+    })
+  ).toBe('fixed_no_show_reversal')
+  expect(
+    utility.getCreditTransactionSourceHistoryKind({
+      sourceType: 'fixedPrivateReservation',
+      outcomeStatus: 'no_show',
+      deltaCount: 1,
+    })
+  ).toBe('fixed_no_show')
+  expect(
+    status(
+      { ...base, actionType: 'fixed_private_no_show_deduct', deltaCount: -1 },
+      translate
+    )
+  ).toBe('노쇼 처리됨')
+  expect(
+    status(
+      { ...base, actionType: 'fixed_private_completed_deduct', deltaCount: -1 },
+      translate
+    )
+  ).toBe('수업완료 처리됨')
+  expect(
+    status(
+      {
+        ...base,
+        actionType: 'fixed_private_no_show_deduct_reversal',
+        deltaCount: 1,
+      },
+      translate
+    )
+  ).toBe('노쇼 취소됨')
+  expect(actionLabelBlock).toContain(
+    "sourceHistoryKind === 'fixed_no_show_reversal'"
+  )
+  expect(actionLabelBlock).toContain(
+    "'student.history.action.fixedNoShowReversal'"
+  )
+  expect(actionLabelBlock).toContain(
+    "['fixed_no_show', 'fixed_completed'].includes(sourceHistoryKind)"
+  )
+  expect(actionLabelBlock).toContain(
+    "'student.history.action.fixedOutcomeDeduction'"
+  )
+  expect(actionLabelBlock).toContain('t(fixedActionLabelKey)')
+  expect(actionLabelBlock).toContain(
+    'formatCreditTransactionDeltaCountDisplay(row.deltaCount)'
+  )
+  expect(
+    `${resourceValue(
+      koSource,
+      'student.history.action.fixedOutcomeDeduction'
+    )} · -1`
+  ).toBe('고정 1:1 결과 차감 · -1')
+  expect(
+    `${resourceValue(
+      koSource,
+      'student.history.action.fixedNoShowReversal'
+    )} · +1`
+  ).toBe('고정 1:1 노쇼 취소 · +1')
+  expect(utilsSource).toContain(
+    'export function formatCreditTransactionActionTypeLabel(actionType, deltaCount)'
+  )
+  expect(
+    utility.formatCreditTransactionActionTypeLabel('package_created')
+  ).toBe('수강권 발급')
+  for (const hardcoded of [
+    '고정 1:1 결과 차감',
+    '고정 1:1 노쇼 취소',
+    'Fixed 1:1 outcome deduction',
+    'Fixed 1:1 no-show cancellation',
+  ]) {
+    expect(utilsSource).not.toContain(hardcoded)
+    expect(studentsSource).not.toContain(hardcoded)
+  }
+  expect(status({ deltaCount: -1 }, translate)).toBe('출석 처리됨')
+  expect(
+    status(
+      {
+        sourceType: 'unknown-source',
+        actionType: 'unknown_action',
+        deltaCount: -1,
+      },
+      translate
+    )
+  ).toBe('unknown_action')
+  expect(statusBlock.indexOf('getCreditTransactionSourceHistoryKind')).toBeLessThan(
+    statusBlock.indexOf('delta < 0')
+  )
+  expect(statusBlock).not.toContain("actionType === 'group_deduct' || delta < 0")
+
+  const prefixes = [
+    'teacher.calendar.action.cancelFixedNoShow',
+    'teacher.calendar.action.restoreOneLessonCredit',
+    'teacher.outcome.fixedReversal.',
+    'student.history.status.',
+    'student.history.action.',
+  ]
+  const collectKeys = (source) =>
+    [...source.matchAll(/^\s*'([^']+)':/gm)]
+      .map((match) => match[1])
+      .filter((key) => prefixes.some((prefix) => key.startsWith(prefix)))
+      .sort()
+  const scopedKoKeys = collectKeys(koSource)
+  const scopedEnKeys = collectKeys(enSource)
+  expect(scopedKoKeys).toEqual(scopedEnKeys)
+  scopedKoKeys.forEach((key) => {
+    expect(resourceValue(koSource, key).trim(), `${key} ko`).not.toBe('')
+    expect(resourceValue(enSource, key).trim(), `${key} en`).not.toBe('')
+  })
+  for (const token of [
+    "'student.history.status.fixedNoShowProcessed': '노쇼 처리됨'",
+    "'student.history.status.fixedLessonCompleted': '수업완료 처리됨'",
+    "'student.history.status.fixedNoShowCanceled': '노쇼 취소됨'",
+    "'student.history.status.fixedNoShowProcessed': 'No-show processed'",
+    "'student.history.status.fixedLessonCompleted': 'Lesson completed'",
+    "'student.history.status.fixedNoShowCanceled': 'No-show canceled'",
+    "'student.history.action.fixedOutcomeDeduction': '고정 1:1 결과 차감'",
+    "'student.history.action.fixedNoShowReversal': '고정 1:1 노쇼 취소'",
+    "'student.history.action.fixedOutcomeDeduction': 'Fixed 1:1 outcome deduction'",
+    "'student.history.action.fixedNoShowReversal': 'Fixed 1:1 no-show cancellation'",
+  ]) {
+    expect(`${koSource}\n${enSource}`).toContain(token)
+  }
 })

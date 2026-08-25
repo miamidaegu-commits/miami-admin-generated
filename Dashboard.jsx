@@ -6887,15 +6887,17 @@ export default function Dashboard() {
       return
     }
     const fixedTarget = isFixedPrivateSourceRecord(target)
+    const fixedNoShowReversal = fixedTarget && target.fixedNoShowReversal === true
     if (
-      fixedTarget
+      (fixedNoShowReversal && !isAdmin) ||
+      (fixedTarget
         ? !canManageFixedPrivateLessonOutcomeLocally({
             target,
             isAdmin,
             user,
             userProfile,
           })
-        : !isAdmin
+        : !isAdmin)
     ) {
       return
     }
@@ -6903,7 +6905,8 @@ export default function Dashboard() {
     setPrivateLessonStatusActionMode(
       target.regularAbsenceFromAuto === true
         ? 'no_show'
-        : String(target.status || '').trim().toLowerCase() === 'no_show'
+        : fixedNoShowReversal ||
+            String(target.status || '').trim().toLowerCase() === 'no_show'
         ? 'reverse_deduction'
         : 'complete'
     )
@@ -7136,7 +7139,12 @@ export default function Dashboard() {
     clearFixedPrivateLessonOutcomeState()
     const previewEpoch = fixedPrivateOutcomePreviewEpochRef.current
     const target = privateLessonStatusActionTarget || {}
-    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const actionType =
+      privateLessonStatusActionMode === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : privateLessonStatusActionMode === 'no_show'
+          ? 'no_show'
+          : 'complete'
 
     try {
       if (!isFixedPrivateLessonOutcomeTarget(target)) {
@@ -8974,7 +8982,12 @@ export default function Dashboard() {
 
     const target = privateLessonStatusActionTarget || {}
     const targetIds = getFixedPrivateLessonOutcomeTargetIds(target)
-    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const actionType =
+      privateLessonStatusActionMode === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : privateLessonStatusActionMode === 'no_show'
+          ? 'no_show'
+          : 'complete'
     const previewData = fixedPrivateOutcomePreviewResult || {}
     const previewPayload = fixedPrivateOutcomePreviewPayload || {}
     const planHash = String(fixedPrivateOutcomePreviewPlanHash || '').trim()

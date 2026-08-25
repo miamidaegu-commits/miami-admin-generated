@@ -213,6 +213,30 @@ function FixedPrivateLessonOutcomeMode({
   const normalizedPlan = preview?.normalizedPlan || {}
   const requestId = String(payload?.requestId || '').trim()
   const planHash = String(fixedOutcomePreviewPlanHash || '').trim()
+  const isFixedNoShowReversal = actionType === 'reverse_deduction'
+  const originalDeductionId = String(
+    normalizedPlan.activeDeductionId ||
+      normalizedPlan.originalCreditTransactionId ||
+      target?.deductionCreditTransactionId ||
+      target?.deductionTransactionId ||
+      ''
+  ).trim()
+  const studentLabel = String(
+    target?.studentName || target?.student || target?.studentId || '-'
+  ).trim()
+  const teacherLabel = String(
+    target?.teacherDisplayName ||
+      target?.teacherName ||
+      target?.teacher ||
+      target?.teacherUid ||
+      '-'
+  ).trim()
+  const lessonDateTimeLabel = [
+    String(target?.date || '').trim(),
+    String(target?.time || '').trim(),
+  ]
+    .filter(Boolean)
+    .join(' ') || '-'
   const previewMatchesTargetAndAction =
     Boolean(payload && requestId && planHash) &&
     payload.lessonId === ids.lessonId &&
@@ -296,13 +320,17 @@ function FixedPrivateLessonOutcomeMode({
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
           <div>
             <h2 id="fixed-private-lesson-outcome-modal-title" style={{ margin: 0 }}>
-              {text('teacher.outcome.title', '고정 1:1 회차 결과 처리')}
+              {isFixedNoShowReversal
+                ? t('teacher.outcome.fixedReversal.title')
+                : text('teacher.outcome.title', '고정 1:1 회차 결과 처리')}
             </h2>
             <p style={{ margin: '8px 0 0 0', opacity: 0.78, fontSize: 14 }}>
-              {text(
-                'teacher.outcome.description',
-                '고정 회차의 3-way 링크와 원장 전환을 서버에서 미리 확인한 뒤 처리합니다.'
-              )}
+              {isFixedNoShowReversal
+                ? t('teacher.outcome.fixedReversal.description')
+                : text(
+                    'teacher.outcome.description',
+                    '고정 회차의 3-way 링크와 원장 전환을 서버에서 미리 확인한 뒤 처리합니다.'
+                  )}
             </p>
           </div>
           <button
@@ -338,6 +366,29 @@ function FixedPrivateLessonOutcomeMode({
           <FieldBlock label="packageId" value={ids.packageId} />
         </div>
 
+        {isFixedNoShowReversal ? (
+          <div
+            data-testid="fixed-private-no-show-reversal-context"
+            style={{
+              marginTop: 12,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 10,
+            }}
+          >
+            <FieldBlock label={t('teacher.outcome.fixedReversal.student')} value={studentLabel} />
+            <FieldBlock label={t('teacher.outcome.fixedReversal.teacher')} value={teacherLabel} />
+            <FieldBlock
+              label={t('teacher.outcome.fixedReversal.lessonDateTime')}
+              value={lessonDateTimeLabel}
+            />
+            <FieldBlock
+              label={t('teacher.outcome.fixedReversal.originalDeductionId')}
+              value={originalDeductionId || '-'}
+            />
+          </div>
+        ) : null}
+
         {!fixedLocalGatePassed ? (
           <section
             data-testid="fixed-private-lesson-outcome-local-gate-error"
@@ -357,38 +408,54 @@ function FixedPrivateLessonOutcomeMode({
           </section>
         ) : null}
 
-        <fieldset
-          style={{
-            margin: '16px 0 0 0',
-            border: '1px solid #2c3447',
-            borderRadius: 12,
-            padding: 14,
-          }}
-        >
-          <legend style={{ padding: '0 6px', fontWeight: 700 }}>
-            {text('teacher.outcome.actionType', '처리 유형')}
-          </legend>
-          {[
-            ['complete', text('teacher.outcome.complete', '수업완료')],
-            ['no_show', text('teacher.outcome.noShow', '노쇼')],
-          ].map(([value, label]) => (
-            <label
-              key={value}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 18 }}
-            >
-              <input
-                type="radio"
-                name="fixedPrivateLessonOutcomeActionType"
-                value={value}
-                checked={actionType === value}
-                onChange={() => setActionType?.(value)}
-                disabled={interactionBusy || locked}
-                data-testid={`fixed-private-lesson-outcome-type-${value}`}
-              />
-              {label}
-            </label>
-          ))}
-        </fieldset>
+        {isFixedNoShowReversal ? (
+          <section
+            data-testid="fixed-private-no-show-reversal-mode"
+            style={{
+              marginTop: 16,
+              border: '1px solid #8b6842',
+              borderRadius: 12,
+              background: '#2a2415',
+              padding: 14,
+              fontWeight: 700,
+            }}
+          >
+            {t('teacher.outcome.fixedReversal.cancelNoShow')}
+          </section>
+        ) : (
+          <fieldset
+            style={{
+              margin: '16px 0 0 0',
+              border: '1px solid #2c3447',
+              borderRadius: 12,
+              padding: 14,
+            }}
+          >
+            <legend style={{ padding: '0 6px', fontWeight: 700 }}>
+              {text('teacher.outcome.actionType', '처리 유형')}
+            </legend>
+            {[
+              ['complete', text('teacher.outcome.complete', '수업완료')],
+              ['no_show', text('teacher.outcome.noShow', '노쇼')],
+            ].map(([value, label]) => (
+              <label
+                key={value}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 18 }}
+              >
+                <input
+                  type="radio"
+                  name="fixedPrivateLessonOutcomeActionType"
+                  value={value}
+                  checked={actionType === value}
+                  onChange={() => setActionType?.(value)}
+                  disabled={interactionBusy || locked}
+                  data-testid={`fixed-private-lesson-outcome-type-${value}`}
+                />
+                {label}
+              </label>
+            ))}
+          </fieldset>
+        )}
 
         <button
           type="button"
@@ -408,7 +475,9 @@ function FixedPrivateLessonOutcomeMode({
         >
           {fixedOutcomePreviewBusy
             ? text('teacher.outcome.previewing', '고정 회차 미리보기 중...')
-            : text('teacher.outcome.preview', '고정 회차 서버 미리보기')}
+            : isFixedNoShowReversal
+              ? t('teacher.outcome.fixedReversal.preview')
+              : text('teacher.outcome.preview', '고정 회차 서버 미리보기')}
         </button>
 
         {fixedOutcomePreviewError ? (
@@ -490,6 +559,60 @@ function FixedPrivateLessonOutcomeMode({
               <FieldBlock label="ledger diagnostics" value={diagnostics} />
             </div>
 
+            {isFixedNoShowReversal ? (
+              <section
+                data-testid="fixed-private-no-show-reversal-package-impact"
+                style={{
+                  border: '1px solid #3c7a5f',
+                  borderRadius: 12,
+                  background: '#14251c',
+                  padding: 14,
+                }}
+              >
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                    gap: 10,
+                  }}
+                >
+                  <FieldBlock
+                    label={t('teacher.outcome.fixedReversal.currentUsedCount')}
+                    value={packageImpact.currentUsedCount}
+                  />
+                  <FieldBlock
+                    label={t('teacher.outcome.fixedReversal.nextUsedCount')}
+                    value={packageImpact.nextUsedCount}
+                  />
+                  <FieldBlock
+                    label={t('teacher.outcome.fixedReversal.currentRemainingCount')}
+                    value={packageImpact.currentRemainingCount}
+                  />
+                  <FieldBlock
+                    label={t('teacher.outcome.fixedReversal.nextRemainingCount')}
+                    value={packageImpact.nextRemainingCount}
+                  />
+                  <FieldBlock
+                    label={t('teacher.outcome.fixedReversal.packageChange')}
+                    value={t('teacher.outcome.fixedReversal.restoreAmount', {
+                      count: Number(packageImpact.remainingCountDelta || 0),
+                    })}
+                  />
+                  <FieldBlock
+                    label={t('teacher.outcome.fixedReversal.reversalCredit')}
+                    value={
+                      Number(creditPreview.deltaCount || 0) > 0
+                        ? `+${Number(creditPreview.deltaCount)}`
+                        : Number(creditPreview.deltaCount || 0)
+                    }
+                  />
+                </div>
+                <p style={{ margin: '12px 0 0 0', color: '#c9f2d5' }}>
+                  {t('teacher.outcome.fixedReversal.accountingDescription')}
+                </p>
+              </section>
+            ) : null}
+
             {classification.mode === 'legacy' ? (
               <section
                 data-testid="fixed-private-lesson-outcome-legacy-net-zero-warning"
@@ -525,7 +648,9 @@ function FixedPrivateLessonOutcomeMode({
                 }}
               >
                 <h3 style={{ margin: 0, fontSize: 15 }}>
-                  {text('teacher.outcome.finalTitle', '고정 회차 실제 처리 전 최종 확인')}
+                  {isFixedNoShowReversal
+                    ? t('teacher.outcome.fixedReversal.finalTitle')
+                    : text('teacher.outcome.finalTitle', '고정 회차 실제 처리 전 최종 확인')}
                 </h3>
                 <p style={{ margin: '8px 0 0 0', color: '#ffe1a8', fontSize: 13 }}>
                   {text(
@@ -549,10 +674,12 @@ function FixedPrivateLessonOutcomeMode({
                     disabled={interactionBusy || locked}
                     data-testid="fixed-private-lesson-outcome-commit-checkbox"
                   />
-                  {text(
-                    'teacher.outcome.confirm',
-                    '미리보기의 대상, 원장 분류, 횟수 변화와 차감 기록을 확인했습니다.'
-                  )}
+                  {isFixedNoShowReversal
+                    ? t('teacher.outcome.fixedReversal.confirm')
+                    : text(
+                        'teacher.outcome.confirm',
+                        '미리보기의 대상, 원장 분류, 횟수 변화와 차감 기록을 확인했습니다.'
+                      )}
                 </label>
                 <button
                   type="button"
@@ -573,7 +700,9 @@ function FixedPrivateLessonOutcomeMode({
                 >
                   {fixedOutcomeCommitBusy
                     ? text('teacher.outcome.committing', '고정 회차 실제 처리 중...')
-                    : text('teacher.outcome.commit', '고정 회차 결과 확정')}
+                    : isFixedNoShowReversal
+                      ? t('teacher.outcome.fixedReversal.commit')
+                      : text('teacher.outcome.commit', '고정 회차 결과 확정')}
                 </button>
               </section>
             ) : null}
@@ -671,10 +800,12 @@ function FixedPrivateLessonOutcomeMode({
           >
             <div>
               <strong>
-                {text(
-                  'teacher.outcome.commitSucceeded',
-                  '고정 회차 실제 처리가 완료되었습니다'
-                )}
+                {isFixedNoShowReversal
+                  ? t('teacher.outcome.fixedReversal.commitSucceeded')
+                  : text(
+                      'teacher.outcome.commitSucceeded',
+                      '고정 회차 실제 처리가 완료되었습니다'
+                    )}
               </strong>
               <p style={{ margin: '8px 0 0 0', fontSize: 13, opacity: 0.82 }}>
                 batchId: {fixedOutcomeCommitResult.batchId || '-'} · idempotentReplay:{' '}

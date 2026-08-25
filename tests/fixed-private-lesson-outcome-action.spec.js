@@ -52,7 +52,7 @@ test('server-owned assignments and renewals stamp reservation ledger marker', ()
   const rulesSource = readSource('firestore.rules')
   const dashboardAssignment = boundedSource(
     dashboardSource,
-    'async function createPrivateFixedSlotAssignment()',
+    'async function createPrivateFixedSlotAssignment(backfillConfirmed = false)',
     'async function createPrivateAvailabilityTemplate()'
   )
   const renewalPayloads = boundedSource(
@@ -302,6 +302,11 @@ test('fixed outcome ledger audit is admin-only, bounded, and read-only', () => {
 
 test('legacy direct reservation paths reject fixed private sources', () => {
   const source = readSource('functions/index.js')
+  const directGuard = boundedSource(
+    source,
+    'function assertNotFixedPrivateDirectReservation(...rows) {',
+    'function rowHasFixedPrivateProvenance('
+  )
   expect(source).toContain(
     'const FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON =\n' +
       '  "fixed_private_requires_fixed_outcome_action"'
@@ -322,6 +327,11 @@ test('legacy direct reservation paths reject fixed private sources', () => {
     'async function applyPrivateReservationOutcomeWithDeductionInTransaction(',
     'exports.markPrivateReservationOutcome = onCall('
   )
+  const reverseTransaction = boundedSource(
+    source,
+    'async function reversePrivateReservationOutcomeInTransaction(',
+    'exports.reversePrivateReservationOutcome = onCall('
+  )
   const reverse = boundedSource(
     source,
     'exports.reversePrivateReservationOutcome = onCall(',
@@ -330,8 +340,27 @@ test('legacy direct reservation paths reject fixed private sources', () => {
   expect(helper).toContain(
     'assertNotFixedPrivateDirectReservation(reservation, slot, linkedLesson)'
   )
-  expect(reverse).toContain('assertNotFixedPrivateDirectReservation(reservation)')
-  expect(reverse).toContain('linkedLesson')
+  expect(reverse).toContain(
+    'return await reversePrivateReservationOutcomeInTransaction('
+  )
+  expect(directGuard).toContain(
+    'if (!classifyFixedPrivateProvenance(...rows).isFixed) return;'
+  )
+  expect(directGuard).toContain(
+    '{blockedReasons: [FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON]}'
+  )
+  const firstGuardIndex = reverseTransaction.indexOf(
+    'assertNotFixedPrivateDirectReservation(reservation)'
+  )
+  const linkedGuardIndex = reverseTransaction.indexOf(
+    'assertNotFixedPrivateDirectReservation(reservation, slot, linkedLesson)'
+  )
+  const accountingIndex = reverseTransaction.indexOf(
+    'applyPrivateReservationOutcomeReversalAccountingInTransaction('
+  )
+  expect(firstGuardIndex).toBeGreaterThanOrEqual(0)
+  expect(linkedGuardIndex).toBeGreaterThan(firstGuardIndex)
+  expect(accountingIndex).toBeGreaterThan(linkedGuardIndex)
 })
 
 test('teacher ownership uses strict uid, teacher id, key, then unique name hierarchy', () => {
@@ -400,4 +429,322 @@ test('fixed actions enforce independent three-way state and safe IDs', () => {
   expect(idGuard).toContain('normalized.includes("/")')
   expect(source).toContain('validateCallableDocumentId(')
   expect(source).toContain('validateCallableRequestId(')
+})
+
+test('fixed reverse action validation is exact and fail closed', () => {
+  const source = readSource('functions/index.js')
+  const actionContract = boundedSource(
+    source,
+    'const FIXED_PRIVATE_OUTCOME_ACTIONS = [',
+    'function fixedPrivateOutcomeBatchId('
+  )
+  const allowlist = actionContract.match(
+    /const FIXED_PRIVATE_OUTCOME_ACTIONS = \[([\s\S]*?)\];/
+  )
+  expect(allowlist).not.toBeNull()
+  expect(
+    [...allowlist[1].matchAll(/"([^"]+)"/g)].map((match) => match[1])
+  ).toEqual(['complete', 'no_show', 'reverse_deduction'])
+  expect(actionContract).toContain(
+    'if (!FIXED_PRIVATE_OUTCOME_ACTIONS.includes(actionType))'
+  )
+  expect(actionContract).toContain(
+    'throw new HttpsError("invalid-argument", "unsupported_action_type")'
+  )
+  expect(actionContract).toContain('requireString(data, "requestId")')
+  expect(actionContract).toContain('requireString(data, "planHash")')
+  expect(actionContract).toContain('/^[a-f0-9]{64}$/.test(planHash)')
+  expect(actionContract).not.toContain('actionType.startsWith(')
+  expect(actionContract).not.toContain('actionType.includes(')
+  expect(actionContract).not.toContain('actionType ||')
+  expect(actionContract).not.toContain('defaultAction')
+})
+
+test('fixed reverse preview pins identity impact hash and write-free planning', () => {
+  const source = readSource('functions/index.js')
+  const resolver = boundedSource(
+    source,
+    'async function resolveFixedPrivateOutcomeTarget({',
+    'function fixedPrivateOutcomeValuesConflict('
+  )
+  const reversalPlan = boundedSource(
+    source,
+    'function buildFixedPrivateOutcomeReversalPlan({',
+    'function buildFixedPrivateOutcomePlan({'
+  )
+  const planHash = boundedSource(
+    source,
+    'function buildFixedPrivateOutcomePlanHash({',
+    'function summarizeFixedPrivateOutcomeTarget('
+  )
+  const preview = boundedSource(
+    source,
+    'async function previewFixedPrivateLessonOutcomeAction({',
+    'const FIXED_PRIVATE_OUTCOME_AUDIT_MAX_LIMIT'
+  )
+
+  expect(resolver).toContain(
+    'getPrivateReservationDeductionPointer(reservation)'
+  )
+  expect(resolver).toContain(
+    'buildPrivateReservationOutcomeReversalCreditId(activeDeductionId)'
+  )
+  expect(resolver).toContain('reversalCreditTransactionId')
+  expect(resolver).toContain('reversalCreditDoc')
+  expect(resolver).toContain('deductionCycleIdentity')
+  ;[
+    'currentState',
+    'activeDeductionId',
+    'originalCreditTransactionId',
+    'reversalCreditTransactionId',
+    'canonicalDeductionId',
+    'deductionCycleNumber',
+    'packageUsedCount',
+    'packageRemainingCount',
+    'usedCountDelta: -1',
+    'remainingCountDelta: 1',
+    'deltaCount: 1',
+    'additionalPackageRestore: 1',
+  ].forEach((token) => expect(reversalPlan).toContain(token))
+  expect(reversalPlan).toContain(
+    'buildPrivateReservationOutcomeReversalCreditId('
+  )
+  expect(reversalPlan).toContain(
+    'buildPrivateReservationOutcomeDeductionCycleIdentity({'
+  )
+  expect(planHash).toContain('actionType: validation.actionType')
+  expect(planHash).toContain(
+    'currentState: fixedPrivateOutcomeHashCurrentState(target, plan)'
+  )
+  expect(planHash).toContain('normalizedPlan: plan.normalizedPlan')
+  expect(preview).toContain('resolveFixedPrivateOutcomeTarget({')
+  expect(preview).toContain('buildFixedPrivateOutcomePlan({')
+  expect(preview).toContain('buildFixedPrivateOutcomePlanHash({')
+  expect(preview).toContain('dryRun: true')
+  expect(preview).toContain('previewOnly: true')
+  expect(preview).toContain('commit: false')
+  for (const writeToken of [
+    'runTransaction(',
+    'transaction.update(',
+    'transaction.create(',
+    '.set(',
+    '.update(',
+    '.delete(',
+  ]) {
+    expect(preview).not.toContain(writeToken)
+    expect(reversalPlan).not.toContain(writeToken)
+  }
+})
+
+test('fixed reverse commit replans then delegates shared transaction accounting', () => {
+  const source = readSource('functions/index.js')
+  const commit = boundedSource(
+    source,
+    'async function commitFixedPrivateLessonOutcomeAction({',
+    'exports.inspectFixedPrivateLessonOutcomeLedger = onCall('
+  )
+  const reversalBranch = boundedSource(
+    commit,
+    'if (validation.actionType === "reverse_deduction") {',
+    'const targetStatus = normalizedPlan.normalizedOutcome'
+  )
+  const fixedIdentity = boundedSource(
+    source,
+    'function buildFixedPrivateReversalAccountingIdentity({',
+    'function applyPrivateReservationOutcomeReversalAccountingInTransaction('
+  )
+  const sharedAccounting = boundedSource(
+    source,
+    'function applyPrivateReservationOutcomeReversalAccountingInTransaction(',
+    'function buildPrivateReservationOutcomeReversalPlan({'
+  )
+
+  const resolveIndex = commit.indexOf('resolveFixedPrivateOutcomeTarget({')
+  const planIndex = commit.indexOf('buildFixedPrivateOutcomePlan({')
+  const hashIndex = commit.indexOf('buildFixedPrivateOutcomePlanHash({')
+  const branchIndex = commit.indexOf(
+    'if (validation.actionType === "reverse_deduction") {'
+  )
+  expect(commit).toContain(
+    'validateFixedPrivateOutcomeActionPayload(data || {}, true)'
+  )
+  expect(commit).toContain('db.runTransaction(async (transaction) =>')
+  expect(commit).toContain('requestId: validation.requestId')
+  expect(commit).toContain('planHash: validation.planHash')
+  expect(resolveIndex).toBeGreaterThanOrEqual(0)
+  expect(planIndex).toBeGreaterThan(resolveIndex)
+  expect(hashIndex).toBeGreaterThan(planIndex)
+  expect(branchIndex).toBeGreaterThan(hashIndex)
+  expect(commit).toContain('actualPlanHash !== validation.planHash')
+  expect(reversalBranch).toContain(
+    'buildFixedPrivateReversalAccountingIdentity({'
+  )
+  expect(reversalBranch).toContain(
+    'applyPrivateReservationOutcomeReversalAccountingInTransaction('
+  )
+  expect(reversalBranch).not.toContain(
+    'transaction.update(target.packageDoc.ref'
+  )
+  expect(reversalBranch).not.toContain(
+    'transaction.create(target.reversalCreditDoc.ref'
+  )
+  expect(fixedIdentity).toContain(
+    'sourceType: "fixedPrivateReservation"'
+  )
+  expect(fixedIdentity).toContain(
+    'actionType: "fixed_private_no_show_deduct_reversal"'
+  )
+  expect(sharedAccounting).toContain('const usedAfter = usedBefore - 1')
+  expect(sharedAccounting).toContain(
+    'const remainingAfter = remainingBefore + 1'
+  )
+  expect(sharedAccounting).toContain('transaction.update(packageRef')
+  expect(sharedAccounting).toContain('transaction.update(originalCreditRef')
+  expect(sharedAccounting).toContain('transaction.create(reversalCreditRef')
+  expect(sharedAccounting).toContain('originalCreditTransactionId')
+  expect(sharedAccounting).toContain(
+    'reversalOfTransactionId: originalCreditTransactionId'
+  )
+  expect(sharedAccounting).not.toContain('totalCount:')
+  ;[
+    'status: "active"',
+    'status: "reserved"',
+    'deductionApplied: false',
+    'deductionReversed: true',
+    'deductionStatus: "reversed"',
+    'fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER',
+    'originalDeductionCreditTransactionId:',
+    'reversalCreditTransactionId:',
+    'outcomeReversalPlanHash: actualPlanHash',
+  ].forEach((token) => expect(reversalBranch).toContain(token))
+})
+
+test('direct reversal preserves guards and delegates the shared helper', () => {
+  const source = readSource('functions/index.js')
+  const directTransaction = boundedSource(
+    source,
+    'async function reversePrivateReservationOutcomeInTransaction(',
+    'exports.reversePrivateReservationOutcome = onCall('
+  )
+  const directPublic = boundedSource(
+    source,
+    'exports.reversePrivateReservationOutcome = onCall(',
+    'exports.bootstrapAdmin = onCall('
+  )
+  const reversalIdentity = boundedSource(
+    source,
+    'function buildPrivateReservationOutcomeReversalCreditId(',
+    'function buildDirectPrivateReversalAccountingIdentity({'
+  )
+
+  expect(
+    directTransaction.match(/assertNotFixedPrivateDirectReservation\(/g)
+  ).toHaveLength(2)
+  expect(directTransaction).toContain(
+    'buildDirectPrivateReversalAccountingIdentity({'
+  )
+  expect(directTransaction).toContain(
+    'applyPrivateReservationOutcomeReversalAccountingInTransaction('
+  )
+  expect(directTransaction).not.toContain('transaction.update(packageRef')
+  expect(directTransaction).not.toContain(
+    'transaction.update(originalCreditRef'
+  )
+  expect(directTransaction).not.toContain(
+    'transaction.create(reversalCreditRef'
+  )
+  expect(reversalIdentity).toContain(
+    'return `reverse_${normalizeId(deductionId)}`'
+  )
+  ;[
+    'optionalString(data, "requestId")',
+    'optionalString(data, "planHash")',
+    'optionalString(data, "packageId")',
+    'optionalString(data, "activeDeductionId")',
+    '"reversalCreditTransactionId"',
+    'requireString(data, "reason")',
+    'requestMode = hasRequestId ? "current" : "legacy"',
+    'mixed_reversal_request_shape',
+  ].forEach((token) => expect(directPublic).toContain(token))
+})
+
+test('fixed reverse exports collections and mutation surfaces stay bounded', () => {
+  const source = readSource('functions/index.js')
+  const fixedCallables = boundedSource(
+    source,
+    'exports.inspectFixedPrivateLessonOutcomeLedger = onCall(',
+    'exports.previewPrivateLessonOutcomeAction = onCall('
+  )
+  const resolver = boundedSource(
+    source,
+    'async function resolveFixedPrivateOutcomeTarget({',
+    'function fixedPrivateOutcomeValuesConflict('
+  )
+  const reversalPlan = boundedSource(
+    source,
+    'function buildFixedPrivateOutcomeReversalPlan({',
+    'function buildFixedPrivateOutcomePlan({'
+  )
+  const commit = boundedSource(
+    source,
+    'async function commitFixedPrivateLessonOutcomeAction({',
+    'exports.inspectFixedPrivateLessonOutcomeLedger = onCall('
+  )
+  const sharedAccounting = boundedSource(
+    source,
+    'function applyPrivateReservationOutcomeReversalAccountingInTransaction(',
+    'function buildPrivateReservationOutcomeReversalPlan({'
+  )
+
+  expect(
+    [...fixedCallables.matchAll(/exports\.(\w+) = onCall\(/g)]
+      .map((match) => match[1])
+  ).toEqual([
+    'inspectFixedPrivateLessonOutcomeLedger',
+    'inspectFixedPrivateLessonOutcomeRemediationEvidence',
+    'previewFixedPrivateLessonOutcomeAction',
+    'commitFixedPrivateLessonOutcomeAction',
+  ])
+  for (const internalName of [
+    'buildFixedPrivateOutcomeReversalPlan',
+    'buildFixedPrivateReversalAccountingIdentity',
+    'applyPrivateReservationOutcomeReversalAccountingInTransaction',
+  ]) {
+    expect(source).not.toContain(`exports.${internalName}`)
+  }
+  expect(
+    [...resolver.matchAll(/collectionName: "([^"]+)"/g)]
+      .map((match) => match[1])
+  ).toEqual([
+    'lessons',
+    'privateLessonReservations',
+    'privateLessonSlots',
+    'studentPackages',
+    'creditTransactions',
+    'creditTransactions',
+  ])
+  expect(source).toContain(
+    'const FIXED_PRIVATE_OUTCOME_BATCH_COLLECTION =\n' +
+      '  "fixedPrivateLessonOutcomeActionBatches"'
+  )
+  expect(fixedCallables.match(
+    /exports\.previewFixedPrivateLessonOutcomeAction = onCall\(/g
+  )).toHaveLength(1)
+  expect(fixedCallables.match(
+    /exports\.commitFixedPrivateLessonOutcomeAction = onCall\(/g
+  )).toHaveLength(1)
+  expect(reversalPlan).not.toContain('"legacy"')
+  for (const forbidden of [
+    'setDoc(',
+    'updateDoc(',
+    'addDoc(',
+    'writeBatch(',
+    'firebase/firestore',
+    'firestore.rules',
+    'firestore.indexes',
+  ]) {
+    expect(commit).not.toContain(forbidden)
+    expect(sharedAccounting).not.toContain(forbidden)
+    expect(reversalPlan).not.toContain(forbidden)
+  }
 })

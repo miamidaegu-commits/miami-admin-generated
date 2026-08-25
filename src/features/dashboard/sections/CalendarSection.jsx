@@ -162,6 +162,38 @@ function isFixedPrivateOutcomeCalendarRow(lesson) {
   return Boolean(lessonId && reservationId && slotId && packageId)
 }
 
+function isFixedPrivateNoShowReversalCalendarTarget({ lesson, isAdmin }) {
+  if (isAdmin !== true || !isFixedPrivateOutcomeCalendarRow(lesson)) return false
+  const outcomeStatus = String(
+    lesson?.outcomeStatus ||
+      lesson?.attendanceStatus ||
+      lesson?.lessonStatus ||
+      lesson?.status ||
+      ''
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+  const deductionCreditTransactionId = String(
+    lesson?.deductionCreditTransactionId || ''
+  ).trim()
+  const deductionTransactionId = String(lesson?.deductionTransactionId || '').trim()
+  const deductionPackageId = String(lesson?.deductionPackageId || '').trim()
+  return (
+    outcomeStatus === 'no_show' &&
+    lesson?.deductionApplied === true &&
+    Boolean(deductionPackageId) &&
+    Boolean(deductionCreditTransactionId) &&
+    deductionCreditTransactionId === deductionTransactionId &&
+    lesson?.deductionReversed !== true &&
+    lesson?.deductionCanceled !== true &&
+    lesson?.deductionCancelled !== true &&
+    lesson?.isDeductCancelled !== true &&
+    !lesson?.outcomeReversedAt &&
+    !String(lesson?.reversalCreditTransactionId || '').trim()
+  )
+}
+
 function normalizePrivateReservationLinkText(value) {
   return String(value ?? '')
     .trim()
@@ -1786,6 +1818,14 @@ export default function CalendarSection(props) {
               lesson.archived !== true &&
               lesson.isSeatReleased !== true &&
               lesson.releasedForPrivateBooking !== true
+            const canOpenFixedPrivateNoShowReversal =
+              activeSection === 'calendar' &&
+              isFixedPrivateNoShowReversalCalendarTarget({ lesson, isAdmin }) &&
+              canOpenFixedPrivateLessonOutcome(lesson) &&
+              lesson.deleted !== true &&
+              lesson.archived !== true &&
+              lesson.isSeatReleased !== true &&
+              lesson.releasedForPrivateBooking !== true
             const rowLessonActionBusy =
               busyLessonId === lesson.id ||
               rowPrivateCrudBusy ||
@@ -2108,6 +2148,36 @@ export default function CalendarSection(props) {
                       }}
                     >
                       횟수 수정
+                    </button>
+                  ) : null}
+                  {canOpenFixedPrivateNoShowReversal ? (
+                    <button
+                      type="button"
+                      data-testid="fixed-private-no-show-reversal-button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onOpenPrivateLessonStatusActionPreview?.({
+                          ...lesson,
+                          fixedNoShowReversal: true,
+                        })
+                      }}
+                      disabled={rowLessonActionBusy}
+                      style={{
+                        display: 'grid',
+                        gap: 2,
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: '1px solid #8b6842',
+                        background: '#3a2c1d',
+                        color: 'white',
+                        cursor: rowLessonActionBusy ? 'not-allowed' : 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      <span>{t('teacher.calendar.action.cancelFixedNoShow')}</span>
+                      <span style={{ fontSize: 11, opacity: 0.78 }}>
+                        {t('teacher.calendar.action.restoreOneLessonCredit')}
+                      </span>
                     </button>
                   ) : null}
                   {activeSection === 'calendar' &&

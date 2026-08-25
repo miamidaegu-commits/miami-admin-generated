@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -11,14 +12,26 @@ const harnessPath = path.join(
     testDir,
     "private-lesson-outcome-commit.emulator.cjs",
 );
+const fixedHarnessPath = path.join(
+    testDir,
+    "fixed-private-lesson-outcome-action.emulator.cjs",
+);
 const functionsPath = path.join(root, "functions", "index.js");
 const configSource = fs.readFileSync(configPath, "utf8");
 const config = JSON.parse(configSource);
 const harness = fs.readFileSync(harnessPath, "utf8");
+const fixedHarness = fs.readFileSync(fixedHarnessPath, "utf8");
 const functionsSource = fs.readFileSync(functionsPath, "utf8");
+const FIXED_HARNESS_SHA256 =
+  "4e4516ee49616035d5691c389d2536567421431673e4c0f34dd447fddb58dbb2";
+const FIXED_HARNESS_LINE_COUNT = 2649;
 
 function functionBody(source, name) {
-  const declaration = `async function ${name}`;
+  const asyncDeclaration = `async function ${name}(`;
+  const syncDeclaration = `function ${name}(`;
+  const declaration = source.includes(asyncDeclaration) ?
+    asyncDeclaration :
+    syncDeclaration;
   const start = source.indexOf(declaration);
   assert.notEqual(start, -1, `${name} declaration`);
   assert.equal(
@@ -105,7 +118,7 @@ function functionBody(source, name) {
     return index;
   }
 
-  const parameterOpening = skipTrivia(start + declaration.length);
+  const parameterOpening = start + declaration.length - 1;
   assert.equal(source[parameterOpening], "(", `${name} parameter opening`);
   const parameterClosing = scanBalanced(
       parameterOpening,
@@ -241,10 +254,15 @@ test("production callables and transaction helpers remain exercised", () => {
       functionsSource,
       "commitPrivateLessonOutcomeAction",
   );
-  const reversal = functionBody(
+  const directReversal = functionBody(
       functionsSource,
       "reversePrivateReservationOutcomeInTransaction",
   );
+  const sharedReversalAccounting = functionBody(
+      functionsSource,
+      "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+  );
+  const reversal = `${directReversal}\n${sharedReversalAccounting}`;
   assert.ok(commit.includes("db.runTransaction"));
   assert.ok(commit.includes(
       "applyPrivateReservationOutcomeWithDeductionInTransaction",
@@ -252,6 +270,9 @@ test("production callables and transaction helpers remain exercised", () => {
   assert.ok(commit.includes("transaction.create(batchRef, checkpoint)"));
   assert.ok(reversal.includes("transaction.update(packageRef"));
   assert.ok(reversal.includes("transaction.create(reversalCreditRef"));
+  assert.ok(directReversal.includes(
+      "applyPrivateReservationOutcomeReversalAccountingInTransaction(",
+  ));
   assert.ok(functionsSource.includes(
       "return `reverse_${normalizeId(deductionId)}`",
   ));
@@ -499,6 +520,293 @@ test("cycle, reversal hash, and legacy shape contracts are fail closed", () => {
       "deductionCreditTransactionId !== deductionTransactionId",
   ));
   assert.equal(validatorSource.includes("creditTransactionCandidates"), false);
+});
+
+test("fixed F01-F10 runner identity and cardinality are exact", () => {
+  const digest = crypto.createHash("sha256")
+      .update(fixedHarness)
+      .digest("hex");
+  assert.equal(digest, FIXED_HARNESS_SHA256);
+  assert.equal(fixedHarness.endsWith("\n"), true);
+  assert.equal(
+      fixedHarness.split("\n").length - 1,
+      FIXED_HARNESS_LINE_COUNT,
+  );
+  const adminAuthMatch = fixedHarness.match(
+      /const adminAuth = \{([\s\S]*?)\n\};\nconst teacherAuth =/,
+  );
+  assert.ok(adminAuthMatch);
+  const adminTokenRoleMatch = adminAuthMatch[1].match(
+      /\n    role: "([^"]+)",/,
+  );
+  assert.ok(adminTokenRoleMatch);
+  assert.equal(adminTokenRoleMatch[1], "owner");
+  const expected = [
+    "testF01FixedReversalPreview",
+    "testF02FixedReversalCommit",
+    "testF03SameRequestReplay",
+    "testF04DifferentRequestReplay",
+    "testF05ConcurrentFixedReversal",
+    "testF06AlreadyReversedFailClosed",
+    "testF07StaleReversalPlanHash",
+    "testF08CrossReservationAndCycleReuse",
+    "testF09ReNoShowCreatesNewCycle",
+    "testF10SecondCycleReversal",
+  ];
+  const declarations = [
+    ...fixedHarness.matchAll(
+        /^async function (testF(?:0[1-9]|10)[A-Za-z0-9_]*)\(/gm,
+    ),
+  ].map((match) => match[1]);
+  assert.deepEqual(declarations, expected);
+  assert.equal(new Set(declarations).size, 10);
+  const main = functionBody(fixedHarness, "main");
+  const adminMembershipRoleMatch = main.match(
+      /await seedMembership\(ADMIN_UID, \{role: "([^"]+)"\}\);/,
+  );
+  assert.ok(adminMembershipRoleMatch);
+  assert.equal(adminMembershipRoleMatch[1], "owner");
+  assert.equal(adminTokenRoleMatch[1], adminMembershipRoleMatch[1]);
+  expected.forEach((name) => {
+    assert.equal(
+        (fixedHarness.match(new RegExp(`async function ${name}\\(`, "g")) ||
+          []).length,
+        1,
+        `${name} declaration cardinality`,
+    );
+    assert.equal(
+        (main.match(new RegExp(`await ${name}\\(`, "g")) || []).length,
+        1,
+        `${name} execution cardinality`,
+    );
+  });
+  assert.deepEqual(fixedHarness.match(/\b(?:skip|todo)\b/gi) || [], []);
+  assert.equal(fixedHarness.includes(".skip("), false);
+  assert.equal(fixedHarness.includes(".todo("), false);
+});
+
+test("fixed F01-F10 runner invokes production handlers directly", () => {
+  assert.ok(fixedHarness.includes(
+      "functions.previewFixedPrivateLessonOutcomeAction",
+  ));
+  assert.ok(fixedHarness.includes(
+      "functions.commitFixedPrivateLessonOutcomeAction",
+  ));
+  assert.ok(functionsSource.includes(
+      "exports.previewFixedPrivateLessonOutcomeAction = onCall(",
+  ));
+  assert.ok(functionsSource.includes(
+      "exports.commitFixedPrivateLessonOutcomeAction = onCall(",
+  ));
+  const requiredCalls = new Map([
+    ["testF01FixedReversalPreview", ["previewFixture("]],
+    ["testF02FixedReversalCommit", ["commitOutcome("]],
+    ["testF03SameRequestReplay", ["commitOutcome("]],
+    ["testF04DifferentRequestReplay", ["commitOutcome("]],
+    ["testF05ConcurrentFixedReversal", [
+      "previewFixture(",
+      "commitOutcome(",
+      "Promise.allSettled(",
+    ]],
+    ["testF06AlreadyReversedFailClosed", [
+      "previewFixture(",
+      "commitOutcome(",
+    ]],
+    ["testF07StaleReversalPlanHash", [
+      "previewFixture(",
+      "commitOutcome(",
+    ]],
+    ["testF08CrossReservationAndCycleReuse", [
+      "previewFixture(",
+      "commitOutcome(",
+    ]],
+    ["testF09ReNoShowCreatesNewCycle", [
+      "previewFixture(",
+      "commitOutcome(",
+    ]],
+    ["testF10SecondCycleReversal", [
+      "previewFixture(",
+      "commitOutcome(",
+    ]],
+  ]);
+  requiredCalls.forEach((tokens, name) => {
+    const body = functionBody(fixedHarness, name);
+    tokens.forEach((token) => {
+      assert.ok(body.includes(token), `${name} ${token}`);
+    });
+  });
+  assert.equal(fixedHarness.includes("runTransaction("), false);
+  for (const internalName of [
+    "buildFixedPrivateOutcomeReversalPlan",
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+    "buildFixedPrivateReversalAccountingIdentity",
+  ]) {
+    assert.equal(
+        fixedHarness.includes(`function ${internalName}(`),
+        false,
+        `${internalName} must not be reimplemented by the runner`,
+    );
+  }
+});
+
+test("fixed reverse action, plan hash, and cycle fields are pinned", () => {
+  const allowlist = functionsSource.match(
+      /const FIXED_PRIVATE_OUTCOME_ACTIONS = \[([\s\S]*?)\];/,
+  );
+  assert.ok(allowlist);
+  assert.deepEqual(
+      [...allowlist[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]),
+      ["complete", "no_show", "reverse_deduction"],
+  );
+  const validator = functionBody(
+      functionsSource,
+      "validateFixedPrivateOutcomeActionPayload",
+  );
+  assert.ok(validator.includes(
+      "FIXED_PRIVATE_OUTCOME_ACTIONS.includes(actionType)",
+  ));
+  assert.ok(validator.includes("requireString(data, \"planHash\")"));
+  assert.equal(validator.includes("actionType ||"), false);
+  const fixedPlan = functionBody(
+      functionsSource,
+      "buildFixedPrivateOutcomePlan",
+  );
+  assert.ok(fixedPlan.includes(
+      "validation.actionType === \"reverse_deduction\"",
+  ));
+  assert.ok(fixedPlan.includes("buildFixedPrivateOutcomeReversalPlan({"));
+  const reversalPlan = functionBody(
+      functionsSource,
+      "buildFixedPrivateOutcomeReversalPlan",
+  );
+  for (const token of [
+    "currentState",
+    "activeDeductionId",
+    "originalCreditTransactionId",
+    "reversalCreditTransactionId",
+    "canonicalDeductionId",
+    "deductionCycleNumber",
+    "packageUsedCount",
+    "packageRemainingCount",
+    "additionalPackageRestore: 1",
+    "usedCountDelta: -1",
+    "remainingCountDelta: 1",
+    "deltaCount: 1",
+  ]) {
+    assert.ok(reversalPlan.includes(token), token);
+  }
+  const preview = functionBody(
+      functionsSource,
+      "previewFixedPrivateLessonOutcomeAction",
+  );
+  const commit = functionBody(
+      functionsSource,
+      "commitFixedPrivateLessonOutcomeAction",
+  );
+  assert.ok(preview.includes("buildFixedPrivateOutcomePlanHash({"));
+  assert.ok(commit.includes("buildFixedPrivateOutcomePlanHash({"));
+  assert.ok(commit.includes("actualPlanHash !== validation.planHash"));
+  assert.ok(functionsSource.includes(
+      "function buildFixedPrivateOutcomePlanHash({",
+  ));
+});
+
+test("fixed and direct reversal share server transaction accounting", () => {
+  const commit = functionBody(
+      functionsSource,
+      "commitFixedPrivateLessonOutcomeAction",
+  );
+  const shared = functionBody(
+      functionsSource,
+      "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+  );
+  const fixedIdentity = functionBody(
+      functionsSource,
+      "buildFixedPrivateReversalAccountingIdentity",
+  );
+  assert.ok(commit.includes("db.runTransaction"));
+  assert.ok(commit.includes("buildFixedPrivateReversalAccountingIdentity({"));
+  assert.ok(commit.includes(
+      "applyPrivateReservationOutcomeReversalAccountingInTransaction(",
+  ));
+  assert.ok(shared.includes("transaction.update(packageRef"));
+  assert.ok(shared.includes("transaction.update(originalCreditRef"));
+  assert.ok(shared.includes("transaction.create(reversalCreditRef"));
+  assert.ok(shared.includes("usedBefore - 1"));
+  assert.ok(shared.includes("remainingBefore + 1"));
+  assert.ok(fixedIdentity.includes(
+      "sourceType: \"fixedPrivateReservation\"",
+  ));
+  assert.ok(fixedIdentity.includes(
+      "actionType: \"fixed_private_no_show_deduct_reversal\"",
+  ));
+  assert.ok(fixedIdentity.includes(
+      "fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER",
+  ));
+  const direct = functionBody(
+      functionsSource,
+      "reversePrivateReservationOutcomeInTransaction",
+  );
+  assert.ok(direct.includes(
+      "applyPrivateReservationOutcomeReversalAccountingInTransaction(",
+  ));
+  assert.ok(direct.includes("buildDirectPrivateReversalAccountingIdentity({"));
+  assert.ok(direct.includes("assertNotFixedPrivateDirectReservation("));
+  for (const internalName of [
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+    "buildFixedPrivateReversalAccountingIdentity",
+    "buildDirectPrivateReversalAccountingIdentity",
+  ]) {
+    assert.equal(functionsSource.includes(`exports.${internalName}`), false);
+  }
+  const clientWrites = ["setDoc(", "updateDoc(", "addDoc(", "writeBatch("];
+  for (const clientWrite of clientWrites) {
+    assert.equal(commit.includes(clientWrite), false);
+    assert.equal(shared.includes(clientWrite), false);
+  }
+});
+
+test("direct reversal request shape and fixed exports remain bounded", () => {
+  const direct = functionBody(
+      functionsSource,
+      "reversePrivateReservationOutcomeInTransaction",
+  );
+  assert.ok(
+      (direct.match(/assertNotFixedPrivateDirectReservation\(/g) || [])
+          .length >= 2,
+  );
+  const publicStart = functionsSource.indexOf(
+      "exports.reversePrivateReservationOutcome = onCall(",
+  );
+  const publicEnd = functionsSource.indexOf(
+      "exports.bootstrapAdmin = onCall(",
+      publicStart,
+  );
+  assert.ok(publicStart > 0);
+  assert.ok(publicEnd > publicStart);
+  const publicSource = functionsSource.slice(publicStart, publicEnd);
+  for (const token of [
+    "optionalString(data, \"requestId\")",
+    "optionalString(data, \"planHash\")",
+    "optionalString(data, \"packageId\")",
+    "optionalString(data, \"activeDeductionId\")",
+    "\"reversalCreditTransactionId\"",
+    "requireString(data, \"reason\")",
+    "requestMode = hasRequestId ? \"current\" : \"legacy\"",
+  ]) {
+    assert.ok(publicSource.includes(token), token);
+  }
+  for (const exportName of [
+    "previewFixedPrivateLessonOutcomeAction",
+    "commitFixedPrivateLessonOutcomeAction",
+  ]) {
+    assert.equal(
+        (functionsSource.match(
+            new RegExp(`exports\\.${exportName} = onCall\\(`, "g"),
+        ) || []).length,
+        1,
+    );
+  }
 });
 
 test("teacher UID mismatch is authoritative and write-free", () => {

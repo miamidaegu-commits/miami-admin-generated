@@ -1477,7 +1477,7 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
   const validation = validate(evidence);
   const {providerResult: genuineProviderResult, providerRuntimeContext} =
     await genuineRuntimeFor(evidence);
-  assert.equal(validation.writerCount, 59);
+  assert.equal(validation.writerCount, 60);
   const first = buildDeterministicWriteFreezeProof(evidence, {
     providerRuntimeContext,
   });
@@ -1506,7 +1506,7 @@ test("valid provider-bound evidence produces deterministic proof", async () => {
       first.writeSourceIdentityDigest,
       EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST,
   );
-  assert.equal(first.writerCount, 59);
+  assert.equal(first.writerCount, 60);
   assert.equal(
       CRITICAL_RUNTIME_SOURCE_PATHS.filter(
           (sourcePath) =>

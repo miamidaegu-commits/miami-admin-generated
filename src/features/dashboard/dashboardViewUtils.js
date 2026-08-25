@@ -559,7 +559,35 @@ export function formatCreditTransactionDeltaCountDisplay(n) {
   return String(v)
 }
 
-export function formatCreditTransactionActionTypeLabel(actionType) {
+export function getCreditTransactionSourceHistoryKind(row = {}) {
+  const sourceType = String(row?.sourceType || '').trim().toLowerCase()
+  const actionType = String(row?.actionType || '').trim().toLowerCase()
+  const sourceOutcome = [
+    row?.normalizedOutcome,
+    row?.outcomeStatus,
+    row?.outcome,
+    row?.attendanceStatus,
+    row?.reason,
+  ]
+    .map((value) => String(value || '').trim().toLowerCase().replace(/-/g, '_'))
+    .find(Boolean) || ''
+  const fixedSource =
+    ['fixedprivatereservation', 'fixed_private_reservation'].includes(sourceType) ||
+    sourceType === 'fixed-private-slot-assignment' ||
+    actionType.startsWith('fixed_private_')
+
+  if (!fixedSource) return ''
+  if (actionType === 'fixed_private_no_show_deduct_reversal') {
+    return 'fixed_no_show_reversal'
+  }
+  if (actionType === 'fixed_private_no_show_deduct') return 'fixed_no_show'
+  if (actionType === 'fixed_private_completed_deduct') return 'fixed_completed'
+  if (['no_show', 'absent'].includes(sourceOutcome)) return 'fixed_no_show'
+  if (['completed', 'complete'].includes(sourceOutcome)) return 'fixed_completed'
+  return ''
+}
+
+export function formatCreditTransactionActionTypeLabel(actionType, deltaCount) {
   const key = String(actionType ?? '').trim()
   if (!key) return '-'
   const map = {
@@ -582,7 +610,14 @@ export function formatCreditTransactionActionTypeLabel(actionType) {
     package_revoked: '수강권 회수',
     group_reenroll: '그룹 재등록',
   }
-  return map[key] ?? key
+  const label = map[key] ?? key
+  if (
+    deltaCount != null &&
+    Number.isFinite(Number(deltaCount))
+  ) {
+    return `${label} · ${formatCreditTransactionDeltaCountDisplay(deltaCount)}`
+  }
+  return label
 }
 
 export const GROUP_RECURRENCE_WEEKDAY_TOGGLES = [

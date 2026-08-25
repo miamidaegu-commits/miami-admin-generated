@@ -2,12 +2,12 @@ import crypto from "node:crypto";
 
 export const WRITE_SURFACE_REGISTRY_VERSION =
   "academy_reset_write_surface.v2";
-export const EXPECTED_WRITE_SURFACE_COUNT = 59;
+export const EXPECTED_WRITE_SURFACE_COUNT = 60;
 export const EXPECTED_WRITE_SURFACE_IDENTITY_DIGEST =
-  "45f0bdda40f26303f792f72cc214d5f1ffea0e7f21ddd887be3dd5f693475092";
+  "46dd9fc647cf00c10a2c474c87e272f7c76931d36b1fd16b0ec7f92491fde91e";
 export const EXPECTED_WRITE_SOURCE_COUNT = 21;
 export const EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST =
-  "cc3ffe8b3ca894c83b36e013b2f287de01fa77662910c23a3800c56667f050d2";
+  "f106cb518d96992316d20309498d70b15d0dcef2c100adc6ed0768123326a655";
 
 export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   Object.freeze({
@@ -16,11 +16,11 @@ export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   }),
   Object.freeze({
     sourceFile: "Dashboard.jsx",
-    sha256: "ff667ff46a653768f8699a630b61fa65565a19d6f04852069294e5d4bbd31b2c",
+    sha256: "e7c2ce0daf1a1a0ea5daa89fe683d8e5f0fdb363c713a0e6d153fd195d4080a5",
   }),
   Object.freeze({
     sourceFile: "functions/index.js",
-    sha256: "935f81f92f8b730766c8132291314caf915d7f6e1e1877d6f7943a4f649b60d4",
+    sha256: "5220bb83e36d50cf9aea75527f33d37bbf44877569e21ed20ac457928adffe8e",
   }),
   Object.freeze({
     sourceFile: "lessonApi.js",
@@ -644,6 +644,13 @@ export const ACADEMY_RESET_WRITE_SURFACE_REGISTRY = Object.freeze([
       ],
       ["create", "update", "transaction"],
       "authorized actor, guarded academy, request hash, and fixed provenance",
+  ),
+  transaction(
+      "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+      ["studentPackages", "creditTransactions"],
+      ["create", "update", "transaction"],
+      "enclosing guarded direct or fixed reversal transaction and exact " +
+        "active deduction evidence",
   ),
   transaction(
       "reversePrivateReservationOutcomeInTransaction",

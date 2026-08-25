@@ -258,7 +258,7 @@ test("write inventory is deeply frozen and has exact category counts", () => {
     writeCallables: 25,
     transactionCallables: 19,
     scheduledWriters: 1,
-    writeHelpers: 13,
+    writeHelpers: 14,
     provisioningAuthCallables: 4,
     authOperations: 4,
   };
@@ -288,6 +288,7 @@ test("write inventory is deeply frozen and has exact category counts", () => {
     "commitPrivateLessonOutcomeAction",
     "commitFixedPrivateLessonOutcomeAction",
     "applyPrivateReservationOutcomeWithDeductionInTransaction",
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction",
     "reversePrivateReservationOutcomeInTransaction",
   ]);
   assert.doesNotThrow(() => assertRegisteredWriteSurface(
