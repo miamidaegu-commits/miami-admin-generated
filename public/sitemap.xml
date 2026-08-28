@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://daegumiami.com/</loc>
+    <loc>__VITE_PUBLIC_APP_URL__/</loc>
   </url>
   <url>
-    <loc>https://daegumiami.com/login</loc>
+    <loc>__VITE_PUBLIC_APP_URL__/login</loc>
   </url>
   <url>
-    <loc>https://daegumiami.com/classes</loc>
+    <loc>__VITE_PUBLIC_APP_URL__/classes</loc>
   </url>
 </urlset>

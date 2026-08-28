@@ -44,18 +44,8 @@ function cleanText(value, fallback = '-') {
   return text || fallback
 }
 
-const STUDENT_INVITATION_APP_URL_BY_PROJECT_ID = {
-  'daegu-miami-production': 'https://daegumiami.com',
-  'miami-e2e': 'https://miami-e2e.web.app',
-}
-
 function getStudentInvitationAppUrl() {
-  const configuredUrl = String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
-  if (configuredUrl) return configuredUrl
-  return (
-    STUDENT_INVITATION_APP_URL_BY_PROJECT_ID[import.meta.env.VITE_FIREBASE_PROJECT_ID] ||
-    'https://miami-e2e.web.app'
-  )
+  return String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
 }
 
 const STUDENT_INVITATION_APP_URL = getStudentInvitationAppUrl()
@@ -519,6 +509,7 @@ function creditTransactionHistoryStatus(row, translate) {
 }
 
 function buildStudentInvitationMessage({ email, resetLink }) {
+  if (!STUDENT_INVITATION_APP_URL) return ''
   return [
     '안녕하세요. 수업 예약 페이지 로그인 안내입니다.',
     '아래 링크를 눌러 비밀번호를 설정한 뒤 로그인해 주세요.',
