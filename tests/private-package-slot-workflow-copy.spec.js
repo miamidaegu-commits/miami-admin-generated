@@ -641,9 +641,13 @@ test('admin can create a separate private package for a different teacher', asyn
   const primaryTeacherKey = `e2e-package-primary-teacher-${unique}`;
   const primaryTeacherId = `e2e-package-primary-teacher-${unique}`;
   const primaryTeacherName = `E2E 다선생 기존 선생 ${unique}`;
+  const primaryTeacherUid = `${primaryTeacherId}-uid`;
+  const primaryTeacherEmail = `${primaryTeacherId}@example.com`;
   const secondTeacherKey = `miketest-${unique}`;
   const secondTeacherId = `e2e-package-teacher-${unique}`;
   const secondTeacherName = `miketest ${unique}`;
+  const secondTeacherUid = `${secondTeacherId}-uid`;
+  const secondTeacherEmail = `${secondTeacherId}@example.com`;
   let tempStudent = null;
   let dialog = null;
 
@@ -654,12 +658,18 @@ test('admin can create a separate private package for a different teacher', asyn
         teacherId: primaryTeacherId,
         teacherKey: primaryTeacherKey,
         teacherName: primaryTeacherName,
+        teacherUid: primaryTeacherUid,
+        teacherEmail: primaryTeacherEmail,
+        createMembership: true,
       }),
       createAdminSeededTeacher({
         academyId: ACADEMY_ID,
         teacherId: secondTeacherId,
         teacherKey: secondTeacherKey,
         teacherName: secondTeacherName,
+        teacherUid: secondTeacherUid,
+        teacherEmail: secondTeacherEmail,
+        createMembership: true,
       }),
     ]);
     tempStudent = await createAdminSeededPrivateStudent({
@@ -689,6 +699,8 @@ test('admin can create a separate private package for a different teacher', asyn
       teacher: primaryTeacherKey,
       teacherKey: primaryTeacherKey,
       teacherName: primaryTeacherName,
+      teacherUid: primaryTeacherUid,
+      teacherEmail: primaryTeacherEmail,
       totalCount: 4,
       remainingCount: 4,
       usedCount: 0,
@@ -720,9 +732,14 @@ test('admin can create a separate private package for a different teacher', asyn
 
     const teacherSelect = dialog.getByLabel('수강권 선생님');
     await expect(teacherSelect).toBeVisible();
+    const secondTeacherOptions = teacherSelect
+      .locator('option')
+      .filter({ hasText: secondTeacherName });
+    await expect(secondTeacherOptions).toHaveCount(1);
     await selectTeacherOption(teacherSelect, [secondTeacherKey, secondTeacherName], {
       timeout: 30000,
     });
+    await expect(teacherSelect).toHaveValue(secondTeacherUid);
     await expect(dialog.getByTestId('student-package-duplicate-guidance')).toHaveCount(0);
     await expect(dialog).toContainText('사용 가능 선생님:');
 
@@ -758,8 +775,11 @@ test('admin can create a separate private package for a different teacher', asyn
           secondTeacher: String(secondPackage?.teacher || ''),
           secondTeacherKey: String(secondPackage?.teacherKey || ''),
           secondTeacherName: String(secondPackage?.teacherName || ''),
+          secondTeacherUid: String(secondPackage?.teacherUid || ''),
+          secondTeacherEmail: String(secondPackage?.teacherEmail || ''),
           secondTotalCount: Number(secondPackage?.totalCount || 0),
           secondRemainingCount: Number(secondPackage?.remainingCount || 0),
+          secondPackageType: String(secondPackage?.packageType || ''),
         };
       }, { timeout: 60000 })
       .toEqual({
@@ -768,8 +788,11 @@ test('admin can create a separate private package for a different teacher', asyn
         secondTeacher: secondTeacherKey,
         secondTeacherKey,
         secondTeacherName,
+        secondTeacherUid,
+        secondTeacherEmail,
         secondTotalCount: 3,
         secondRemainingCount: 3,
+        secondPackageType: 'private',
       });
     await maybeDismissPostPrivateLessonScheduleModal(page, {
       expectedText: '새 개인 수강권이 발급되었습니다.',
@@ -802,6 +825,8 @@ test('admin can create a separate private package for a different teacher', asyn
       teacher: secondTeacherKey,
       teacherKey: secondTeacherKey,
       teacherName: secondTeacherName,
+      teacherUid: secondTeacherUid,
+      teacherEmail: secondTeacherEmail,
       totalCount: 3,
       remainingCount: 3,
       packageType: 'private',
@@ -835,10 +860,14 @@ test('admin can create a separate private package for a different teacher', asyn
     await cleanupAdminSeededTeacher({
       academyId: ACADEMY_ID,
       teacherId: secondTeacherId,
+      teacherUid: secondTeacherUid,
+      cleanupMembership: true,
     }).catch(() => {});
     await cleanupAdminSeededTeacher({
       academyId: ACADEMY_ID,
       teacherId: primaryTeacherId,
+      teacherUid: primaryTeacherUid,
+      cleanupMembership: true,
     }).catch(() => {});
   }
 });
