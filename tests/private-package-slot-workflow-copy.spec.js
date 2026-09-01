@@ -646,6 +646,7 @@ test('admin can create a separate private package for a different teacher', asyn
   const secondTeacherKey = `miketest-${unique}`;
   const secondTeacherId = `e2e-package-teacher-${unique}`;
   const secondTeacherName = `miketest ${unique}`;
+  const secondTeacherStoredFallbackKey = secondTeacherName.trim().toLowerCase();
   const secondTeacherUid = `${secondTeacherId}-uid`;
   const secondTeacherEmail = `${secondTeacherId}@example.com`;
   let tempStudent = null;
@@ -763,7 +764,7 @@ test('admin can create a separate private package for a different teacher', asyn
         });
         const secondPackage = packages.find(
           (pkg) =>
-            String(pkg.teacherKey || pkg.teacher || '').trim() === secondTeacherKey &&
+            String(pkg.teacherUid || '').trim() === secondTeacherUid &&
             String(pkg.title || '').trim() === newPackageTitle
         );
         if (secondPackage?.id) secondPackageId = secondPackage.id;
@@ -783,10 +784,10 @@ test('admin can create a separate private package for a different teacher', asyn
         };
       }, { timeout: 60000 })
       .toEqual({
-        teacherKeys: [primaryTeacherKey, secondTeacherKey].sort(),
+        teacherKeys: [primaryTeacherKey, secondTeacherStoredFallbackKey].sort(),
         secondTitle: newPackageTitle,
-        secondTeacher: secondTeacherKey,
-        secondTeacherKey,
+        secondTeacher: secondTeacherStoredFallbackKey,
+        secondTeacherKey: secondTeacherStoredFallbackKey,
         secondTeacherName,
         secondTeacherUid,
         secondTeacherEmail,
@@ -818,12 +819,14 @@ test('admin can create a separate private package for a different teacher', asyn
       (pkg) => String(pkg.teacherKey || pkg.teacher || '') === primaryTeacherKey
     );
     const secondPackage = packages.find(
-      (pkg) => String(pkg.teacherKey || pkg.teacher || '') === secondTeacherKey
+      (pkg) =>
+        String(pkg.teacherUid || '').trim() === secondTeacherUid &&
+        String(pkg.title || '').trim() === newPackageTitle
     );
     expect(primaryPackage?.id).toBe(existingPackage.packageId);
     expect(secondPackage).toMatchObject({
-      teacher: secondTeacherKey,
-      teacherKey: secondTeacherKey,
+      teacher: secondTeacherStoredFallbackKey,
+      teacherKey: secondTeacherStoredFallbackKey,
       teacherName: secondTeacherName,
       teacherUid: secondTeacherUid,
       teacherEmail: secondTeacherEmail,
