@@ -4,17 +4,8 @@ import { functions as firebaseFunctions } from '../../../../firebase.js'
 import { formatLessonStatsMonthLabel } from '../lessonOccurrenceStats.js'
 import TeacherLessonRosterModal from '../modals/TeacherLessonRosterModal.jsx'
 
-const TEACHER_INVITATION_APP_URL_BY_PROJECT_ID = {
-  'daegu-miami-production': 'https://daegumiami.com',
-  'miami-e2e': 'https://miami-e2e.web.app',
-}
-
 function getTeacherInvitationAppUrl() {
-  const configuredUrl = String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
-  if (configuredUrl) return configuredUrl
-
-  const projectId = String(import.meta.env.VITE_FIREBASE_PROJECT_ID || '').trim()
-  return TEACHER_INVITATION_APP_URL_BY_PROJECT_ID[projectId] || 'https://miami-e2e.web.app'
+  return String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
 }
 
 const TEACHER_INVITATION_APP_URL = getTeacherInvitationAppUrl()
@@ -140,6 +131,7 @@ function TeacherLessonCountStatsSection({ lessonCountStats, loading }) {
 }
 
 function buildTeacherInvitationMessage({ email, resetLink }) {
+  if (!TEACHER_INVITATION_APP_URL) return ''
   return [
     '안녕하세요. 선생님 로그인 안내입니다.',
     '아래 링크를 눌러 비밀번호를 설정한 뒤 로그인해 주세요.',

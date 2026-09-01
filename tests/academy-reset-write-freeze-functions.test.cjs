@@ -34,6 +34,15 @@ const freezeGuardSource = fs.readFileSync(
     ),
     "utf8",
 );
+const writeSurfaceRegistrySource = fs.readFileSync(
+    path.join(
+        repositoryRoot,
+        "functions",
+        "scripts",
+        "academy-reset-write-surface-registry.mjs",
+    ),
+    "utf8",
+);
 
 const READ_ONLY_CALLABLES = Object.freeze([
   "listGroupLessonAvailability",
@@ -130,10 +139,14 @@ function runtimeProjectContract(env) {
   const productionDeclaration = indexSource.match(
       /const PRODUCTION_PROJECT_ID = "daegu-miami-production";/,
   );
+  const e2eDeclaration = indexSource.match(
+      /const E2E_PROJECT_ID = "miami-e2e";/,
+  );
   const emulatorDeclaration = indexSource.match(
       /const EMULATOR_PROJECT_ID = "demo-miami-e2e";/,
   );
   assert.ok(productionDeclaration);
+  assert.ok(e2eDeclaration);
   assert.ok(emulatorDeclaration);
   class TestHttpsError extends Error {
     constructor(code, message, details) {
@@ -148,9 +161,11 @@ function runtimeProjectContract(env) {
       [
         "\"use strict\";",
         productionDeclaration[0],
+        e2eDeclaration[0],
         emulatorDeclaration[0],
         extractFunctionSource("getProjectIdFromFirebaseConfig"),
         extractFunctionSource("getRuntimeProjectId"),
+        extractFunctionSource("isLoopbackFirestoreEmulatorHost"),
         extractFunctionSource("requireWriteGuardRuntimeProjectId"),
         "return {getRuntimeProjectId, requireWriteGuardRuntimeProjectId};",
       ].join("\n"),
@@ -234,11 +249,16 @@ async function expectFreeze(promise, reason) {
 test("write inventory is deeply frozen and has exact category counts", () => {
   assert.equal(Object.isFrozen(WRITE_SURFACE_INVENTORY), true);
   assert.equal(WRITE_SURFACE_INVENTORY.version, WRITE_SURFACE_INVENTORY_VERSION);
+  assert.equal(
+      WRITE_SURFACE_INVENTORY_VERSION,
+      "academy_reset_write_surface_inventory.v2",
+  );
+  assert.equal(RESET_WRITE_FREEZE_SCHEMA_VERSION, "academy_reset_write_freeze.v1");
   const expectedCounts = {
     writeCallables: 25,
     transactionCallables: 19,
     scheduledWriters: 1,
-    writeHelpers: 12,
+    writeHelpers: 14,
     provisioningAuthCallables: 4,
     authOperations: 4,
   };
@@ -255,6 +275,25 @@ test("write inventory is deeply frozen and has exact category counts", () => {
         `${category} contains a duplicate`,
     );
   }
+  assert.deepEqual(WRITE_SURFACE_INVENTORY.writeHelpers, [
+    "setMergeWithTimestamps",
+    "createStudentAccessSummaryDocsIfMissing",
+    "runFixedPrivateRenewalWriteTransaction",
+    "runFixedPrivateAssignmentWriteTransaction",
+    "runFixedPrivateRescheduleWriteTransaction",
+    "commitPrivateLessonStatusAction",
+    "autoDeductPrivateReservation",
+    "autoDeductGroupStudent",
+    "createPrivateSlotNotification",
+    "commitPrivateLessonOutcomeAction",
+    "commitFixedPrivateLessonOutcomeAction",
+    "applyPrivateReservationOutcomeWithDeductionInTransaction",
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+    "reversePrivateReservationOutcomeInTransaction",
+  ]);
+  assert.doesNotThrow(() => assertRegisteredWriteSurface(
+      "reversePrivateReservationOutcomeInTransaction",
+  ));
   assert.deepEqual(
       sorted(WRITE_SURFACE_INVENTORY.provisioningAuthCallables),
       sorted(["bootstrapAdmin", "setUserRole", "linkStudentAccount",
@@ -319,6 +358,22 @@ test("transaction and non-transaction callable allowlists are exact", () => {
 
 test("all 20 transaction runners guard before their first transaction read", () => {
   const runnerMatches = [...indexSource.matchAll(/runTransaction\s*\(/g)];
+  const delegatedReadHelperByRunner = new Map([
+    [
+      "markPrivateReservationOutcome",
+      "applyPrivateReservationOutcomeWithDeductionInTransaction",
+    ],
+    [
+      "reversePrivateReservationOutcome",
+      "reversePrivateReservationOutcomeInTransaction",
+    ],
+  ]);
+  assert.equal(delegatedReadHelperByRunner.size, 2);
+  assert.equal(new Set(delegatedReadHelperByRunner.values()).size, 2);
+  assert.equal(
+      delegatedReadHelperByRunner.get("reversePrivateReservationOutcome"),
+      "reversePrivateReservationOutcomeInTransaction",
+  );
   assert.equal(runnerMatches.length, 20);
   for (let index = 0; index < runnerMatches.length; index += 1) {
     const start = runnerMatches[index].index;
@@ -327,15 +382,43 @@ test("all 20 transaction runners guard before their first transaction read", () 
     const transactionBody = indexSource.slice(start, end);
     const guardIndex = transactionBody.indexOf("guardAcademyWrite({");
     const firstReadIndex = transactionBody.indexOf("transaction.get(");
-    const delegatedTransactionRead = transactionBody.includes(
-        "applyPrivateReservationOutcomeWithDeductionInTransaction(",
-    );
+    const runnerSurfaceId = transactionBody.match(
+        /writeSurfaceId:\s*"([^"]+)"/,
+    )?.[1];
+    const delegatedHelperName =
+      delegatedReadHelperByRunner.get(runnerSurfaceId);
+    const delegatedHelperCallIndex = delegatedHelperName ?
+      transactionBody.indexOf(`return await ${delegatedHelperName}(`) :
+      -1;
+    const delegatedTransactionRead = delegatedHelperCallIndex !== -1;
     assert.notEqual(guardIndex, -1, `transaction ${index + 1} has no guard`);
     assert.equal(
         firstReadIndex !== -1 || delegatedTransactionRead,
         true,
         `transaction ${index + 1} has no direct or delegated read`,
     );
+    if (delegatedHelperName) {
+      assert.notEqual(
+          delegatedHelperCallIndex,
+          -1,
+          `${runnerSurfaceId} does not call ${delegatedHelperName}`,
+      );
+      assert.ok(
+          guardIndex < delegatedHelperCallIndex,
+          `${runnerSurfaceId} calls ${delegatedHelperName} before its guard`,
+      );
+      const helperDeclaration = indexSource.indexOf(
+          `async function ${delegatedHelperName}(`,
+      );
+      assert.notEqual(helperDeclaration, -1, delegatedHelperName);
+      const helperBody =
+        extractBalancedFunctionBody(indexSource, helperDeclaration);
+      assert.notEqual(
+          helperBody.indexOf("transaction.get("),
+          -1,
+          `${delegatedHelperName} has no transaction read`,
+      );
+    }
     if (firstReadIndex !== -1) {
       assert.ok(
           guardIndex < firstReadIndex,
@@ -343,6 +426,39 @@ test("all 20 transaction runners guard before their first transaction read", () 
       );
     }
   }
+  const reversalRunner = "reversePrivateReservationOutcome";
+  const reversalHelper = "reversePrivateReservationOutcomeInTransaction";
+  assert.equal(
+      indexSource.split(`exports.${reversalRunner} = onCall(`).length - 1,
+      1,
+  );
+  assert.equal(
+      indexSource.split(`async function ${reversalHelper}(`).length - 1,
+      1,
+  );
+  assert.equal(
+      indexSource.split(`return await ${reversalHelper}(`).length - 1,
+      1,
+  );
+  const reversalHelperDeclaration =
+    indexSource.indexOf(`async function ${reversalHelper}(`);
+  const reversalHelperBody =
+    extractBalancedFunctionBody(indexSource, reversalHelperDeclaration);
+  assert.equal(
+      reversalHelperBody.indexOf("transaction.get(") <
+        reversalHelperBody.indexOf("transaction.update("),
+      true,
+  );
+  assert.equal(
+      WRITE_SURFACE_INVENTORY.writeHelpers.filter(
+          (helperName) => helperName === reversalHelper,
+      ).length,
+      1,
+  );
+  assert.equal(
+      writeSurfaceRegistrySource.split(`"${reversalHelper}"`).length - 1,
+      1,
+  );
   const transactionGuardIds = [
     ...indexSource.matchAll(
         /transaction,\s*\n\s*academyId(?::[^,\n]+)?,\s*\n\s*writeSurfaceId:\s*"([^"]+)"/g,
@@ -494,11 +610,23 @@ test("unknown runtime projects fail closed before backend write guards", () => {
   assert.notEqual(declaration, -1);
   const body = extractBalancedFunctionBody(indexSource, declaration);
   assert.match(body, /projectId === PRODUCTION_PROJECT_ID/);
-  assert.match(body, /Boolean\(process\.env\.FIRESTORE_EMULATOR_HOST\)/);
+  assert.match(body, /projectId === E2E_PROJECT_ID/);
+  assert.match(
+      body,
+      /process\.env\.FIRESTORE_EMULATOR_HOST === undefined/,
+  );
+  assert.match(body, /isLoopbackFirestoreEmulatorHost\(\)/);
   assert.match(body, /projectId === EMULATOR_PROJECT_ID/);
   assert.match(body, /new HttpsError\(/);
   assert.match(body, /unknown_runtime_project/);
   assert.doesNotMatch(body, /startsWith|includes|\/\^demo-/);
+  const loopbackBody = extractBalancedFunctionBody(
+      indexSource,
+      indexSource.indexOf("function isLoopbackFirestoreEmulatorHost()"),
+  );
+  assert.match(loopbackBody, /127\\\.0\\\.0\\\.1\|localhost/);
+  assert.match(loopbackBody, /port <= 65535/);
+  assert.doesNotMatch(loopbackBody, /0\.0\.0\.0|\.\*|\[\^/);
   assert.match(
       indexSource,
       /assertAcademyResetWriteAllowed\(\{[\s\S]*?projectId:\s*requireWriteGuardRuntimeProjectId\(\)/,
@@ -509,77 +637,144 @@ test("unknown runtime projects fail closed before backend write guards", () => {
   );
 });
 
-test("runtime project identity contract is exact and emulator-bound", () => {
-  const productionProject = "daegu-miami-production";
-  const emulatorProject = "demo-miami-e2e";
-  const emulatorHost = "127.0.0.1:8080";
-  const matchingEnv = (projectId, extras = {}) => ({
+const PRODUCTION_RUNTIME_PROJECT = "daegu-miami-production";
+const DEV_RUNTIME_PROJECT = "miami-e2e";
+const EMULATOR_RUNTIME_PROJECT = "demo-miami-e2e";
+const LOOPBACK_EMULATOR_HOST = "127.0.0.1:8080";
+
+function matchingRuntimeEnv(projectId, extras = {}) {
+  return {
     GCLOUD_PROJECT: projectId,
     GOOGLE_CLOUD_PROJECT: projectId,
     FIREBASE_CONFIG: JSON.stringify({projectId}),
     ...extras,
-  });
-  const requireProject = (env) =>
-    runtimeProjectContract(env).requireWriteGuardRuntimeProjectId();
-  const expectUnknownRuntime = (env) => {
-    assert.throws(
-        () => requireProject(env),
-        (error) => {
-          assert.equal(error.code, "failed-precondition");
-          assert.equal(error.details?.reason, "unknown_runtime_project");
-          return true;
-        },
-    );
   };
+}
 
-  assert.equal(
-      requireProject(matchingEnv(productionProject)),
-      productionProject,
+function requireRuntimeProject(env) {
+  return runtimeProjectContract(env).requireWriteGuardRuntimeProjectId();
+}
+
+function expectUnknownRuntime(env) {
+  assert.throws(
+      () => requireRuntimeProject(env),
+      (error) => {
+        assert.equal(error.code, "failed-precondition");
+        assert.equal(error.details?.reason, "unknown_runtime_project");
+        return true;
+      },
   );
+}
+
+test("I03 — Production cloud runtime is allowed exactly", () => {
   assert.equal(
-      requireProject(matchingEnv(emulatorProject, {
-        FIRESTORE_EMULATOR_HOST: emulatorHost,
-      })),
-      emulatorProject,
+      requireRuntimeProject(matchingRuntimeEnv(PRODUCTION_RUNTIME_PROJECT)),
+      PRODUCTION_RUNTIME_PROJECT,
   );
-
-  expectUnknownRuntime(matchingEnv(emulatorProject));
-  expectUnknownRuntime(matchingEnv("miami-e2e", {
-    FIRESTORE_EMULATOR_HOST: emulatorHost,
+  expectUnknownRuntime(matchingRuntimeEnv(PRODUCTION_RUNTIME_PROJECT, {
+    FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST,
   }));
-  expectUnknownRuntime(matchingEnv("demo-other", {
-    FIRESTORE_EMULATOR_HOST: emulatorHost,
-  }));
-  expectUnknownRuntime(matchingEnv("foreign-project", {
-    FIRESTORE_EMULATOR_HOST: emulatorHost,
-  }));
+});
 
-  expectUnknownRuntime({
-    ...matchingEnv(productionProject),
-    GOOGLE_CLOUD_PROJECT: emulatorProject,
-  });
-  expectUnknownRuntime({
-    ...matchingEnv(emulatorProject, {
-      FIRESTORE_EMULATOR_HOST: emulatorHost,
-    }),
-    FIREBASE_CONFIG: JSON.stringify({projectId: "foreign-project"}),
-  });
-
-  for (const projectId of [
-    productionProject.toUpperCase(),
-    emulatorProject.toUpperCase(),
-    ` ${productionProject}`,
-    `${productionProject} `,
-    ` ${emulatorProject}`,
-    `${emulatorProject} `,
+test("I04 — miami-e2e cloud runtime is allowed exactly", () => {
+  assert.equal(
+      requireRuntimeProject(matchingRuntimeEnv(DEV_RUNTIME_PROJECT)),
+      DEV_RUNTIME_PROJECT,
+  );
+  for (const env of [
+    {GCLOUD_PROJECT: DEV_RUNTIME_PROJECT},
+    {GOOGLE_CLOUD_PROJECT: DEV_RUNTIME_PROJECT},
+    {FIREBASE_CONFIG: JSON.stringify({projectId: DEV_RUNTIME_PROJECT})},
   ]) {
-    expectUnknownRuntime(matchingEnv(projectId, {
-      FIRESTORE_EMULATOR_HOST: emulatorHost,
-    }));
+    assert.equal(requireRuntimeProject(env), DEV_RUNTIME_PROJECT);
+  }
+  expectUnknownRuntime(matchingRuntimeEnv(DEV_RUNTIME_PROJECT, {
+    FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST,
+  }));
+});
+
+test("I05 — demo emulator requires strict loopback evidence", () => {
+  for (const host of [
+    "127.0.0.1:1",
+    LOOPBACK_EMULATOR_HOST,
+    "localhost:65535",
+  ]) {
+    assert.equal(
+        requireRuntimeProject(matchingRuntimeEnv(EMULATOR_RUNTIME_PROJECT, {
+          FIRESTORE_EMULATOR_HOST: host,
+        })),
+        EMULATOR_RUNTIME_PROJECT,
+    );
   }
 });
 
+test("I06 — demo without valid loopback evidence is rejected", () => {
+  for (const host of [
+    undefined,
+    "",
+    "0.0.0.0:8080",
+    "192.168.1.10:8080",
+    "127.0.0.1:0",
+    "127.0.0.1:08080",
+    "127.0.0.1:65536",
+    "localhost",
+  ]) {
+    const env = matchingRuntimeEnv(EMULATOR_RUNTIME_PROJECT);
+    if (host !== undefined) env.FIRESTORE_EMULATOR_HOST = host;
+    expectUnknownRuntime(env);
+  }
+});
+
+test("I07 — unknown cloud projects are rejected without broad matching", () => {
+  for (const projectId of [
+    "foreign-project",
+    "demo-other",
+    "miami-e2e-copy",
+    PRODUCTION_RUNTIME_PROJECT.toUpperCase(),
+    ` ${PRODUCTION_RUNTIME_PROJECT}`,
+    `${DEV_RUNTIME_PROJECT} `,
+  ]) {
+    expectUnknownRuntime(matchingRuntimeEnv(projectId));
+  }
+});
+
+test("I08 — conflicting or malformed project sources are rejected", () => {
+  expectUnknownRuntime({
+    ...matchingRuntimeEnv(PRODUCTION_RUNTIME_PROJECT),
+    GOOGLE_CLOUD_PROJECT: DEV_RUNTIME_PROJECT,
+  });
+  expectUnknownRuntime({
+    ...matchingRuntimeEnv(EMULATOR_RUNTIME_PROJECT, {
+      FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST,
+    }),
+    FIREBASE_CONFIG: JSON.stringify({projectId: "foreign-project"}),
+  });
+  expectUnknownRuntime({
+    GCLOUD_PROJECT: DEV_RUNTIME_PROJECT,
+    FIREBASE_CONFIG: "{",
+  });
+});
+
+test("I09 — missing project identity is rejected", () => {
+  expectUnknownRuntime({});
+  expectUnknownRuntime({FIRESTORE_EMULATOR_HOST: LOOPBACK_EMULATOR_HOST});
+  expectUnknownRuntime({FIREBASE_CONFIG: "{}"});
+});
+
 test("write helper declarations are pinned to the exact inventory", () => {
+  const newHelperName = "reversePrivateReservationOutcomeInTransaction";
+  assert.equal(
+      WRITE_SURFACE_INVENTORY.writeHelpers.filter(
+          (helperName) => helperName === newHelperName,
+      ).length,
+      1,
+  );
+  assert.equal(
+      (indexSource.match(
+          /^async function reversePrivateReservationOutcomeInTransaction\(/gm,
+      ) || []).length,
+      1,
+  );
   for (const helperName of WRITE_SURFACE_INVENTORY.writeHelpers) {
     assert.match(
         indexSource,

@@ -71,6 +71,7 @@ const adminAuth = {
   token: {
     email: "fixed-private-admin@example.com",
     name: "Fixed Private Admin",
+    role: "owner",
   },
 };
 const teacherAuth = {
@@ -378,6 +379,534 @@ async function assertCommitted(fixture, {
   assert.equal(creditSnap.get("sourceId"), fixture.reservationId);
   assert.equal(creditSnap.get("deltaCount"), -1);
   return creditId;
+}
+
+async function seedCanonicalFixedNoShow(name) {
+  const fixture = await seedFixture({
+    name,
+    mode: "canonical",
+    usedCount: 0,
+    remainingCount: 4,
+  });
+  const prepared = await previewFixture(
+      fixture,
+      `${name}-prepare-no-show`,
+      "no_show",
+  );
+  assert.equal(prepared.preview.allowed, true, JSON.stringify(prepared.preview));
+  const committed = await commitOutcome({
+    auth: adminAuth,
+    data: buildCommitData(prepared.data, prepared.preview.planHash),
+  });
+  const deductionId = await assertCommitted(fixture, {
+    outcome: "no_show",
+    usedCount: 1,
+    remainingCount: 3,
+  });
+  assert.equal(committed.creditTransactionId, deductionId);
+  return {fixture, deductionId};
+}
+
+async function getFixedOutcomeCredits(fixture) {
+  const snap = await db.collection("creditTransactions")
+      .where("academyId", "==", ACADEMY_ID)
+      .where("sourceId", "==", fixture.reservationId)
+      .get();
+  return snap.docs.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function assertFixedReversalState(context, {
+  activeDeductionId,
+  reversalCreditTransactionId,
+  usedCount,
+  remainingCount,
+}) {
+  const fixture = context.fixture;
+  const [lessonSnap, reservationSnap, slotSnap, packageSnap] =
+    await Promise.all([
+      db.collection("lessons").doc(fixture.lessonId).get(),
+      db.collection("privateLessonReservations")
+          .doc(fixture.reservationId).get(),
+      db.collection("privateLessonSlots").doc(fixture.slotId).get(),
+      db.collection("studentPackages").doc(fixture.packageId).get(),
+    ]);
+  assert.equal(lessonSnap.get("status"), "active");
+  assert.equal(reservationSnap.get("status"), "active");
+  assert.equal(slotSnap.get("status"), "reserved");
+  for (const snap of [lessonSnap, reservationSnap, slotSnap]) {
+    assert.equal(snap.get("fixedPrivateDeductionLedger"), MARKER);
+    assert.equal(snap.get("deductionApplied"), false);
+    assert.equal(snap.get("deductionReversed"), true);
+    assert.equal(snap.get("deductionStatus"), "reversed");
+    assert.equal(
+        snap.get("deductionCreditTransactionId"),
+        activeDeductionId,
+    );
+    assert.equal(snap.get("deductionTransactionId"), activeDeductionId);
+    assert.equal(
+        snap.get("reversalCreditTransactionId"),
+        reversalCreditTransactionId,
+    );
+  }
+  assert.equal(packageSnap.get("usedCount"), usedCount);
+  assert.equal(packageSnap.get("remainingCount"), remainingCount);
+  assert.equal(packageSnap.get("totalCount"), 4);
+}
+
+async function testF01FixedReversalPreview() {
+  const context = await seedCanonicalFixedNoShow("f01-f04-fixed-reversal");
+  const before = await snapshotSafetyState();
+  const reversal = await previewFixture(
+      context.fixture,
+      "f01-fixed-reversal-preview",
+      "reverse_deduction",
+  );
+  const after = await snapshotSafetyState();
+  assert.equal(after, before, "F01 preview must write zero documents");
+  assert.equal(reversal.preview.allowed, true, JSON.stringify(reversal.preview));
+  assert.equal(reversal.preview.packageImpact.currentUsedCount, 1);
+  assert.equal(reversal.preview.packageImpact.currentRemainingCount, 3);
+  assert.equal(reversal.preview.packageImpact.usedCountDelta, -1);
+  assert.equal(reversal.preview.packageImpact.remainingCountDelta, 1);
+  assert.equal(reversal.preview.packageImpact.nextUsedCount, 0);
+  assert.equal(reversal.preview.packageImpact.nextRemainingCount, 4);
+  assert.equal(reversal.preview.normalizedPlan.creditImpact.deltaCount, 1);
+  assert.equal(
+      reversal.preview.normalizedPlan.activeDeductionId,
+      context.deductionId,
+  );
+  assert.equal(
+      reversal.preview.normalizedPlan.reversalCreditTransactionId,
+      `reverse_${context.deductionId}`,
+  );
+  assert.match(reversal.preview.planHash, /^[a-f0-9]{64}$/);
+  return {...context, reversal};
+}
+
+async function testF02FixedReversalCommit(context) {
+  const payload = buildCommitData(
+      context.reversal.data,
+      context.reversal.preview.planHash,
+  );
+  const result = await commitOutcome({auth: adminAuth, data: payload});
+  const reversalId =
+    context.reversal.preview.normalizedPlan.reversalCreditTransactionId;
+  assert.equal(result.idempotentReplay, false);
+  assert.equal(result.actionType, "reverse_deduction");
+  assert.equal(result.creditTransactionId, reversalId);
+  assert.equal(result.normalizedPlan.additionalPackageRestore, 1);
+  await assertFixedReversalState(context, {
+    activeDeductionId: context.deductionId,
+    reversalCreditTransactionId: reversalId,
+    usedCount: 0,
+    remainingCount: 4,
+  });
+  const [originalCredit, reversalCredit, checkpoint, credits] =
+    await Promise.all([
+      db.collection("creditTransactions").doc(context.deductionId).get(),
+      db.collection("creditTransactions").doc(reversalId).get(),
+      db.collection("fixedPrivateLessonOutcomeActionBatches")
+          .doc(result.batchId).get(),
+      getFixedOutcomeCredits(context.fixture),
+    ]);
+  assert.equal(originalCredit.exists, true);
+  assert.equal(originalCredit.get("deltaCount"), -1);
+  assert.equal(
+      originalCredit.get("reversalCreditTransactionId"),
+      reversalId,
+  );
+  assert.equal(reversalCredit.exists, true);
+  assert.equal(
+      reversalCredit.get("actionType"),
+      "fixed_private_no_show_deduct_reversal",
+  );
+  assert.equal(reversalCredit.get("sourceType"), "fixedPrivateReservation");
+  assert.equal(reversalCredit.get("deltaCount"), 1);
+  assert.equal(
+      reversalCredit.get("reversalOfTransactionId"),
+      context.deductionId,
+  );
+  assert.equal(credits.filter((doc) => doc.get("deltaCount") === 1).length, 1);
+  assert.equal(checkpoint.exists, true);
+  assert.equal(checkpoint.get("status"), "completed");
+  assert.equal(checkpoint.get("actionType"), "reverse_deduction");
+  context.payload = payload;
+  context.result = result;
+  context.reversalId = reversalId;
+  return context;
+}
+
+async function testF03SameRequestReplay(context) {
+  const before = await snapshotSafetyState();
+  const replay = await commitOutcome({
+    auth: adminAuth,
+    data: context.payload,
+  });
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(replay.batchId, context.result.batchId);
+  assert.equal(replay.creditTransactionId, context.reversalId);
+  assert.equal(await snapshotSafetyState(), before);
+  const [packageSnap, checkpoint, credits] = await Promise.all([
+    db.collection("studentPackages").doc(context.fixture.packageId).get(),
+    db.collection("fixedPrivateLessonOutcomeActionBatches")
+        .doc(context.result.batchId).get(),
+    getFixedOutcomeCredits(context.fixture),
+  ]);
+  assert.equal(packageSnap.get("usedCount"), 0);
+  assert.equal(packageSnap.get("remainingCount"), 4);
+  assert.equal(checkpoint.exists, true);
+  assert.equal(checkpoint.get("status"), "completed");
+  assert.equal(checkpoint.get("creditTransactionId"), context.reversalId);
+  assert.equal(credits.filter((doc) => doc.get("deltaCount") === 1).length, 1);
+}
+
+async function testF04DifferentRequestReplay(context) {
+  const requestId = "f04-fixed-reversal-different-request";
+  const payload = {...context.payload, requestId};
+  const batchId = [
+    "fixedPrivateLessonOutcomeAction",
+    ACADEMY_ID,
+    requestId,
+  ].join("_");
+  const before = await snapshotSafetyState();
+  const replay = await commitOutcome({auth: adminAuth, data: payload});
+  assert.equal(replay.idempotentReplay, true);
+  assert.equal(replay.normalizedPlan.additionalPackageRestore, 0);
+  assert.equal(replay.creditTransactionId, context.reversalId);
+  assert.equal(await snapshotSafetyState(), before);
+  const [batchSnap, credits] = await Promise.all([
+    db.collection("fixedPrivateLessonOutcomeActionBatches").doc(batchId).get(),
+    getFixedOutcomeCredits(context.fixture),
+  ]);
+  assert.equal(batchSnap.exists, false);
+  assert.equal(credits.filter((doc) => doc.get("deltaCount") === 1).length, 1);
+}
+
+async function testF05ConcurrentFixedReversal() {
+  const context = await seedCanonicalFixedNoShow("f05-concurrent-reversal");
+  const first = await previewFixture(
+      context.fixture,
+      "f05-concurrent-reversal-a",
+      "reverse_deduction",
+  );
+  const second = await previewFixture(
+      context.fixture,
+      "f05-concurrent-reversal-b",
+      "reverse_deduction",
+  );
+  assert.equal(first.preview.allowed, true);
+  assert.equal(second.preview.allowed, true);
+  const settled = await Promise.allSettled([
+    commitOutcome({
+      auth: adminAuth,
+      data: buildCommitData(first.data, first.preview.planHash),
+    }),
+    commitOutcome({
+      auth: adminAuth,
+      data: buildCommitData(second.data, second.preview.planHash),
+    }),
+  ]);
+  assert.equal(
+      settled.filter((entry) => entry.status === "fulfilled").length,
+      1,
+      JSON.stringify(settled),
+  );
+  assert.equal(
+      settled.filter((entry) => entry.status === "rejected").length,
+      1,
+      JSON.stringify(settled),
+  );
+  const packageSnap = await db.collection("studentPackages")
+      .doc(context.fixture.packageId).get();
+  const credits = await getFixedOutcomeCredits(context.fixture);
+  assert.equal(packageSnap.get("usedCount"), 0);
+  assert.equal(packageSnap.get("remainingCount"), 4);
+  assert.equal(credits.filter((doc) => doc.get("deltaCount") === 1).length, 1);
+  assert.equal(
+      credits.filter((doc) => doc.get("deltaCount") === -1).length,
+      1,
+  );
+}
+
+async function testF06AlreadyReversedFailClosed() {
+  const context = await seedCanonicalFixedNoShow("f06-already-reversed");
+  const first = await previewFixture(
+      context.fixture,
+      "f06-first-reversal",
+      "reverse_deduction",
+  );
+  await commitOutcome({
+    auth: adminAuth,
+    data: buildCommitData(first.data, first.preview.planHash),
+  });
+  const before = await snapshotSafetyState();
+  const blocked = await previewFixture(
+      context.fixture,
+      "f06-already-reversed-preview",
+      "reverse_deduction",
+  );
+  assert.equal(blocked.preview.allowed, false);
+  assert.ok(blocked.preview.blockedReasons.includes("reversal_marker_conflict"));
+  assert.ok(blocked.preview.blockedReasons.includes(
+      "reversal_evidence_conflict",
+  ));
+  assert.equal(await snapshotSafetyState(), before);
+  await expectHttpsError(
+      commitOutcome({
+        auth: adminAuth,
+        data: buildCommitData(blocked.data, blocked.preview.planHash),
+      }),
+      "failed-precondition",
+  );
+  assert.equal(await snapshotSafetyState(), before);
+  const packageSnap = await db.collection("studentPackages")
+      .doc(context.fixture.packageId).get();
+  const credits = await getFixedOutcomeCredits(context.fixture);
+  assert.equal(packageSnap.get("usedCount"), 0);
+  assert.equal(packageSnap.get("remainingCount"), 4);
+  assert.equal(credits.filter((doc) => doc.get("deltaCount") === 1).length, 1);
+}
+
+async function testF07StaleReversalPlanHash() {
+  const context = await seedCanonicalFixedNoShow("f07-stale-reversal");
+  const reversal = await previewFixture(
+      context.fixture,
+      "f07-stale-reversal-preview",
+      "reverse_deduction",
+  );
+  await db.collection("studentPackages").doc(context.fixture.packageId).update({
+    usedCount: 2,
+    remainingCount: 2,
+  });
+  const before = await snapshotSafetyState();
+  await expectHttpsError(
+      commitOutcome({
+        auth: adminAuth,
+        data: buildCommitData(reversal.data, reversal.preview.planHash),
+      }),
+      "failed-precondition",
+      "preview_stale",
+  );
+  assert.equal(await snapshotSafetyState(), before);
+  const staleReversalId =
+    reversal.preview.normalizedPlan.reversalCreditTransactionId;
+  const [reservationSnap, reversalSnap, credits] = await Promise.all([
+    db.collection("privateLessonReservations")
+        .doc(context.fixture.reservationId).get(),
+    db.collection("creditTransactions").doc(staleReversalId).get(),
+    getFixedOutcomeCredits(context.fixture),
+  ]);
+  assert.equal(reservationSnap.get("status"), "no_show");
+  assert.equal(reservationSnap.get("deductionReversed"), false);
+  assert.equal(
+      reservationSnap.get("deductionCreditTransactionId"),
+      context.deductionId,
+  );
+  assert.equal(reversalSnap.exists, false);
+  assert.equal(credits.length, 1);
+  assert.equal(credits[0].get("deltaCount"), -1);
+}
+
+async function testF08CrossReservationAndCycleReuse() {
+  const first = await seedCanonicalFixedNoShow("f08-cross-reservation-a");
+  const second = await seedCanonicalFixedNoShow("f08-cross-reservation-b");
+  const firstPreview = await previewFixture(
+      first.fixture,
+      "f08-cross-reservation-preview",
+      "reverse_deduction",
+  );
+  const crossReservationPayload = buildCommitData(
+      {
+        ...firstPreview.data,
+        lessonId: second.fixture.lessonId,
+        reservationId: second.fixture.reservationId,
+        slotId: second.fixture.slotId,
+        packageId: second.fixture.packageId,
+      },
+      firstPreview.preview.planHash,
+  );
+  const crossReservationBefore = await snapshotSafetyState();
+  await expectHttpsError(
+      commitOutcome({auth: adminAuth, data: crossReservationPayload}),
+      "failed-precondition",
+      "preview_stale",
+  );
+  assert.equal(await snapshotSafetyState(), crossReservationBefore);
+
+  const cycle = await seedCanonicalFixedNoShow("f08-cross-cycle");
+  const oldCyclePreview = await previewFixture(
+      cycle.fixture,
+      "f08-old-cycle-preview",
+      "reverse_deduction",
+  );
+  await commitOutcome({
+    auth: adminAuth,
+    data: buildCommitData(
+        oldCyclePreview.data,
+        oldCyclePreview.preview.planHash,
+    ),
+  });
+  const reNoShow = await previewFixture(
+      cycle.fixture,
+      "f08-advance-cycle-no-show",
+      "no_show",
+  );
+  assert.equal(reNoShow.preview.allowed, true, JSON.stringify(reNoShow.preview));
+  await commitOutcome({
+    auth: adminAuth,
+    data: buildCommitData(reNoShow.data, reNoShow.preview.planHash),
+  });
+  const currentReservation = await db.collection("privateLessonReservations")
+      .doc(cycle.fixture.reservationId).get();
+  const currentDeductionId =
+    currentReservation.get("deductionCreditTransactionId");
+  assert.notEqual(currentDeductionId, cycle.deductionId);
+  const crossCycleBefore = await snapshotSafetyState();
+  await expectHttpsError(
+      commitOutcome({
+        auth: adminAuth,
+        data: {
+          ...buildCommitData(
+              oldCyclePreview.data,
+              oldCyclePreview.preview.planHash,
+          ),
+          requestId: "f08-cross-cycle-reuse",
+        },
+      }),
+      "failed-precondition",
+      "preview_stale",
+  );
+  assert.equal(await snapshotSafetyState(), crossCycleBefore);
+  const afterReservation = await db.collection("privateLessonReservations")
+      .doc(cycle.fixture.reservationId).get();
+  assert.equal(
+      afterReservation.get("deductionCreditTransactionId"),
+      currentDeductionId,
+  );
+  assert.equal(afterReservation.get("deductionReversed"), false);
+}
+
+async function testF09ReNoShowCreatesNewCycle() {
+  const context = await seedCanonicalFixedNoShow("f09-f10-second-cycle");
+  const firstReversal = await previewFixture(
+      context.fixture,
+      "f09-first-cycle-reversal",
+      "reverse_deduction",
+  );
+  await commitOutcome({
+    auth: adminAuth,
+    data: buildCommitData(
+        firstReversal.data,
+        firstReversal.preview.planHash,
+    ),
+  });
+  const reNoShow = await previewFixture(
+      context.fixture,
+      "f09-re-no-show",
+      "no_show",
+  );
+  assert.equal(reNoShow.preview.allowed, true, JSON.stringify(reNoShow.preview));
+  assert.equal(reNoShow.preview.normalizedPlan.deductionCycleNumber, 2);
+  assert.equal(
+      reNoShow.preview.normalizedPlan.previousDeductionCreditTransactionId,
+      context.deductionId,
+  );
+  const result = await commitOutcome({
+    auth: adminAuth,
+    data: buildCommitData(reNoShow.data, reNoShow.preview.planHash),
+  });
+  const secondDeductionId = result.creditTransactionId;
+  assert.notEqual(secondDeductionId, context.deductionId);
+  assert.match(secondDeductionId, /__cycle_[a-f0-9]{24}$/);
+  const [reservationSnap, packageSnap, oldCredit, newCredit] =
+    await Promise.all([
+      db.collection("privateLessonReservations")
+          .doc(context.fixture.reservationId).get(),
+      db.collection("studentPackages").doc(context.fixture.packageId).get(),
+      db.collection("creditTransactions").doc(context.deductionId).get(),
+      db.collection("creditTransactions").doc(secondDeductionId).get(),
+    ]);
+  assert.equal(
+      reservationSnap.get("deductionCreditTransactionId"),
+      secondDeductionId,
+  );
+  assert.equal(reservationSnap.get("deductionReversed"), false);
+  assert.equal(packageSnap.get("usedCount"), 1);
+  assert.equal(packageSnap.get("remainingCount"), 3);
+  assert.equal(oldCredit.get("deltaCount"), -1);
+  assert.equal(
+      oldCredit.get("reversalCreditTransactionId"),
+      `reverse_${context.deductionId}`,
+  );
+  assert.equal(newCredit.get("deltaCount"), -1);
+  assert.equal(
+      newCredit.get("previousDeductionCreditTransactionId"),
+      context.deductionId,
+  );
+  assert.equal(
+      newCredit.get("predecessorReversalCreditTransactionId"),
+      `reverse_${context.deductionId}`,
+  );
+  return {
+    ...context,
+    firstReversalId: `reverse_${context.deductionId}`,
+    secondDeductionId,
+  };
+}
+
+async function testF10SecondCycleReversal(context) {
+  const reversal = await previewFixture(
+      context.fixture,
+      "f10-second-cycle-reversal",
+      "reverse_deduction",
+  );
+  assert.equal(reversal.preview.allowed, true, JSON.stringify(reversal.preview));
+  assert.equal(
+      reversal.preview.normalizedPlan.activeDeductionId,
+      context.secondDeductionId,
+  );
+  assert.equal(
+      reversal.preview.normalizedPlan.reversalCreditTransactionId,
+      `reverse_${context.secondDeductionId}`,
+  );
+  const result = await commitOutcome({
+    auth: adminAuth,
+    data: buildCommitData(reversal.data, reversal.preview.planHash),
+  });
+  assert.equal(result.normalizedPlan.additionalPackageRestore, 1);
+  const credits = await getFixedOutcomeCredits(context.fixture);
+  const packageSnap = await db.collection("studentPackages")
+      .doc(context.fixture.packageId).get();
+  assert.equal(packageSnap.get("usedCount"), 0);
+  assert.equal(packageSnap.get("remainingCount"), 4);
+  assert.equal(credits.filter((doc) => doc.get("deltaCount") === -1).length, 2);
+  assert.equal(credits.filter((doc) => doc.get("deltaCount") === 1).length, 2);
+  const [firstDeduction, firstReversal, secondDeduction, secondReversal] =
+    await Promise.all([
+      db.collection("creditTransactions").doc(context.deductionId).get(),
+      db.collection("creditTransactions").doc(context.firstReversalId).get(),
+      db.collection("creditTransactions").doc(context.secondDeductionId).get(),
+      db.collection("creditTransactions")
+          .doc(`reverse_${context.secondDeductionId}`).get(),
+    ]);
+  assert.equal(firstDeduction.exists, true);
+  assert.equal(firstDeduction.get("deltaCount"), -1);
+  assert.equal(firstReversal.exists, true);
+  assert.equal(firstReversal.get("deltaCount"), 1);
+  assert.equal(secondDeduction.exists, true);
+  assert.equal(secondDeduction.get("deltaCount"), -1);
+  assert.equal(secondReversal.exists, true);
+  assert.equal(secondReversal.get("deltaCount"), 1);
+  assert.equal(
+      secondReversal.get("reversalOfTransactionId"),
+      context.secondDeductionId,
+  );
+  await assertFixedReversalState(context, {
+    activeDeductionId: context.secondDeductionId,
+    reversalCreditTransactionId: `reverse_${context.secondDeductionId}`,
+    usedCount: 0,
+    remainingCount: 4,
+  });
 }
 
 async function testCanonicalReplayConflictAndSelectedOnly() {
@@ -2084,6 +2613,16 @@ async function main() {
     teacherKey: TEACHER_KEY,
     canManageOwnLessonDeductions: true,
   });
+  const fixedReversalContext = await testF01FixedReversalPreview();
+  await testF02FixedReversalCommit(fixedReversalContext);
+  await testF03SameRequestReplay(fixedReversalContext);
+  await testF04DifferentRequestReplay(fixedReversalContext);
+  await testF05ConcurrentFixedReversal();
+  await testF06AlreadyReversedFailClosed();
+  await testF07StaleReversalPlanHash();
+  await testF08CrossReservationAndCycleReuse();
+  const secondCycleContext = await testF09ReNoShowCreatesNewCycle();
+  await testF10SecondCycleReversal(secondCycleContext);
   await testCanonicalReplayConflictAndSelectedOnly();
   await testLegacyNetZero();
   await testCanonicalNoShowAndLegacyReplay();

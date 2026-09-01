@@ -14,6 +14,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   startAfter,
   serverTimestamp,
   Timestamp,
@@ -26,6 +27,9 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { auth, db, functions as firebaseFunctions } from './firebase'
 import { useAuth } from './AuthContext'
+import AuthenticatedShell from './src/components/AuthenticatedShell.jsx'
+import { useTranslation } from './src/i18n/LocalizationProvider.jsx'
+import { useLayoutMode } from './src/preferences/LayoutProvider.jsx'
 import { debugLog } from './src/utils/debugLog.js'
 import {
   SCHOOL_TIME_ZONE,
@@ -70,9 +74,16 @@ import {
   resolveTeacherDisplayName,
   sanitizePhoneForTel,
 } from './src/features/dashboard/dashboardViewUtils.js'
+import {
+  buildFixedPrivateAssignmentCallablePayload,
+  canCommitFixedPrivateAssignmentBackfill,
+  classifyFixedPrivateAssignmentDates,
+  formatFixedPrivateAssignmentBackfillWarning,
+} from './src/features/dashboard/privateFixedAssignmentBackfill.js'
 import { resolveGroupLessonSubject } from './src/features/dashboard/groupClassRoomUtils.js'
 import CalendarSection from './src/features/dashboard/sections/CalendarSection.jsx'
 import TodaySchedulePanel from './src/features/dashboard/components/TodaySchedulePanel.jsx'
+import GroupClassStatusPanel from './src/features/dashboard/components/GroupClassStatusPanel.jsx'
 import LessonCountStatsPanel from './src/features/dashboard/components/LessonCountStatsPanel.jsx'
 import PrivateLessonStatusActionModal from './src/features/dashboard/components/PrivateLessonStatusActionModal.jsx'
 import GroupsSection from './src/features/dashboard/sections/GroupsSection.jsx'
@@ -100,7 +111,9 @@ import PrivateLessonModal from './src/features/dashboard/modals/PrivateLessonMod
 import PrivateLessonEditModal from './src/features/dashboard/modals/PrivateLessonEditModal.jsx'
 import useStudentsSectionViewModel from './src/features/dashboard/hooks/useStudentsSectionViewModel.js'
 import useGroupsSectionViewModel from './src/features/dashboard/hooks/useGroupsSectionViewModel.js'
-import useCalendarSectionViewModel from './src/features/dashboard/hooks/useCalendarSectionViewModel.js'
+import useCalendarSectionViewModel, {
+  buildCalendarTeacherFilterOptions,
+} from './src/features/dashboard/hooks/useCalendarSectionViewModel.js'
 import useGroupScheduleRebuildFlow from './src/features/dashboard/hooks/useGroupScheduleRebuildFlow.js'
 import useGroupLessonManagementFlow from './src/features/dashboard/hooks/useGroupLessonManagementFlow.js'
 import useGroupAttendanceFlow from './src/features/dashboard/hooks/useGroupAttendanceFlow.js'
@@ -120,6 +133,14 @@ import {
   isValidOperationalAcademyId,
   requireCurrentAcademyId,
 } from './src/features/dashboard/academyScope.js'
+import {
+  buildCanonicalTeacherOption,
+  buildGroupLessonCanonicalFields,
+  buildTeacherGroupClassesQuerySpec,
+  resolveCanonicalTeacherMembershipIdentity,
+  scopeTeacherGroupData,
+} from './src/features/dashboard/groupClassTeacherScope.js'
+import { buildTeacherPrivateReservationQuerySpec } from './src/features/dashboard/privateLessonReservationTeacherScope.js'
 import {
   buildStudentGroupAccessPayloadFromGroupStudent,
   deleteStudentGroupAccessBatch,
@@ -157,6 +178,8 @@ import {
   buildTeacherLessonOccurrenceStats,
   formatLessonStatsMonthLabel,
 } from './src/features/dashboard/lessonOccurrenceStats.js'
+import { buildPrivateLessonDashboardStats } from './src/features/dashboard/privateLessonDashboardStats.js'
+import { computeGroupClassDashboardStats } from './src/features/dashboard/groupClassDashboardStats.js'
 
 /** 운영 화면에서는 false 유지. 예전 수업 데이터 일괄 변환이 필요할 때만 true로 잠시 켜세요. */
 const ENABLE_LEGACY_LESSON_MIGRATION_BUTTON = false
@@ -200,12 +223,20 @@ function getNotificationEventCreatedAtMillis(event) {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
-function formatReservationNotificationMessage(event) {
-  const studentName = String(event?.studentName || '').trim() || '학생'
+function formatReservationNotificationMessage(event, t, localize = false) {
+  const studentName =
+    String(event?.studentName || '').trim() ||
+    (localize ? t('teacher.notifications.studentFallback') : '학생')
   const date = String(event?.date || '').trim() || '-'
   const time = String(event?.time || '').trim() || '-'
   if (event?.type === 'private_slot_cancelled') {
+    if (localize) {
+      return t('teacher.notifications.cancelled', { student: studentName, date, time })
+    }
     return `${studentName} 학생이 ${date} ${time} 1:1 수업 예약을 취소했습니다.`
+  }
+  if (localize) {
+    return t('teacher.notifications.booked', { student: studentName, date, time })
   }
   return `${studentName} 학생이 ${date} ${time} 1:1 수업을 예약했습니다.`
 }
@@ -237,7 +268,9 @@ function getPrivateReservationSubjectLabel(reservation, slot = null) {
   )
 }
 
-function ReservationNotificationsPanel({ events, loading }) {
+function ReservationNotificationsPanel({ events, loading, localize = false }) {
+  const { t } = useTranslation()
+  const text = (key, fallback) => (localize ? t(key) : fallback)
   const rows = Array.isArray(events) ? events : []
 
   return (
@@ -256,15 +289,21 @@ function ReservationNotificationsPanel({ events, loading }) {
         }}
       >
         <h2 className="section-title" style={{ margin: 0 }}>
-          예약 알림
+          {text('teacher.notifications.title', '예약 알림')}
         </h2>
-        <span style={{ fontSize: 12, opacity: 0.65 }}>최근 20개</span>
+        <span style={{ fontSize: 12, opacity: 0.65 }}>
+          {text('teacher.notifications.recent', '최근 20개')}
+        </span>
       </div>
 
       {loading ? (
-        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>예약 알림을 불러오는 중입니다.</p>
+        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>
+          {text('teacher.notifications.loading', '예약 알림을 불러오는 중입니다.')}
+        </p>
       ) : rows.length === 0 ? (
-        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>최근 예약 알림이 없습니다.</p>
+        <p style={{ margin: 0, opacity: 0.72, fontSize: 14 }}>
+          {text('teacher.notifications.empty', '최근 예약 알림이 없습니다.')}
+        </p>
       ) : (
         <div style={{ display: 'grid', gap: 8 }}>
           {rows.map((event) => (
@@ -281,7 +320,7 @@ function ReservationNotificationsPanel({ events, loading }) {
                 lineHeight: 1.45,
               }}
             >
-              {formatReservationNotificationMessage(event)}
+              {formatReservationNotificationMessage(event, t, localize)}
             </div>
           ))}
         </div>
@@ -988,7 +1027,7 @@ function getPrivateSlotTeacherDisplay(slot) {
 }
 
 function isPrivateAvailabilityTemplateForFixedAssignment(template) {
-  return template?.useForFixedAssignment !== false
+  return template?.useForFixedAssignment === true
 }
 
 function getPrivateAvailabilityTemplateUsagePatch({
@@ -996,25 +1035,21 @@ function getPrivateAvailabilityTemplateUsagePatch({
   openForStudentBooking,
   currentTemplate = null,
 }) {
-  const nextUseForFixedAssignment = useForFixedAssignment !== false
+  const nextUseForFixedAssignment = Boolean(useForFixedAssignment)
   const nextOpenForStudentBooking = openForStudentBooking === true
-  const isDefaultUsage = nextUseForFixedAssignment && !nextOpenForStudentBooking
-  const currentUseForFixedAssignment = currentTemplate?.useForFixedAssignment !== false
   const currentOpenForStudentBooking = currentTemplate?.openForStudentBooking === true
-
-  if (!currentTemplate && isDefaultUsage) return {}
-  if (
-    currentTemplate &&
-    currentUseForFixedAssignment === nextUseForFixedAssignment &&
-    currentOpenForStudentBooking === nextOpenForStudentBooking
-  ) {
-    return {}
-  }
-
-  return {
+  const patch = {
     useForFixedAssignment: nextUseForFixedAssignment,
-    openForStudentBooking: nextOpenForStudentBooking,
   }
+
+  if (!currentTemplate) {
+    if (nextOpenForStudentBooking) patch.openForStudentBooking = true
+    return patch
+  }
+  if (currentOpenForStudentBooking !== nextOpenForStudentBooking) {
+    patch.openForStudentBooking = nextOpenForStudentBooking
+  }
+  return patch
 }
 
 function getPrivateTeacherIdentityKeys(row) {
@@ -1339,6 +1374,8 @@ async function createGroupLessonsInDateRange({
   groupClassId,
   groupClassName,
   teacher,
+  teacherUid,
+  teacherName,
   time,
   subject,
   groupCourseType,
@@ -1358,6 +1395,7 @@ async function createGroupLessonsInDateRange({
     groupCourseType: courseType,
   })
   const teacherNorm = normalizeText(teacher || '')
+  const teacherDisplayName = String(teacherName || teacher || '').trim()
   const capacity = Number(maxStudents)
   const cap = Number.isFinite(capacity) && capacity >= 0 ? capacity : 0
 
@@ -1367,16 +1405,7 @@ async function createGroupLessonsInDateRange({
   if (weekdaySet.size === 0 || !timeStr || !courseType) return { created, skippedDup }
 
   const prior = Array.isArray(existingLessons) ? existingLessons : []
-  const commitBatchSize = 20
-  let batch = writeBatch(db)
-  let pendingWrites = 0
-
-  async function commitPendingWrites() {
-    if (pendingWrites === 0) return
-    await batch.commit()
-    batch = writeBatch(db)
-    pendingWrites = 0
-  }
+  const candidates = []
 
   for (const dateStr of iterateYmdRangeInclusive(startYmd, endYmd)) {
     const dt = parseYmdToLocalDate(dateStr)
@@ -1393,14 +1422,24 @@ async function createGroupLessonsInDateRange({
       continue
     }
 
-    const lessonRef = doc(collection(db, 'groupLessons'))
-    batch.set(lessonRef, {
+    const canonicalFields = buildGroupLessonCanonicalFields({
       academyId: scopedAcademyId,
-      groupClassId,
-      groupClassName: groupClassName || '',
-      teacher: teacherNorm,
+      groupClass: {
+        id: groupClassId,
+        academyId: scopedAcademyId,
+        teacherUid,
+      },
       date: dateStr,
       time: timeStr,
+      status: 'scheduled',
+    })
+    candidates.push({
+      ref: doc(db, 'groupLessons', canonicalFields.occurrenceId),
+      data: {
+      ...canonicalFields,
+      groupClassName: groupClassName || '',
+      teacher: teacherNorm,
+      teacherName: teacherDisplayName,
       subject: subjectStr,
       ...(courseType ? { groupCourseType: courseType } : {}),
       completed: false,
@@ -1413,15 +1452,30 @@ async function createGroupLessonsInDateRange({
       generationKind: 'recurring',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
+      },
     })
-    created += 1
-    pendingWrites += 1
-    if (pendingWrites >= commitBatchSize) {
-      await commitPendingWrites()
-    }
   }
 
-  await commitPendingWrites()
+  for (const candidateChunk of chunkArray(candidates, 20)) {
+    const result = await runTransaction(db, async (transaction) => {
+      const snapshots = await Promise.all(
+        candidateChunk.map((candidate) => transaction.get(candidate.ref))
+      )
+      let transactionCreated = 0
+      let transactionSkipped = 0
+      snapshots.forEach((snapshot, index) => {
+        if (snapshot.exists()) {
+          transactionSkipped += 1
+          return
+        }
+        transaction.set(candidateChunk[index].ref, candidateChunk[index].data)
+        transactionCreated += 1
+      })
+      return { transactionCreated, transactionSkipped }
+    })
+    created += result.transactionCreated
+    skippedDup += result.transactionSkipped
+  }
 
   return { created, skippedDup }
 }
@@ -1496,7 +1550,9 @@ function buildGroupPackageCoverageLessons({
 }
 
 export default function Dashboard() {
-  const { user, userProfile, currentAcademyId } = useAuth()
+  const { user, userProfile, currentAcademyId, currentMembership } = useAuth()
+  const { t } = useTranslation()
+  const { resolvedLayout } = useLayoutMode()
   const navigate = useNavigate()
   const [teacherDirectoryMemberships, setTeacherDirectoryMemberships] = useState([])
   const [teacherRecords, setTeacherRecords] = useState([])
@@ -1562,6 +1618,7 @@ export default function Dashboard() {
   const [busyPrivateReservationOutcomeId, setBusyPrivateReservationOutcomeId] = useState('')
   const [privateLessonStatusActionTarget, setPrivateLessonStatusActionTarget] = useState(null)
   const [privateLessonStatusActionMode, setPrivateLessonStatusActionMode] = useState('complete')
+  const [privateLessonReversalReason, setPrivateLessonReversalReason] = useState('')
   const [privateLessonStatusActionPreview, setPrivateLessonStatusActionPreview] = useState(null)
   const [privateLessonStatusActionPreviewBusy, setPrivateLessonStatusActionPreviewBusy] =
     useState(false)
@@ -1696,6 +1753,19 @@ export default function Dashboard() {
   const [studentPrivateBookingStatsLoading, setStudentPrivateBookingStatsLoading] =
     useState(false)
 
+  const canonicalTeacherIdentity = useMemo(() => {
+    if (String(userProfile?.role || '').trim().toLowerCase() !== 'teacher') return null
+    try {
+      return resolveCanonicalTeacherMembershipIdentity({
+        authUid: user?.uid,
+        academyId: currentAcademyId,
+        membership: currentMembership,
+      })
+    } catch {
+      return null
+    }
+  }, [currentAcademyId, currentMembership, user?.uid, userProfile?.role])
+
   useEffect(() => {
     if (userProfile?.role !== 'admin' || !isValidOperationalAcademyId(currentAcademyId)) {
       setTeacherDirectoryMemberships([])
@@ -1757,85 +1827,40 @@ export default function Dashboard() {
   }, [currentAcademyId, userProfile?.role])
 
   const teacherSelectOptions = useMemo(() => {
-    const membershipByTeacherKey = new Map()
-    for (const membership of teacherDirectoryMemberships) {
-      const role = String(membership?.role || '').trim().toLowerCase()
-      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) continue
-      const teacherKey = normalizeText(membership.teacherName || '')
-      if (!teacherKey || membershipByTeacherKey.has(teacherKey)) continue
-      membershipByTeacherKey.set(teacherKey, membership)
-    }
-    const activeTeachers = teacherRecords.filter(
-      (teacher) => String(teacher?.status || 'active') !== 'inactive'
-    )
-    const nameCounts = new Map()
-    activeTeachers.forEach((teacher) => {
-      const name = getTeacherDisplayName(teacher)
-      if (!name) return
-      nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
-    })
-    teacherDirectoryMemberships.forEach((membership) => {
-      const role = String(membership?.role || '').trim().toLowerCase()
-      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) return
-      const name = String(membership?.displayName || membership?.teacherName || '').trim()
-      if (!name) return
-      nameCounts.set(name, (nameCounts.get(name) || 0) + 1)
-    })
-    const map = new Map()
-    for (const teacher of teacherRecords) {
-      if (String(teacher?.status || 'active') === 'inactive') continue
-      const rawName = getTeacherDisplayName(teacher)
-      const teacherKey = getTeacherRecordKey(teacher)
-      const membership = teacherKey ? membershipByTeacherKey.get(teacherKey) : null
-      const teacherUid = String(teacher?.teacherUid || teacher?.uid || membership?.uid || '').trim()
-      const teacherEmail = String(teacher?.teacherEmail || teacher?.email || membership?.email || '').trim()
-      const value = teacherUid || teacherKey || rawName
-      if (!value) continue
-      if (!map.has(value)) {
-        const displayName = rawName || teacherKey || teacherEmail || value
-        map.set(value, {
-          value,
-          label: buildTeacherOptionLabel({
-            displayName,
-            teacherKey,
-            teacherEmail,
-            teacherUid,
-            duplicateName: nameCounts.get(displayName) > 1,
-          }),
-          displayName,
-          teacherKey,
-          teacherUid,
-          teacherEmail,
-        })
+    const teacherRecordsByUid = new Map()
+    teacherRecords.forEach((teacher) => {
+      const teacherUid = String(teacher?.teacherUid || teacher?.uid || '').trim()
+      if (teacherUid && String(teacher?.status || 'active') !== 'inactive') {
+        teacherRecordsByUid.set(teacherUid, teacher)
       }
-    }
-    for (const u of teacherDirectoryMemberships) {
-      const rawName = String(u?.displayName || u?.teacherName || '').trim()
-      if (!rawName) continue
-      const role = String(u?.role || '').trim().toLowerCase()
-      if (!(role === 'teacher' || role === 'admin' || role === 'owner')) continue
-      const teacherKey = normalizeText(u?.teacherName || rawName)
-      const teacherUid = String(u?.uid || '').trim()
-      const teacherEmail = String(u?.email || '').trim()
-      const value = teacherUid || teacherKey || rawName
-      if (!value || map.has(value)) continue
-      map.set(value, {
-        value,
+    })
+    const nameCounts = new Map()
+    const canonicalOptions = teacherDirectoryMemberships
+      .map((membership) =>
+        buildCanonicalTeacherOption({
+          academyId: currentAcademyId,
+          membership,
+          teacherRecord: teacherRecordsByUid.get(String(membership?.uid || '').trim()) || null,
+        })
+      )
+      .filter(Boolean)
+    canonicalOptions.forEach((option) => {
+      nameCounts.set(option.teacherName, (nameCounts.get(option.teacherName) || 0) + 1)
+    })
+    return canonicalOptions
+      .map((option) => ({
+        ...option,
+        teacherKey: normalizeText(option.teacherName),
         label: buildTeacherOptionLabel({
-          displayName: rawName,
-          teacherKey,
-          teacherEmail,
-          teacherUid,
-          duplicateName: nameCounts.get(rawName) > 1,
+          displayName: option.teacherName,
+          teacherKey: normalizeText(option.teacherName),
+          teacherEmail: option.teacherEmail,
+          teacherUid: option.teacherUid,
+          duplicateName: nameCounts.get(option.teacherName) > 1,
         }),
-        displayName: rawName,
-        teacherKey,
-        teacherUid,
-        teacherEmail,
-      })
-    }
-    return [...map.values()].sort((a, b) => a.label.localeCompare(b.label, 'ko'))
-  }, [teacherDirectoryMemberships, teacherRecords])
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'ko'))
+  }, [currentAcademyId, teacherDirectoryMemberships, teacherRecords])
 
   const teacherManagementTeachers = useMemo(() => {
     const membershipByTeacherKey = new Map()
@@ -2244,7 +2269,6 @@ export default function Dashboard() {
     if (!userProfile?.role) return
 
     const role = userProfile.role
-    const teacherName = String(userProfile.teacherName ?? '').trim()
 
     let ref
     if (isDashboardAdminProfile(userProfile)) {
@@ -2252,60 +2276,38 @@ export default function Dashboard() {
         collection(db, 'groupClasses'),
         where('academyId', '==', currentAcademyId)
       )
-    } else if (role === 'teacher' && teacherName) {
-      const queryByTeacher = query(
+    } else if (role === 'teacher' && canonicalTeacherIdentity) {
+      const querySpec = buildTeacherGroupClassesQuerySpec(canonicalTeacherIdentity)
+      ref = query(
         collection(db, 'groupClasses'),
-        where('academyId', '==', currentAcademyId),
-        where('teacher', '==', teacherName)
+        ...querySpec.map((constraint) =>
+          where(constraint.field, constraint.operator, constraint.value)
+        )
       )
-      const queryByTeacherName = query(
-        collection(db, 'groupClasses'),
-        where('academyId', '==', currentAcademyId),
-        where('teacherName', '==', teacherName)
-      )
-
       setGroupClassesLoading(true)
-      const rowsByTeacher = new Map()
-      const rowsByTeacherName = new Map()
-      const mergeRows = () => {
-        const rowsById = new Map([...rowsByTeacher, ...rowsByTeacherName])
-        setGroupClasses([...rowsById.values()])
-        setGroupClassesLoading(false)
-      }
-      const unsubTeacher = onSnapshot(
-        queryByTeacher,
+      const unsubscribe = onSnapshot(
+        ref,
         (snapshot) => {
-          rowsByTeacher.clear()
-          snapshot.docs.forEach((docItem) => {
-            rowsByTeacher.set(docItem.id, { id: docItem.id, ...docItem.data() })
+          const rows = snapshot.docs.map((docItem) => ({
+            id: docItem.id,
+            ...docItem.data(),
+          }))
+          const scoped = scopeTeacherGroupData({
+            groupClasses: rows,
+            groupLessons: [],
+            academyId: canonicalTeacherIdentity.academyId,
+            teacherUid: canonicalTeacherIdentity.teacherUid,
           })
-          mergeRows()
+          setGroupClasses(scoped.groupClasses)
+          setGroupClassesLoading(false)
         },
         (error) => {
-          console.error('teacher groupClasses 불러오기 실패:', error)
+          console.error('canonical teacherUid groupClasses 불러오기 실패:', error)
           setGroupClasses([])
           setGroupClassesLoading(false)
         }
       )
-      const unsubTeacherName = onSnapshot(
-        queryByTeacherName,
-        (snapshot) => {
-          rowsByTeacherName.clear()
-          snapshot.docs.forEach((docItem) => {
-            rowsByTeacherName.set(docItem.id, { id: docItem.id, ...docItem.data() })
-          })
-          mergeRows()
-        },
-        (error) => {
-          console.error('teacherName groupClasses 불러오기 실패:', error)
-          setGroupClasses([])
-          setGroupClassesLoading(false)
-        }
-      )
-      return () => {
-        unsubTeacher()
-        unsubTeacherName()
-      }
+      return () => unsubscribe()
     } else {
       setGroupClasses([])
       setGroupClassesLoading(false)
@@ -2329,7 +2331,12 @@ export default function Dashboard() {
       }
     )
     return () => unsubscribe()
-  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [
+    canonicalTeacherIdentity,
+    currentAcademyId,
+    user?.uid,
+    userProfile?.role,
+  ])
 
   useEffect(() => {
     if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId) || !userProfile?.role) {
@@ -2721,13 +2728,25 @@ export default function Dashboard() {
 
     setGroupLessonsLoading(true)
     const groupClassId = selectedGroupClass.id
-    const q = query(
-      collection(db, 'groupLessons'),
-      and(
-        where('academyId', '==', currentAcademyId),
-        or(where('groupClassId', '==', groupClassId), where('groupClassID', '==', groupClassId))
+    const teacherScoped =
+      String(userProfile?.role || '').trim().toLowerCase() === 'teacher' &&
+      canonicalTeacherIdentity
+    const q = teacherScoped
+      ? query(
+          collection(db, 'groupLessons'),
+          where('academyId', '==', currentAcademyId),
+          where('groupClassId', '==', groupClassId)
+        )
+      : query(
+          collection(db, 'groupLessons'),
+          and(
+            where('academyId', '==', currentAcademyId),
+            or(
+              where('groupClassId', '==', groupClassId),
+              where('groupClassID', '==', groupClassId)
+            )
+          )
       )
-    )
 
     const unsubscribe = onSnapshot(
       q,
@@ -2736,7 +2755,17 @@ export default function Dashboard() {
           id: docItem.id,
           ...docItem.data(),
         })).filter(isVisibleGroupLessonForActiveViews)
-        setGroupLessons(rows)
+        if (teacherScoped) {
+          const scoped = scopeTeacherGroupData({
+            groupClasses: [selectedGroupClass],
+            groupLessons: rows,
+            academyId: canonicalTeacherIdentity.academyId,
+            teacherUid: canonicalTeacherIdentity.teacherUid,
+          })
+          setGroupLessons(scoped.groupLessons)
+        } else {
+          setGroupLessons(rows)
+        }
         setGroupLessonsLoading(false)
       },
       (error) => {
@@ -2747,7 +2776,12 @@ export default function Dashboard() {
     )
 
     return () => unsubscribe()
-  }, [currentAcademyId, selectedGroupClass?.id])
+  }, [
+    canonicalTeacherIdentity,
+    currentAcademyId,
+    selectedGroupClass,
+    userProfile?.role,
+  ])
 
   useEffect(() => {
     if (!selectedGroupClass?.id || !isValidOperationalAcademyId(currentAcademyId)) {
@@ -2976,7 +3010,6 @@ export default function Dashboard() {
     if (!userProfile?.role) return
 
     const isAdminProfile = isDashboardAdminProfile(userProfile)
-    const teacherName = normalizeText(userProfile.teacherName || '')
     if (isAdminProfile) {
       setPrivateLessonReservationsLoading(true)
       const unsubscribe = onSnapshot(
@@ -3009,58 +3042,35 @@ export default function Dashboard() {
         }
       )
       return () => unsubscribe()
-    } else if (isDashboardTeacherProfile(userProfile) && teacherName) {
+    } else if (isDashboardTeacherProfile(userProfile) && canonicalTeacherIdentity) {
       setPrivateLessonReservationsLoading(true)
-      const teacherUid = String(user?.uid || '').trim()
-      const teacherQuerySpecs = [
-        ['teacher', teacherName],
-        ['teacherName', teacherName],
-        ['teacherKey', teacherName],
-        ['teacherUid', teacherUid],
-        ['teacherUID', teacherUid],
-      ].filter(([, value]) => value)
-      const teacherSnapshotsByKey = new Map()
-      const mergeTeacherRows = () => {
-        if (teacherSnapshotsByKey.size < teacherQuerySpecs.length) return
-        const byId = new Map()
-        Array.from(teacherSnapshotsByKey.values()).forEach((snapshot) => {
-          snapshot.docs.forEach((docItem) => {
-            byId.set(docItem.id, { id: docItem.id, ...docItem.data() })
-          })
-        })
-        setPrivateLessonReservations(Array.from(byId.values()))
-        setPrivateLessonReservationsLoading(false)
-      }
-      const queryBase = [
-        where('academyId', '==', currentAcademyId),
-      ]
-      const unsubscribers = teacherQuerySpecs.map(([field, value]) =>
-        onSnapshot(
-          query(
-            collection(db, 'privateLessonReservations'),
-            ...queryBase,
-            where(field, '==', value)
-          ),
-          (snapshot) => {
-            teacherSnapshotsByKey.set(`${field}:${value}`, snapshot)
-            mergeTeacherRows()
-          },
-          (error) => {
-            console.error(`privateLessonReservations(${field}) 불러오기 실패:`, error)
-            teacherSnapshotsByKey.set(`${field}:${value}`, { docs: [] })
-            mergeTeacherRows()
-          }
-        )
+      const querySpec = buildTeacherPrivateReservationQuerySpec(canonicalTeacherIdentity)
+      const unsubscribe = onSnapshot(
+        query(
+          collection(db, 'privateLessonReservations'),
+          ...querySpec.map((constraint) =>
+            where(constraint.field, constraint.operator, constraint.value)
+          )
+        ),
+        (snapshot) => {
+          setPrivateLessonReservations(
+            snapshot.docs.map((docItem) => ({ id: docItem.id, ...docItem.data() }))
+          )
+          setPrivateLessonReservationsLoading(false)
+        },
+        (error) => {
+          console.error('privateLessonReservations(canonical teacherUid) 불러오기 실패:', error)
+          setPrivateLessonReservations([])
+          setPrivateLessonReservationsLoading(false)
+        }
       )
-      return () => {
-        unsubscribers.forEach((unsubscribe) => unsubscribe())
-      }
+      return () => unsubscribe()
     } else {
       setPrivateLessonReservations([])
       setPrivateLessonReservationsLoading(false)
       return
     }
-  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName])
+  }, [canonicalTeacherIdentity, currentAcademyId, user?.uid, userProfile?.role])
 
   useEffect(() => {
     if (!user?.uid || !isValidOperationalAcademyId(currentAcademyId)) {
@@ -3075,7 +3085,6 @@ export default function Dashboard() {
     }
 
     const role = userProfile.role
-    const teacherName = String(userProfile.teacherName ?? '').trim()
 
     if (role === 'admin') {
       let active = true
@@ -3123,7 +3132,7 @@ export default function Dashboard() {
       }
     }
 
-    if (role === 'teacher' && teacherName) {
+    if (role === 'teacher' && canonicalTeacherIdentity) {
       let active = true
       const ids = groupClasses.map((g) => g.id).filter(Boolean)
       if (ids.length === 0) {
@@ -3161,7 +3170,13 @@ export default function Dashboard() {
             byId.set(row.id, row)
           }
         }
-        setStudentSummaryGroupLessons(Array.from(byId.values()))
+        const scoped = scopeTeacherGroupData({
+          groupClasses,
+          groupLessons: Array.from(byId.values()),
+          academyId: canonicalTeacherIdentity.academyId,
+          teacherUid: canonicalTeacherIdentity.teacherUid,
+        })
+        setStudentSummaryGroupLessons(scoped.groupLessons)
       }
 
       const unsubs = []
@@ -3195,10 +3210,8 @@ export default function Dashboard() {
 
         const qGl = query(
           collection(db, 'groupLessons'),
-          and(
-            where('academyId', '==', currentAcademyId),
-            or(where('groupClassId', 'in', chunk), where('groupClassID', 'in', chunk))
-          )
+          where('academyId', '==', currentAcademyId),
+          where('groupClassId', 'in', chunk)
         )
         getDocs(qGl)
           .then((snapshot) => {
@@ -3229,7 +3242,7 @@ export default function Dashboard() {
 
     setStudentSummaryGroupStudents([])
     setStudentSummaryGroupLessons([])
-	  }, [currentAcademyId, user?.uid, userProfile?.role, userProfile?.teacherName, groupClasses])
+  }, [canonicalTeacherIdentity, currentAcademyId, user?.uid, userProfile?.role, groupClasses])
 
   const todayYmd = getTodayStorageDateString()
 
@@ -3254,13 +3267,12 @@ export default function Dashboard() {
 
   useEffect(() => {
     const role = String(userProfile?.role || '').trim().toLowerCase()
-    const teacherName = String(userProfile?.teacherName || '').trim()
 
     if (
       !user?.uid ||
       !isValidOperationalAcademyId(currentAcademyId) ||
       role !== 'teacher' ||
-      !teacherName
+      !canonicalTeacherIdentity
     ) {
       setTodayDashboardGroupLessons([])
       setTodayDashboardGroupLessonsLoading(false)
@@ -3294,7 +3306,7 @@ export default function Dashboard() {
     )
       .then((results) => {
         if (!active) return
-        const byId = new Map()
+        const candidates = []
         results.forEach((result) => {
           if (result.status !== 'fulfilled') {
             console.error('today teacher groupLessons 불러오기 실패:', result.reason)
@@ -3302,16 +3314,18 @@ export default function Dashboard() {
           }
           result.value.docs.forEach((docItem) => {
             const lesson = { id: docItem.id, ...docItem.data() }
-            const lessonAcademyId = String(lesson.academyId || '').trim()
-            const lessonTeacher = String(lesson.teacher || lesson.teacherName || '').trim()
-            if (lessonAcademyId !== String(currentAcademyId || '').trim()) return
             if (!isVisibleGroupLessonForActiveViews(lesson)) return
             if (String(lesson.date || '').trim() !== todayYmd) return
-            if (lessonTeacher && lessonTeacher !== teacherName) return
-            byId.set(docItem.id, lesson)
+            candidates.push(lesson)
           })
         })
-        setTodayDashboardGroupLessons(Array.from(byId.values()))
+        const scoped = scopeTeacherGroupData({
+          groupClasses,
+          groupLessons: candidates,
+          academyId: canonicalTeacherIdentity.academyId,
+          teacherUid: canonicalTeacherIdentity.teacherUid,
+        })
+        setTodayDashboardGroupLessons(scoped.groupLessons)
         setTodayDashboardGroupLessonsLoading(false)
       })
       .catch((error) => {
@@ -3325,12 +3339,12 @@ export default function Dashboard() {
       active = false
     }
   }, [
+    canonicalTeacherIdentity,
     currentAcademyId,
     groupClasses,
     todayYmd,
     user?.uid,
     userProfile?.role,
-    userProfile?.teacherName,
   ])
 
   const todayGroupLessons = useMemo(() => {
@@ -3466,6 +3480,7 @@ export default function Dashboard() {
     activeSection,
     userProfile,
     currentAcademyId,
+    canonicalTeacherIdentity,
     selectedGroupClass,
     groupLessons,
     createGroupLessonsInDateRange,
@@ -3588,6 +3603,7 @@ export default function Dashboard() {
   })
 
   const isAdmin = isDashboardAdminProfile(userProfile)
+  const includeOpenPrivateSlots = isAdmin
   const canViewPaymentFields = canViewBillingFields(userProfile)
   const teacherGroupClassKey = normalizeText(userProfile?.teacherName || '')
   const canManageOwnGroupClasses =
@@ -3609,67 +3625,14 @@ export default function Dashboard() {
   const busyGroupStudentId = busyRemovingGroupStudentId || busyAddingGroupStudentId
 
   const calendarTeacherFilterOptions = useMemo(() => {
-    const optionByValue = new Map()
-    const valueByIdentityKey = new Map()
-
-    const addTeacherCandidate = (row, preferredDisplayName = '') => {
-      if (!row) return
-      const identityKeys = getPrivateTeacherIdentityKeys(row)
-      if (identityKeys.length === 0) return
-      const existingValue = identityKeys
-        .map((key) => valueByIdentityKey.get(key))
-        .find(Boolean)
-      const value = existingValue || identityKeys[0]
-      const displayName = String(
-        preferredDisplayName ||
-          row.name ||
-          row.displayName ||
-          row.teacherName ||
-          row.teacher ||
-          row.teacherKey ||
-          row.teacherEmail ||
-          value
-      ).trim()
-      if (!displayName) return
-      if (!optionByValue.has(value)) {
-        const teacherUid = String(
-          row.teacherUid ||
-            row.teacherUID ||
-            row.teacherMembershipUid ||
-            row.uid ||
-            ''
-        ).trim()
-        const teacherKey = normalizeText(row.teacherKey || row.teacher || row.teacherName || '')
-        optionByValue.set(value, {
-          value,
-          label: displayName,
-          displayName,
-          name: displayName,
-          teacher: String(row.teacher || teacherKey || displayName).trim(),
-          teacherName: String(row.teacherName || row.teacher || displayName).trim(),
-          teacherKey,
-          teacherUid,
-          teacherUID: teacherUid,
-          teacherId: String(row.teacherId || row.teacherID || row.id || '').trim(),
-          teacherEmail: String(row.teacherEmail || row.email || '').trim(),
-        })
-      }
-      identityKeys.forEach((key) => valueByIdentityKey.set(key, value))
-    }
-
-    teacherManagementTeachers.forEach((teacher) => {
-      if (String(teacher?.status || 'active') === 'inactive') return
-      addTeacherCandidate(teacher, getTeacherDisplayName(teacher))
+    return buildCalendarTeacherFilterOptions({
+      teacherManagementTeachers,
+      lessons,
+      groupClasses,
+      groupLessons: studentSummaryGroupLessons,
+      privateLessonSlots,
+      privateLessonReservations,
     })
-    lessons.forEach((lesson) => addTeacherCandidate(lesson))
-    groupClasses.forEach((groupClass) => addTeacherCandidate(groupClass))
-    studentSummaryGroupLessons.forEach((groupLesson) => addTeacherCandidate(groupLesson))
-    privateLessonSlots.forEach((slot) => addTeacherCandidate(slot))
-    privateLessonReservations.forEach((reservation) => addTeacherCandidate(reservation))
-
-    return [...optionByValue.values()].sort((a, b) =>
-      String(a.label || '').localeCompare(String(b.label || ''), 'ko')
-    )
   }, [
     groupClasses,
     lessons,
@@ -3687,18 +3650,24 @@ export default function Dashboard() {
     if (!hasSelectedTeacher) setCalendarTeacherFilterValue('')
   }, [calendarTeacherFilterOptions, calendarTeacherFilterValue])
 
+  const selectedCalendarTeacherUid =
+    isAdmin && calendarTeacherFilterValue ? calendarTeacherFilterValue : null
   const selectedCalendarTeacher = useMemo(() => {
-    if (!isAdmin || !calendarTeacherFilterValue) return null
+    if (!selectedCalendarTeacherUid) return null
     return (
-      calendarTeacherFilterOptions.find((option) => option.value === calendarTeacherFilterValue) ||
-      null
+      calendarTeacherFilterOptions.find(
+        (option) => option.value === selectedCalendarTeacherUid
+      ) || null
     )
-  }, [calendarTeacherFilterOptions, calendarTeacherFilterValue, isAdmin])
+  }, [calendarTeacherFilterOptions, selectedCalendarTeacherUid])
 
   const selectedCalendarTeacherScope = useMemo(() => {
-    if (!selectedCalendarTeacher) return null
-    return getTeacherScopeFromRecord(selectedCalendarTeacher)
-  }, [selectedCalendarTeacher])
+    if (!selectedCalendarTeacherUid) return null
+    return {
+      teacherUid: selectedCalendarTeacherUid,
+      teacherUID: selectedCalendarTeacherUid,
+    }
+  }, [selectedCalendarTeacherUid])
 
   const todayGroupLessonById = useMemo(() => {
     return new Map(todayGroupLessons.map((lesson) => [lesson.id, lesson]))
@@ -3763,7 +3732,9 @@ export default function Dashboard() {
           !isReleasedFixedPrivateSeatLesson(lesson) &&
           matchesSelectedTeacher(lesson)
       )
-      .map((lesson) => ({
+      .map((lesson) => {
+        const subject = String(lesson.subject || '').trim()
+        return {
         id: `private-lesson-${lesson.id}`,
         date: getLessonStorageDateString(lesson) || todayYmd,
         time: lessonTimeInputValue(lesson) || '-',
@@ -3785,9 +3756,11 @@ export default function Dashboard() {
           })(),
         studentLabel: getStudentName(lesson),
         teacherLabel: getTeacherName(lesson),
-        title: String(lesson.subject || '').trim() || '1:1 수업',
+        title: subject || '1:1 수업',
+        titleIsSystemFallback: !subject,
         statusLabel: lesson.isDeductCancelled === true ? '차감취소' : '수업 예정',
-      }))
+        }
+      })
 
     const groupLessonItems = todayGroupLessons
       .filter((lesson) => {
@@ -3815,6 +3788,7 @@ export default function Dashboard() {
             '선생님 선택 필요'
           ),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
+          titleIsSystemFallback: !className && !subject,
           statusLabel: isNoDeductionCancelledGroupLesson(lesson) ? '휴강 · 차감 없음' : '수업 예정',
         }
       })
@@ -3861,6 +3835,7 @@ export default function Dashboard() {
               '선생님 선택 필요'
             ),
           title: [className, subject].filter(Boolean).join(' · ') || '단체반 수업',
+          titleIsSystemFallback: !className && !subject,
           statusLabel: '예약 완료',
         }
       })
@@ -3928,6 +3903,7 @@ export default function Dashboard() {
       .map((reservation) => {
         const student = privateStudentById.get(String(reservation.studentId || '').trim()) || null
         const slot = privateSlotById.get(String(reservation.slotId || '').trim()) || null
+        const subject = String(reservation.subject || slot?.subject || '').trim()
         return {
           id: `private-reservation-${reservation.id}`,
           date: String(reservation.date || slot?.date || '').trim() || todayYmd,
@@ -3936,7 +3912,8 @@ export default function Dashboard() {
           sourceKind: 'privateReservation',
           studentLabel: getPrivateReservationStudentLabel(reservation, student),
           teacherLabel: getPrivateReservationTeacherLabel(reservation, slot),
-          title: getPrivateReservationSubjectLabel(reservation, slot),
+          title: subject || getPrivateReservationSubjectLabel(reservation, slot),
+          titleIsSystemFallback: !subject,
           statusLabel: '예약 완료',
         }
       })
@@ -4191,6 +4168,7 @@ export default function Dashboard() {
     fixedPrivateOutcomePreviewBusyRef.current = false
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonReversalReason('')
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
     setPrivateLessonStatusActionPreviewPayload(null)
@@ -4243,6 +4221,7 @@ export default function Dashboard() {
     activeSection,
     userProfile,
     currentAcademyId,
+    canonicalTeacherIdentity,
     busyGroupId,
     setBusyGroupId,
     selectedDateString,
@@ -4272,8 +4251,8 @@ export default function Dashboard() {
     lessonsCountByDate,
     lessonsPreviewByDate,
     displayedLessons,
-    calendarCombinedLessons,
-    allCalendarCombinedLessons,
+    calendarInstructionalLessons,
+    allCalendarInstructionalLessons,
   } =
     useCalendarSectionViewModel({
       lessons,
@@ -4284,28 +4263,37 @@ export default function Dashboard() {
       selectedDateString,
       showOnlySelectedDate,
       userProfile,
-      selectedCalendarTeacher,
+      selectedCalendarTeacherUid,
+      includeOpenPrivateSlots,
+      currentAcademyId,
+      calendarMonth,
     })
 
   const lessonCountStats = useMemo(
     () =>
       buildLessonOccurrenceStats({
-        rows: calendarCombinedLessons,
+        rows: calendarInstructionalLessons,
         monthDate: calendarMonth,
         todayYmd,
       }),
-    [calendarCombinedLessons, calendarMonth, todayYmd]
+    [calendarInstructionalLessons, calendarMonth, todayYmd]
   )
 
   const teacherLessonCountStats = useMemo(() => {
     if (!isAdmin) return null
     return buildTeacherLessonOccurrenceStats({
-      rows: allCalendarCombinedLessons,
+      rows: allCalendarInstructionalLessons,
       teachers: calendarTeacherFilterOptions,
       monthDate: calendarMonth,
       todayYmd,
     })
-  }, [allCalendarCombinedLessons, calendarMonth, calendarTeacherFilterOptions, isAdmin, todayYmd])
+  }, [
+    allCalendarInstructionalLessons,
+    calendarMonth,
+    calendarTeacherFilterOptions,
+    isAdmin,
+    todayYmd,
+  ])
 
   const activeLessonCountStats = useMemo(
     () => flattenLessonOccurrenceStats(lessonCountStats),
@@ -4331,19 +4319,58 @@ export default function Dashboard() {
     [lessonCountStats?.range, teacherLessonCountStats?.range]
   )
 
+  const privateLessonDashboardStats = useMemo(() => {
+    if (isAdmin || !user?.uid) return null
+    const reservationOccurrences = privateLessonReservations.map((reservation) => ({
+      ...reservation,
+      _calendarRowKind: 'privateReservation',
+      packageId: reservation.packageId || reservation.deductionPackageId,
+    }))
+    return buildPrivateLessonDashboardStats({
+      occurrences: [...lessons, ...reservationOccurrences],
+      packages: studentPackages,
+      teacherUid: user.uid,
+      now: new Date(),
+    })
+  }, [isAdmin, lessons, privateLessonReservations, studentPackages, user?.uid])
+
+  const groupClassDashboardStats = useMemo(() => {
+    if (isAdmin || !canonicalTeacherIdentity) return null
+    return computeGroupClassDashboardStats({
+      groupClasses,
+      groupLessons: studentSummaryGroupLessons,
+      academyId: canonicalTeacherIdentity.academyId,
+      teacherUid: canonicalTeacherIdentity.teacherUid,
+      now: new Date(),
+    })
+  }, [canonicalTeacherIdentity, groupClasses, isAdmin, studentSummaryGroupLessons])
+
   const todayScheduleSummary = useMemo(() => {
     const items = Array.isArray(todayScheduleItems) ? todayScheduleItems : []
+    const privateSnapshotSummary = privateLessonDashboardStats
+      ? {
+          todayPrivateLessonCount: privateLessonDashboardStats.todayPrivateCount,
+          monthlyPrivateLessonCount: privateLessonDashboardStats.monthlyPrivateCount,
+          deductCancelledCount: privateLessonDashboardStats.deductionCancelledCount,
+          lastLessonCount: privateLessonDashboardStats.finalLessonCount,
+        }
+      : {}
     return {
       ...activeLessonCountStats,
+      ...privateSnapshotSummary,
       privateLessonCount: items.filter(
         (item) =>
           item.sourceKind === 'privateLesson' || item.sourceKind === 'privateReservation'
       ).length,
       groupLessonCount: items.filter((item) => item.sourceKind === 'groupLesson').length,
-      deductCancelledCount: items.filter((item) => item.isDeductCancelled === true).length,
-      lastLessonCount: items.filter((item) => item.isLastLesson === true).length,
+      ...(privateLessonDashboardStats
+        ? {}
+        : {
+            deductCancelledCount: items.filter((item) => item.isDeductCancelled === true).length,
+            lastLessonCount: items.filter((item) => item.isLastLesson === true).length,
+          }),
     }
-  }, [activeLessonCountStats, todayScheduleItems])
+  }, [activeLessonCountStats, privateLessonDashboardStats, todayScheduleItems])
 
   const todaySchedulePanelSummary = useMemo(() => {
     if (activeSection !== 'groups') return todayScheduleSummary
@@ -5520,7 +5547,9 @@ export default function Dashboard() {
       privateAvailabilityTemplateForm.effectiveStartDate || ''
     ).trim()
     const effectiveEndDate = String(privateAvailabilityTemplateForm.effectiveEndDate || '').trim()
-    const useForFixedAssignment = privateAvailabilityTemplateForm.useForFixedAssignment !== false
+    const useForFixedAssignment = Boolean(
+      privateAvailabilityTemplateForm.useForFixedAssignment
+    )
     const openForStudentBooking = privateAvailabilityTemplateForm.openForStudentBooking === true
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (!Number.isInteger(weekday) || weekday < 1 || weekday > 6) {
@@ -5592,7 +5621,7 @@ export default function Dashboard() {
     const status = String(privateAvailabilityBulkForm.status || 'active').trim()
     const effectiveStartDate = String(privateAvailabilityBulkForm.effectiveStartDate || '').trim()
     const effectiveEndDate = String(privateAvailabilityBulkForm.effectiveEndDate || '').trim()
-    const useForFixedAssignment = privateAvailabilityBulkForm.useForFixedAssignment !== false
+    const useForFixedAssignment = Boolean(privateAvailabilityBulkForm.useForFixedAssignment)
     const openForStudentBooking = privateAvailabilityBulkForm.openForStudentBooking === true
     if (!teacherFields.teacher) errors.teacher = '선생님을 선택해주세요.'
     if (weekdays.length === 0) errors.weekdays = '요일을 하나 이상 선택해주세요.'
@@ -5843,11 +5872,6 @@ export default function Dashboard() {
       if (dates.length === 0) errors.dateRange = '기간 안에 생성할 수업이 없습니다'
     }
 
-    const pastDates = dates.filter((date) => date < today)
-    if (pastDates.length > 0) {
-      errors.dateRange = '과거 날짜에는 고정 1:1 수업을 생성할 수 없습니다'
-    }
-
     const blockingReasons = []
     const conflictDetails = []
     const duplicateDetails = []
@@ -5980,6 +6004,10 @@ export default function Dashboard() {
       }
     }
 
+    const { pastDates, pastDateCount } = classifyFixedPrivateAssignmentDates(
+      assignableDates,
+      today
+    )
     const uniqueBlockingReasons = Array.from(new Set(blockingReasons))
     const valid = Object.keys(errors).length === 0 && uniqueBlockingReasons.length === 0
     return {
@@ -5993,6 +6021,9 @@ export default function Dashboard() {
       dates: assignableDates,
       requestedDates: dates,
       assignableDates,
+      pastDates,
+      pastDateCount,
+      todayYmd: today,
       excludedDates,
       durationMinutes: safeDurationMinutes,
       blockingReasons: uniqueBlockingReasons,
@@ -6020,22 +6051,68 @@ export default function Dashboard() {
       requestedCount: previewDates.length,
       candidateCount: (plan.requestedDates || []).length,
       excludedCount: (plan.excludedDates || []).length,
+      pastDateCount: plan.pastDateCount || 0,
+      todayYmd: plan.todayYmd,
       canCreate: plan.valid,
     }
   }
 
-  function previewPrivateFixedSlotAssignment() {
+  async function previewPrivateFixedSlotAssignment() {
+    const plan = buildPrivateFixedSlotAssignmentPlan()
+    setPrivateFixedSlotAssignmentErrors(plan.errors)
+    const localPreview = buildPrivateFixedSlotAssignmentPreviewState(plan)
+    setPrivateFixedSlotAssignmentPreview(localPreview)
+    if (!plan.valid) return
+
     try {
-      const plan = buildPrivateFixedSlotAssignmentPlan()
-      setPrivateFixedSlotAssignmentErrors(plan.errors)
-      setPrivateFixedSlotAssignmentPreview(buildPrivateFixedSlotAssignmentPreviewState(plan))
+      setBusyPrivateFixedSlotAssignment(true)
+      const requestId = `fixed-private-assignment-preview-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 10)}`
+      const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
+      const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonAssignment')
+      const payload = buildFixedPrivateAssignmentCallablePayload(
+        {
+          academyId: scopedAcademyId,
+          requestId,
+          templateId: String(plan.template?.id || '').trim(),
+          studentId: String(plan.student?.id || '').trim(),
+          packageId: String(plan.selectedPackage?.id || '').trim(),
+          subject: plan.subject,
+          assignableDates: plan.assignableDates,
+        },
+        { previewOnly: true, pastDateCount: plan.pastDateCount }
+      )
+      const result = await callable(payload)
+      const previewData = result?.data || null
+      if (
+        previewData?.ok !== true ||
+        previewData?.previewOnly !== true ||
+        previewData?.dryRun !== true ||
+        previewData?.committed === true
+      ) {
+        throw new Error('서버가 읽기 전용 고정 배정 미리보기를 반환하지 않았습니다.')
+      }
+      setPrivateFixedSlotAssignmentPreview({
+        ...localPreview,
+        serverPreview: previewData,
+      })
     } catch (error) {
       console.error('고정 1:1 수업 배정 미리보기 실패:', error)
-      alert(`고정 1:1 수업 배정 미리보기 실패: ${error.message}`)
+      setPrivateFixedSlotAssignmentPreview({
+        ...localPreview,
+        canCreate: false,
+        blockingReasons: [
+          ...localPreview.blockingReasons,
+          error?.message || '서버 미리보기에 실패했습니다.',
+        ],
+      })
+    } finally {
+      setBusyPrivateFixedSlotAssignment(false)
     }
   }
 
-  async function createPrivateFixedSlotAssignment() {
+  async function createPrivateFixedSlotAssignment(backfillConfirmed = false) {
     if (!isAdmin) {
       alert('고정 1:1 수업 배정은 관리자만 생성할 수 있습니다.')
       return
@@ -6044,6 +6121,12 @@ export default function Dashboard() {
     setPrivateFixedSlotAssignmentErrors(plan.errors)
     setPrivateFixedSlotAssignmentPreview(buildPrivateFixedSlotAssignmentPreviewState(plan))
     if (!plan.valid) return
+    if (
+      !canCommitFixedPrivateAssignmentBackfill(plan.pastDateCount, backfillConfirmed)
+    ) {
+      alert(formatFixedPrivateAssignmentBackfillWarning(plan.pastDateCount))
+      return
+    }
 
     try {
       setBusyPrivateFixedSlotAssignment(true)
@@ -6052,18 +6135,19 @@ export default function Dashboard() {
         .slice(2, 10)}`
       const scopedAcademyId = requireCurrentAcademyId(currentAcademyId)
       const callable = httpsCallable(firebaseFunctions, 'createFixedPrivateLessonAssignment')
-      await callable({
-        academyId: scopedAcademyId,
-        requestId,
-        templateId: String(plan.template?.id || '').trim(),
-        studentId: String(plan.student?.id || '').trim(),
-        packageId: String(plan.selectedPackage?.id || '').trim(),
-        subject: plan.subject,
-        assignableDates: plan.assignableDates,
-        commit: true,
-        dryRun: false,
-        previewOnly: false,
-      })
+      const payload = buildFixedPrivateAssignmentCallablePayload(
+        {
+          academyId: scopedAcademyId,
+          requestId,
+          templateId: String(plan.template?.id || '').trim(),
+          studentId: String(plan.student?.id || '').trim(),
+          packageId: String(plan.selectedPackage?.id || '').trim(),
+          subject: plan.subject,
+          assignableDates: plan.assignableDates,
+        },
+        { pastDateCount: plan.pastDateCount }
+      )
+      await callable(payload)
       setPrivateFixedSlotAssignmentPreview({
         mode: 'created',
         dates: plan.assignableDates,
@@ -6076,6 +6160,8 @@ export default function Dashboard() {
         requestedCount: plan.assignableDates.length,
         candidateCount: (plan.requestedDates || []).length,
         excludedCount: (plan.excludedDates || []).length,
+        pastDateCount: plan.pastDateCount,
+        todayYmd: plan.todayYmd,
         canCreate: false,
       })
       setPrivateFixedSlotAssignmentForm((prev) => ({
@@ -6167,6 +6253,7 @@ export default function Dashboard() {
       setBusyPrivateAvailabilityTemplateId(template.id)
       await updateDoc(doc(db, 'privateLessonAvailabilityTemplates', template.id), {
         status: nextStatus,
+        useForFixedAssignment: template.useForFixedAssignment === true,
         updatedAt: serverTimestamp(),
       })
     } catch (error) {
@@ -6182,7 +6269,7 @@ export default function Dashboard() {
     const status = String(values?.status || 'active').trim()
     const effectiveStartDate = String(values?.effectiveStartDate || '').trim()
     const effectiveEndDate = String(values?.effectiveEndDate || '').trim()
-    const useForFixedAssignment = values?.useForFixedAssignment !== false
+    const useForFixedAssignment = Boolean(values?.useForFixedAssignment)
     const openForStudentBooking = values?.openForStudentBooking === true
 
     if (!['active', 'inactive'].includes(status)) errors.status = '상태를 선택해주세요.'
@@ -6494,7 +6581,9 @@ export default function Dashboard() {
     const actionLabel = isNoShow ? '노쇼 처리' : '완료 처리'
     if (
       !window.confirm(
-        `${actionLabel}하고 수강권 1회를 차감할까요?\n${label || '1:1 예약'}`
+        `${actionLabel}할까요? 서버가 현재 활성 차감 기록을 확인해 실제 수강권 영향을 결정합니다.\n${
+          label || '1:1 예약'
+        }`
       )
     ) {
       return
@@ -6505,11 +6594,19 @@ export default function Dashboard() {
       assertSameAcademy(reservation, scopedAcademyId, '1:1 예약')
       setBusyPrivateReservationOutcomeId(`${reservation.id}:${outcome}`)
       const callable = httpsCallable(firebaseFunctions, 'markPrivateReservationOutcome')
-      await callable({
+      const result = await callable({
         academyId: scopedAcademyId,
         reservationId: reservation.id,
         outcome,
       })
+      const additionalPackageDeduction = Number(
+        result?.data?.additionalPackageDeduction ?? 1
+      )
+      alert(
+        additionalPackageDeduction === 0
+          ? '처리가 완료되었습니다. 추가 수강권 차감은 없고 기존 활성 차감 기록을 유지했습니다.'
+          : `처리가 완료되었습니다. 수강권 ${additionalPackageDeduction}회가 차감되었습니다.`
+      )
     } catch (error) {
       console.error('1:1 예약 처리 실패:', error)
       alert(`1:1 예약 처리 실패: ${error.message || '알 수 없는 오류'}`)
@@ -6542,11 +6639,17 @@ export default function Dashboard() {
       assertSameAcademy(reservation, scopedAcademyId, '1:1 예약')
       setBusyPrivateReservationOutcomeId(`${reservation.id}:reverse`)
       const callable = httpsCallable(firebaseFunctions, 'reversePrivateReservationOutcome')
-      await callable({
+      const result = await callable({
         academyId: scopedAcademyId,
         reservationId: reservation.id,
         reason: trimmedReason,
       })
+      const restoredPackageLessons = Number(
+        result?.data?.restoredPackageLessons ??
+          result?.data?.packageImpact?.restoredPackageLessons ??
+          0
+      )
+      alert(`처리가 취소되었습니다. 수강권 ${restoredPackageLessons}회가 복구되었습니다.`)
     } catch (error) {
       console.error('1:1 예약 처리 취소 실패:', error)
       alert(`1:1 예약 처리 취소 실패: ${error.message || '알 수 없는 오류'}`)
@@ -6721,6 +6824,9 @@ export default function Dashboard() {
       openStudentPackageEditModal,
       canEditStudentPackageCountsForPackage,
       onOpenFixedRescheduleScopePreview: openCalendarFixedRescheduleScopePreview,
+      onOpenPrivateSlotManagement: includeOpenPrivateSlots
+        ? () => setActiveSection('privateSlots')
+        : undefined,
     },
   }
 
@@ -6781,20 +6887,30 @@ export default function Dashboard() {
       return
     }
     const fixedTarget = isFixedPrivateSourceRecord(target)
+    const fixedNoShowReversal = fixedTarget && target.fixedNoShowReversal === true
     if (
-      fixedTarget
+      (fixedNoShowReversal && !isAdmin) ||
+      (fixedTarget
         ? !canManageFixedPrivateLessonOutcomeLocally({
             target,
             isAdmin,
             user,
             userProfile,
           })
-        : !isAdmin
+        : !isAdmin)
     ) {
       return
     }
     setPrivateLessonStatusActionTarget(target)
-    setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonStatusActionMode(
+      target.regularAbsenceFromAuto === true
+        ? 'no_show'
+        : fixedNoShowReversal ||
+            String(target.status || '').trim().toLowerCase() === 'no_show'
+        ? 'reverse_deduction'
+        : 'complete'
+    )
+    setPrivateLessonReversalReason('')
     clearPrivateLessonStatusActionPreview()
   }
 
@@ -6813,6 +6929,7 @@ export default function Dashboard() {
     }
     setPrivateLessonStatusActionTarget(null)
     setPrivateLessonStatusActionMode('complete')
+    setPrivateLessonReversalReason('')
     clearPrivateLessonStatusActionPreview()
   }
 
@@ -6826,7 +6943,12 @@ export default function Dashboard() {
     ) {
       return
     }
-    const safeActionType = actionType === 'no_show' ? 'no_show' : 'complete'
+    const safeActionType =
+      actionType === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : actionType === 'no_show'
+          ? 'no_show'
+          : 'complete'
     setPrivateLessonStatusActionMode(safeActionType)
     clearPrivateLessonStatusActionPreview()
   }
@@ -6843,7 +6965,12 @@ export default function Dashboard() {
     }
 
     const target = privateLessonStatusActionTarget || {}
-    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const actionType =
+      privateLessonStatusActionMode === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : privateLessonStatusActionMode === 'no_show'
+          ? 'no_show'
+          : 'complete'
     clearPrivateLessonOutcomePreview()
     setPrivateLessonStatusActionPreview(null)
     setPrivateLessonStatusActionPreviewError('')
@@ -7012,7 +7139,12 @@ export default function Dashboard() {
     clearFixedPrivateLessonOutcomeState()
     const previewEpoch = fixedPrivateOutcomePreviewEpochRef.current
     const target = privateLessonStatusActionTarget || {}
-    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const actionType =
+      privateLessonStatusActionMode === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : privateLessonStatusActionMode === 'no_show'
+          ? 'no_show'
+          : 'complete'
 
     try {
       if (!isFixedPrivateLessonOutcomeTarget(target)) {
@@ -8610,9 +8742,63 @@ export default function Dashboard() {
       if (blockedReasons.length > 0) {
         throw new Error('처리 차단 사유가 있는 수업은 실제 처리할 수 없습니다.')
       }
-      const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+      const actionType =
+        privateLessonStatusActionMode === 'reverse_deduction'
+          ? 'reverse_deduction'
+          : privateLessonStatusActionMode === 'no_show'
+            ? 'no_show'
+            : 'complete'
       if (privateLessonStatusActionPreviewPayload.actionType !== actionType) {
         throw new Error('선택한 처리 유형이 미리보기 payload와 일치하지 않습니다.')
+      }
+
+      privateLessonStatusActionCommitBusyRef.current = true
+      setPrivateLessonStatusActionCommitBusy(true)
+      setPrivateLessonStatusActionCommitError('')
+      setPrivateLessonStatusActionCommitResult(null)
+      if (actionType === 'reverse_deduction') {
+        const reason = String(privateLessonReversalReason || '').trim()
+        const planHash = String(previewData.planHash || '').trim()
+        const reservationId = String(
+          privateLessonStatusActionTarget?.reservationId ||
+            privateLessonStatusActionTarget?.privateReservationId ||
+            privateLessonStatusActionTarget?.id ||
+            ''
+        ).trim()
+        if (!reservationId || privateLessonStatusActionPreviewPayload.reservationId !== reservationId) {
+          throw new Error('결석 취소 대상 예약이 미리보기와 일치하지 않습니다.')
+        }
+        if (reason.length < 2) {
+          throw new Error('결석 취소 사유를 2자 이상 입력해 주세요.')
+        }
+        if (!/^[a-f0-9]{64}$/.test(planHash)) {
+          throw new Error('결석 취소 미리보기 planHash가 없습니다.')
+        }
+        const callable = httpsCallable(firebaseFunctions, 'reversePrivateReservationOutcome')
+        const normalizedPlan = previewData.normalizedPlan || {}
+        const result = await callable({
+          academyId: privateLessonStatusActionPreviewPayload.academyId,
+          reservationId,
+          requestId,
+          planHash,
+          packageId: normalizedPlan.packageId,
+          activeDeductionId: normalizedPlan.activeDeductionId,
+          reversalCreditTransactionId: normalizedPlan.reversalCreditTransactionId,
+          reason,
+        })
+        const commitData = result?.data || null
+        if (
+          commitData?.ok !== true ||
+          commitData?.committed !== true ||
+          commitData?.reversed !== true ||
+          commitData?.requestId !== requestId ||
+          commitData?.planHash !== planHash ||
+          commitData?.actionType !== 'reverse_deduction'
+        ) {
+          throw new Error('서버 결석 취소 결과가 유효하지 않습니다.')
+        }
+        setPrivateLessonStatusActionCommitResult(commitData)
+        return
       }
 
       const payload = {
@@ -8624,10 +8810,6 @@ export default function Dashboard() {
         previewOnly: false,
       }
 
-      privateLessonStatusActionCommitBusyRef.current = true
-      setPrivateLessonStatusActionCommitBusy(true)
-      setPrivateLessonStatusActionCommitError('')
-      setPrivateLessonStatusActionCommitResult(null)
       const callable = httpsCallable(firebaseFunctions, 'commitPrivateLessonStatusAction')
       const result = await callable(payload)
       const commitData = result?.data || null
@@ -8665,6 +8847,10 @@ export default function Dashboard() {
       : []
     const creditTransactionPreview = previewData.creditTransactionPreview || {}
     const packageImpact = previewData.packageImpact
+    const reusesExistingDeduction = [
+      'reuse_existing_auto_deduction',
+      'reuse_existing_active_deduction',
+    ].includes(String(previewData.normalizedPlan?.deductionMode || ''))
     const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
     const target = privateLessonStatusActionTarget || {}
     const reservationId = String(
@@ -8702,7 +8888,7 @@ export default function Dashboard() {
       if (previewBlockedReasons.length > 0) {
         throw new Error('차감 포함 처리 차단 사유가 있는 수업은 실제 처리할 수 없습니다.')
       }
-      if (creditTransactionPreview.duplicateExists === true) {
+      if (creditTransactionPreview.duplicateExists === true && !reusesExistingDeduction) {
         throw new Error('이미 존재하는 차감 기록이 있어 실제 처리를 실행할 수 없습니다.')
       }
       if (!packageImpact || typeof packageImpact !== 'object' || !packageImpact.packageId) {
@@ -8796,7 +8982,12 @@ export default function Dashboard() {
 
     const target = privateLessonStatusActionTarget || {}
     const targetIds = getFixedPrivateLessonOutcomeTargetIds(target)
-    const actionType = privateLessonStatusActionMode === 'no_show' ? 'no_show' : 'complete'
+    const actionType =
+      privateLessonStatusActionMode === 'reverse_deduction'
+        ? 'reverse_deduction'
+        : privateLessonStatusActionMode === 'no_show'
+          ? 'no_show'
+          : 'complete'
     const previewData = fixedPrivateOutcomePreviewResult || {}
     const previewPayload = fixedPrivateOutcomePreviewPayload || {}
     const planHash = String(fixedPrivateOutcomePreviewPlanHash || '').trim()
@@ -8944,6 +9135,8 @@ export default function Dashboard() {
     }),
     actionType: privateLessonStatusActionMode,
     setActionType: selectPrivateLessonStatusActionMode,
+    reversalReason: privateLessonReversalReason,
+    setReversalReason: setPrivateLessonReversalReason,
     preview: privateLessonStatusActionPreview,
     previewBusy: privateLessonStatusActionPreviewBusy,
     previewError: privateLessonStatusActionPreviewError,
@@ -8981,94 +9174,56 @@ export default function Dashboard() {
     onClose: closePrivateLessonStatusActionPreview,
   }
 
-  return (
-    <div className="dashboard">
-      <aside className="sidebar">
-        <div className="sidebar-logo">
-          <span className="logo-icon">⬡</span>
-          <span className="logo-text">Miami Admin</span>
-        </div>
-
-        <nav className="sidebar-nav">
-  {[
-    { key: 'calendar', label: '캘린더' },
-    ...(isAdmin || canUseStudentPackageCountSection ? [{ key: 'students', label: '학생 관리' }] : []),
+  // Preserve the existing role/permission-filtered menu as the single navigation authority.
+  const dashboardMenuItems = [
+    { key: 'calendar', labelKey: 'nav.calendar' },
+    ...(isAdmin || canUseStudentPackageCountSection
+      ? [{ key: 'students', labelKey: 'nav.students' }]
+      : []),
     ...(canManageOwnGroupClasses
-      ? [{ key: 'teacherPrivateSchedule', label: TEACHER_PRIVATE_SCHEDULE_LABEL }]
+      ? [{ key: 'teacherPrivateSchedule', labelKey: 'nav.teacherPrivateSchedule' }]
       : []),
     ...(isAdmin || canManageOwnGroupClasses
-      ? [{ key: 'groups', label: isAdmin ? ADMIN_GROUP_MANAGEMENT_LABEL : TEACHER_GROUP_MANAGEMENT_LABEL }]
+      ? [{ key: 'groups', labelKey: isAdmin ? 'nav.groups.admin' : 'nav.groups.teacher' }]
       : []),
-    ...(isAdmin ? [{ key: 'privateSlots', label: PRIVATE_SLOT_MANAGEMENT_LABEL }] : []),
-    ...(isAdmin ? [{ key: 'lessonRequests', label: '수업 요청 관리' }] : []),
-    ...(isAdmin ? [{ key: 'teachers', label: '선생님 관리' }] : []),
-    ...(isAdmin ? [{ key: 'dailyMaterials', label: '오늘의 영상 관리' }] : []),
-  ].map((item) => (
-    <button
-      key={item.key}
-      type="button"
-      onClick={() => setActiveSection(item.key)}
-      className={`nav-item ${activeSection === item.key ? 'active' : ''}`}
-      style={{
-        width: '100%',
-        textAlign: 'left',
-        background: 'transparent',
-        border: 'none',
-        cursor: 'pointer',
-      }}
+    ...(isAdmin ? [{ key: 'privateSlots', labelKey: 'nav.privateSlots' }] : []),
+    ...(isAdmin ? [{ key: 'lessonRequests', labelKey: 'nav.lessonRequests' }] : []),
+    ...(isAdmin ? [{ key: 'teachers', labelKey: 'nav.teachers' }] : []),
+    ...(isAdmin ? [{ key: 'dailyMaterials', labelKey: 'nav.dailyMaterials' }] : []),
+  ]
+  const activeSectionTitle =
+    t(dashboardMenuItems.find((item) => item.key === activeSection)?.labelKey || 'nav.calendar')
+
+  return (
+    <div
+      className={`dashboard dashboard--${resolvedLayout}${isAdmin ? '' : ' dashboard--teacher'}`}
+      data-portal-role={isAdmin ? 'admin' : 'teacher'}
     >
-      <span className="nav-dot" />
-      {item.label}
-    </button>
-  ))}
-</nav>
-
-        <div className="sidebar-footer">
-          <div className="user-chip">
-            <div className="avatar">{user?.email?.[0]?.toUpperCase() || 'U'}</div>
-            <div className="user-info">
-              <span className="user-email">{user?.email || '-'}</span>
-              <span className="user-role">{userProfile?.role || 'user'}</span>
-            </div>
-          </div>
-
-          <button className="btn-signout" onClick={handleSignOut}>
-            로그아웃
-          </button>
-        </div>
-      </aside>
-
+      <AuthenticatedShell
+        activeKey={activeSection}
+        menuItems={dashboardMenuItems}
+        onLogout={handleSignOut}
+        onSelect={setActiveSection}
+        role={userProfile?.role}
+        title={activeSectionTitle}
+        user={user}
+      >
       <main className="main">
         <header className="main-header">
           <div>
-          <h1 className="page-title">
-	  {activeSection === 'calendar'
-	    ? '캘린더'
-	    : activeSection === 'students'
-	    ? '학생 관리'
-	    : activeSection === 'groups'
-	    ? isAdmin
-        ? ADMIN_GROUP_MANAGEMENT_LABEL
-        : TEACHER_GROUP_MANAGEMENT_LABEL
-      : activeSection === 'teacherPrivateSchedule'
-      ? TEACHER_PRIVATE_SCHEDULE_LABEL
-	    : activeSection === 'teachers'
-	    ? '선생님 관리'
-	    : activeSection === 'lessonRequests'
-	    ? '수업 요청 관리'
-	    : activeSection === 'dailyMaterials'
-	    ? '오늘의 영상 관리'
-	    : PRIVATE_SLOT_MANAGEMENT_LABEL}
-</h1>
+            <h1 className="page-title">{activeSectionTitle}</h1>
             <p className="page-sub" data-testid="dashboard-welcome-subtitle">
               {userProfile?.teacherName
-                ? `${userProfile.teacherName} 님 환영합니다`
-                : `${user?.email || '사용자'} 님, 환영합니다`}
+                ? t('shell.welcomeName', { name: userProfile.teacherName })
+                : t('shell.welcomeUser', { name: user?.email || t('shell.user') })}
             </p>
 	          </div>
 	          </header>
 
           <div style={{ marginBottom: 20 }}>
+            {activeSection === 'groups' && !isAdmin ? (
+              <GroupClassStatusPanel stats={groupClassDashboardStats} />
+            ) : null}
             <TodaySchedulePanel
               items={todaySchedulePanelItems}
               summary={todaySchedulePanelSummary}
@@ -9081,7 +9236,16 @@ export default function Dashboard() {
                     ? 'default'
                     : 'teacherPrivate'
               }
-              title={activeSection === 'groups' ? '오늘의 단체반 일정' : '오늘의 일정'}
+              localize={!isAdmin}
+              title={
+                activeSection === 'groups'
+                  ? isAdmin
+                    ? '오늘의 단체반 일정'
+                    : t('teacher.today.groupTitle')
+                  : isAdmin
+                    ? '오늘의 일정'
+                    : t('teacher.today.title')
+              }
             />
             {isAdmin && activeSection !== 'teachers' ? (
               <LessonCountStatsPanel
@@ -9097,20 +9261,21 @@ export default function Dashboard() {
             <ReservationNotificationsPanel
               events={reservationNotificationEvents}
               loading={reservationNotificationEventsLoading}
+              localize={!isAdmin}
             />
           ) : null}
 	
 	          {activeSection === 'calendar' && (
-            <CalendarSection {...calendarSectionProps.month} />
+            <CalendarSection {...calendarSectionProps.month} teacherPortal={!isAdmin} />
           )}
           {activeSection === 'students' && (isAdmin || canUseStudentPackageCountSection) ? (
             <StudentsSection {...studentsSectionProps} />
           ) : null}
           {activeSection === 'groups' && (isAdmin || canManageOwnGroupClasses) ? (
-            <GroupsSection {...groupsSectionProps} />
+            <GroupsSection {...groupsSectionProps} teacherPortal={!isAdmin} />
           ) : null}
           {activeSection === 'teacherPrivateSchedule' && canManageOwnGroupClasses ? (
-            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
+            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} teacherPortal />
           ) : null}
 	          {activeSection === 'privateSlots' && isAdmin ? (
 	            <PrivateLessonSlotsSection {...privateLessonSlotsSectionProps} />
@@ -9134,10 +9299,11 @@ export default function Dashboard() {
           activeSection !== 'lessonRequests' &&
           activeSection !== 'dailyMaterials' &&
           activeSection !== 'teachers' ? (
-	          <CalendarSection {...calendarSectionProps.lessons} />
+	          <CalendarSection {...calendarSectionProps.lessons} teacherPortal={!isAdmin} />
 	        ) : null}
 
       </main>
+      </AuthenticatedShell>
 
       {privateLessonStatusActionTarget &&
       (isAdmin ||
@@ -9147,7 +9313,10 @@ export default function Dashboard() {
           user,
           userProfile,
         })) ? (
-        <PrivateLessonStatusActionModal {...privateLessonStatusActionModalProps} />
+        <PrivateLessonStatusActionModal
+          {...privateLessonStatusActionModalProps}
+          teacherPortal={!isAdmin}
+        />
       ) : null}
 
       {activeSection === 'students' && isAdmin && studentModal ? (

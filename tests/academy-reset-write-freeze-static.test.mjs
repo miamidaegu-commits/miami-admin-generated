@@ -9,7 +9,9 @@ import * as writeFreezeContract from
 import {
   ACADEMY_RESET_WRITE_SURFACE_REGISTRY,
   EXPECTED_WRITE_SOURCE_COUNT,
+  EXPECTED_WRITE_SURFACE_COUNT,
   WRITE_SOURCE_SHA256_ALLOWLIST,
+  WRITE_SURFACE_REGISTRY_VERSION,
 } from "../functions/scripts/academy-reset-write-surface-registry.mjs";
 import {
   EXPECTED_DEPLOYED_FUNCTION_NAMES,
@@ -426,6 +428,196 @@ test("every registered transaction helper is present and mutating", () => {
   assert.match(
       functionsSource,
       /\btransaction\.(?:create|set|update|delete)\s*\(/,
+  );
+});
+
+test("reversal helper is exactly represented by both v2 current owners", () => {
+  const helperName = "reversePrivateReservationOutcomeInTransaction";
+  const accountingHelperName =
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction";
+  assert.equal(
+      WRITE_SURFACE_REGISTRY_VERSION,
+      "academy_reset_write_surface.v2",
+  );
+  assert.equal(EXPECTED_WRITE_SURFACE_COUNT, 60);
+  assert.equal(
+      ACADEMY_RESET_WRITE_SURFACE_REGISTRY.filter(
+          ({category}) => category === "transaction_writer",
+      ).length,
+      14,
+  );
+  assert.equal(
+      (backendFreezeSource.match(
+          /"academy_reset_write_surface_inventory\.v2"/g,
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      (backendFreezeSource.match(/"academy_reset_write_freeze\.v1"/g) || [])
+          .length,
+      1,
+  );
+  assert.equal(
+      inventoryList("writeHelpers").filter((name) => name === helperName)
+          .length,
+      1,
+  );
+  assert.equal(
+      inventoryList("writeHelpers").filter(
+          (name) => name === accountingHelperName,
+      ).length,
+      1,
+  );
+
+  const helperStart = functionsSource.indexOf(`async function ${helperName}(`);
+  const helperEnd = functionsSource.indexOf(
+      "\nexports.reversePrivateReservationOutcome = onCall(",
+      helperStart,
+  );
+  assert.notEqual(helperStart, -1);
+  assert.notEqual(helperEnd, -1);
+  const helperSource = functionsSource.slice(helperStart, helperEnd);
+  const mutations = [...helperSource.matchAll(
+      /transaction\.(create|set|update|delete)\(\s*([A-Za-z][A-Za-z0-9]*)/g,
+  )].map((match) => `${match[1]}:${match[2]}`);
+  assert.deepEqual(mutations, ["update:reservationRef"]);
+
+  const accountingHelperStart = functionsSource.indexOf(
+      `function ${accountingHelperName}(`,
+  );
+  const accountingHelperEnd = functionsSource.indexOf(
+      "\nfunction buildPrivateReservationOutcomeReversalPlan(",
+      accountingHelperStart,
+  );
+  assert.notEqual(accountingHelperStart, -1);
+  assert.notEqual(accountingHelperEnd, -1);
+  const accountingHelperSource = functionsSource.slice(
+      accountingHelperStart,
+      accountingHelperEnd,
+  );
+  const accountingMutations = [...accountingHelperSource.matchAll(
+      /transaction\.(create|set|update|delete)\(\s*([A-Za-z][A-Za-z0-9]*)/g,
+  )].map((match) => `${match[1]}:${match[2]}`);
+  assert.deepEqual(accountingMutations, [
+    "update:packageRef",
+    "update:originalCreditRef",
+    "create:reversalCreditRef",
+  ]);
+  assert.deepEqual(
+      [...mutations, ...accountingMutations].sort(),
+      [
+        "update:packageRef",
+        "update:reservationRef",
+        "update:originalCreditRef",
+        "create:reversalCreditRef",
+      ].sort(),
+  );
+  for (const reference of [
+    'const packageRef = db.collection("studentPackages").doc(packageId);',
+    '.collection("privateLessonReservations")',
+    'const originalCreditRef = db.collection("creditTransactions")',
+    'const reversalCreditRef = db.collection("creditTransactions")',
+  ]) {
+    assert.equal(helperSource.includes(reference), true, reference);
+  }
+  assert.equal(
+      (helperSource.match(new RegExp(`${accountingHelperName}\\(`, "g")) || [])
+          .length,
+      1,
+  );
+  const fixedCommitStart = functionsSource.indexOf(
+      "async function commitFixedPrivateLessonOutcomeAction(",
+  );
+  const fixedCommitEnd = functionsSource.indexOf(
+      "\nexports.previewFixedPrivateLessonOutcomeAction = onCall(",
+      fixedCommitStart,
+  );
+  assert.notEqual(fixedCommitStart, -1);
+  assert.notEqual(fixedCommitEnd, -1);
+  const fixedCommitSource = functionsSource.slice(
+      fixedCommitStart,
+      fixedCommitEnd,
+  );
+  assert.equal(
+      (fixedCommitSource.match(
+          new RegExp(`${accountingHelperName}\\(`, "g"),
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      (functionsSource.match(
+          new RegExp(`^\\s+${accountingHelperName}\\(`, "gm"),
+      ) || []).length,
+      2,
+  );
+  assert.equal(
+      (functionsSource.match(
+          /^async function reversePrivateReservationOutcomeInTransaction\(/gm,
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      (functionsSource.match(
+          /return await reversePrivateReservationOutcomeInTransaction\(/g,
+      ) || []).length,
+      1,
+  );
+  assert.equal(
+      (functionsSource.match(
+          /^function applyPrivateReservationOutcomeReversalAccountingInTransaction\(/gm,
+      ) || []).length,
+      1,
+  );
+  assert.match(
+      accountingHelperSource,
+      /transaction\.update\(originalCreditRef,\s*\{[\s\S]*reversalCreditTransactionId/,
+  );
+  assert.doesNotMatch(
+      accountingHelperSource,
+      /transaction\.delete\(originalCreditRef/,
+  );
+  assert.doesNotMatch(
+      accountingHelperSource,
+      /\b(?:packageRef|originalCreditRef|reversalCreditRef)\.(?:create|set|update|delete)\(/,
+  );
+  assert.doesNotMatch(
+      helperSource,
+      /\breservationRef\.(?:create|set|update|delete)\(/,
+  );
+  const directExportStart = functionsSource.indexOf(
+      "\nexports.reversePrivateReservationOutcome = onCall(",
+  );
+  const directExportEnd = functionsSource.indexOf(
+      "\nexports.bootstrapAdmin = onCall(",
+      directExportStart,
+  );
+  assert.notEqual(directExportStart, -1);
+  assert.notEqual(directExportEnd, -1);
+  const directExportSource = functionsSource.slice(
+      directExportStart,
+      directExportEnd,
+  );
+  assert.ok(
+      directExportSource.indexOf("db.runTransaction") <
+        directExportSource.indexOf("guardAcademyWrite"),
+  );
+  assert.ok(
+      directExportSource.indexOf("guardAcademyWrite") <
+        directExportSource.indexOf(`${helperName}(`),
+  );
+  assert.ok(
+      fixedCommitSource.indexOf("db.runTransaction") <
+        fixedCommitSource.indexOf("guardAcademyWrite"),
+  );
+  assert.ok(
+      fixedCommitSource.indexOf("guardAcademyWrite") <
+        fixedCommitSource.indexOf(`${accountingHelperName}(`),
+  );
+  assert.equal(
+      functionsSource.includes(
+          "return `reverse_${normalizeId(deductionId)}`;",
+      ),
+      true,
   );
 });
 

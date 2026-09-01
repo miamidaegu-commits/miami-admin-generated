@@ -1,4 +1,7 @@
+import { useTranslation } from '../../i18n/LocalizationProvider.jsx'
+
 export default function DailyMaterialStudentPanel({ material, loading }) {
+  const { t } = useTranslation()
   const hasMaterial = Boolean(material?.id)
 
   return (
@@ -11,10 +14,10 @@ export default function DailyMaterialStudentPanel({ material, loading }) {
         padding: 20,
       }}
     >
-      <h2 style={{ margin: 0, fontSize: '1.1rem' }}>오늘의 영상</h2>
+      <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{t('student.dailyVideo.title')}</h2>
 
       {loading ? (
-        <p style={{ opacity: 0.78, marginBottom: 0 }}>불러오는 중...</p>
+        <p style={{ opacity: 0.78, marginBottom: 0 }}>{t('student.dailyVideo.loading')}</p>
       ) : hasMaterial ? (
         <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
           <h3 style={{ margin: 0, fontSize: '1rem' }}>{material.title || '-'}</h3>
@@ -40,11 +43,11 @@ export default function DailyMaterialStudentPanel({ material, loading }) {
               textDecoration: 'none',
             }}
           >
-            영상 보기
+            {t('student.dailyVideo.open')}
           </a>
         </div>
       ) : (
-        <p style={{ opacity: 0.78, marginBottom: 0 }}>오늘 등록된 영상이 없습니다.</p>
+        <p style={{ opacity: 0.78, marginBottom: 0 }}>{t('student.dailyVideo.empty')}</p>
       )}
     </section>
   )

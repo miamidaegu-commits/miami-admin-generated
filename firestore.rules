@@ -93,6 +93,11 @@ service cloud.firestore {
         (myMembership(academyId).role == "teacher" || myMembership(academyId).role == "staff");
     }
 
+    function isAcademyTeacher(academyId) {
+      return isAcademyMember(academyId) &&
+        myMembership(academyId).role == "teacher";
+    }
+
     function myAcademyTeacherName(academyId) {
       return myMembership(academyId).teacherName;
     }
@@ -159,6 +164,18 @@ service cloud.firestore {
           (data.teacher is string && data.teacher == myAcademyTeacherName(data.academyId)) ||
           (data.teacherName is string && data.teacherName == myAcademyTeacherName(data.academyId))
         );
+    }
+
+    function groupClassBelongsToTeacherUid(data) {
+      return isAcademyTeacher(data.academyId) &&
+        data.teacherUid is string &&
+        data.teacherUid == currentUid();
+    }
+
+    function privateReservationBelongsToTeacherUid(data) {
+      return isAcademyTeacher(data.academyId) &&
+        data.teacherUid is string &&
+        data.teacherUid == currentUid();
     }
 
     function studentPackageBelongsToTeacher(data) {
@@ -1960,6 +1977,10 @@ service cloud.firestore {
     }
 
     match /privateStudents/{studentId} {
+      allow get: if sameAcademyOnRead() &&
+        hasStudentIdentity(resource.data.academyId) &&
+        studentId == myStudentId(resource.data.academyId);
+
       allow read: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
         privateStudentBelongsToTeacher(resource.data)
@@ -1975,6 +1996,7 @@ service cloud.firestore {
     match /groupClasses/{groupClassId} {
       allow read: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
+        groupClassBelongsToTeacherUid(resource.data) ||
         groupClassBelongsToTeacher(resource.data)
       );
       allow create: if sameAcademyOnCreate() &&
@@ -2201,13 +2223,7 @@ service cloud.firestore {
 
       allow read: if sameAcademyOnRead() && (
         isAcademyAdmin(resource.data.academyId) ||
-        (
-          isAcademyTeacherOrStaff(resource.data.academyId) &&
-          (
-            resource.data.teacher == myAcademyTeacherName(resource.data.academyId) ||
-            resource.data.teacherName == myAcademyTeacherName(resource.data.academyId)
-          )
-        ) ||
+        privateReservationBelongsToTeacherUid(resource.data) ||
         (
           hasStudentIdentity(resource.data.academyId) &&
           resource.data.studentId == myStudentId(resource.data.academyId)

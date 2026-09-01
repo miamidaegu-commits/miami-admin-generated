@@ -988,35 +988,90 @@ export async function createAdminSeededTeacher({
   teacherName,
   teacherUid = '',
   teacherEmail = '',
+  createMembership = false,
 }) {
   const db = getDb();
   const now = timestampNow();
+  const normalizedAcademyId = String(academyId || '').trim();
   const key = String(teacherKey || '').trim();
   const id = String(teacherId || `e2e-teacher-${key}`).trim();
-  await db.collection('teachers').doc(id).set({
-    academyId: String(academyId || '').trim(),
-    name: String(teacherName || key).trim(),
+  const uid = String(teacherUid || '').trim();
+  const email = String(teacherEmail || '').trim();
+  const displayName = String(teacherName || key).trim();
+  const membershipId = `${normalizedAcademyId}_${uid}`;
+  if (createMembership === true && (!normalizedAcademyId || !key || !uid)) {
+    throw new Error(
+      'createAdminSeededTeacher membership requires academyId, teacherKey, and teacherUid'
+    );
+  }
+
+  const batch = db.batch();
+  batch.set(db.collection('teachers').doc(id), {
+    academyId: normalizedAcademyId,
+    name: displayName,
     teacherName: key,
     teacherKey: key,
-    teacherUid: String(teacherUid || '').trim(),
-    teacherEmail: String(teacherEmail || '').trim(),
+    teacherUid: uid,
+    teacherEmail: email,
     status: 'active',
     createdAt: now,
     updatedAt: now,
   });
-  return { teacherId: id, teacherKey: key, teacherName: String(teacherName || key).trim() };
+  if (createMembership === true) {
+    batch.set(db.collection('academyMemberships').doc(membershipId), {
+      academyId: normalizedAcademyId,
+      uid,
+      email,
+      displayName,
+      role: 'teacher',
+      teacherName: key,
+      status: 'active',
+      permissions: {},
+      joinedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  await batch.commit();
+
+  const result = { teacherId: id, teacherKey: key, teacherName: displayName };
+  if (createMembership !== true) return result;
+  return { ...result, teacherUid: uid, teacherMembershipId: membershipId };
 }
 
 export async function cleanupAdminSeededTeacher({
   academyId = DEFAULT_E2E_ACADEMY_ID,
   teacherId,
+  teacherUid = '',
+  cleanupMembership = false,
 }) {
-  await deleteKnownAcademyDoc(
-    getDb(),
+  const db = getDb();
+  const normalizedAcademyId = String(academyId || '').trim();
+  const uid = String(teacherUid || '').trim();
+  if (cleanupMembership === true && (!normalizedAcademyId || !uid)) {
+    throw new Error(
+      'cleanupAdminSeededTeacher membership cleanup requires academyId and teacherUid'
+    );
+  }
+  const teacherCleanup = deleteKnownAcademyDoc(
+    db,
     'teachers',
     String(teacherId || '').trim(),
-    String(academyId || '').trim()
+    normalizedAcademyId
   );
+  if (cleanupMembership !== true) {
+    await teacherCleanup;
+    return;
+  }
+  await Promise.all([
+    teacherCleanup,
+    deleteKnownAcademyDoc(
+      db,
+      'academyMemberships',
+      `${normalizedAcademyId}_${uid}`,
+      normalizedAcademyId
+    ),
+  ]);
 }
 
 export async function cleanupAdminSeededStudentPrivateAccessSummary({

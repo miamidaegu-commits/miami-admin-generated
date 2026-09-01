@@ -65,21 +65,29 @@ export function isCountablePrivateReservationStatus(status) {
   return COUNTABLE_PRIVATE_RESERVATION_STATUSES.has(normalizedStatus)
 }
 
-function isGroupLessonOccurrence(row) {
-  return row?._calendarRowKind === 'group'
+export function isGroupLessonOccurrence(row) {
+  const type = normalizeToken(row?.lessonType || row?.type || row?.packageType)
+  return row?._calendarRowKind === 'group' || type === 'group'
 }
 
 function isPrivateReservationOccurrence(row) {
   return row?._calendarRowKind === 'privateReservation'
 }
 
-function hasExplicitExclusion(row) {
+function hasExplicitExclusion(row, { includeDeductionCancelled = false } = {}) {
   if (!row) return true
   if (
     row.noDeduction === true ||
-    row.isDeductCancelled === true ||
+    row.deductionEligible === false ||
+    (!includeDeductionCancelled &&
+      (row.isDeductCancelled === true ||
+        row.deductionCancelled === true ||
+        row.deductionCanceled === true ||
+        row.deductionReversed === true)) ||
     row.isSeatReleased === true ||
     row.deleted === true ||
+    row.isDeleted === true ||
+    row.isHoliday === true ||
     row.groupClassDeleted === true ||
     row.releasedForPrivateBooking === true
   ) {
@@ -101,7 +109,10 @@ function hasExplicitExclusion(row) {
   )
 }
 
-export function isCountableLessonOccurrence(row) {
+export function isCountableLessonOccurrence(
+  row,
+  { includeDeductionCancelled = false } = {}
+) {
   if (!row) return false
   if (isGroupLessonOccurrence(row)) {
     if (
@@ -111,15 +122,15 @@ export function isCountableLessonOccurrence(row) {
     ) {
       return false
     }
-    return !hasExplicitExclusion(row)
+    return !hasExplicitExclusion(row, { includeDeductionCancelled })
   }
 
   if (isPrivateReservationOccurrence(row)) {
     if (!isCountablePrivateReservationStatus(row.status)) return false
-    return !hasExplicitExclusion(row)
+    return !hasExplicitExclusion(row, { includeDeductionCancelled })
   }
 
-  return !hasExplicitExclusion(row)
+  return !hasExplicitExclusion(row, { includeDeductionCancelled })
 }
 
 function getOccurrenceKind(row) {
@@ -153,6 +164,33 @@ export function getLessonOccurrenceKey(row) {
   }
   if (slotId && student) return `private:${date}:slotId:${slotId}:${student}`
   return ['private', date, time, student, teacher].join('__')
+}
+
+export function getCanonicalPrivateOccurrenceIdentity(row) {
+  if (!row || isGroupLessonOccurrence(row)) return ''
+  const reservationId = String(row.reservationId || '').trim()
+  if (reservationId) return `private:reservation:${reservationId}`
+  if (isPrivateReservationOccurrence(row)) {
+    const directReservationId = String(row.id || '').trim()
+    if (directReservationId) return `private:reservation:${directReservationId}`
+  }
+  const lessonId = String(row.lessonId || row.id || '').trim()
+  return lessonId ? `private:lesson:${lessonId}` : ''
+}
+
+export function getKstDateYmd(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date)
+  const year = parts.find((part) => part.type === 'year')?.value
+  const month = parts.find((part) => part.type === 'month')?.value
+  const day = parts.find((part) => part.type === 'day')?.value
+  return year && month && day ? `${year}-${month}-${day}` : ''
 }
 
 function getKstMonthKeyFromDate(value) {

@@ -4,6 +4,7 @@ import { signInWithEmailAndPassword } from 'firebase/auth'
 import { Link, useNavigate } from 'react-router-dom'
 import { auth } from './firebase'
 import { useAuth } from './AuthContext'
+import { useTranslation } from './src/i18n/LocalizationProvider.jsx'
 
 function getDefaultRouteForRole(role) {
   if (role === 'student') return '/student-booking'
@@ -18,6 +19,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const { user, role, loading: authLoading } = useAuth()
+  const { language, setLanguage, t } = useTranslation()
 
   useEffect(() => {
     if (authLoading || !user) return
@@ -43,34 +45,52 @@ export default function Login() {
       case 'auth/user-not-found':
       case 'auth/wrong-password':
       case 'auth/invalid-credential':
-        return 'Invalid email or password.'
+        return t('login.error.invalidCredentials')
       case 'auth/too-many-requests':
-        return 'Too many attempts. Try again later.'
+        return t('login.error.tooManyRequests')
       default:
-        return 'Sign-in failed. Please try again.'
+        return t('login.error.generic')
     }
   }
 
   return (
     <div className="login-page">
       <div className="login-card">
+        <div
+          className="login-language-selector"
+          role="group"
+          aria-label={t('settings.language')}
+          data-testid="login-language-selector"
+        >
+          {['ko', 'en'].map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={language === option}
+              className={language === option ? 'selected' : ''}
+              onClick={() => setLanguage(option, { syncAccount: false })}
+            >
+              {t(`settings.language.${option}`)}
+            </button>
+          ))}
+        </div>
         <div className="login-header">
           <div className="login-icon">⬡</div>
-          <h1>마이애미 영어회화</h1>
-          <p>수업 관리와 예약을 위해 로그인하세요.</p>
+          <h1>{t('login.title')}</h1>
+          <p>{t('login.subtitle')}</p>
           <Link className="login-public-link" to="/classes">
-            수업 소개 보기
+            {t('login.publicClasses')}
           </Link>
         </div>
 
         <form onSubmit={handleSubmit} className="login-form">
           <div className="field">
-            <label htmlFor="email">이메일</label>
+            <label htmlFor="email">{t('login.email')}</label>
             <input
               id="email"
               type="email"
               autoComplete="email"
-              placeholder="email@example.com"
+              placeholder={t('login.emailPlaceholder')}
               value={email}
               onChange={e => setEmail(e.target.value)}
               required
@@ -78,12 +98,12 @@ export default function Login() {
           </div>
 
           <div className="field">
-            <label htmlFor="password">비밀번호</label>
+            <label htmlFor="password">{t('login.password')}</label>
             <input
               id="password"
               type="password"
               autoComplete="current-password"
-              placeholder="••••••••"
+              placeholder={t('login.passwordPlaceholder')}
               value={password}
               onChange={e => setPassword(e.target.value)}
               required
@@ -93,7 +113,7 @@ export default function Login() {
           {error && <p className="error-msg">{error}</p>}
 
           <button type="submit" className="btn-primary" disabled={loading}>
-            {loading ? '로그인 중…' : '로그인'}
+            {loading ? t('login.submitting') : t('login.submit')}
           </button>
         </form>
       </div>

@@ -6,7 +6,7 @@ const TARGET_PROJECT_ID = "daegu-miami-production";
 const RESET_WRITE_FREEZE_MODE = "academy_test_data_reset";
 const RESET_WRITE_FREEZE_SCHEMA_VERSION = "academy_reset_write_freeze.v1";
 const WRITE_SURFACE_INVENTORY_VERSION =
-  "academy_reset_write_surface_inventory.v1";
+  "academy_reset_write_surface_inventory.v2";
 const RESET_WRITE_FREEZE_KEYS = Object.freeze([
   "active",
   "schemaVersion",
@@ -86,6 +86,8 @@ const WRITE_SURFACE_INVENTORY = Object.freeze({
     "commitPrivateLessonOutcomeAction",
     "commitFixedPrivateLessonOutcomeAction",
     "applyPrivateReservationOutcomeWithDeductionInTransaction",
+    "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+    "reversePrivateReservationOutcomeInTransaction",
   ]),
   provisioningAuthCallables: frozenList([
     "bootstrapAdmin",

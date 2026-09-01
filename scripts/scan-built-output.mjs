@@ -14,12 +14,40 @@ const forbiddenPatterns = [
   { name: 'BEGIN PRIVATE KEY', pattern: /BEGIN PRIVATE KEY/g },
   { name: 'client_email', pattern: /client_email/g },
   { name: 'miamiacademyschedule', pattern: /miamiacademyschedule/g },
+  { name: 'daegu-miami-production', pattern: /daegu-miami-production/g },
+  { name: 'productionHostingUrl', pattern: /https:\/\/daegumiami\.com/g },
+  {
+    name: 'productionCloudFunctionsEndpoint',
+    pattern: /daegu-miami-production\.cloudfunctions\.net/g,
+  },
+  {
+    name: 'productionRunEndpoint',
+    pattern: /daegu-miami-production[^"'`\s]*\.run\.app/g,
+  },
+  { name: 'emulatorProjectId', pattern: /demo-miami-e2e/g },
+  { name: 'firestoreEmulatorHost', pattern: /FIRESTORE_EMULATOR_HOST/g },
+  {
+    name: 'emulatorEndpoint',
+    pattern: /https?:\/\/(?:localhost|127\.0\.0\.1):[0-9]+/g,
+  },
   { name: 'localhost', pattern: /localhost/g },
   { name: '127.0.0.1', pattern: /127\.0\.0\.1/g },
 ];
 
 const allowedPatterns = [
   { name: 'miami-e2e', pattern: /miami-e2e/g },
+];
+
+const requiredPatterns = [
+  { name: 'devProjectId', pattern: /miami-e2e/g },
+  {
+    name: 'devAppId',
+    pattern: /1:912159195659:web:f3812d54768f7d35a4fd0e/g,
+  },
+  {
+    name: 'devPublicAppUrl',
+    pattern: /https:\/\/miami-e2e\.web\.app/g,
+  },
 ];
 
 const allowedFindingRules = [
@@ -138,6 +166,18 @@ function scanAllowedTokens(files) {
   return counts;
 }
 
+function scanRequiredTokens(files) {
+  const counts = Object.fromEntries(requiredPatterns.map(({ name }) => [name, 0]));
+  for (const file of files) {
+    if (!isTextFile(file)) continue;
+    const content = fs.readFileSync(file, 'utf8');
+    for (const { name, pattern } of requiredPatterns) {
+      counts[name] += countMatches(content, pattern);
+    }
+  }
+  return counts;
+}
+
 function main() {
   if (!fs.existsSync(distDir)) {
     throw new Error('Missing dist/. Run npm run build:e2e before scanning built output.');
@@ -146,12 +186,18 @@ function main() {
   const files = listFiles(distDir);
   const scannedFiles = files.filter(isTextFile);
   const { findings, allowedFindings } = scanFiles(scannedFiles);
+  const requiredTokenCounts = scanRequiredTokens(scannedFiles);
+  const missingRequiredTokens = Object.entries(requiredTokenCounts)
+    .filter(([, count]) => count === 0)
+    .map(([name]) => name);
   const summary = {
-    ok: findings.length === 0,
+    ok: findings.length === 0 && missingRequiredTokens.length === 0,
     distDir: path.relative(repoRoot, distDir),
     scannedFileCount: scannedFiles.length,
     skippedFileCount: files.length - scannedFiles.length,
     allowedTokenCounts: scanAllowedTokens(scannedFiles),
+    requiredTokenCounts,
+    missingRequiredTokens,
     forbiddenTokens: forbiddenPatterns.map(({ name }) => name),
     allowedFindings,
     findings,

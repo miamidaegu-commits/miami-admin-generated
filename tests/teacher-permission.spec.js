@@ -13,19 +13,72 @@ import {
 import { buildTeacherPrivateLessonRequestPlans } from '../src/features/dashboard/teacherPrivateLessonRequestPlanning.js';
 
 const SERVICE_ACCOUNT_PATH = path.join(process.cwd(), 'serviceAccountKey.json');
+const EXPECTED_ADMIN_CREDENTIAL_PROJECT_ID = 'miami-e2e';
 const LOGIN_ATTEMPT_TIMEOUT_MS = 15000;
+const CANONICAL_TEACHER_GROUP_CLASS_FIXTURE_ID =
+  'e2e-teacher-permission-canonical-group-class';
 
 function hasServiceAccount() {
-  return fs.existsSync(SERVICE_ACCOUNT_PATH);
+  return Boolean(
+    String(process.env.MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64 || '').trim() ||
+      fs.existsSync(SERVICE_ACCOUNT_PATH)
+  );
+}
+
+function parseAdminServiceAccountJson(rawJson) {
+  let serviceAccount;
+  try {
+    serviceAccount = JSON.parse(rawJson);
+  } catch {
+    throw new Error('E2E Admin credential JSON is malformed.');
+  }
+  if (!serviceAccount || typeof serviceAccount !== 'object' || Array.isArray(serviceAccount)) {
+    throw new Error('E2E Admin credential must be a JSON object.');
+  }
+  if (serviceAccount.project_id !== EXPECTED_ADMIN_CREDENTIAL_PROJECT_ID) {
+    throw new Error('E2E Admin credential project mismatch.');
+  }
+  for (const fieldName of ['client_email', 'private_key']) {
+    if (!String(serviceAccount[fieldName] || '').trim()) {
+      throw new Error(`E2E Admin credential is missing ${fieldName}.`);
+    }
+  }
+  return serviceAccount;
+}
+
+function readBase64AdminServiceAccount(encodedCredential) {
+  if (
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      encodedCredential
+    )
+  ) {
+    throw new Error('E2E Admin credential Base64 is malformed.');
+  }
+  return parseAdminServiceAccountJson(
+    Buffer.from(encodedCredential, 'base64').toString('utf8')
+  );
+}
+
+function resolveAdminServiceAccount() {
+  const encodedCredential = String(
+    process.env.MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64 || ''
+  ).trim();
+  if (encodedCredential) {
+    return readBase64AdminServiceAccount(encodedCredential);
+  }
+  if (fs.existsSync(SERVICE_ACCOUNT_PATH)) {
+    return parseAdminServiceAccountJson(fs.readFileSync(SERVICE_ACCOUNT_PATH, 'utf8'));
+  }
+  return null;
 }
 
 function getAdminApp() {
   const existing = admin.apps.find((app) => app?.name === 'teacher-permission-e2e');
   if (existing) return existing;
 
-  const serviceAccount = JSON.parse(fs.readFileSync(SERVICE_ACCOUNT_PATH, 'utf8'));
-  if (serviceAccount.project_id !== 'miami-e2e') {
-    throw new Error(`Expected miami-e2e service account, received ${serviceAccount.project_id}`);
+  const serviceAccount = resolveAdminServiceAccount();
+  if (!serviceAccount) {
+    throw new Error('E2E Admin credential is required.');
   }
 
   return admin.initializeApp(
@@ -223,8 +276,52 @@ test('teacher mutation guards are admin-only in source and rules', () => {
     expect(sourceBlock(functionsSource, functionName, nextFunctionName)).toContain('requireAcademyAdmin');
   }
   expect(sourceBlock(functionsSource, 'function canMarkPrivateReservationOutcome', 'function canManageGroupReservations')).toContain('requireAcademyAdmin');
-  expect(sourceBlock(functionsSource, 'exports.markPrivateReservationOutcome', 'exports.updateTeacherStudentPackageCounts')).toContain('canMarkPrivateReservationOutcome');
-  expect(sourceBlock(functionsSource, 'exports.reversePrivateReservationOutcome', 'exports.bootstrapAdmin')).toContain('canMarkPrivateReservationOutcome');
+  const privateOutcomeActorGuard = sourceBlock(
+    functionsSource,
+    'function buildPrivateLessonOutcomeActorFromMembership',
+    'function buildPrivateLessonOutcomeUpdated'
+  );
+  expect(privateOutcomeActorGuard).toContain('membership.status !== "active"');
+  expect(privateOutcomeActorGuard).toContain('!(role === "owner" || role === "admin")');
+  expect(privateOutcomeActorGuard).toContain('"permission-denied"');
+
+  const markPrivateOutcome = sourceBlock(
+    functionsSource,
+    'exports.markPrivateReservationOutcome',
+    'exports.updateTeacherStudentPackageCounts'
+  );
+  const markGuardIndex = markPrivateOutcome.indexOf('await guardAcademyWrite({');
+  const markMembershipIndex = markPrivateOutcome.indexOf(
+    'const membershipSnap = await transaction.get('
+  );
+  const markActorIndex = markPrivateOutcome.indexOf(
+    'buildPrivateLessonOutcomeActorFromMembership'
+  );
+  const markWriterIndex = markPrivateOutcome.indexOf(
+    'applyPrivateReservationOutcomeWithDeductionInTransaction'
+  );
+  expect(markPrivateOutcome).toContain(
+    'writeSurfaceId: "markPrivateReservationOutcome"'
+  );
+  expect(markGuardIndex).toBeGreaterThanOrEqual(0);
+  expect(markMembershipIndex).toBeGreaterThan(markGuardIndex);
+  expect(markActorIndex).toBeGreaterThan(markMembershipIndex);
+  expect(markWriterIndex).toBeGreaterThan(markActorIndex);
+
+  const reversePrivateOutcome = sourceBlock(
+    functionsSource,
+    'exports.reversePrivateReservationOutcome',
+    'exports.bootstrapAdmin'
+  );
+  const reverseGuardIndex = reversePrivateOutcome.indexOf('await guardAcademyWrite({');
+  const reverseWriterIndex = reversePrivateOutcome.indexOf(
+    'reversePrivateReservationOutcomeInTransaction'
+  );
+  expect(reversePrivateOutcome).toContain(
+    'writeSurfaceId: "reversePrivateReservationOutcome"'
+  );
+  expect(reverseGuardIndex).toBeGreaterThanOrEqual(0);
+  expect(reverseWriterIndex).toBeGreaterThan(reverseGuardIndex);
 
   const studentPackagesRules = sourceBlock(
     rulesSource,
@@ -256,6 +353,18 @@ test('teacher mutation guards are admin-only in source and rules', () => {
 
 test('production helper callables are locked down in source', () => {
   const functionsSource = fs.readFileSync(path.join(process.cwd(), 'functions/index.js'), 'utf8');
+  const studentsSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/StudentsSection.jsx'),
+    'utf8'
+  );
+  const teacherManagementSectionSource = fs.readFileSync(
+    path.join(process.cwd(), 'src/features/dashboard/sections/TeacherManagementSection.jsx'),
+    'utf8'
+  );
+  const permissionTestSource = fs.readFileSync(
+    path.join(process.cwd(), 'tests/teacher-permission.spec.js'),
+    'utf8'
+  );
 
   const runtimeProjectGuards = sourceBlock(
     functionsSource,
@@ -294,6 +403,62 @@ test('production helper callables are locked down in source', () => {
   expect(setUserRoleHelper).toContain('targetMembershipRole === "owner"');
   expect(setUserRoleHelper).toContain('targetClaimsRole === "owner"');
   expect(setUserRoleHelper).not.toContain('callerRole !== "admin"');
+
+  for (const invitationSource of [studentsSectionSource, teacherManagementSectionSource]) {
+    expect(invitationSource).toContain(
+      "return String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\\/+$/, '')"
+    );
+    expect(invitationSource).not.toContain('VITE_FIREBASE_PROJECT_ID');
+    expect(invitationSource).not.toContain('INVITATION_APP_URL_BY_PROJECT_ID');
+    expect(invitationSource).not.toContain('daegu-miami-production');
+    expect(invitationSource).not.toContain('https://daegumiami.com');
+    expect(invitationSource).not.toContain('https://miami-e2e.web.app');
+    expect(invitationSource).not.toContain('window.location.origin');
+  }
+
+  expect(studentsSectionSource).toContain("if (!STUDENT_INVITATION_APP_URL) return ''");
+  expect(studentsSectionSource).toContain(
+    '`예약 페이지: ${STUDENT_INVITATION_APP_URL}`'
+  );
+  expect(studentsSectionSource).toContain(
+    'if (!studentAccountInvitationMessage) return'
+  );
+  expect(studentsSectionSource).toContain(
+    'disabled={!studentAccountInvitationMessage || studentAccountLinkBusy}'
+  );
+
+  expect(teacherManagementSectionSource).toContain(
+    "if (!TEACHER_INVITATION_APP_URL) return ''"
+  );
+  expect(teacherManagementSectionSource).toContain(
+    '`로그인 페이지: ${TEACHER_INVITATION_APP_URL}`'
+  );
+  expect(teacherManagementSectionSource).toContain('if (!invitationMessage) return');
+  expect(teacherManagementSectionSource).toContain(
+    'disabled={!invitationMessage || inviteBusy}'
+  );
+
+  const credentialResolverSource = sourceBlock(
+    permissionTestSource,
+    'function resolveAdminServiceAccount()',
+    'function getAdminApp()'
+  );
+  const base64SourceIndex = credentialResolverSource.indexOf(
+    'process.env.MIAMI_E2E_SERVICE_ACCOUNT_KEY_B64'
+  );
+  const repositoryFallbackIndex = credentialResolverSource.indexOf(
+    'fs.existsSync(SERVICE_ACCOUNT_PATH)'
+  );
+  expect(base64SourceIndex).toBeGreaterThanOrEqual(0);
+  expect(repositoryFallbackIndex).toBeGreaterThan(base64SourceIndex);
+  expect(permissionTestSource).toContain("Buffer.from(encodedCredential, 'base64')");
+  expect(permissionTestSource).toContain(
+    "serviceAccount.project_id !== EXPECTED_ADMIN_CREDENTIAL_PROJECT_ID"
+  );
+  expect(permissionTestSource).toContain("['client_email', 'private_key']");
+  expect(credentialResolverSource).not.toContain('GOOGLE_APPLICATION_CREDENTIALS');
+  expect(credentialResolverSource).not.toContain('applicationDefault(');
+  expect(credentialResolverSource).not.toContain('console.');
 });
 
 async function loginAsDashboardUser(page, email, password) {
@@ -380,8 +545,174 @@ async function getTeacherMembershipRef() {
   return getDb().collection('academyMemberships').doc(`${DEFAULT_E2E_ACADEMY_ID}_${userRecord.uid}`);
 }
 
+let restoreCanonicalTeacherScopeFixture = null;
+let teacherMembershipPermissionBaselineCaptured = false;
+let teacherMembershipPermissionBaseline = null;
+
+async function ensureCanonicalTeacherOwnedGroupClassFixture() {
+  if (restoreCanonicalTeacherScopeFixture) {
+    throw new Error('Canonical teacher scope fixture cleanup is still pending.');
+  }
+
+  const adminApp = getAdminApp();
+  const db = adminApp.firestore();
+  const teacherUser = await adminApp.auth().getUserByEmail(TEST_TEACHER_EMAIL);
+  const userRef = db.collection('users').doc(teacherUser.uid);
+  const membershipRef = db
+    .collection('academyMemberships')
+    .doc(`${DEFAULT_E2E_ACADEMY_ID}_${teacherUser.uid}`);
+  const groupClassRef = db
+    .collection('groupClasses')
+    .doc(CANONICAL_TEACHER_GROUP_CLASS_FIXTURE_ID);
+
+  const [userSnap, membershipSnap, groupClassSnap] = await Promise.all([
+    userRef.get(),
+    membershipRef.get(),
+    groupClassRef.get(),
+  ]);
+  const originalUserData = userSnap.exists ? userSnap.data() || {} : null;
+  const originalMembershipData = membershipSnap.exists ? membershipSnap.data() || {} : null;
+  const originalGroupClassData = groupClassSnap.exists ? groupClassSnap.data() || {} : null;
+  const teacherName = String(
+    originalMembershipData?.teacherName ||
+      originalUserData?.teacherName ||
+      teacherUser.displayName ||
+      'teacher'
+  ).trim();
+
+  restoreCanonicalTeacherScopeFixture = async () => {
+    const restoreErrors = [];
+    for (const [ref, originalData] of [
+      [groupClassRef, originalGroupClassData],
+      [membershipRef, originalMembershipData],
+      [userRef, originalUserData],
+    ]) {
+      try {
+        if (originalData) {
+          await ref.set(originalData);
+        } else {
+          await ref.delete();
+        }
+      } catch (error) {
+        restoreErrors.push(error);
+      }
+    }
+    if (restoreErrors.length > 0) {
+      throw new AggregateError(restoreErrors, 'Canonical teacher scope fixture cleanup failed.');
+    }
+  };
+
+  await userRef.set({
+    ...(originalUserData || {}),
+    uid: teacherUser.uid,
+    email: teacherUser.email || TEST_TEACHER_EMAIL,
+    role: 'teacher',
+    teacherName,
+    isActive: true,
+    lastSelectedAcademyId: DEFAULT_E2E_ACADEMY_ID,
+  });
+
+  await membershipRef.set({
+    ...(originalMembershipData || {}),
+    uid: teacherUser.uid,
+    email: teacherUser.email || TEST_TEACHER_EMAIL,
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    role: 'teacher',
+    teacherName,
+    status: 'active',
+  });
+
+  await groupClassRef.set({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    teacherUid: teacherUser.uid,
+    teacherName,
+    name: 'E2E 교사 권한 단체반',
+    status: 'active',
+    deleted: false,
+    groupClassDeleted: false,
+    maxStudents: 1,
+    time: '10:00',
+    subject: 'E2E Teacher Permission',
+    weekdays: ['월'],
+  });
+
+  const [groupClassAfterWrite, exactTeacherGroupClasses] = await Promise.all([
+    groupClassRef.get(),
+    db
+      .collection('groupClasses')
+      .where('academyId', '==', DEFAULT_E2E_ACADEMY_ID)
+      .where('teacherUid', '==', teacherUser.uid)
+      .get(),
+  ]);
+  expect(
+    groupClassAfterWrite.exists,
+    'Canonical teacher groupClass fixture must exist before browser navigation.'
+  ).toBe(true);
+  expect(
+    exactTeacherGroupClasses.docs.some(
+      (docSnap) => docSnap.id === CANONICAL_TEACHER_GROUP_CLASS_FIXTURE_ID
+    ),
+    'Exact teacher groupClasses query must contain the canonical fixture before browser navigation.'
+  ).toBe(true);
+
+  const canonicalGroupClass = groupClassAfterWrite.data() || {};
+  expect(canonicalGroupClass).toMatchObject({
+    academyId: DEFAULT_E2E_ACADEMY_ID,
+    teacherUid: teacherUser.uid,
+    status: 'active',
+    deleted: false,
+    groupClassDeleted: false,
+  });
+  expect(
+    String(canonicalGroupClass.name || '').trim(),
+    'Canonical teacher groupClass fixture must have a renderable name.'
+  ).not.toBe('');
+}
+
+test.afterEach(async () => {
+  const cleanupErrors = [];
+
+  if (restoreCanonicalTeacherScopeFixture) {
+    const restoreFixture = restoreCanonicalTeacherScopeFixture;
+    restoreCanonicalTeacherScopeFixture = null;
+    try {
+      await restoreFixture();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+
+  if (teacherMembershipPermissionBaselineCaptured) {
+    const baseline = teacherMembershipPermissionBaseline;
+    teacherMembershipPermissionBaselineCaptured = false;
+    teacherMembershipPermissionBaseline = null;
+    try {
+      if (baseline.exists) {
+        await baseline.ref.set(baseline.data);
+      } else {
+        await baseline.ref.delete();
+      }
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, 'Teacher permission fixture cleanup failed.');
+  }
+});
+
 async function setTeacherCountEditPermission(enabled) {
   const membershipRef = await getTeacherMembershipRef();
+  if (!teacherMembershipPermissionBaselineCaptured) {
+    const membershipSnapshot = await membershipRef.get();
+    teacherMembershipPermissionBaseline = {
+      ref: membershipRef,
+      exists: membershipSnapshot.exists,
+      data: membershipSnapshot.exists ? membershipSnapshot.data() || {} : null,
+    };
+    teacherMembershipPermissionBaselineCaptured = true;
+  }
   await membershipRef.set(
     {
       academyId: DEFAULT_E2E_ACADEMY_ID,
@@ -499,7 +830,7 @@ async function openTeacherCountEditStudentPackage(page) {
   return { studentDetail, packageCard };
 }
 
-test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관리만 볼 수 있다', async ({
+test('teacher 계정은 캘린더, 1:1 수업 일정, 담당 단체반만 볼 수 있다', async ({
   page,
   browserName,
 }) => {
@@ -508,12 +839,13 @@ test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관�
   if (hasServiceAccount()) {
     await setTeacherCountEditPermission(false);
   }
+  await ensureCanonicalTeacherOwnedGroupClassFixture();
 
   await loginAsTeacher(page);
 
   await expect(page.getByRole('button', { name: '캘린더', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '내 단체반 관리', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '1:1 수업 일정', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '담당 단체반', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: '캘린더', level: 1 })).toBeVisible();
   await expect(page.getByRole('button', { name: '학생 관리', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '내 1:1 관리', exact: true })).toHaveCount(0);
@@ -527,8 +859,8 @@ test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관�
   await expect(page.getByRole('button', { name: '로그인 초대', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '수강권 추가', exact: true })).toHaveCount(0);
 
-  await page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 주간 1:1 시간표', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '1:1 수업 일정', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '1:1 수업 일정', level: 1 })).toBeVisible();
   await expect(page.getByTestId('private-teacher-weekly-board-section')).toBeVisible({
     timeout: 15000,
   });
@@ -541,9 +873,9 @@ test('teacher 계정은 캘린더, 내 주간 1:1 시간표, 내 단체반 관�
   await expect(page.getByRole('button', { name: '예약 취소 후 공개', exact: true })).toHaveCount(0);
 
   const teacherName = await getTeacherNameFromWelcome(page);
-  await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
-  await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 2 })).toBeVisible();
+  await page.getByRole('button', { name: '담당 단체반', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '담당 단체반', level: 1 })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '담당 단체반', level: 2 })).toBeVisible();
   await expect(page.getByText('결제 횟수')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '학생 등록', exact: true })).toHaveCount(0);
@@ -653,8 +985,8 @@ test('teacher 1:1 화면은 주간 시간표만 읽기 전용으로 보여준다
 
   await loginAsTeacher(page);
 
-  await page.getByRole('button', { name: '내 주간 1:1 시간표', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 주간 1:1 시간표', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '1:1 수업 일정', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '1:1 수업 일정', level: 1 })).toBeVisible();
   await expect(page.getByTestId('private-teacher-weekly-board-section')).toBeVisible({
     timeout: 15000,
   });
@@ -690,17 +1022,18 @@ test('admin 계정은 전체 단체반 관리를 볼 수 있다', async ({ page,
   await expect(page.getByRole('button', { name: '정규반 만들기', exact: true })).toBeVisible();
 });
 
-test('teacher는 내 단체반 관리에서 본인 반을 읽기 전용으로만 볼 수 있다', async ({
+test('teacher는 담당 단체반에서 본인 반을 읽기 전용으로만 볼 수 있다', async ({
   page,
   browserName,
 }) => {
   test.skip(browserName !== 'chromium', '이 테스트는 chromium 기준으로 작성되었습니다.');
 
+  await ensureCanonicalTeacherOwnedGroupClassFixture();
   await loginAsTeacher(page);
 
   const teacherName = await getTeacherNameFromWelcome(page);
-  await page.getByRole('button', { name: '내 단체반 관리', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 단체반 관리', level: 1 })).toBeVisible();
+  await page.getByRole('button', { name: '담당 단체반', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '담당 단체반', level: 1 })).toBeVisible();
   const todaySchedulePanel = page.getByTestId('today-schedule-panel');
   await expect(
     todaySchedulePanel.getByRole('heading', { name: '오늘의 단체반 일정', exact: true })

@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 
 export const WRITE_SURFACE_REGISTRY_VERSION =
-  "academy_reset_write_surface.v1";
-export const EXPECTED_WRITE_SURFACE_COUNT = 58;
+  "academy_reset_write_surface.v2";
+export const EXPECTED_WRITE_SURFACE_COUNT = 60;
 export const EXPECTED_WRITE_SURFACE_IDENTITY_DIGEST =
-  "7b95e17be6e052c3ee161ad35d46709ef01f939e2c50b3f22ae5f9edb12900e8";
+  "46dd9fc647cf00c10a2c474c87e272f7c76931d36b1fd16b0ec7f92491fde91e";
 export const EXPECTED_WRITE_SOURCE_COUNT = 21;
 export const EXPECTED_WRITE_SOURCE_IDENTITY_DIGEST =
-  "8f63180960dde64a252f12c68fbe6fed938333d1325514660e0a972b6b06209b";
+  "f106cb518d96992316d20309498d70b15d0dcef2c100adc6ed0768123326a655";
 
 export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   Object.freeze({
@@ -16,11 +16,11 @@ export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   }),
   Object.freeze({
     sourceFile: "Dashboard.jsx",
-    sha256: "366546bf91e46b2bd7261d8824c6ec0f049443ba0bd916d5ce78e2c22f4e59b2",
+    sha256: "e7c2ce0daf1a1a0ea5daa89fe683d8e5f0fdb363c713a0e6d153fd195d4080a5",
   }),
   Object.freeze({
     sourceFile: "functions/index.js",
-    sha256: "754e1f559a28ca1721c5b732ede0acce91dfbb409ada6153de93092d1209db49",
+    sha256: "5220bb83e36d50cf9aea75527f33d37bbf44877569e21ed20ac457928adffe8e",
   }),
   Object.freeze({
     sourceFile: "lessonApi.js",
@@ -33,15 +33,15 @@ export const WRITE_SOURCE_SHA256_ALLOWLIST = Object.freeze([
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupLessonManagementFlow.js",
-    sha256: "336e947bc93a7e3efd29f61e8eea4c39a7fb8a8eb1e9663362807ec5c1cac94d",
+    sha256: "bc75505ce2d3df5d79e7d1ac955ad862f606b8cb7849ba2577159c590fdfed77",
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupManagementFlow.js",
-    sha256: "08f3b99a0e148ba9b5b49b0826a926d4180c91998c4718025ef0606c82d00df7",
+    sha256: "60e987edc589a9c1dff4ca37bc440634a8cb0da9eff2a9c4010536a7c22e66c8",
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupScheduleRebuildFlow.js",
-    sha256: "f79928d61b51d91808dfd53143c6a00065672299e470885e79baf6b23b9803f3",
+    sha256: "e43dcf23e50c61d76146dba938e0d58c2f63de7f2b27a45395f33da8e520d0bc",
   }),
   Object.freeze({
     sourceFile: "src/features/dashboard/hooks/useGroupStudentAddFlow.js",
@@ -644,6 +644,21 @@ export const ACADEMY_RESET_WRITE_SURFACE_REGISTRY = Object.freeze([
       ],
       ["create", "update", "transaction"],
       "authorized actor, guarded academy, request hash, and fixed provenance",
+  ),
+  transaction(
+      "applyPrivateReservationOutcomeReversalAccountingInTransaction",
+      ["studentPackages", "creditTransactions"],
+      ["create", "update", "transaction"],
+      "enclosing guarded direct or fixed reversal transaction and exact " +
+        "active deduction evidence",
+  ),
+  transaction(
+      "reversePrivateReservationOutcomeInTransaction",
+      [
+        "studentPackages", "privateLessonReservations", "creditTransactions",
+      ],
+      ["create", "update", "transaction"],
+      "authorized actor, guarded academy, and exact reversal evidence",
   ),
 
   writer({

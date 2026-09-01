@@ -106,13 +106,25 @@ function getRuntimeProjectId() {
     "";
 }
 
+function isLoopbackFirestoreEmulatorHost() {
+  const host = process.env.FIRESTORE_EMULATOR_HOST;
+  if (typeof host !== "string") return false;
+  const match =
+    /^(?:127\.0\.0\.1|localhost):([1-9][0-9]{0,4})$/.exec(host);
+  if (!match) return false;
+  const port = Number(match[1]);
+  return Number.isInteger(port) && port <= 65535;
+}
+
 function requireWriteGuardRuntimeProjectId() {
   const projectId = getRuntimeProjectId();
-  const productionRuntime = projectId === PRODUCTION_PROJECT_ID;
+  const cloudRuntime =
+    process.env.FIRESTORE_EMULATOR_HOST === undefined &&
+    (projectId === PRODUCTION_PROJECT_ID || projectId === E2E_PROJECT_ID);
   const emulatorRuntime =
-    Boolean(process.env.FIRESTORE_EMULATOR_HOST) &&
+    isLoopbackFirestoreEmulatorHost() &&
     projectId === EMULATOR_PROJECT_ID;
-  if (!productionRuntime && !emulatorRuntime) {
+  if (!cloudRuntime && !emulatorRuntime) {
     throw new HttpsError(
         "failed-precondition",
         "Backend writes are blocked because the runtime project is unknown.",
@@ -1154,6 +1166,10 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     teacherId: plan.teacherId,
     teacherEmail: normalizeId(packageData.teacherEmail),
   };
+  const backfillMetadata = validation.backfill === true ? {
+    backfill: true,
+    pastDateCount: validation.pastDateCount,
+  } : {};
   const fixedBase = {
     academyId: validation.academyId,
     studentId: plan.studentId,
@@ -1178,6 +1194,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     fixedPrivateDeductionLedger: "reservation_v1",
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+    ...backfillMetadata,
   };
   const slot = {
     academyId: validation.academyId,
@@ -1204,6 +1221,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
     fixedPrivateDeductionLedger: "reservation_v1",
+    ...backfillMetadata,
     createdByUid: actor.actorUid,
     startAt: startTimestamp,
     reservedAt: now,
@@ -1237,6 +1255,7 @@ function buildFixedPrivateRenewalOccurrencePayloads({
     packageTeacherKey: plan.teacherKey || teacher.teacher,
     privateLessonAvailabilityTemplateId: templateId,
     fixedPrivateAssignmentBatchId: validation.renewalBatchIdCandidate,
+    ...backfillMetadata,
     durationMinutes: plan.durationMinutes,
     reservedAt: now,
     createdAt: now,
@@ -1779,13 +1798,30 @@ async function runFixedPrivateRenewalWriteTransaction({
   });
 }
 
+function getFixedPrivateAssignmentMode(data) {
+  if (data.commit === true &&
+      data.dryRun === false &&
+      data.previewOnly === false) {
+    return {commit: true, dryRun: false, previewOnly: false};
+  }
+  if (data.commit === false &&
+      data.dryRun === true &&
+      data.previewOnly === true) {
+    return {commit: false, dryRun: true, previewOnly: true};
+  }
+  throw new HttpsError(
+      "failed-precondition",
+      "Assignment requires exact commit mode or read-only preview mode.",
+  );
+}
+
 function validateFixedPrivateAssignmentPayload(data) {
-  if (data.commit !== true ||
-      data.dryRun !== false ||
-      data.previewOnly !== false) {
+  const mode = getFixedPrivateAssignmentMode(data);
+  if (Object.prototype.hasOwnProperty.call(data, "allowPastDates") &&
+      typeof data.allowPastDates !== "boolean") {
     throw new HttpsError(
-        "failed-precondition",
-        "Assignment requires commit true, dryRun false, and previewOnly false.",
+        "invalid-argument",
+        "allowPastDates must be a boolean when provided.",
     );
   }
   const academyId = requireString(data, "academyId");
@@ -1819,12 +1855,7 @@ function validateFixedPrivateAssignmentPayload(data) {
     );
   }
   const today = getSeoulTodayDateString();
-  if (assignableDates.some((date) => date < today)) {
-    throw new HttpsError(
-        "failed-precondition",
-        "Past fixed private assignments are not allowed.",
-    );
-  }
+  const pastDates = assignableDates.filter((date) => date < today);
   const assignmentBatchIdCandidate = sanitizeFixedPrivateRenewalDocId(
       `fixedPrivateAssignment_${academyId}_${requestId}`,
   );
@@ -1837,7 +1868,22 @@ function validateFixedPrivateAssignmentPayload(data) {
     assignmentBatchIdCandidate,
     subject: normalizeId(data.subject) || "1:1 수업",
     assignableDates,
+    allowPastDates: data.allowPastDates === true,
+    backfill: pastDates.length > 0,
+    pastDates,
+    pastDateCount: pastDates.length,
+    today,
+    ...mode,
   };
+}
+
+function assertFixedPrivateAssignmentPastDateContract(validation) {
+  if (validation.pastDateCount > 0 && validation.allowPastDates !== true) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Past fixed private assignments require allowPastDates true.",
+    );
+  }
 }
 
 function buildFixedPrivateAssignmentIds(validation) {
@@ -1878,7 +1924,7 @@ function buildFixedPrivateAssignmentIds(validation) {
 }
 
 function fixedPrivateAssignmentPayloadHash(validation) {
-  return hashFixedPrivateRenewalPayload({
+  const payload = {
     version: 1,
     academyId: validation.academyId,
     requestId: validation.requestId,
@@ -1887,7 +1933,12 @@ function fixedPrivateAssignmentPayloadHash(validation) {
     packageId: validation.packageId,
     subject: validation.subject,
     assignableDates: validation.assignableDates,
-  });
+  };
+  if (validation.backfill) {
+    payload.backfill = true;
+    payload.pastDateCount = validation.pastDateCount;
+  }
+  return hashFixedPrivateRenewalPayload(payload);
 }
 
 function fixedPrivateAssignmentTeacherFromTemplate(template) {
@@ -1996,22 +2047,54 @@ async function assertNoFixedPrivateAssignmentStudentConflicts({
   }
 }
 
+function buildFixedPrivateAssignmentPreviewResult({
+  validation,
+  ids,
+  normalizedPlan,
+}) {
+  return {
+    ok: true,
+    committed: false,
+    previewOnly: true,
+    dryRun: true,
+    commitRequiredForWrite: true,
+    idempotentReplay: false,
+    requestId: validation.requestId,
+    idempotencyKey: validation.requestId,
+    assignmentBatchIdCandidate: ids.batchId,
+    normalizedPlan,
+    wouldCreate: {
+      fixedPrivateAssignmentBatch: 1,
+      lessons: ids.occurrences.length,
+      privateLessonSlots: ids.occurrences.length,
+      privateLessonReservations: ids.occurrences.length,
+    },
+    ...(validation.backfill ? {
+      backfill: true,
+      pastDateCount: validation.pastDateCount,
+    } : {}),
+  };
+}
+
 async function runFixedPrivateAssignmentWriteTransaction({
   db,
   auth,
   membership,
   validation,
+  commit = true,
 }) {
   const ids = buildFixedPrivateAssignmentIds(validation);
   const payloadHash = fixedPrivateAssignmentPayloadHash(validation);
   const actor = buildAdminActorContext(auth, membership);
   return db.runTransaction(async (transaction) => {
-    await guardAcademyWrite({
-      db,
-      transaction,
-      academyId: validation.academyId,
-      writeSurfaceId: "createFixedPrivateLessonAssignment",
-    });
+    if (commit) {
+      await guardAcademyWrite({
+        db,
+        transaction,
+        academyId: validation.academyId,
+        writeSurfaceId: "createFixedPrivateLessonAssignment",
+      });
+    }
     const batchRef = db.collection("fixedPrivateAssignmentBatches")
         .doc(ids.batchId);
     const studentRef = db.collection("privateStudents")
@@ -2053,6 +2136,23 @@ async function runFixedPrivateAssignmentWriteTransaction({
             "Fixed assignment checkpoint is incomplete.",
         );
       }
+      if (!commit) {
+        return {
+          ...buildFixedPrivateAssignmentPreviewResult({
+            validation,
+            ids,
+            normalizedPlan: checkpoint.normalizedPlan || {
+              academyId: validation.academyId,
+              templateId: validation.templateId,
+              studentId: validation.studentId,
+              packageId: validation.packageId,
+              subject: validation.subject,
+              assignableDates: validation.assignableDates,
+            },
+          }),
+          idempotentReplay: true,
+        };
+      }
       return {
         ok: true,
         committed: true,
@@ -2060,6 +2160,10 @@ async function runFixedPrivateAssignmentWriteTransaction({
         requestId: validation.requestId,
         assignmentBatchIdCandidate: ids.batchId,
         created: checkpoint.created || {},
+        ...(validation.backfill ? {
+          backfill: true,
+          pastDateCount: validation.pastDateCount,
+        } : {}),
       };
     }
     const studentData = assertFixedPrivateRenewalStudent({
@@ -2081,7 +2185,11 @@ async function runFixedPrivateAssignmentWriteTransaction({
     const effectiveValidation = {
       academyId: validation.academyId,
       renewalBatchIdCandidate: validation.assignmentBatchIdCandidate,
+      backfill: validation.backfill,
+      pastDateCount: validation.pastDateCount,
       normalizedPlan: {
+        academyId: validation.academyId,
+        templateId: validation.templateId,
         studentId: validation.studentId,
         ...teacher,
         weekday: Number(template.weekday),
@@ -2137,6 +2245,13 @@ async function runFixedPrivateAssignmentWriteTransaction({
       validation,
       effectiveValidation,
     });
+    if (!commit) {
+      return buildFixedPrivateAssignmentPreviewResult({
+        validation,
+        ids,
+        normalizedPlan: effectiveValidation.normalizedPlan,
+      });
+    }
     const now = admin.firestore.FieldValue.serverTimestamp();
     occurrenceRefs.forEach((refs) => {
       const payloads = buildFixedPrivateRenewalOccurrencePayloads({
@@ -2174,6 +2289,11 @@ async function runFixedPrivateAssignmentWriteTransaction({
       status: "completed",
       created,
       actor,
+      normalizedPlan: effectiveValidation.normalizedPlan,
+      ...(validation.backfill ? {
+        backfill: true,
+        pastDateCount: validation.pastDateCount,
+      } : {}),
       createdAt: now,
       updatedAt: now,
     });
@@ -2184,8 +2304,16 @@ async function runFixedPrivateAssignmentWriteTransaction({
       requestId: validation.requestId,
       assignmentBatchIdCandidate: ids.batchId,
       created,
+      ...(validation.backfill ? {
+        backfill: true,
+        pastDateCount: validation.pastDateCount,
+      } : {}),
     };
   });
+}
+
+function runFixedPrivateAssignmentPreviewTransaction(options) {
+  return runFixedPrivateAssignmentWriteTransaction({...options, commit: false});
 }
 
 const FIXED_PRIVATE_RESCHEDULE_SCOPE_MODES = [
@@ -5086,8 +5214,8 @@ function buildAdminActorContext(auth, membership) {
 
 const PRIVATE_LESSON_STATUS_ACTIONS = {
   complete: "수업완료",
-  no_show: "결석/노쇼",
-  reverse_deduction: "차감취소",
+  no_show: "결석",
+  reverse_deduction: "결석 취소",
 };
 
 const PRIVATE_LESSON_STATUS_ACTIVE_STATUSES = [
@@ -5451,10 +5579,6 @@ async function findPrivateLessonStatusReservationBySlot(
 
 async function fetchPrivateLessonStatusCreditCandidates({
   db,
-  academyId,
-  lessonId,
-  reservationId,
-  packageId,
   directIds = [],
 }) {
   const candidatesById = {};
@@ -5470,31 +5594,17 @@ async function fetchPrivateLessonStatusCreditCandidates({
         normalizeId((snap.data() || {}).sourceType) :
         "",
       sourceId: snap.exists ? normalizeId((snap.data() || {}).sourceId) : "",
+      academyId: snap.exists ? normalizeId((snap.data() || {}).academyId) : "",
+      studentId: snap.exists ? normalizeId((snap.data() || {}).studentId) : "",
       packageId: snap.exists ? normalizeId((snap.data() || {}).packageId) : "",
       deltaCount: snap.exists ? Number((snap.data() || {}).deltaCount || 0) : 0,
+      reversalCreditTransactionId: snap.exists ?
+        normalizeId((snap.data() || {}).reversalCreditTransactionId) :
+        "",
+      reversalOfTransactionId: snap.exists ?
+        normalizeId((snap.data() || {}).reversalOfTransactionId) :
+        "",
     };
-  }
-  const sourceIds = [reservationId, lessonId].map(normalizeId).filter(Boolean);
-  for (const sourceId of sourceIds) {
-    const snap = await db
-        .collection("creditTransactions")
-        .where("academyId", "==", academyId)
-        .where("sourceId", "==", sourceId)
-        .limit(5)
-        .get();
-    snap.docs.forEach((docSnap) => {
-      const data = docSnap.data() || {};
-      if (packageId && normalizeId(data.packageId) !== packageId) return;
-      candidatesById[docSnap.id] = {
-        id: docSnap.id,
-        exists: true,
-        actionType: normalizeId(data.actionType),
-        sourceType: normalizeId(data.sourceType),
-        sourceId: normalizeId(data.sourceId),
-        packageId: normalizeId(data.packageId),
-        deltaCount: Number(data.deltaCount || 0),
-      };
-    });
   }
   return Object.values(candidatesById);
 }
@@ -5600,31 +5710,43 @@ async function resolvePrivateLessonStatusTarget({db, academyId, data}) {
       "studentPackages",
       packageId,
   );
+  const reservationData = reservationDoc.exists ? reservationDoc.data : {};
+  const deductionCreditTransactionId = normalizeId(
+      reservationData.deductionCreditTransactionId,
+  );
+  const deductionTransactionId = normalizeId(
+      reservationData.deductionTransactionId,
+  );
+  const activeDeductionId =
+    deductionCreditTransactionId &&
+    deductionCreditTransactionId === deductionTransactionId ?
+      deductionCreditTransactionId :
+      "";
+  const activeDeductionReversalId = activeDeductionId ?
+    buildPrivateReservationOutcomeReversalCreditId(activeDeductionId) :
+    "";
   const creditTransactionCandidates =
     await fetchPrivateLessonStatusCreditCandidates({
       db,
-      academyId,
-      lessonId: lessonDoc.id,
-      reservationId: reservationDoc.id,
-      packageId,
       directIds: [
-        reservationDoc.exists && (
-          reservationDoc.data.deductionCreditTransactionId ||
-          reservationDoc.data.deductionTransactionId
-        ),
-        lessonDoc.exists && (
-          lessonDoc.data.deductionCreditTransactionId ||
-          lessonDoc.data.deductionTransactionId
-        ),
+        activeDeductionId,
+        activeDeductionReversalId,
       ],
     });
   return {
+    academyId,
     lessonDoc,
     reservationDoc,
     slotDoc,
     packageDoc,
     packageId,
     creditTransactionCandidates,
+    activeDeductionCredit: creditTransactionCandidates.find(
+        (candidate) => candidate.id === activeDeductionId,
+    ) || null,
+    activeDeductionReversalCredit: creditTransactionCandidates.find(
+        (candidate) => candidate.id === activeDeductionReversalId,
+    ) || null,
   };
 }
 
@@ -5935,17 +6057,108 @@ function buildPrivateLessonStatusPackageImpact({actionType, target}) {
 }
 
 function hasPrivateLessonStatusDeductionEvidence(target) {
-  const reservation = target.reservationDoc.exists ?
-    target.reservationDoc.data :
-    {};
-  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
-  if (reservation.deductionApplied === true) return true;
-  if (lesson.deductionApplied === true) return true;
-  if (lesson.isDeductCancelled === true) return false;
-  if (normalizeId(lesson.packageId) && normalizeId(lesson.date)) return true;
-  return target.creditTransactionCandidates.some(
-      (candidate) => Number(candidate.deltaCount || 0) < 0,
+  return Boolean(
+      getPrivateLessonStatusCanonicalActiveDeductionEvidence(target),
   );
+}
+
+function getPrivateLessonStatusCanonicalActiveDeductionEvidence(target) {
+  if (!target.reservationDoc.exists) return null;
+  const reservation = target.reservationDoc.data || {};
+  const activeCredit = target.activeDeductionCredit;
+  const deterministicReversal = target.activeDeductionReversalCredit;
+  return getPrivateReservationCanonicalActiveDeductionEvidence({
+    academyId: target.academyId,
+    reservationId: target.reservationDoc.id,
+    reservation,
+    packageId: target.packageDoc.id,
+    packageData: target.packageDoc.exists ? target.packageDoc.data : null,
+    creditTransactionId: activeCredit && activeCredit.id,
+    creditTransactionExists: Boolean(
+        activeCredit && activeCredit.exists === true,
+    ),
+    creditTransaction: activeCredit,
+    deterministicReversalCreditTransactionId:
+      deterministicReversal && deterministicReversal.id,
+    deterministicReversalCreditTransactionExists: Boolean(
+        deterministicReversal && deterministicReversal.exists === true,
+    ),
+  });
+}
+
+function getPrivateReservationCanonicalActiveDeductionEvidence({
+  academyId,
+  reservationId,
+  reservation = {},
+  packageId,
+  packageData,
+  creditTransactionId,
+  creditTransactionExists,
+  creditTransaction,
+  deterministicReversalCreditTransactionId,
+  deterministicReversalCreditTransactionExists,
+}) {
+  const deductionCreditTransactionId = normalizeId(
+      reservation.deductionCreditTransactionId,
+  );
+  const deductionTransactionId = normalizeId(
+      reservation.deductionTransactionId,
+  );
+  if (
+    !deductionCreditTransactionId ||
+    !deductionTransactionId ||
+    deductionCreditTransactionId !== deductionTransactionId
+  ) {
+    return null;
+  }
+
+  const activeDeductionId = deductionCreditTransactionId;
+  const normalizedAcademyId = normalizeId(academyId);
+  const normalizedReservationId = normalizeId(reservationId);
+  const studentId = normalizeId(reservation.studentId);
+  const normalizedPackageId = normalizeId(packageId);
+  if (
+    !normalizedAcademyId ||
+    normalizeId(reservation.academyId) !== normalizedAcademyId ||
+    !normalizedReservationId ||
+    !studentId ||
+    !normalizedPackageId ||
+    normalizeId(reservation.deductionPackageId) !== normalizedPackageId ||
+    reservation.deductionApplied !== true ||
+    reservation.deductionReversed !== false ||
+    normalizeId(reservation.deductionStatus) !== "deducted" ||
+    reservation.outcomeReversedAt !== null ||
+    !packageData ||
+    normalizeId(packageData.academyId) !== normalizedAcademyId ||
+    normalizeId(packageData.studentId) !== studentId
+  ) {
+    return null;
+  }
+
+  if (
+    creditTransactionExists !== true ||
+    normalizeId(creditTransactionId) !== activeDeductionId ||
+    !creditTransaction ||
+    normalizeId(creditTransaction.academyId) !== normalizedAcademyId ||
+    normalizeId(creditTransaction.sourceType) !== "privateReservation" ||
+    normalizeId(creditTransaction.sourceId) !== normalizedReservationId ||
+    normalizeId(creditTransaction.studentId) !== studentId ||
+    normalizeId(creditTransaction.packageId) !== normalizedPackageId ||
+    Number(creditTransaction.deltaCount) !== -1 ||
+    normalizeId(creditTransaction.reversalCreditTransactionId) ||
+    normalizeId(creditTransaction.reversalOfTransactionId) ||
+    normalizeId(deterministicReversalCreditTransactionId) !==
+      buildPrivateReservationOutcomeReversalCreditId(activeDeductionId) ||
+    deterministicReversalCreditTransactionExists === true
+  ) {
+    return null;
+  }
+
+  return {
+    activeDeductionId,
+    creditTransaction,
+    packageId: normalizedPackageId,
+  };
 }
 
 function buildPrivateLessonStatusCreditPreview({actionType, target}) {
@@ -5955,9 +6168,12 @@ function buildPrivateLessonStatusCreditPreview({actionType, target}) {
   const sourceId = linkedReservationId ||
     linkedLessonId ||
     getPrivateLessonStatusTargetId(target);
-  const originalCredit = target.creditTransactionCandidates.find(
-      (candidate) => Number(candidate.deltaCount || 0) < 0,
-  ) || null;
+  const canonicalEvidence =
+    getPrivateLessonStatusCanonicalActiveDeductionEvidence(target);
+  const originalCredit =
+    canonicalEvidence && canonicalEvidence.creditTransaction ?
+      canonicalEvidence.creditTransaction :
+      null;
   if (actionType !== "reverse_deduction") {
     return {
       wouldCreate: false,
@@ -5994,8 +6210,10 @@ function buildPrivateLessonStatusDeductionEvidence(target, currentState) {
     target.reservationDoc.data :
     {};
   const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
-  const negativeCreditTransaction = target.creditTransactionCandidates.some(
-      (candidate) => Number(candidate.deltaCount || 0) < 0,
+  const canonicalEvidence =
+    getPrivateLessonStatusCanonicalActiveDeductionEvidence(target);
+  const negativeCreditTransaction = Boolean(
+      canonicalEvidence && canonicalEvidence.creditTransaction,
   );
   const lessonPackageDateEvidence = Boolean(
       normalizeId(lesson.packageId) && normalizeId(lesson.date),
@@ -6065,6 +6283,9 @@ function buildPrivateLessonStatusPackageCreditPolicy({
 function buildPrivateLessonStatusPlan({actionType, target}) {
   const blockedReasons = [];
   const warnings = [];
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
   if (isFixedPrivateDirectTarget(target)) {
     blockedReasons.push(FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON);
   }
@@ -6080,10 +6301,23 @@ function buildPrivateLessonStatusPlan({actionType, target}) {
   if (!target.slotDoc.exists) warnings.push("missing_slot");
   const statusReason = getPrivateLessonStatusBlockedReason(target);
   const status = getPrivateLessonStatusValue(target);
+  const isAutoDeductionAbsenceReclassification =
+    actionType === "no_show" &&
+    status === "completed" &&
+    reservation.deductionApplied === true &&
+    normalizeId(reservation.deductionSource).toLowerCase() === "auto" &&
+    normalizeId(reservation.outcomeActorRole).toLowerCase() === "auto" &&
+    reservation.deductionReversed !== true &&
+    !reservation.outcomeReversedAt;
   if (actionType === "complete" || actionType === "no_show") {
-    if (statusReason) blockedReasons.push(statusReason);
-    if (!PRIVATE_LESSON_STATUS_ACTIVE_STATUSES.includes(status) ||
-        PRIVATE_LESSON_STATUS_BLOCKED_STATUSES.includes(status)) {
+    if (statusReason && !isAutoDeductionAbsenceReclassification) {
+      blockedReasons.push(statusReason);
+    }
+    if (
+      (!PRIVATE_LESSON_STATUS_ACTIVE_STATUSES.includes(status) ||
+        PRIVATE_LESSON_STATUS_BLOCKED_STATUSES.includes(status)) &&
+      !isAutoDeductionAbsenceReclassification
+    ) {
       blockedReasons.push("unsupported_current_status");
     }
     warnings.push(
@@ -6093,11 +6327,11 @@ function buildPrivateLessonStatusPlan({actionType, target}) {
     );
   }
   if (actionType === "reverse_deduction") {
-    warnings.push("reverse_deduction_is_high_risk");
-    const reservation = target.reservationDoc.exists ?
-      target.reservationDoc.data :
-      {};
+    warnings.push("regular_absence_reversal_restores_one_package_lesson");
     const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+    if (!["completed", "no_show", "no-show"].includes(status)) {
+      blockedReasons.push("outcome_not_reversible");
+    }
     if (!target.packageDoc.exists) blockedReasons.push("missing_package");
     if (!hasPrivateLessonStatusDeductionEvidence(target)) {
       blockedReasons.push("deduction_not_applied");
@@ -6163,6 +6397,10 @@ function buildPrivateLessonStatusPlan({actionType, target}) {
   if (actionType === "complete" || actionType === "no_show") {
     blockedReasons.push(...statusOnlyPolicy.blockedReasons);
     warnings.push(...statusOnlyPolicy.warnings);
+    if (isAutoDeductionAbsenceReclassification) {
+      blockedReasons.push("package_or_credit_write_required");
+      warnings.push("existing_auto_deduction_must_use_canonical_outcome_path");
+    }
   }
   const uniqueBlockedReasons = Array.from(new Set(blockedReasons));
   const uniqueWarnings = Array.from(new Set(warnings));
@@ -6243,8 +6481,41 @@ async function previewPrivateLessonStatusAction({db, auth, data}) {
     target,
   });
   const plan = buildPrivateLessonStatusPlan({actionType, target});
+  const reversalReservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const reversalActiveDeductionId =
+    getPrivateReservationDeductionPointer(reversalReservation);
+  const reversalCreditTransactionId = reversalActiveDeductionId ?
+    buildPrivateReservationOutcomeReversalCreditId(
+        reversalActiveDeductionId,
+    ) :
+    "";
+  const reversalPlan = actionType === "reverse_deduction" ?
+    buildPrivateReservationOutcomeReversalPlan({
+      academyId,
+      reservationId: normalizeId(target.reservationDoc.id),
+      reservation: reversalReservation,
+      packageData: target.packageDoc.exists ? target.packageDoc.data : null,
+      originalCredit: target.creditTransactionCandidates.find(
+          (candidate) => candidate.id === reversalActiveDeductionId,
+      ) || null,
+      reversalCredit: target.creditTransactionCandidates.find(
+          (candidate) =>
+            candidate.id === reversalCreditTransactionId &&
+            candidate.exists === true,
+      ) || null,
+    }) :
+    null;
+  const planHash = reversalPlan ?
+    buildPrivateReservationOutcomeReversalPlanHash({
+      actorUid: actor.uid || actor.actorUid,
+      plan: reversalPlan,
+    }) :
+    "";
   const blockedReasons = Array.from(new Set([
     ...plan.blockedReasons,
+    ...(reversalPlan ? reversalPlan.blockedReasons : []),
     ...(permission.allowed ? [] : [
       permission.blockedReason || "permission_denied",
     ]),
@@ -6298,7 +6569,9 @@ async function previewPrivateLessonStatusAction({db, auth, data}) {
     },
     currentState: plan.currentState,
     proposedState: plan.proposedState,
-    packageImpact: plan.packageImpact,
+    packageImpact: reversalPlan ?
+      reversalPlan.packageImpact :
+      plan.packageImpact,
     creditTransactionPreview: plan.creditTransactionPreview,
     statusOnlyPolicy: plan.statusOnlyPolicy,
     deductionEvidence: plan.statusOnlyPolicy &&
@@ -6306,7 +6579,13 @@ async function previewPrivateLessonStatusAction({db, auth, data}) {
     allowed,
     blockedReasons,
     warnings,
-    normalizedPlan: plan.normalizedPlan,
+    normalizedPlan: reversalPlan ?
+      {
+        ...plan.normalizedPlan,
+        ...reversalPlan.normalizedPlan,
+      } :
+      plan.normalizedPlan,
+    planHash,
     nextStep: allowed ?
       "실제 처리는 최종 확인 후 진행할 수 있습니다." :
       "차단 사유를 확인한 뒤 기존 차감 포함 처리 또는 별도 기능을 사용하세요.",
@@ -6526,10 +6805,6 @@ async function transactionFindPrivateLessonStatusReservationBySlot({
 async function transactionFetchPrivateLessonStatusCreditCandidates({
   transaction,
   db,
-  academyId,
-  lessonId,
-  reservationId,
-  packageId,
   directIds = [],
 }) {
   const candidatesById = {};
@@ -6547,32 +6822,17 @@ async function transactionFetchPrivateLessonStatusCreditCandidates({
         normalizeId((snap.data() || {}).sourceType) :
         "",
       sourceId: snap.exists ? normalizeId((snap.data() || {}).sourceId) : "",
+      academyId: snap.exists ? normalizeId((snap.data() || {}).academyId) : "",
+      studentId: snap.exists ? normalizeId((snap.data() || {}).studentId) : "",
       packageId: snap.exists ? normalizeId((snap.data() || {}).packageId) : "",
       deltaCount: snap.exists ? Number((snap.data() || {}).deltaCount || 0) : 0,
+      reversalCreditTransactionId: snap.exists ?
+        normalizeId((snap.data() || {}).reversalCreditTransactionId) :
+        "",
+      reversalOfTransactionId: snap.exists ?
+        normalizeId((snap.data() || {}).reversalOfTransactionId) :
+        "",
     };
-  }
-  const sourceIds = [reservationId, lessonId].map(normalizeId).filter(Boolean);
-  for (const sourceId of sourceIds) {
-    const snap = await transaction.get(
-        db
-            .collection("creditTransactions")
-            .where("academyId", "==", academyId)
-            .where("sourceId", "==", sourceId)
-            .limit(5),
-    );
-    snap.docs.forEach((docSnap) => {
-      const data = docSnap.data() || {};
-      if (packageId && normalizeId(data.packageId) !== packageId) return;
-      candidatesById[docSnap.id] = {
-        id: docSnap.id,
-        exists: true,
-        actionType: normalizeId(data.actionType),
-        sourceType: normalizeId(data.sourceType),
-        sourceId: normalizeId(data.sourceId),
-        packageId: normalizeId(data.packageId),
-        deltaCount: Number(data.deltaCount || 0),
-      };
-    });
   }
   return Object.values(candidatesById);
 }
@@ -6696,32 +6956,44 @@ async function resolvePrivateLessonStatusTargetInTransaction({
       "studentPackages",
       packageId,
   );
+  const reservationData = reservationDoc.exists ? reservationDoc.data : {};
+  const deductionCreditTransactionId = normalizeId(
+      reservationData.deductionCreditTransactionId,
+  );
+  const deductionTransactionId = normalizeId(
+      reservationData.deductionTransactionId,
+  );
+  const activeDeductionId =
+    deductionCreditTransactionId &&
+    deductionCreditTransactionId === deductionTransactionId ?
+      deductionCreditTransactionId :
+      "";
+  const activeDeductionReversalId = activeDeductionId ?
+    buildPrivateReservationOutcomeReversalCreditId(activeDeductionId) :
+    "";
   const creditTransactionCandidates =
     await transactionFetchPrivateLessonStatusCreditCandidates({
       transaction,
       db,
-      academyId,
-      lessonId: lessonDoc.id,
-      reservationId: reservationDoc.id,
-      packageId,
       directIds: [
-        reservationDoc.exists && (
-          reservationDoc.data.deductionCreditTransactionId ||
-          reservationDoc.data.deductionTransactionId
-        ),
-        lessonDoc.exists && (
-          lessonDoc.data.deductionCreditTransactionId ||
-          lessonDoc.data.deductionTransactionId
-        ),
+        activeDeductionId,
+        activeDeductionReversalId,
       ],
     });
   return {
+    academyId,
     lessonDoc,
     reservationDoc,
     slotDoc,
     packageDoc,
     packageId,
     creditTransactionCandidates,
+    activeDeductionCredit: creditTransactionCandidates.find(
+        (candidate) => candidate.id === activeDeductionId,
+    ) || null,
+    activeDeductionReversalCredit: creditTransactionCandidates.find(
+        (candidate) => candidate.id === activeDeductionReversalId,
+    ) || null,
   };
 }
 
@@ -9657,6 +9929,12 @@ async function autoDeductPrivateReservation({
       incrementDeductionSkip(summary, "alreadyDeducted");
       return summary;
     }
+    if (reservation.deductionReversed === true ||
+        normalizeId(reservation.deductionStatus).toLowerCase() === "reversed" ||
+        reservation.outcomeReversedAt) {
+      incrementDeductionSkip(summary, "alreadyDeducted");
+      return summary;
+    }
     if (reservationSkipReason) {
       incrementDeductionSkip(summary, reservationSkipReason);
       return summary;
@@ -9792,6 +10070,8 @@ async function autoDeductPrivateReservation({
       deductionTransactionId: deductionKey,
       deductionSource: "auto",
       deductionStatus: "deducted",
+      deductionReversed: false,
+      outcomeReversedAt: null,
       outcomeActorRole: "auto",
       updatedAt: now,
     });
@@ -14462,9 +14742,7 @@ exports.createFixedPrivateLessonAssignment = onCall(
       cpu: 1,
       concurrency: 80,
       maxInstances: 10,
-      serviceAccount:
-        "academy-private-writer-runtime@" +
-        "daegu-miami-production.iam.gserviceaccount.com",
+      serviceAccount: "academy-private-writer-runtime@",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,
@@ -14477,13 +14755,27 @@ exports.createFixedPrivateLessonAssignment = onCall(
         const validation = validateFixedPrivateAssignmentPayload(
             request.data || {},
         );
+        const authRole = request.auth.token &&
+          typeof request.auth.token.role === "string" ?
+          request.auth.token.role.trim().toLowerCase() :
+          "";
+        if (!["owner", "admin"].includes(authRole)) {
+          throw new HttpsError(
+              "permission-denied",
+              "Authenticated owner/admin role required.",
+          );
+        }
         const db = admin.firestore();
         const membership = await requireAcademyAdmin(
             db,
             validation.academyId,
             request.auth.uid,
         );
-        return await runFixedPrivateAssignmentWriteTransaction({
+        assertFixedPrivateAssignmentPastDateContract(validation);
+        const operation = validation.commit ?
+          runFixedPrivateAssignmentWriteTransaction :
+          runFixedPrivateAssignmentPreviewTransaction;
+        return await operation({
           db,
           auth: request.auth,
           membership,
@@ -14708,7 +15000,11 @@ exports.previewPrivateLessonStatusAction = onCall(
 );
 
 const FIXED_PRIVATE_DEDUCTION_LEDGER = "reservation_v1";
-const FIXED_PRIVATE_OUTCOME_ACTIONS = ["complete", "no_show"];
+const FIXED_PRIVATE_OUTCOME_ACTIONS = [
+  "complete",
+  "no_show",
+  "reverse_deduction",
+];
 const FIXED_PRIVATE_OUTCOME_BATCH_COLLECTION =
   "fixedPrivateLessonOutcomeActionBatches";
 
@@ -14718,15 +15014,23 @@ function validateFixedPrivateOutcomeActionPayload(data, commitMode) {
       requireString(data, "lessonId"),
       "lessonId",
   );
+  const reservationId = validateCallableDocumentId(
+      requireString(data, "reservationId"),
+      "reservationId",
+  );
+  const slotId = validateCallableDocumentId(
+      requireString(data, "slotId"),
+      "slotId",
+  );
+  const packageId = validateCallableDocumentId(
+      requireString(data, "packageId"),
+      "packageId",
+  );
   const requestId = validateCallableRequestId(
       requireString(data, "requestId"),
   );
   const actionType = requireString(data, "actionType");
   validateAcademyId(academyId);
-  ["reservationId", "slotId", "packageId"].forEach((fieldName) => {
-    const value = optionalString(data, fieldName);
-    if (value) validateCallableDocumentId(value, fieldName);
-  });
   if (!FIXED_PRIVATE_OUTCOME_ACTIONS.includes(actionType)) {
     throw new HttpsError("invalid-argument", "unsupported_action_type");
   }
@@ -14746,9 +15050,9 @@ function validateFixedPrivateOutcomeActionPayload(data, commitMode) {
     return {
       academyId,
       lessonId,
-      reservationId: optionalString(data, "reservationId"),
-      slotId: optionalString(data, "slotId"),
-      packageId: optionalString(data, "packageId"),
+      reservationId,
+      slotId,
+      packageId,
       requestId,
       actionType,
       planHash,
@@ -14765,9 +15069,9 @@ function validateFixedPrivateOutcomeActionPayload(data, commitMode) {
   return {
     academyId,
     lessonId,
-    reservationId: optionalString(data, "reservationId"),
-    slotId: optionalString(data, "slotId"),
-    packageId: optionalString(data, "packageId"),
+    reservationId,
+    slotId,
+    packageId,
     requestId,
     actionType,
   };
@@ -15062,21 +15366,48 @@ async function resolveFixedPrivateOutcomeTarget({
     docId: packageId,
   });
   const studentId = normalizeId(
-      lesson.studentId || lesson.studentID || reservation.studentId,
+      fixedPrivateOutcomeLinkedId(
+          lesson,
+          ["studentId", "studentID", "fixedStudentId"],
+      ) ||
+      fixedPrivateOutcomeLinkedId(
+          reservation,
+          ["studentId", "studentID", "fixedStudentId"],
+      ) ||
+      fixedPrivateOutcomeLinkedId(
+          slot,
+          ["studentId", "studentID", "fixedStudentId"],
+      ),
   );
-  const creditTransactionId = packageId && studentId && reservationDoc.id ?
-    buildDeductionKey({
+  const deductionCycleIdentity = packageId && studentId && reservationDoc.id ?
+    buildPrivateReservationOutcomeDeductionCycleIdentity({
       academyId: validation.academyId,
-      lessonId: reservationDoc.id,
+      reservationId: reservationDoc.id,
       studentId,
       packageId,
+      reservation,
     }) :
-    "";
+    null;
+  const activeDeductionId = getPrivateReservationDeductionPointer(reservation);
+  const creditTransactionId = validation.actionType === "reverse_deduction" ?
+    activeDeductionId :
+    normalizeId(
+        deductionCycleIdentity && deductionCycleIdentity.creditTransactionId,
+    );
   const creditDoc = await readFixedPrivateOutcomeDoc({
     db,
     transaction,
     collectionName: "creditTransactions",
     docId: creditTransactionId,
+  });
+  const reversalCreditTransactionId = activeDeductionId ?
+    buildPrivateReservationOutcomeReversalCreditId(activeDeductionId) :
+    "";
+  const reversalCreditDoc = await readFixedPrivateOutcomeDoc({
+    db,
+    transaction,
+    collectionName: "creditTransactions",
+    docId: reversalCreditTransactionId,
   });
   const ledgerRows = await readFixedPrivatePackageLedgerRows({
     db,
@@ -15097,6 +15428,10 @@ async function resolveFixedPrivateOutcomeTarget({
     packageId,
     studentId,
     creditTransactionId,
+    activeDeductionId,
+    reversalCreditTransactionId,
+    reversalCreditDoc,
+    deductionCycleIdentity,
   };
 }
 
@@ -15161,7 +15496,11 @@ function fixedPrivatePackageOccurrenceMismatch({
   return "";
 }
 
-function fixedPrivateOutcomeRowFlagReasons(row, label) {
+function fixedPrivateOutcomeRowFlagReasons(
+    row,
+    label,
+    {allowReversedDeduction = false} = {},
+) {
   if (!row || Object.keys(row).length === 0) return [];
   const reasons = [];
   if (row.noDeduction === true) {
@@ -15170,7 +15509,7 @@ function fixedPrivateOutcomeRowFlagReasons(row, label) {
   if (row.isDeductCancelled === true ||
       row.deductionCanceled === true ||
       row.deductionCancelled === true ||
-      row.deductionReversed === true) {
+      (!allowReversedDeduction && row.deductionReversed === true)) {
     reasons.push(`${label}_deduction_cancelled`);
   }
   if (row.cancelled === true ||
@@ -15189,6 +15528,369 @@ function fixedPrivateOutcomeRowFlagReasons(row, label) {
   return reasons;
 }
 
+function buildFixedPrivateOutcomeReversalPlan({
+  validation,
+  target,
+  actor,
+  permission,
+}) {
+  const blockedReasons = [];
+  const warnings = [];
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const slot = target.slotDoc.exists ? target.slotDoc.data : {};
+  const packageData = target.packageDoc.exists ? target.packageDoc.data : null;
+  const originalCredit = target.creditDoc.exists ? target.creditDoc.data : null;
+  const reversalCredit = target.reversalCreditDoc.exists ?
+    target.reversalCreditDoc.data :
+    null;
+  const classification = classifyFixedPrivateDeductionLedger({
+    lesson,
+    reservation,
+    slot,
+  });
+  const teacherIdentity =
+    getPrivateLessonStatusTargetTeacherIdentity(target);
+  if (!target.lessonDoc.exists) blockedReasons.push("lesson_missing");
+  if (!target.reservationDoc.exists) blockedReasons.push("reservation_missing");
+  if (!target.slotDoc.exists) blockedReasons.push("slot_missing");
+  if (!target.packageDoc.exists) blockedReasons.push("package_missing");
+  if (!permission.allowed) {
+    blockedReasons.push(permission.blockedReason || "permission_denied");
+  }
+  if (teacherIdentity.conflict) {
+    blockedReasons.push("teacher_identity_mismatch");
+  }
+  [lesson, reservation, slot, packageData || {}]
+      .filter((row) => Object.keys(row).length > 0)
+      .forEach((row) => {
+        if (normalizeId(row.academyId) !== validation.academyId) {
+          blockedReasons.push("academy_mismatch");
+        }
+      });
+  if (target.lessonDoc.exists && !isFixedPrivateOutcomeLesson(lesson)) {
+    blockedReasons.push("lesson_not_fixed_private");
+  }
+  if (target.reservationDoc.exists &&
+      !isFixedPrivateOutcomeReservation(reservation)) {
+    blockedReasons.push("reservation_not_fixed_private");
+  }
+  if (target.slotDoc.exists && !isFixedPrivateOutcomeSlot(slot)) {
+    blockedReasons.push("slot_not_fixed_private");
+  }
+  if (classification.mode !== "canonical") {
+    blockedReasons.push("inconsistent_ledger_markers");
+  }
+  if (target.linkedReservationId !== validation.reservationId ||
+      target.reservationDoc.id !== validation.reservationId) {
+    blockedReasons.push("reservation_mismatch");
+  }
+  if (target.linkedSlotId !== validation.slotId ||
+      target.slotDoc.id !== validation.slotId) {
+    blockedReasons.push("slot_mismatch");
+  }
+  if (target.packageIds.length !== 1 ||
+      target.packageId !== validation.packageId) {
+    blockedReasons.push("package_mismatch");
+  }
+  const exactPackageRelation = [lesson, reservation, slot].every((row) => {
+    const ids = fixedPrivateOutcomePackageIds(row);
+    return ids.length === 1 && ids[0] === validation.packageId;
+  });
+  if (!exactPackageRelation) {
+    blockedReasons.push("package_relation_mismatch");
+  }
+  const reservationLessonId = fixedPrivateOutcomeLinkedId(
+      reservation,
+      ["lessonId", "fixedLessonId"],
+  );
+  const reservationSlotId = fixedPrivateOutcomeLinkedId(
+      reservation,
+      ["slotId", "privateLessonSlotId"],
+  );
+  const slotLessonId = fixedPrivateOutcomeLinkedId(
+      slot,
+      ["lessonId", "fixedLessonId"],
+  );
+  if (reservationLessonId !== validation.lessonId ||
+      slotLessonId !== validation.lessonId) {
+    blockedReasons.push("lesson_link_mismatch");
+  }
+  if (reservationSlotId !== validation.slotId) {
+    blockedReasons.push("slot_link_mismatch");
+  }
+  if (normalizeId(slot.reservationId) !== validation.reservationId) {
+    blockedReasons.push("reservation_link_mismatch");
+  }
+  if (fixedPrivateOutcomeLinkedId(
+      reservation,
+      ["studentId", "studentID", "fixedStudentId"],
+  ) !== target.studentId ||
+      fixedPrivateOutcomeLinkedId(
+          slot,
+          ["studentId", "studentID", "fixedStudentId"],
+      ) !== target.studentId) {
+    blockedReasons.push("student_mismatch");
+  }
+  [
+    ["student_mismatch", ["studentId", "studentID", "fixedStudentId"]],
+    ["date_mismatch", ["date", "lessonDate", "scheduleDate"]],
+    ["time_mismatch", ["time", "startTime", "scheduleTime"]],
+  ].forEach(([reason, fields]) => {
+    if (fixedPrivateOutcomeValuesConflict(
+        [lesson, reservation, slot],
+        fields,
+    )) {
+      blockedReasons.push(reason);
+    }
+  });
+  if (packageData) {
+    const packageMismatch = fixedPrivatePackageOccurrenceMismatch({
+      academyId: validation.academyId,
+      packageData,
+      studentId: target.studentId,
+      reservation,
+      slot,
+    });
+    if (packageMismatch) blockedReasons.push(packageMismatch);
+  }
+  const lessonStatus = normalizeId(lesson.status).toLowerCase();
+  const reservationStatus = normalizeId(reservation.status).toLowerCase();
+  const slotStatus = normalizeId(slot.status).toLowerCase();
+  if (lessonStatus !== "no_show" || reservationStatus !== "no_show") {
+    blockedReasons.push("fixed_no_show_not_current");
+  }
+  if (slotStatus !== "reserved") {
+    blockedReasons.push("slot_not_reserved");
+  }
+  const reservationDeductionId =
+    getPrivateReservationDeductionPointer(reservation);
+  const lessonDeductionId = getPrivateReservationDeductionPointer(lesson);
+  if (!reservationDeductionId ||
+      !lessonDeductionId ||
+      reservationDeductionId !== lessonDeductionId ||
+      reservationDeductionId !== target.activeDeductionId) {
+    blockedReasons.push("deduction_identity_missing");
+  }
+  if (reservation.deductionApplied !== true ||
+      lesson.deductionApplied !== true) {
+    blockedReasons.push("deduction_evidence_conflict");
+  }
+  if (isPrivateReservationDeductionReversed(reservation) ||
+      isPrivateReservationDeductionReversed(lesson) ||
+      isPrivateReservationDeductionReversed(slot) ||
+      normalizeId(reservation.reversalCreditTransactionId) ||
+      normalizeId(lesson.reversalCreditTransactionId) ||
+      normalizeId(slot.reversalCreditTransactionId)) {
+    blockedReasons.push("reversal_marker_conflict");
+  }
+  const canonicalDeductionId = buildDeductionKey({
+    academyId: validation.academyId,
+    lessonId: validation.reservationId,
+    studentId: target.studentId,
+    packageId: validation.packageId,
+  });
+  if (!originalCredit ||
+      target.creditDoc.id !== target.activeDeductionId ||
+      normalizeId(originalCredit.academyId) !== validation.academyId ||
+      normalizeId(originalCredit.sourceType) !== "fixedPrivateReservation" ||
+      normalizeId(originalCredit.sourceId) !== validation.reservationId ||
+      normalizeId(originalCredit.lessonId) !== validation.lessonId ||
+      normalizeId(originalCredit.slotId) !== validation.slotId ||
+      normalizeId(originalCredit.studentId) !== target.studentId ||
+      normalizeId(originalCredit.packageId) !== validation.packageId ||
+      normalizeId(originalCredit.actionType) !==
+        "fixed_private_no_show_deduct" ||
+      Number(originalCredit.deltaCount) !== -1 ||
+      normalizeId(originalCredit.reversalCreditTransactionId) ||
+      normalizeId(originalCredit.reversalOfTransactionId)) {
+    blockedReasons.push("deduction_evidence_conflict");
+  }
+  if (originalCredit && target.activeDeductionId !== canonicalDeductionId) {
+    const expectedCycleIdentity =
+      buildPrivateReservationOutcomeDeductionCycleIdentity({
+        academyId: validation.academyId,
+        reservationId: validation.reservationId,
+        studentId: target.studentId,
+        packageId: validation.packageId,
+        reservation: {
+          deductionApplied: false,
+          deductionReversed: true,
+          deductionCreditTransactionId: normalizeId(
+              originalCredit.previousDeductionCreditTransactionId,
+          ),
+          deductionTransactionId: normalizeId(
+              originalCredit.previousDeductionCreditTransactionId,
+          ),
+          reversalCreditTransactionId: normalizeId(
+              originalCredit.predecessorReversalCreditTransactionId,
+          ),
+          deductionCycleNumber:
+            normalizePositiveAttempt(originalCredit.deductionCycleNumber) - 1,
+        },
+      });
+    if (normalizeId(originalCredit.canonicalDeductionId) !==
+          canonicalDeductionId ||
+        expectedCycleIdentity.creditTransactionId !==
+          target.activeDeductionId ||
+        normalizePositiveAttempt(originalCredit.deductionCycleNumber) !==
+          normalizePositiveAttempt(reservation.deductionCycleNumber)) {
+      blockedReasons.push("deduction_identity_mismatch");
+    }
+  } else if (originalCredit && (
+    normalizeId(originalCredit.canonicalDeductionId) &&
+      normalizeId(originalCredit.canonicalDeductionId) !==
+        canonicalDeductionId ||
+    normalizePositiveAttempt(originalCredit.deductionCycleNumber) &&
+      normalizePositiveAttempt(originalCredit.deductionCycleNumber) !==
+        Math.max(
+            1,
+            normalizePositiveAttempt(reservation.deductionCycleNumber) ||
+              normalizePositiveAttempt(reservation.deductionAttemptNumber),
+        )
+  )) {
+    blockedReasons.push("deduction_identity_mismatch");
+  }
+  if (reversalCredit ||
+      target.reversalCreditDoc.exists ||
+      target.reversalCreditTransactionId !==
+        buildPrivateReservationOutcomeReversalCreditId(
+            target.activeDeductionId,
+        )) {
+    blockedReasons.push("reversal_evidence_conflict");
+  }
+  const currentUsedCount = packageData ? Number(packageData.usedCount) : null;
+  const currentRemainingCount = packageData ?
+    Number(packageData.remainingCount) :
+    null;
+  const totalCount = packageData ? Number(packageData.totalCount) : null;
+  if (packageData && (
+    !Number.isFinite(currentUsedCount) ||
+    !Number.isFinite(currentRemainingCount) ||
+    !Number.isFinite(totalCount) ||
+    currentUsedCount <= 0 ||
+    currentRemainingCount < 0 ||
+    currentRemainingCount >= totalCount
+  )) {
+    blockedReasons.push("package_count_invalid");
+  }
+  const packageImpact = {
+    packageId: validation.packageId,
+    currentStatus: normalizeId(packageData && packageData.status),
+    currentUsedCount,
+    currentRemainingCount,
+    usedCountDelta: -1,
+    remainingCountDelta: 1,
+    restoredPackageLessons: 1,
+    nextUsedCount: Number.isFinite(currentUsedCount) ?
+      currentUsedCount - 1 :
+      null,
+    nextRemainingCount: Number.isFinite(currentRemainingCount) ?
+      currentRemainingCount + 1 :
+      null,
+    nextStatus: packageData && Number.isFinite(currentRemainingCount) ?
+      getNextStudentPackageStatus(
+          packageData.status,
+          currentRemainingCount + 1,
+      ) :
+      "",
+  };
+  const creditImpact = {
+    originalCreditTransactionId: target.activeDeductionId,
+    reversalCreditTransactionId: target.reversalCreditTransactionId,
+    deltaCount: 1,
+    wouldCreate: !target.reversalCreditDoc.exists,
+  };
+  const ledgerDiagnostics = buildFixedPrivatePackageLedgerDiagnostics({
+    rows: target.ledgerRows,
+    packageData,
+    lessonId: validation.lessonId,
+    reservationId: validation.reservationId,
+    todayYmd: getKstDateString(new Date()),
+    classification,
+  });
+  if (packageData && !ledgerDiagnostics.aggregateMatches) {
+    blockedReasons.push("package_aggregate_conflict");
+  }
+  if (!ledgerDiagnostics.selectedReservationCounted) {
+    blockedReasons.push("reservation_deduction_not_counted");
+  }
+  if (ledgerDiagnostics.hasDuplicateOccurrenceContributions) {
+    blockedReasons.push("duplicate_fixed_occurrence_contribution");
+  }
+  const currentState = {
+    lessonId: validation.lessonId,
+    reservationId: validation.reservationId,
+    slotId: validation.slotId,
+    packageId: validation.packageId,
+    lessonStatus,
+    reservationStatus,
+    slotStatus,
+    activeDeductionId: target.activeDeductionId,
+    reversalCreditTransactionId: target.reversalCreditTransactionId,
+    deductionApplied: reservation.deductionApplied === true,
+    deductionReversed: isPrivateReservationDeductionReversed(reservation),
+    packageUsedCount: currentUsedCount,
+    packageRemainingCount: currentRemainingCount,
+  };
+  const normalizedPlan = {
+    academyId: validation.academyId,
+    actionType: validation.actionType,
+    normalizedOutcome: "active",
+    previousOutcomeStatus: "no_show",
+    nextLessonStatus: "active",
+    nextReservationStatus: "active",
+    nextSlotStatus: "reserved",
+    lessonId: validation.lessonId,
+    reservationId: validation.reservationId,
+    slotId: validation.slotId,
+    packageId: validation.packageId,
+    studentId: target.studentId,
+    activeDeductionId: target.activeDeductionId,
+    originalCreditTransactionId: target.activeDeductionId,
+    reversalCreditTransactionId: target.reversalCreditTransactionId,
+    canonicalDeductionId: normalizeId(
+        originalCredit && originalCredit.canonicalDeductionId,
+    ) || canonicalDeductionId,
+    deductionCycleNumber: Math.max(
+        1,
+        normalizePositiveAttempt(reservation.deductionCycleNumber) ||
+          normalizePositiveAttempt(reservation.deductionAttemptNumber),
+    ),
+    packageUsedCount: packageImpact.nextUsedCount,
+    packageRemainingCount: packageImpact.nextRemainingCount,
+    packageStatus: packageImpact.nextStatus,
+    additionalPackageRestore: 1,
+    packageImpact,
+    creditImpact,
+    actorUid: String(actor.uid || actor.actorUid || ""),
+    actorRole: normalizeId(actor.role || actor.actorRole),
+  };
+  return {
+    ok: Array.from(new Set(blockedReasons)).length === 0,
+    blockedReasons: Array.from(new Set(blockedReasons)),
+    warnings,
+    classification,
+    ledgerDiagnostics,
+    packageImpact,
+    creditTransactionPreview: {
+      wouldCreate: creditImpact.wouldCreate,
+      id: target.reversalCreditTransactionId,
+      sourceType: "fixedPrivateReservation",
+      sourceId: validation.reservationId,
+      packageId: validation.packageId,
+      deltaCount: 1,
+      duplicateExists: target.reversalCreditDoc.exists,
+      originalCreditTransactionId: target.activeDeductionId,
+      reversalOfTransactionId: target.activeDeductionId,
+    },
+    currentState,
+    normalizedPlan,
+  };
+}
+
 function buildFixedPrivateOutcomePlan({
   validation,
   target,
@@ -15196,6 +15898,14 @@ function buildFixedPrivateOutcomePlan({
   permission,
   nowMillis,
 }) {
+  if (validation.actionType === "reverse_deduction") {
+    return buildFixedPrivateOutcomeReversalPlan({
+      validation,
+      target,
+      actor,
+      permission,
+    });
+  }
   const blockedReasons = [];
   const warnings = [];
   const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
@@ -15209,6 +15919,12 @@ function buildFixedPrivateOutcomePlan({
     reservation,
     slot,
   });
+  const reenteringAfterReversal = Boolean(
+      isPrivateReservationDeductionReversed(reservation) &&
+      target.deductionCycleIdentity &&
+      !target.deductionCycleIdentity.invalidReason &&
+      target.deductionCycleIdentity.historyOnly === true,
+  );
   const teacherIdentity =
     getPrivateLessonStatusTargetTeacherIdentity(target);
   if (!target.lessonDoc.exists) blockedReasons.push("lesson_missing");
@@ -15319,10 +16035,20 @@ function buildFixedPrivateOutcomePlan({
     blockedReasons.push("slot_not_reserved");
   }
   blockedReasons.push(
-      ...fixedPrivateOutcomeRowFlagReasons(lesson, "lesson"),
-      ...fixedPrivateOutcomeRowFlagReasons(reservation, "reservation"),
-      ...fixedPrivateOutcomeRowFlagReasons(slot, "slot"),
+      ...fixedPrivateOutcomeRowFlagReasons(lesson, "lesson", {
+        allowReversedDeduction: reenteringAfterReversal,
+      }),
+      ...fixedPrivateOutcomeRowFlagReasons(reservation, "reservation", {
+        allowReversedDeduction: reenteringAfterReversal,
+      }),
+      ...fixedPrivateOutcomeRowFlagReasons(slot, "slot", {
+        allowReversedDeduction: reenteringAfterReversal,
+      }),
   );
+  if (target.deductionCycleIdentity &&
+      target.deductionCycleIdentity.invalidReason) {
+    blockedReasons.push(target.deductionCycleIdentity.invalidReason);
+  }
   const endMillis = getPrivateReservationEndMillis(reservation, slot);
   if (endMillis === null) {
     blockedReasons.push("lesson_schedule_missing");
@@ -15421,6 +16147,23 @@ function buildFixedPrivateOutcomePlan({
     packageId: target.packageId,
     studentId: target.studentId,
     creditTransactionId: target.creditTransactionId,
+    activeDeductionId: target.creditTransactionId,
+    canonicalDeductionId: normalizeId(
+        target.deductionCycleIdentity &&
+        target.deductionCycleIdentity.canonicalDeductionId,
+    ),
+    previousDeductionCreditTransactionId: normalizeId(
+        target.deductionCycleIdentity &&
+        target.deductionCycleIdentity.previousDeductionCreditTransactionId,
+    ),
+    predecessorReversalCreditTransactionId: normalizeId(
+        target.deductionCycleIdentity &&
+        target.deductionCycleIdentity.predecessorReversalCreditTransactionId,
+    ),
+    deductionCycleNumber: Number(
+        target.deductionCycleIdentity &&
+        target.deductionCycleIdentity.cycleNumber || 0,
+    ),
     ledgerMode: classification.mode,
     ledgerMarker: FIXED_PRIVATE_DEDUCTION_LEDGER,
     packageUsedCount: ledgerDiagnostics.nextUsedCount,
@@ -15466,7 +16209,12 @@ function fixedPrivateOutcomeHashCurrentState(target, plan) {
       "academyId", "status", "outcome", "attendanceStatus",
       "reservationId", "slotId", "packageId", "deductionPackageId",
       "fixedPrivateDeductionLedger", "deductionApplied",
-      "deductionCreditTransactionId", "isDeductCancelled", "noDeduction",
+      "deductionCreditTransactionId", "deductionTransactionId",
+      "deductionStatus", "deductionCycleNumber",
+      "deductionCyclePredecessorReversalCreditTransactionId",
+      "originalDeductionCreditTransactionId",
+      "reversalCreditTransactionId", "outcomeReversedAt",
+      "outcomeReversalPlanHash", "isDeductCancelled", "noDeduction",
       "deductionCanceled", "deductionCancelled", "deductionReversed",
       "cancelledAt", "releasedAt", "releasedFromFixed",
       "teacherUid", "teacherUID", "teacherId", "teacherID", "teacherKey",
@@ -15476,7 +16224,12 @@ function fixedPrivateOutcomeHashCurrentState(target, plan) {
       "academyId", "status", "outcome", "attendanceStatus", "lessonId",
       "slotId", "packageId", "deductionPackageId",
       "fixedPrivateDeductionLedger", "deductionApplied",
-      "deductionCreditTransactionId", "noDeduction", "deductionCanceled",
+      "deductionCreditTransactionId", "deductionTransactionId",
+      "deductionStatus", "deductionCycleNumber",
+      "deductionCyclePredecessorReversalCreditTransactionId",
+      "originalDeductionCreditTransactionId",
+      "reversalCreditTransactionId", "outcomeReversedAt",
+      "outcomeReversalPlanHash", "noDeduction", "deductionCanceled",
       "deductionCancelled", "deductionReversed", "cancelledAt",
       "releasedAt", "releasedFromFixed", "teacherUid", "teacherUID",
       "teacherId", "teacherID", "teacherKey", "teacher", "teacherName",
@@ -15485,7 +16238,11 @@ function fixedPrivateOutcomeHashCurrentState(target, plan) {
     slot: summarize(target.slotDoc, [
       "academyId", "status", "lessonId", "reservationId", "packageId",
       "fixedPrivateDeductionLedger", "noDeduction", "deductionCanceled",
-      "deductionCancelled", "deductionReversed", "cancelledAt",
+      "deductionCancelled", "deductionApplied", "deductionStatus",
+      "deductionCreditTransactionId", "deductionTransactionId",
+      "deductionCycleNumber", "originalDeductionCreditTransactionId",
+      "reversalCreditTransactionId", "outcomeReversedAt",
+      "outcomeReversalPlanHash", "deductionReversed", "cancelledAt",
       "releasedAt", "releasedFromFixed", "teacherUid", "teacherUID",
       "teacherId", "teacherID", "teacherKey", "teacher", "teacherName",
       "updatedAt",
@@ -15497,6 +16254,23 @@ function fixedPrivateOutcomeHashCurrentState(target, plan) {
     creditTransaction: {
       id: target.creditDoc.id,
       exists: target.creditDoc.exists,
+      data: summarize(target.creditDoc, [
+        "academyId", "studentId", "packageId", "sourceType", "sourceId",
+        "lessonId", "slotId", "deltaCount", "canonicalDeductionId",
+        "deductionCycleNumber", "previousDeductionCreditTransactionId",
+        "predecessorReversalCreditTransactionId",
+        "reversalCreditTransactionId", "reversalOfTransactionId",
+      ]),
+    },
+    reversalCreditTransaction: {
+      id: target.reversalCreditDoc.id,
+      exists: target.reversalCreditDoc.exists,
+      data: summarize(target.reversalCreditDoc, [
+        "academyId", "studentId", "packageId", "sourceType", "sourceId",
+        "lessonId", "slotId", "deltaCount", "canonicalDeductionId",
+        "deductionCycleNumber", "originalCreditTransactionId",
+        "reversalOfTransactionId", "planHash",
+      ]),
     },
     ledgerDiagnostics: plan.ledgerDiagnostics,
   };
@@ -15536,6 +16310,7 @@ function summarizeFixedPrivateOutcomeTarget(target) {
     slot: summarize(target.slotDoc),
     package: summarize(target.packageDoc),
     creditTransaction: summarize(target.creditDoc),
+    reversalCreditTransaction: summarize(target.reversalCreditDoc),
   };
 }
 
@@ -15599,6 +16374,8 @@ async function previewFixedPrivateLessonOutcomeAction({
     ledgerDiagnostics: plan.ledgerDiagnostics,
     packageImpact: plan.packageImpact,
     creditTransactionPreview: plan.creditTransactionPreview,
+    currentState: plan.currentState ||
+      fixedPrivateOutcomeHashCurrentState(target, plan),
     blockedReasons: plan.blockedReasons,
     warnings: plan.warnings,
     normalizedPlan: plan.normalizedPlan,
@@ -19379,6 +20156,115 @@ const PRIVATE_LESSON_OUTCOME_COMMIT_ACTIONS = ["complete", "no_show"];
 const PRIVATE_LESSON_OUTCOME_ACTION_BATCH_COLLECTION =
   "privateLessonOutcomeActionBatches";
 
+function isPrivateReservationDeductionReversed(reservation = {}) {
+  return reservation.deductionReversed === true ||
+    normalizeId(reservation.deductionStatus).toLowerCase() === "reversed" ||
+    Boolean(reservation.outcomeReversedAt);
+}
+
+function getPrivateReservationDeductionPointer(reservation = {}) {
+  const deductionCreditTransactionId = normalizeId(
+      reservation.deductionCreditTransactionId,
+  );
+  const deductionTransactionId = normalizeId(
+      reservation.deductionTransactionId,
+  );
+  return deductionCreditTransactionId &&
+    deductionCreditTransactionId === deductionTransactionId ?
+    deductionCreditTransactionId :
+    "";
+}
+
+function buildPrivateReservationOutcomeDeductionCycleIdentity({
+  academyId,
+  reservationId,
+  studentId,
+  packageId,
+  reservation = {},
+}) {
+  const canonicalDeductionId = buildDeductionKey({
+    academyId,
+    lessonId: reservationId,
+    studentId,
+    packageId,
+  });
+  const currentPointer = getPrivateReservationDeductionPointer(reservation);
+  const reversed = isPrivateReservationDeductionReversed(reservation);
+  if (reservation.deductionApplied === true && !reversed && currentPointer) {
+    return {
+      creditTransactionId: currentPointer,
+      canonicalDeductionId,
+      previousDeductionCreditTransactionId: "",
+      predecessorReversalCreditTransactionId: normalizeId(
+          reservation.deductionCyclePredecessorReversalCreditTransactionId,
+      ),
+      cycleNumber: Math.max(
+          1,
+          normalizePositiveAttempt(reservation.deductionCycleNumber) ||
+            normalizePositiveAttempt(reservation.deductionAttemptNumber),
+      ),
+      active: true,
+      historyOnly: false,
+    };
+  }
+  if (!reversed) {
+    return {
+      creditTransactionId: canonicalDeductionId,
+      canonicalDeductionId,
+      previousDeductionCreditTransactionId: "",
+      predecessorReversalCreditTransactionId: "",
+      cycleNumber: 1,
+      active: false,
+      historyOnly: false,
+    };
+  }
+  const previousDeductionCreditTransactionId = currentPointer;
+  const predecessorReversalCreditTransactionId = normalizeId(
+      reservation.reversalCreditTransactionId,
+  );
+  const expectedReversalId = previousDeductionCreditTransactionId ?
+    buildPrivateReservationOutcomeReversalCreditId(
+        previousDeductionCreditTransactionId,
+    ) :
+    "";
+  if (!previousDeductionCreditTransactionId ||
+      !predecessorReversalCreditTransactionId ||
+      predecessorReversalCreditTransactionId !== expectedReversalId) {
+    return {
+      creditTransactionId: "",
+      canonicalDeductionId,
+      previousDeductionCreditTransactionId,
+      predecessorReversalCreditTransactionId,
+      cycleNumber: 0,
+      active: false,
+      historyOnly: true,
+      invalidReason: "reversal_cycle_identity_missing",
+    };
+  }
+  const discriminator = crypto
+      .createHash("sha256")
+      .update(stableStringify({
+        version: 1,
+        canonicalDeductionId,
+        previousDeductionCreditTransactionId,
+        predecessorReversalCreditTransactionId,
+      }))
+      .digest("hex")
+      .slice(0, 24);
+  return {
+    creditTransactionId: `${canonicalDeductionId}__cycle_${discriminator}`,
+    canonicalDeductionId,
+    previousDeductionCreditTransactionId,
+    predecessorReversalCreditTransactionId,
+    cycleNumber: Math.max(
+        2,
+        normalizePositiveAttempt(reservation.deductionCycleNumber) + 1,
+    ),
+    active: false,
+    historyOnly: true,
+  };
+}
+
 function buildPrivateLessonOutcomeActionBatchId({academyId, requestId}) {
   return [
     "privateLessonOutcomeAction",
@@ -19477,6 +20363,7 @@ function buildPrivateLessonOutcomeCommitResult({
   creditTransactionId,
   updated,
   normalizedPlan,
+  packageImpact,
   idempotentReplay,
 }) {
   return {
@@ -19494,6 +20381,10 @@ function buildPrivateLessonOutcomeCommitResult({
     creditTransactionId: normalizeId(creditTransactionId),
     updated,
     normalizedPlan,
+    packageImpact,
+    additionalPackageDeduction: Number(
+        packageImpact && packageImpact.additionalPackageDeduction || 0,
+    ),
     nextStep: "Private lesson outcome action committed.",
   };
 }
@@ -19518,6 +20409,12 @@ function buildPrivateLessonOutcomeCommitReplay({
         helperResult.creditTransactionId,
     }),
     normalizedPlan: checkpoint.normalizedPlan || {},
+    packageImpact: {
+      ...(checkpoint.packageImpact || {}),
+      usedCountDelta: 0,
+      remainingCountDelta: 0,
+      additionalPackageDeduction: 0,
+    },
     idempotentReplay: true,
   });
 }
@@ -19664,11 +20561,18 @@ async function commitPrivateLessonOutcomeAction({db, auth, data}) {
       reservation: target.reservation,
       slot: target.slot,
       lesson: target.lesson,
+      studentDoc: target.studentDoc,
       packageDoc: target.packageDoc,
       packageIdCandidate: target.packageId,
       packageLookupReason: target.packageLookupReason,
       creditTransactionExists: target.creditTransactionExists,
       creditTransactionId: target.creditTransactionId,
+      creditTransaction: target.creditTransaction,
+      deterministicReversalCreditTransactionId:
+        target.deterministicReversalCreditTransactionId,
+      deterministicReversalCreditTransactionExists:
+        target.deterministicReversalCreditTransactionExists,
+      deductionCycleIdentity: target.deductionCycleIdentity,
       actor,
       nowMillis: Date.now(),
     });
@@ -19751,6 +20655,7 @@ async function commitPrivateLessonOutcomeAction({db, auth, data}) {
       updated,
       warnings: plan.warnings,
       normalizedPlan: plan.normalizedPlan,
+      packageImpact: plan.packageImpact,
       sourceType: "private-lesson-outcome-action",
       createdAt: now,
       completedAt: now,
@@ -19764,6 +20669,7 @@ async function commitPrivateLessonOutcomeAction({db, auth, data}) {
       creditTransactionId: helperResult.creditTransactionId,
       updated,
       normalizedPlan: plan.normalizedPlan,
+      packageImpact: plan.packageImpact,
       idempotentReplay: false,
     });
   });
@@ -19802,6 +20708,20 @@ function buildPrivateReservationOutcomePlanHashCurrentState(target) {
       deductionTransactionId: normalizeId(
           reservation.deductionTransactionId,
       ),
+      originalDeductionCreditTransactionId: normalizeId(
+          reservation.originalDeductionCreditTransactionId,
+      ),
+      reversalCreditTransactionId: normalizeId(
+          reservation.reversalCreditTransactionId,
+      ),
+      deductionCyclePredecessorReversalCreditTransactionId: normalizeId(
+          reservation.deductionCyclePredecessorReversalCreditTransactionId,
+      ),
+      deductionReversed: isPrivateReservationDeductionReversed(reservation),
+      deductionStatus: normalizeId(reservation.deductionStatus).toLowerCase(),
+      deductionCycleNumber: normalizePositiveAttempt(
+          reservation.deductionCycleNumber,
+      ),
       deductionAttemptNumber: normalizePositiveAttempt(
           reservation.deductionAttemptNumber,
       ),
@@ -19815,6 +20735,10 @@ function buildPrivateReservationOutcomePlanHashCurrentState(target) {
           slot,
       ),
       endMillis: getPrivateReservationEndMillis(reservation, slot),
+    } : null,
+    student: target && target.studentDoc ? {
+      academyId: normalizeId(target.studentDoc.academyId),
+      status: normalizeId(target.studentDoc.status || "active").toLowerCase(),
     } : null,
     slot: slot ? {
       academyId: normalizeId(slot.academyId),
@@ -19857,6 +20781,34 @@ function buildPrivateReservationOutcomePlanHashCurrentState(target) {
     creditTransaction: {
       id: normalizeId(target && target.creditTransactionId),
       exists: Boolean(target && target.creditTransactionExists),
+      academyId: normalizeId(
+          target && target.creditTransaction &&
+          target.creditTransaction.academyId,
+      ),
+      sourceType: normalizeId(
+          target && target.creditTransaction &&
+          target.creditTransaction.sourceType,
+      ),
+      sourceId: normalizeId(
+          target && target.creditTransaction &&
+          target.creditTransaction.sourceId,
+      ),
+      studentId: normalizeId(
+          target && target.creditTransaction &&
+          target.creditTransaction.studentId,
+      ),
+      packageId: normalizeId(
+          target && target.creditTransaction &&
+          target.creditTransaction.packageId,
+      ),
+      deltaCount: normalizePrivateReservationOutcomeHashNumber(
+          target && target.creditTransaction &&
+          target.creditTransaction.deltaCount,
+      ),
+      reversalCreditTransactionId: normalizeId(
+          target && target.creditTransaction &&
+          target.creditTransaction.reversalCreditTransactionId,
+      ),
     },
   };
 }
@@ -19896,6 +20848,7 @@ function buildPrivateReservationOutcomePlanHash({
 function mapPrivateReservationOutcomePackageBlockedReason(reason) {
   const reasonMap = {
     package_missing: "package_missing",
+    package_ambiguous: "package_ambiguous",
     academy_mismatch: "package_academy_mismatch",
     student_mismatch: "package_student_mismatch",
     package_not_active: "package_not_active",
@@ -19909,6 +20862,108 @@ function mapPrivateReservationOutcomePackageBlockedReason(reason) {
   return reasonMap[reason] || "package_mismatch";
 }
 
+function getDirectPrivateTeacherRelationBlockedReason({
+  reservation,
+  slot,
+  lesson,
+  packageData,
+}) {
+  const occurrenceIdentity = getPrivateTeacherIdentity(
+      reservation,
+      slot,
+      lesson,
+  );
+  const packageIdentity = getPrivateTeacherIdentity(packageData);
+  const tiers = ["uidIds", "teacherIds", "teacherKeys", "names"];
+  for (const tier of tiers) {
+    const occurrenceValues = occurrenceIdentity[tier] || [];
+    const packageValues = packageIdentity[tier] || [];
+    if (occurrenceValues.length === 0 && packageValues.length === 0) continue;
+    if (occurrenceValues.length !== 1 || packageValues.length !== 1) {
+      return "teacher_identity_mismatch";
+    }
+    return occurrenceValues[0] === packageValues[0] ?
+      "" :
+      "teacher_identity_mismatch";
+  }
+  return "teacher_identity_missing";
+}
+
+function getDirectPrivateLinkedConflictReason({
+  reservationId,
+  reservation,
+  slot,
+  lesson,
+  normalizedOutcome,
+}) {
+  if (!reservation || !slot) return "reservation_linkage_missing";
+  const studentId = normalizeId(reservation.studentId);
+  const slotReservationId = normalizeId(slot.reservationId);
+  const slotStudentId = normalizeId(
+      slot.studentId || slot.reservedStudentId,
+  );
+  if (slotReservationId && slotReservationId !== reservationId) {
+    return "slot_reservation_mismatch";
+  }
+  if (slotStudentId && slotStudentId !== studentId) {
+    return "student_mismatch";
+  }
+  if (!lesson) return "";
+  const lessonReservationId = normalizeId(
+      lesson.reservationId || lesson.privateLessonReservationId,
+  );
+  const lessonStudentId = normalizeId(lesson.studentId || lesson.studentID);
+  if (lessonReservationId && lessonReservationId !== reservationId) {
+    return "lesson_reservation_mismatch";
+  }
+  if (lessonStudentId && lessonStudentId !== studentId) {
+    return "student_mismatch";
+  }
+  const lessonFinalState = normalizeId(
+      lesson.attendanceStatus || lesson.outcome || lesson.status,
+  ).toLowerCase();
+  const completedConflict = lesson.completed === true ||
+    ["attended", "completed", "complete"].includes(lessonFinalState);
+  const absentConflict = ["no_show", "no-show", "absent"].includes(
+      lessonFinalState,
+  );
+  if (normalizedOutcome === "no_show" && completedConflict) {
+    return "conflicting_completed_outcome";
+  }
+  if (normalizedOutcome === "completed" && absentConflict) {
+    return "conflicting_absence_outcome";
+  }
+  return "";
+}
+
+function isAutoDeductedPrivateReservationOutcomeReclassification({
+  reservation,
+  normalizedOutcome,
+  creditTransactionExists = false,
+}) {
+  const currentStatus = normalizeId(reservation && reservation.status)
+      .toLowerCase();
+  const deductionSource = normalizeId(
+      reservation && reservation.deductionSource,
+  ).toLowerCase();
+  const outcomeActorRole = normalizeId(
+      reservation && reservation.outcomeActorRole,
+  ).toLowerCase();
+  return normalizedOutcome === "no_show" &&
+    currentStatus === "completed" &&
+    reservation && reservation.deductionApplied === true &&
+    deductionSource === "auto" &&
+    outcomeActorRole === "auto" &&
+    creditTransactionExists === true &&
+    reservation.deductionReversed !== true &&
+    normalizeId(reservation.deductionStatus).toLowerCase() !== "reversed" &&
+    !reservation.outcomeReversedAt;
+}
+
+function isExistingPrivateDeductionAvailabilityReason(reason) {
+  return reason === "no_remaining_count" || reason === "package_not_active";
+}
+
 function buildPrivateReservationOutcomePlan({
   academyId,
   reservationId,
@@ -19916,11 +20971,16 @@ function buildPrivateReservationOutcomePlan({
   reservation,
   slot,
   lesson = null,
+  studentDoc = null,
   packageDoc,
   packageIdCandidate = "",
   packageLookupReason = "",
   creditTransactionExists = false,
   creditTransactionId = "",
+  creditTransaction = null,
+  deterministicReversalCreditTransactionId = "",
+  deterministicReversalCreditTransactionExists = false,
+  deductionCycleIdentity = null,
   actor = {},
   nowMillis,
 }) {
@@ -19935,6 +20995,42 @@ function buildPrivateReservationOutcomePlan({
   const normalizedOutcome = actionType === "complete" ?
     "completed" :
     actionType === "no_show" ? "no_show" : "";
+  const currentReservationStatus = normalizeId(
+      reservationData && reservationData.status,
+  ).toLowerCase();
+  const reservationDeductionReversed =
+    isPrivateReservationDeductionReversed(reservationData || {});
+  const activeDeductionPointer = getPrivateReservationDeductionPointer(
+      reservationData || {},
+  );
+  const hasActiveDeduction = Boolean(
+      reservationData &&
+      reservationData.deductionApplied === true &&
+      reservationData.deductionReversed === false &&
+      normalizeId(reservationData.deductionStatus) === "deducted" &&
+      reservationData.outcomeReversedAt === null &&
+      !reservationDeductionReversed &&
+      activeDeductionPointer &&
+      activeDeductionPointer === creditTransactionId,
+  );
+  const activeCreditMatches = Boolean(
+      getPrivateReservationCanonicalActiveDeductionEvidence({
+        academyId,
+        reservationId,
+        reservation: reservationData || {},
+        packageId,
+        packageData,
+        creditTransactionId,
+        creditTransactionExists,
+        creditTransaction,
+        deterministicReversalCreditTransactionId,
+        deterministicReversalCreditTransactionExists,
+      }),
+  );
+  const sameOutcomeActiveDeductionReplay = Boolean(
+      activeCreditMatches &&
+      currentReservationStatus === normalizedOutcome,
+  );
 
   if (!normalizedOutcome) blockedReasons.push("invalid_action");
   if (!reservationData) {
@@ -19948,9 +21044,16 @@ function buildPrivateReservationOutcomePlan({
     blockedReasons.push(FIXED_PRIVATE_DIRECT_PATH_BLOCK_REASON);
   }
 
-  const currentReservationStatus = normalizeId(
-      reservationData && reservationData.status,
-  ).toLowerCase();
+  const isAutoDeductionReclassification =
+    isAutoDeductedPrivateReservationOutcomeReclassification({
+      reservation: reservationData,
+      normalizedOutcome,
+      creditTransactionExists: activeCreditMatches,
+    });
+  const reusesActiveDeduction = Boolean(
+      isAutoDeductionReclassification ||
+      sameOutcomeActiveDeductionReplay,
+  );
   const reservationAcademyMatches = Boolean(
       reservationData &&
       normalizeId(reservationData.academyId) === academyId,
@@ -19959,32 +21062,68 @@ function buildPrivateReservationOutcomePlan({
     if (!reservationAcademyMatches) {
       blockedReasons.push("academy_mismatch");
     } else {
-      if (currentReservationStatus === "completed") {
+      if (
+        currentReservationStatus === "completed" &&
+        !isAutoDeductionReclassification &&
+        !sameOutcomeActiveDeductionReplay
+      ) {
         blockedReasons.push("already_completed");
       } else if (
         currentReservationStatus === "no_show" ||
         currentReservationStatus === "no-show"
       ) {
-        blockedReasons.push("already_no_show");
+        if (!sameOutcomeActiveDeductionReplay) {
+          blockedReasons.push("already_no_show");
+        }
       } else if (
         currentReservationStatus === "cancelled" ||
         currentReservationStatus === "canceled"
       ) {
         blockedReasons.push("reservation_cancelled");
       }
-      if (!isActivePrivateReservation(reservationData)) {
+      if (
+        !isActivePrivateReservation(reservationData) &&
+        !reusesActiveDeduction
+      ) {
         blockedReasons.push("reservation_not_active");
       }
-      if (reservationData.deductionApplied === true) {
+      if (
+        reservationData.deductionApplied === true &&
+        !reusesActiveDeduction
+      ) {
         blockedReasons.push("deduction_already_applied");
+      }
+      if (hasActiveDeduction && !activeCreditMatches) {
+        blockedReasons.push("deduction_evidence_conflict");
+      }
+      if (deductionCycleIdentity && deductionCycleIdentity.invalidReason) {
+        blockedReasons.push(deductionCycleIdentity.invalidReason);
       }
       if (!normalizeId(reservationData.studentId) ||
           !normalizeId(reservationData.slotId)) {
         blockedReasons.push("reservation_linkage_missing");
       }
-      if (slot && normalizeId(slot.academyId) !== academyId) {
+      if (!slot) {
+        blockedReasons.push("slot_missing");
+      } else if (normalizeId(slot.academyId) !== academyId) {
         blockedReasons.push("slot_academy_mismatch");
       }
+      if (!studentDoc) {
+        blockedReasons.push("student_missing");
+      } else if (normalizeId(studentDoc.academyId) !== academyId) {
+        blockedReasons.push("student_academy_mismatch");
+      }
+      if (lesson && normalizeId(lesson.academyId) !== academyId) {
+        blockedReasons.push("lesson_academy_mismatch");
+      }
+      const linkedConflict = getDirectPrivateLinkedConflictReason({
+        reservationId,
+        reservation: reservationData,
+        slot,
+        lesson,
+        normalizedOutcome,
+      });
+      if (linkedConflict) blockedReasons.push(linkedConflict);
       const endMillis = getPrivateReservationEndMillis(reservationData, slot);
       if (endMillis === null) {
         blockedReasons.push("reservation_schedule_missing");
@@ -20012,12 +21151,26 @@ function buildPrivateReservationOutcomePlan({
             reservationData.date || (slot && slot.date),
         ),
       });
-      if (packageRejectReason) {
+      if (
+        packageRejectReason &&
+        !(reusesActiveDeduction &&
+          isExistingPrivateDeductionAvailabilityReason(packageRejectReason))
+      ) {
         blockedReasons.push(
             mapPrivateReservationOutcomePackageBlockedReason(
                 packageRejectReason,
             ),
         );
+      }
+      const teacherRelationReason =
+        getDirectPrivateTeacherRelationBlockedReason({
+          reservation: reservationData,
+          slot,
+          lesson,
+          packageData,
+        });
+      if (teacherRelationReason) {
+        blockedReasons.push(teacherRelationReason);
       }
     }
   }
@@ -20036,17 +21189,22 @@ function buildPrivateReservationOutcomePlan({
   }
   if (
     packageData &&
-    (currentRemainingCount === null || currentRemainingCount <= 0)
+    (currentRemainingCount === null ||
+      currentRemainingCount <= 0) &&
+    !reusesActiveDeduction
   ) {
     blockedReasons.push("package_remaining_insufficient");
   }
 
   const nextUsedCount = currentUsedCount === null ?
     null :
-    currentUsedCount + 1;
+    currentUsedCount + (reusesActiveDeduction ? 0 : 1);
   const nextRemainingCount = currentRemainingCount === null ?
     null :
-    Math.max(0, currentRemainingCount - 1);
+    Math.max(
+        0,
+        currentRemainingCount - (reusesActiveDeduction ? 0 : 1),
+    );
   const currentPackageStatus = packageData ?
     normalizeId(packageData.status || "active").toLowerCase() :
     "";
@@ -20062,7 +21220,7 @@ function buildPrivateReservationOutcomePlan({
       "private_reservation_no_show_deduct" :
       "";
 
-  if (creditTransactionExists) {
+  if (creditTransactionExists && !reusesActiveDeduction) {
     blockedReasons.push("credit_transaction_already_exists");
   }
   if (!packageLookupReason &&
@@ -20073,8 +21231,14 @@ function buildPrivateReservationOutcomePlan({
 
   const uniqueBlockedReasons = Array.from(new Set(blockedReasons));
   if (uniqueBlockedReasons.length === 0) {
-    warnings.push("package_deduction_will_be_applied");
-    warnings.push("credit_transaction_will_be_created");
+    if (isAutoDeductionReclassification) {
+      warnings.push("existing_auto_deduction_will_be_reused");
+    } else if (sameOutcomeActiveDeductionReplay) {
+      warnings.push("existing_active_deduction_will_be_reused");
+    } else {
+      warnings.push("package_deduction_will_be_applied");
+      warnings.push("credit_transaction_will_be_created");
+    }
   }
   const uniqueWarnings = Array.from(new Set(warnings));
   const wouldCreate = Boolean(
@@ -20090,8 +21254,9 @@ function buildPrivateReservationOutcomePlan({
     packageId,
     currentUsedCount,
     currentRemainingCount,
-    usedCountDelta: 1,
-    remainingCountDelta: -1,
+    usedCountDelta: reusesActiveDeduction ? 0 : 1,
+    remainingCountDelta: reusesActiveDeduction ? 0 : -1,
+    additionalPackageDeduction: reusesActiveDeduction ? 0 : 1,
     nextUsedCount,
     nextRemainingCount,
     currentStatus: currentPackageStatus,
@@ -20102,7 +21267,7 @@ function buildPrivateReservationOutcomePlan({
     creditTransactionId,
     sourceType: "privateReservation",
     sourceId: reservationId,
-    deltaCount: -1,
+    deltaCount: reusesActiveDeduction ? 0 : -1,
     actionType: creditActionType,
     packageId,
     duplicateExists: creditTransactionExists === true,
@@ -20145,6 +21310,27 @@ function buildPrivateReservationOutcomePlan({
     reservationId,
     actionType,
     normalizedOutcome,
+    deductionMode: isAutoDeductionReclassification ?
+      "reuse_existing_auto_deduction" :
+      sameOutcomeActiveDeductionReplay ?
+        "reuse_existing_active_deduction" :
+        "create_deduction",
+    additionalPackageDeduction: reusesActiveDeduction ? 0 : 1,
+    canonicalDeductionId: normalizeId(
+        deductionCycleIdentity && deductionCycleIdentity.canonicalDeductionId,
+    ),
+    activeDeductionId: creditTransactionId,
+    previousDeductionCreditTransactionId: normalizeId(
+        deductionCycleIdentity &&
+        deductionCycleIdentity.previousDeductionCreditTransactionId,
+    ),
+    predecessorReversalCreditTransactionId: normalizeId(
+        deductionCycleIdentity &&
+        deductionCycleIdentity.predecessorReversalCreditTransactionId,
+    ),
+    deductionCycleNumber: Number(
+        deductionCycleIdentity && deductionCycleIdentity.cycleNumber || 0,
+    ),
     packageId,
     creditTransactionId,
     packageUsedCount: nextUsedCount,
@@ -20185,6 +21371,7 @@ async function resolvePrivateReservationOutcomePreviewTarget({
       reservation: null,
       slot: null,
       lesson: null,
+      studentDoc: null,
       packageDoc: null,
       packageId: "",
       packageLookupReason: "",
@@ -20201,6 +21388,7 @@ async function resolvePrivateReservationOutcomePreviewTarget({
       },
       slot: null,
       lesson: null,
+      studentDoc: null,
       packageDoc: null,
       packageId: "",
       packageLookupReason: "",
@@ -20225,7 +21413,17 @@ async function resolvePrivateReservationOutcomePreviewTarget({
   const lesson = lessonSnap && lessonSnap.exists ?
     lessonSnap.data() || {} :
     null;
-  const explicitPackageId = normalizeId(reservation.packageId);
+  const studentId = normalizeId(reservation.studentId);
+  const studentSnap = studentId ?
+    await read(db.collection("privateStudents").doc(studentId)) :
+    null;
+  const studentDoc = studentSnap && studentSnap.exists ?
+    studentSnap.data() || {} :
+    null;
+  const explicitPackageId = normalizeId(
+      reservation.packageId ||
+      reservation.deductionPackageId,
+  );
   let packageDoc = null;
   let packageLookupReason = "";
 
@@ -20242,7 +21440,6 @@ async function resolvePrivateReservationOutcomePreviewTarget({
       packageLookupReason = "package_missing";
     }
   } else {
-    const studentId = normalizeId(reservation.studentId);
     if (studentId) {
       const packageSnap = await read(db
           .collection("studentPackages")
@@ -20262,11 +21459,13 @@ async function resolvePrivateReservationOutcomePreviewTarget({
             ) && Number(candidate.data.remainingCount || 0) > 0,
           )
           .sort(sortPrivatePackageCandidates);
-      if (matchingCandidates.length > 0) {
+      if (matchingCandidates.length === 1) {
         packageDoc = {
           id: matchingCandidates[0].id,
           data: matchingCandidates[0].data,
         };
+      } else if (matchingCandidates.length > 1) {
+        packageLookupReason = "package_ambiguous";
       } else {
         const rejectedCandidates = candidates.map((candidate) => ({
           candidate,
@@ -20313,6 +21512,10 @@ async function resolvePrivateReservationOutcomePreviewTarget({
 
   let creditTransactionId = "";
   let creditTransactionExists = false;
+  let creditTransaction = null;
+  let deterministicReversalCreditTransactionId = "";
+  let deterministicReversalCreditTransactionExists = false;
+  let deductionCycleIdentity = null;
   if (packageDoc) {
     const packageRejectReason = getPrivatePackageRejectReason({
       pkg: packageDoc.data,
@@ -20326,20 +21529,53 @@ async function resolvePrivateReservationOutcomePreviewTarget({
     });
     const remainingCount = Number(packageDoc.data.remainingCount || 0);
     const usedCount = Number(packageDoc.data.usedCount || 0);
-    if (!packageRejectReason &&
+    const canReuseExistingDeductionPackage = Boolean(
+        reservation.deductionApplied === true &&
+        !isPrivateReservationDeductionReversed(reservation) &&
+        normalizeId(reservation.deductionPackageId) === packageDoc.id &&
+        isExistingPrivateDeductionAvailabilityReason(packageRejectReason),
+    );
+    if ((!packageRejectReason || canReuseExistingDeductionPackage) &&
         Number.isFinite(remainingCount) &&
-        remainingCount > 0 &&
+        (remainingCount > 0 || canReuseExistingDeductionPackage) &&
         Number.isFinite(usedCount)) {
-      creditTransactionId = buildDeductionKey({
-        academyId,
-        lessonId: reservationId,
-        studentId: normalizeId(reservation.studentId),
-        packageId: packageDoc.id,
-      });
+      deductionCycleIdentity =
+        buildPrivateReservationOutcomeDeductionCycleIdentity({
+          academyId,
+          studentId: normalizeId(reservation.studentId),
+          packageId: packageDoc.id,
+          reservationId,
+          reservation,
+        });
+      creditTransactionId = normalizeId(
+          deductionCycleIdentity.creditTransactionId,
+      );
+      if (!creditTransactionId) {
+        return {
+          reservation,
+          slot,
+          lesson,
+          studentDoc,
+          packageDoc,
+          packageId: packageDoc.id,
+          packageLookupReason,
+          creditTransactionId: "",
+          creditTransactionExists: false,
+          creditTransaction: null,
+          deductionCycleIdentity,
+        };
+      }
       const creditSnap = await read(db
           .collection("creditTransactions")
           .doc(creditTransactionId));
       creditTransactionExists = creditSnap.exists;
+      creditTransaction = creditSnap.exists ? creditSnap.data() || {} : null;
+      deterministicReversalCreditTransactionId =
+        buildPrivateReservationOutcomeReversalCreditId(creditTransactionId);
+      const reversalSnap = await read(db
+          .collection("creditTransactions")
+          .doc(deterministicReversalCreditTransactionId));
+      deterministicReversalCreditTransactionExists = reversalSnap.exists;
     }
   }
 
@@ -20347,11 +21583,16 @@ async function resolvePrivateReservationOutcomePreviewTarget({
     reservation,
     slot,
     lesson,
+    studentDoc,
     packageDoc,
     packageId: packageDoc ? packageDoc.id : explicitPackageId,
     packageLookupReason,
     creditTransactionId,
     creditTransactionExists,
+    creditTransaction,
+    deterministicReversalCreditTransactionId,
+    deterministicReversalCreditTransactionExists,
+    deductionCycleIdentity,
   };
 }
 
@@ -20375,6 +21616,11 @@ function buildPrivateReservationOutcomePreviewTarget({
       exists: Boolean(target.slot),
       status: normalizeId(target.slot && target.slot.status),
     },
+    student: {
+      id: normalizeId(target.reservation && target.reservation.studentId),
+      exists: Boolean(target.studentDoc),
+      status: normalizeId(target.studentDoc && target.studentDoc.status),
+    },
     lesson: {
       id: normalizeId(
           target.reservation && (
@@ -20393,6 +21639,20 @@ function buildPrivateReservationOutcomePreviewTarget({
     creditTransaction: {
       id: target.creditTransactionId,
       exists: target.creditTransactionExists === true,
+      activeDeductionId: normalizeId(
+          target.deductionCycleIdentity &&
+          target.deductionCycleIdentity.active ?
+            target.creditTransactionId :
+            "",
+      ),
+      canonicalDeductionId: normalizeId(
+          target.deductionCycleIdentity &&
+          target.deductionCycleIdentity.canonicalDeductionId,
+      ),
+      cycleNumber: Number(
+          target.deductionCycleIdentity &&
+          target.deductionCycleIdentity.cycleNumber || 0,
+      ),
     },
   };
 }
@@ -20420,6 +21680,148 @@ function buildFixedPrivateOutcomeCommitResult({
     ledgerDiagnostics: checkpoint.ledgerDiagnostics,
     normalizedPlan: checkpoint.normalizedPlan,
     nextStep: "Fixed private lesson outcome action committed.",
+  };
+}
+
+function buildFixedPrivateReversalReplayCheckpoint({
+  validation,
+  target,
+}) {
+  if (validation.actionType !== "reverse_deduction") return null;
+  const lesson = target.lessonDoc.exists ? target.lessonDoc.data : {};
+  const reservation = target.reservationDoc.exists ?
+    target.reservationDoc.data :
+    {};
+  const slot = target.slotDoc.exists ? target.slotDoc.data : {};
+  const packageData = target.packageDoc.exists ? target.packageDoc.data : {};
+  const originalCredit = target.creditDoc.exists ? target.creditDoc.data : {};
+  const reversalCredit = target.reversalCreditDoc.exists ?
+    target.reversalCreditDoc.data :
+    {};
+  const activeDeductionId = getPrivateReservationDeductionPointer(reservation);
+  const lessonDeductionId = getPrivateReservationDeductionPointer(lesson);
+  const reversalCreditTransactionId = activeDeductionId ?
+    buildPrivateReservationOutcomeReversalCreditId(activeDeductionId) :
+    "";
+  const storedPlanHashes = [
+    reservation.outcomeReversalPlanHash,
+    lesson.outcomeReversalPlanHash,
+    slot.outcomeReversalPlanHash,
+    reversalCredit.planHash,
+  ].map(normalizeId);
+  if (!target.lessonDoc.exists ||
+      !target.reservationDoc.exists ||
+      !target.slotDoc.exists ||
+      !target.packageDoc.exists ||
+      !target.creditDoc.exists ||
+      !target.reversalCreditDoc.exists ||
+      target.linkedReservationId !== validation.reservationId ||
+      target.linkedSlotId !== validation.slotId ||
+      target.packageId !== validation.packageId ||
+      normalizeId(lesson.academyId) !== validation.academyId ||
+      normalizeId(reservation.academyId) !== validation.academyId ||
+      normalizeId(slot.academyId) !== validation.academyId ||
+      normalizeId(lesson.status).toLowerCase() !== "active" ||
+      normalizeId(reservation.status).toLowerCase() !== "active" ||
+      normalizeId(slot.status).toLowerCase() !== "reserved" ||
+      lesson.deductionApplied !== false ||
+      reservation.deductionApplied !== false ||
+      slot.deductionApplied !== false ||
+      !isPrivateReservationDeductionReversed(lesson) ||
+      !isPrivateReservationDeductionReversed(reservation) ||
+      !isPrivateReservationDeductionReversed(slot) ||
+      !activeDeductionId ||
+      activeDeductionId !== lessonDeductionId ||
+      activeDeductionId !== getPrivateReservationDeductionPointer(slot) ||
+      target.reversalCreditTransactionId !== reversalCreditTransactionId ||
+      normalizeId(reservation.reversalCreditTransactionId) !==
+        reversalCreditTransactionId ||
+      normalizeId(lesson.reversalCreditTransactionId) !==
+        reversalCreditTransactionId ||
+      normalizeId(slot.reversalCreditTransactionId) !==
+        reversalCreditTransactionId ||
+      storedPlanHashes.some((value) => value !== validation.planHash) ||
+      normalizeId(originalCredit.reversalCreditTransactionId) !==
+        reversalCreditTransactionId ||
+      normalizeId(originalCredit.sourceType) !== "fixedPrivateReservation" ||
+      normalizeId(originalCredit.sourceId) !== validation.reservationId ||
+      normalizeId(originalCredit.lessonId) !== validation.lessonId ||
+      normalizeId(originalCredit.slotId) !== validation.slotId ||
+      normalizeId(originalCredit.packageId) !== validation.packageId ||
+      normalizeId(originalCredit.studentId) !== target.studentId ||
+      normalizeId(originalCredit.actionType) !==
+        "fixed_private_no_show_deduct" ||
+      Number(originalCredit.deltaCount) !== -1 ||
+      normalizeId(reversalCredit.academyId) !== validation.academyId ||
+      normalizeId(reversalCredit.sourceType) !== "fixedPrivateReservation" ||
+      normalizeId(reversalCredit.sourceId) !== validation.reservationId ||
+      normalizeId(reversalCredit.lessonId) !== validation.lessonId ||
+      normalizeId(reversalCredit.slotId) !== validation.slotId ||
+      normalizeId(reversalCredit.packageId) !== validation.packageId ||
+      normalizeId(reversalCredit.studentId) !== target.studentId ||
+      normalizeId(reversalCredit.actionType) !==
+        "fixed_private_no_show_deduct_reversal" ||
+      normalizeId(reversalCredit.reversalOfTransactionId) !==
+        activeDeductionId ||
+      Number(reversalCredit.deltaCount) !== 1 ||
+      normalizeId(packageData.academyId) !== validation.academyId ||
+      normalizeId(packageData.studentId) !== target.studentId ||
+      normalizeId(packageData.packageType).toLowerCase() !== "private") {
+    return null;
+  }
+  const normalizedPlan = {
+    academyId: validation.academyId,
+    actionType: validation.actionType,
+    normalizedOutcome: "active",
+    previousOutcomeStatus: "no_show",
+    nextLessonStatus: "active",
+    nextReservationStatus: "active",
+    nextSlotStatus: "reserved",
+    lessonId: validation.lessonId,
+    reservationId: validation.reservationId,
+    slotId: validation.slotId,
+    packageId: validation.packageId,
+    studentId: target.studentId,
+    activeDeductionId,
+    originalCreditTransactionId: activeDeductionId,
+    reversalCreditTransactionId,
+    packageUsedCount: Number(packageData.usedCount),
+    packageRemainingCount: Number(packageData.remainingCount),
+    packageStatus: normalizeId(packageData.status),
+    additionalPackageRestore: 0,
+    creditImpact: {
+      originalCreditTransactionId: activeDeductionId,
+      reversalCreditTransactionId,
+      deltaCount: 0,
+      wouldCreate: false,
+    },
+  };
+  return {
+    batchId: "",
+    academyId: validation.academyId,
+    requestId: validation.requestId,
+    planHash: validation.planHash,
+    actionType: validation.actionType,
+    outcome: "active",
+    lessonId: validation.lessonId,
+    reservationId: validation.reservationId,
+    slotId: validation.slotId,
+    packageId: validation.packageId,
+    creditTransactionId: reversalCreditTransactionId,
+    status: "completed",
+    updated: {
+      reservations: [],
+      lessons: [],
+      privateLessonSlots: [],
+      studentPackages: [],
+      creditTransactions: [],
+    },
+    ledgerClassification: {
+      mode: "canonical",
+      marker: FIXED_PRIVATE_DEDUCTION_LEDGER,
+    },
+    ledgerDiagnostics: {},
+    normalizedPlan,
   };
 }
 
@@ -20519,6 +21921,33 @@ async function commitFixedPrivateLessonOutcomeAction({db, auth, data}) {
       permission,
       nowMillis: Date.now(),
     });
+    const reversalReplayCheckpoint =
+      buildFixedPrivateReversalReplayCheckpoint({
+        validation,
+        target,
+      });
+    if (reversalReplayCheckpoint) {
+      if (!permission.allowed) {
+        throw new HttpsError(
+            "permission-denied",
+            "Fixed private lesson outcome permission denied.",
+            fixedPrivateOutcomeErrorDetails({
+              validation,
+              plan,
+              actualPlanHash: validation.planHash,
+              blockedReasons: [
+                permission.blockedReason || "permission_denied",
+              ],
+            }),
+        );
+      }
+      return buildFixedPrivateOutcomeCommitResult({
+        validation,
+        batchId,
+        checkpoint: reversalReplayCheckpoint,
+        idempotentReplay: true,
+      });
+    }
     const actualPlanHash = buildFixedPrivateOutcomePlanHash({
       validation,
       target,
@@ -20563,6 +21992,137 @@ async function commitFixedPrivateLessonOutcomeAction({db, auth, data}) {
     }
     const now = admin.firestore.FieldValue.serverTimestamp();
     const normalizedPlan = plan.normalizedPlan;
+    if (validation.actionType === "reverse_deduction") {
+      const accountingIdentity =
+        buildFixedPrivateReversalAccountingIdentity({
+          validation,
+          target,
+          actor,
+          batchId,
+          planHash: actualPlanHash,
+          packageImpact: plan.packageImpact,
+        });
+      applyPrivateReservationOutcomeReversalAccountingInTransaction(
+          transaction,
+          {
+            packageRef: target.packageDoc.ref,
+            packageData: target.packageDoc.data,
+            originalCreditRef: target.creditDoc.ref,
+            reversalCreditRef: target.reversalCreditDoc.ref,
+            originalCreditTransactionId: normalizedPlan.activeDeductionId,
+            reversalCreditTransactionId:
+              normalizedPlan.reversalCreditTransactionId,
+            identity: accountingIdentity,
+            now,
+          },
+      );
+      const actorUid = getAuthUid(auth);
+      const actorRole = normalizeId(actor.actorRole || actor.role);
+      const actorName = normalizeId(actor.actorName);
+      const reversalAttemptNumber = Math.max(
+          normalizePositiveAttempt(
+              target.reservationDoc.data.reversalAttemptNumber,
+          ),
+          normalizePositiveAttempt(
+              target.lessonDoc.data.reversalAttemptNumber,
+          ),
+      ) + 1;
+      const reversalPatch = {
+        status: "active",
+        outcome: "active",
+        attendanceStatus: "active",
+        fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER,
+        completedAt: null,
+        noShowAt: null,
+        deductionApplied: false,
+        deductionPackageId: normalizedPlan.packageId,
+        deductionCreditTransactionId: normalizedPlan.activeDeductionId,
+        deductionTransactionId: normalizedPlan.activeDeductionId,
+        deductionReversed: true,
+        deductionStatus: "reversed",
+        deductionCycleNumber: normalizedPlan.deductionCycleNumber,
+        deductionCyclePredecessorReversalCreditTransactionId:
+          normalizeId(
+              target.creditDoc.data &&
+              target.creditDoc.data.predecessorReversalCreditTransactionId,
+          ) || null,
+        originalOutcomeStatus: "no_show",
+        previousOutcomeStatus: "no_show",
+        originalDeductionCreditTransactionId:
+          normalizedPlan.activeDeductionId,
+        reversalCreditTransactionId:
+          normalizedPlan.reversalCreditTransactionId,
+        outcomeReversedAt: now,
+        outcomeReversedByUid: actorUid,
+        outcomeReversedByRole: actorRole,
+        outcomeReversedByName: actorName,
+        outcomeReversalReason: "fixed_no_show_reversal",
+        outcomeReversalRequestId: validation.requestId,
+        outcomeReversalPlanHash: actualPlanHash,
+        outcomeReversalRequestMode: "fixed_outcome_action",
+        reversalAttemptNumber,
+        outcomeActionType: validation.actionType,
+        outcomeActionBatchId: batchId,
+        outcomeActionRequestId: validation.requestId,
+        updatedAt: now,
+      };
+      transaction.update(target.reservationDoc.ref, reversalPatch);
+      transaction.update(target.lessonDoc.ref, reversalPatch);
+      transaction.update(target.slotDoc.ref, {
+        ...reversalPatch,
+        status: "reserved",
+        outcome: "active",
+        attendanceStatus: "active",
+        ledgerUpdatedAt: now,
+      });
+      const updated = {
+        reservations: [target.reservationDoc.id],
+        lessons: [target.lessonDoc.id],
+        privateLessonSlots: [target.slotDoc.id],
+        studentPackages: [target.packageDoc.id],
+        creditTransactions: [
+          target.creditDoc.id,
+          target.reversalCreditDoc.id,
+        ],
+      };
+      const checkpoint = {
+        batchId,
+        academyId: validation.academyId,
+        requestId: validation.requestId,
+        payloadHash,
+        planHash: validation.planHash,
+        actionType: validation.actionType,
+        outcome: "active",
+        lessonId: target.lessonDoc.id,
+        reservationId: target.reservationDoc.id,
+        slotId: target.slotDoc.id,
+        packageId: target.packageDoc.id,
+        creditTransactionId: target.reversalCreditDoc.id,
+        originalCreditTransactionId: target.creditDoc.id,
+        actor: {
+          uid: actorUid,
+          role: actorRole,
+          name: actorName,
+          permissionSource: permission.permissionSource,
+        },
+        status: "completed",
+        updated,
+        warnings: plan.warnings,
+        ledgerClassification: plan.classification,
+        ledgerDiagnostics: plan.ledgerDiagnostics,
+        normalizedPlan,
+        sourceType: "fixed-private-lesson-outcome-action",
+        createdAt: now,
+        completedAt: now,
+      };
+      transaction.create(batchRef, checkpoint);
+      return buildFixedPrivateOutcomeCommitResult({
+        validation,
+        batchId,
+        checkpoint,
+        idempotentReplay: false,
+      });
+    }
     const targetStatus = normalizedPlan.normalizedOutcome;
     const deductionAttemptNumber = Math.max(
         normalizePositiveAttempt(
@@ -20586,6 +22146,16 @@ async function commitFixedPrivateLessonOutcomeAction({db, auth, data}) {
       deductionTransactionId: normalizedPlan.creditTransactionId,
       deductionSource: "manual",
       deductionStatus: "deducted",
+      deductionReversed: false,
+      outcomeReversedAt: null,
+      reversalCreditTransactionId: null,
+      outcomeReversalPlanHash: null,
+      outcomeReversalRequestId: null,
+      deductionCycleNumber: normalizedPlan.deductionCycleNumber,
+      deductionCyclePredecessorReversalCreditTransactionId:
+        normalizedPlan.predecessorReversalCreditTransactionId || null,
+      originalDeductionCreditTransactionId:
+        normalizedPlan.previousDeductionCreditTransactionId || null,
       deductionAttemptNumber,
       outcomeByUid: actorUid,
       outcomeActorRole: actorRole,
@@ -20607,6 +22177,21 @@ async function commitFixedPrivateLessonOutcomeAction({db, auth, data}) {
     transaction.update(target.lessonDoc.ref, outcomePatch);
     transaction.update(target.slotDoc.ref, {
       fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER,
+      deductionApplied: true,
+      deductionPackageId: normalizedPlan.packageId,
+      deductionCreditTransactionId: normalizedPlan.creditTransactionId,
+      deductionTransactionId: normalizedPlan.creditTransactionId,
+      deductionStatus: "deducted",
+      deductionReversed: false,
+      outcomeReversedAt: null,
+      reversalCreditTransactionId: null,
+      outcomeReversalPlanHash: null,
+      outcomeReversalRequestId: null,
+      deductionCycleNumber: normalizedPlan.deductionCycleNumber,
+      deductionCyclePredecessorReversalCreditTransactionId:
+        normalizedPlan.predecessorReversalCreditTransactionId || null,
+      originalDeductionCreditTransactionId:
+        normalizedPlan.previousDeductionCreditTransactionId || null,
       ledgerUpdatedAt: now,
       updatedAt: now,
     });
@@ -20635,6 +22220,12 @@ async function commitFixedPrivateLessonOutcomeAction({db, auth, data}) {
       sourceId: target.reservationDoc.id,
       lessonId: target.lessonDoc.id,
       slotId: target.slotDoc.id,
+      canonicalDeductionId: normalizedPlan.canonicalDeductionId,
+      deductionCycleNumber: normalizedPlan.deductionCycleNumber,
+      previousDeductionCreditTransactionId:
+        normalizedPlan.previousDeductionCreditTransactionId || "",
+      predecessorReversalCreditTransactionId:
+        normalizedPlan.predecessorReversalCreditTransactionId || "",
       fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER,
       ledgerTransition: plan.classification.mode === "legacy" ?
         "lesson_to_reservation" :
@@ -20743,9 +22334,7 @@ exports.previewFixedPrivateLessonOutcomeAction = onCall(
       cpu: 1,
       concurrency: 80,
       maxInstances: 10,
-      serviceAccount:
-        "academy-private-preview-rt@" +
-        "daegu-miami-production.iam.gserviceaccount.com",
+      serviceAccount: "academy-private-preview-rt@",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,
@@ -20775,9 +22364,7 @@ exports.commitFixedPrivateLessonOutcomeAction = onCall(
       cpu: 1,
       concurrency: 80,
       maxInstances: 10,
-      serviceAccount:
-        "academy-private-writer-runtime@" +
-        "daegu-miami-production.iam.gserviceaccount.com",
+      serviceAccount: "academy-private-writer-runtime@",
       ingressSettings: "ALLOW_ALL",
       enforceAppCheck: false,
       consumeAppCheckToken: false,
@@ -20845,11 +22432,18 @@ exports.previewPrivateLessonOutcomeAction = onCall(
         reservation: target.reservation,
         slot: target.slot,
         lesson: target.lesson,
+        studentDoc: target.studentDoc,
         packageDoc: target.packageDoc,
         packageIdCandidate: target.packageId,
         packageLookupReason: target.packageLookupReason,
         creditTransactionExists: target.creditTransactionExists,
         creditTransactionId: target.creditTransactionId,
+        creditTransaction: target.creditTransaction,
+        deterministicReversalCreditTransactionId:
+          target.deterministicReversalCreditTransactionId,
+        deterministicReversalCreditTransactionExists:
+          target.deterministicReversalCreditTransactionExists,
+        deductionCycleIdentity: target.deductionCycleIdentity,
         actor,
         nowMillis: Date.now(),
       });
@@ -20929,13 +22523,36 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
         "Private reservation academy mismatch.",
     );
   }
-  if (!isActivePrivateReservation(reservation)) {
+  const normalizedOutcome = outcome === "completed" ? "completed" : "no_show";
+  const currentStatus = normalizeId(reservation.status).toLowerCase();
+  const isAutoDeductionReclassificationCandidate =
+    isAutoDeductedPrivateReservationOutcomeReclassification({
+      reservation,
+      normalizedOutcome,
+      creditTransactionExists: true,
+    });
+  const isSameOutcomeActiveDeductionCandidate = Boolean(
+      reservation.deductionApplied === true &&
+      !isPrivateReservationDeductionReversed(reservation) &&
+      currentStatus === normalizedOutcome,
+  );
+  const mayReuseActiveDeduction = Boolean(
+      isAutoDeductionReclassificationCandidate ||
+      isSameOutcomeActiveDeductionCandidate,
+  );
+  if (
+    !isActivePrivateReservation(reservation) &&
+    !mayReuseActiveDeduction
+  ) {
     throw new HttpsError(
         "failed-precondition",
         "Only active private reservations can be completed.",
     );
   }
-  if (reservation.deductionApplied === true) {
+  if (
+    reservation.deductionApplied === true &&
+    !mayReuseActiveDeduction
+  ) {
     throw new HttpsError(
         "failed-precondition",
         "Private reservation deduction was already applied.",
@@ -20959,6 +22576,18 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
   ]);
   const slot = slotSnap.exists ? slotSnap.data() || {} : null;
   const student = studentSnap.exists ? studentSnap.data() || {} : null;
+  if (!slot) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Linked private lesson slot not found.",
+    );
+  }
+  if (!student) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Linked private student not found.",
+    );
+  }
   const linkedLessonId = normalizeId(
       reservation.lessonId ||
       reservation.fixedLessonId ||
@@ -20971,16 +22600,36 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
     linkedLessonSnap.data() || {} :
     null;
   assertNotFixedPrivateDirectReservation(reservation, slot, linkedLesson);
-  if (slot && normalizeId(slot.academyId) !== academyId) {
+  if (normalizeId(slot.academyId) !== academyId) {
     throw new HttpsError(
         "permission-denied",
         "Private lesson slot academy mismatch.",
     );
   }
-  if (student && normalizeId(student.academyId) !== academyId) {
+  if (normalizeId(student.academyId) !== academyId) {
     throw new HttpsError(
         "permission-denied",
         "Student academy mismatch.",
+    );
+  }
+  if (linkedLesson && normalizeId(linkedLesson.academyId) !== academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Linked lesson academy mismatch.",
+    );
+  }
+  const linkedConflict = getDirectPrivateLinkedConflictReason({
+    reservationId,
+    reservation,
+    slot,
+    lesson: linkedLesson,
+    normalizedOutcome,
+  });
+  if (linkedConflict) {
+    throw new HttpsError(
+        "failed-precondition",
+        `Private reservation relation is invalid: ${linkedConflict}.`,
+        {blockedReasons: [linkedConflict]},
     );
   }
   const endMillis = getPrivateReservationEndMillis(reservation, slot);
@@ -20997,7 +22646,10 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
     );
   }
 
-  const explicitPackageId = normalizeId(reservation.packageId);
+  const explicitPackageId = normalizeId(
+      reservation.packageId ||
+      reservation.deductionPackageId,
+  );
   let packageRef = null;
   let packageData = null;
   if (explicitPackageId) {
@@ -21013,11 +22665,21 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
       );
     }
     const explicitPackage = explicitPackageSnap.data() || {};
-    if (!isPrivatePackageForReservation(
-        explicitPackage,
-        reservation,
-        slot,
-    )) {
+    const explicitPackageRejectReason = getPrivatePackageRejectReason({
+      pkg: explicitPackage,
+      academyId,
+      studentId,
+      teacherKey: getReservationTeacherKey(reservation, slot),
+      teacherKeys: getReservationTeacherKeys(reservation, slot),
+      lessonDate: normalizeId(reservation.date || slot.date),
+    });
+    if (
+      explicitPackageRejectReason &&
+      !(mayReuseActiveDeduction &&
+        isExistingPrivateDeductionAvailabilityReason(
+            explicitPackageRejectReason,
+        ))
+    ) {
       throw new HttpsError(
           "failed-precondition",
           "Linked private package does not match reservation.",
@@ -21051,15 +22713,36 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
           "No remaining matching private package found.",
       );
     }
+    if (candidates.length > 1) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Multiple matching private packages found.",
+          {blockedReasons: ["package_ambiguous"]},
+      );
+    }
     packageRef = candidates[0].ref;
     packageData = candidates[0].data;
+  }
+
+  const teacherRelationReason = getDirectPrivateTeacherRelationBlockedReason({
+    reservation,
+    slot,
+    lesson: linkedLesson,
+    packageData,
+  });
+  if (teacherRelationReason) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation teacher identity does not match its package.",
+        {blockedReasons: [teacherRelationReason]},
+    );
   }
 
   const remainingBefore = Number(packageData.remainingCount || 0);
   const usedBefore = Number(packageData.usedCount || 0);
   if (
     !Number.isFinite(remainingBefore) ||
-    remainingBefore <= 0 ||
+    (remainingBefore <= 0 && !mayReuseActiveDeduction) ||
     !Number.isFinite(usedBefore)
   ) {
     throw new HttpsError(
@@ -21077,16 +22760,82 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
   );
   const deductionAttemptNumber =
     normalizePositiveAttempt(reservation.deductionAttemptNumber) + 1;
-  const creditTransactionId = buildDeductionKey({
-    academyId,
-    lessonId: reservationId,
-    studentId,
-    packageId: packageRef.id,
-  });
+  const deductionCycleIdentity =
+    buildPrivateReservationOutcomeDeductionCycleIdentity({
+      academyId,
+      reservationId,
+      studentId,
+      packageId: packageRef.id,
+      reservation,
+    });
+  if (deductionCycleIdentity.invalidReason ||
+      !deductionCycleIdentity.creditTransactionId) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation deduction cycle identity is incomplete.",
+        {blockedReasons: [
+          deductionCycleIdentity.invalidReason ||
+            "deduction_cycle_identity_missing",
+        ]},
+    );
+  }
+  const creditTransactionId = deductionCycleIdentity.creditTransactionId;
   const creditRef = db
       .collection("creditTransactions")
       .doc(creditTransactionId);
   const creditSnap = await transaction.get(creditRef);
+  if (mayReuseActiveDeduction) {
+    const credit = creditSnap.exists ? creditSnap.data() || {} : null;
+    const deterministicReversalCreditTransactionId =
+      buildPrivateReservationOutcomeReversalCreditId(creditTransactionId);
+    const deterministicReversalCreditSnap = await transaction.get(
+        db.collection("creditTransactions")
+            .doc(deterministicReversalCreditTransactionId),
+    );
+    const activeDeductionEvidence =
+      getPrivateReservationCanonicalActiveDeductionEvidence({
+        academyId,
+        reservationId,
+        reservation,
+        packageId: packageRef.id,
+        packageData,
+        creditTransactionId,
+        creditTransactionExists: creditSnap.exists,
+        creditTransaction: credit,
+        deterministicReversalCreditTransactionId,
+        deterministicReversalCreditTransactionExists:
+          deterministicReversalCreditSnap.exists,
+      });
+    if (!activeDeductionEvidence) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Existing active deduction evidence is inconsistent.",
+          {blockedReasons: ["deduction_evidence_conflict"]},
+      );
+    }
+    if (isAutoDeductionReclassificationCandidate) {
+      transaction.update(reservationRef, {
+        status: normalizedOutcome,
+        completedAt: null,
+        noShowAt: writeTime,
+        outcomeByUid: uid,
+        outcomeActorRole: outcomeActor.actorRole,
+        outcomeActorName: outcomeActor.actorName,
+        updatedAt: writeTime,
+      });
+    }
+    return {
+      ok: true,
+      academyId,
+      reservationId,
+      outcome: normalizedOutcome,
+      packageId: packageRef.id,
+      creditTransactionId,
+      reusedExistingDeduction: true,
+      additionalPackageDeduction: 0,
+      deductionCycleNumber: deductionCycleIdentity.cycleNumber,
+    };
+  }
   if (creditSnap.exists) {
     throw new HttpsError(
         "failed-precondition",
@@ -21123,6 +22872,11 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
     deductionTransactionId: creditTransactionId,
     deductionSource: "manual",
     deductionStatus: "deducted",
+    deductionReversed: false,
+    outcomeReversedAt: null,
+    deductionCycleNumber: deductionCycleIdentity.cycleNumber,
+    deductionCyclePredecessorReversalCreditTransactionId:
+      deductionCycleIdentity.predecessorReversalCreditTransactionId || null,
     deductionAttemptNumber,
     outcomeByUid: uid,
     outcomeActorRole: outcomeActor.actorRole,
@@ -21140,6 +22894,12 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
     groupClassName: "",
     sourceType: "privateReservation",
     sourceId: reservationId,
+    canonicalDeductionId: deductionCycleIdentity.canonicalDeductionId,
+    deductionCycleNumber: deductionCycleIdentity.cycleNumber,
+    previousDeductionCreditTransactionId:
+      deductionCycleIdentity.previousDeductionCreditTransactionId || "",
+    predecessorReversalCreditTransactionId:
+      deductionCycleIdentity.predecessorReversalCreditTransactionId || "",
     actionType,
     deltaCount: -1,
     memo: datePart ?
@@ -21160,6 +22920,9 @@ async function applyPrivateReservationOutcomeWithDeductionInTransaction(
     outcome,
     packageId: packageRef.id,
     creditTransactionId,
+    reusedExistingDeduction: false,
+    additionalPackageDeduction: 1,
+    deductionCycleNumber: deductionCycleIdentity.cycleNumber,
   };
 }
 
@@ -21185,8 +22948,6 @@ exports.markPrivateReservationOutcome = onCall(
 
         const db = admin.firestore();
         const uid = request.auth.uid;
-        const outcomeActor =
-          await canMarkPrivateReservationOutcome(db, academyId, request.auth);
 
         return await db.runTransaction(async (transaction) => {
           await guardAcademyWrite({
@@ -21194,6 +22955,16 @@ exports.markPrivateReservationOutcome = onCall(
             transaction,
             academyId,
             writeSurfaceId: "markPrivateReservationOutcome",
+          });
+          const membershipSnap = await transaction.get(
+              db.collection("academyMemberships")
+                  .doc(`${academyId}_${uid}`),
+          );
+          const outcomeActor = buildPrivateLessonOutcomeActorFromMembership({
+            auth: request.auth,
+            membership: membershipSnap.exists ?
+              membershipSnap.data() || {} :
+              null,
           });
           return await applyPrivateReservationOutcomeWithDeductionInTransaction(
               transaction,
@@ -21372,6 +23143,842 @@ exports.commitPrivateLessonOutcomeAction = onCall(
     },
 );
 
+function buildPrivateReservationOutcomeReversalCreditId(deductionId) {
+  return `reverse_${normalizeId(deductionId)}`;
+}
+
+function buildDirectPrivateReversalAccountingIdentity({
+  academyId,
+  reservationId,
+  studentId,
+  studentName,
+  packageId,
+  packageData,
+  reservation,
+  slot,
+  actorUid,
+  outcomeActor,
+  actionType,
+  reason,
+  requestId,
+  requestMode,
+  planHash,
+  packageImpact,
+  previousOutcomeStatus,
+}) {
+  return {
+    academyId,
+    studentId,
+    studentName,
+    teacher: getReservationTeacherKey(reservation, slot),
+    packageId,
+    packageType: "private",
+    packageTitle: String(packageData.packageTitle || ""),
+    groupClassName: "",
+    sourceType: "privateReservation",
+    sourceId: reservationId,
+    actionType,
+    memo: `1:1 예약 처리 취소: ${reason}`,
+    actorUid,
+    actorRole: outcomeActor.actorRole,
+    actorName: outcomeActor.actorName,
+    reason,
+    extraCreditFields: {
+      reversalReason: reason,
+      requestId,
+      requestMode,
+      planHash,
+      packageImpact,
+      originalOutcomeStatus: previousOutcomeStatus,
+    },
+  };
+}
+
+function buildFixedPrivateReversalAccountingIdentity({
+  validation,
+  target,
+  actor,
+  batchId,
+  planHash,
+  packageImpact,
+}) {
+  const reservation = target.reservationDoc.data || {};
+  const lesson = target.lessonDoc.data || {};
+  const slot = target.slotDoc.data || {};
+  const packageData = target.packageDoc.data || {};
+  const actorUid = normalizeId(actor.actorUid || actor.uid);
+  const actorRole = normalizeId(actor.actorRole || actor.role);
+  const actorName = normalizeId(actor.actorName);
+  const datePart = [
+    normalizeId(reservation.date || slot.date),
+    normalizeId(reservation.time || slot.time),
+    normalizeId(reservation.subject || slot.subject),
+  ].filter(Boolean).join(" ");
+  return {
+    academyId: validation.academyId,
+    studentId: target.studentId,
+    studentName: normalizeId(
+        reservation.studentName || lesson.studentName,
+    ) || target.studentId,
+    teacher: getReservationTeacherKey(reservation, slot),
+    packageId: validation.packageId,
+    packageType: "private",
+    packageTitle: String(
+        packageData.packageTitle || packageData.title || "",
+    ),
+    groupClassName: "",
+    sourceType: "fixedPrivateReservation",
+    sourceId: validation.reservationId,
+    actionType: "fixed_private_no_show_deduct_reversal",
+    memo: datePart ?
+      `고정 1:1 노쇼 차감 취소 ${datePart}` :
+      "고정 1:1 노쇼 차감 취소",
+    actorUid,
+    actorRole,
+    actorName,
+    reason: "fixed_no_show_reversal",
+    extraCreditFields: {
+      lessonId: validation.lessonId,
+      slotId: validation.slotId,
+      fixedPrivateDeductionLedger: FIXED_PRIVATE_DEDUCTION_LEDGER,
+      requestId: validation.requestId,
+      requestMode: "fixed_outcome_action",
+      batchId,
+      planHash,
+      packageImpact,
+      originalOutcomeStatus: "no_show",
+      canonicalDeductionId: normalizeId(
+          target.creditDoc.data &&
+          target.creditDoc.data.canonicalDeductionId,
+      ) || buildDeductionKey({
+        academyId: validation.academyId,
+        lessonId: validation.reservationId,
+        studentId: target.studentId,
+        packageId: validation.packageId,
+      }),
+      deductionCycleNumber: Math.max(
+          1,
+          normalizePositiveAttempt(
+              target.reservationDoc.data.deductionCycleNumber,
+          ) ||
+            normalizePositiveAttempt(
+                target.reservationDoc.data.deductionAttemptNumber,
+            ),
+      ),
+    },
+  };
+}
+
+function applyPrivateReservationOutcomeReversalAccountingInTransaction(
+    transaction,
+    {
+      packageRef,
+      packageData,
+      originalCreditRef,
+      reversalCreditRef,
+      originalCreditTransactionId,
+      reversalCreditTransactionId,
+      identity,
+      now,
+    },
+) {
+  const usedBefore = Number(packageData.usedCount);
+  const remainingBefore = Number(packageData.remainingCount);
+  const totalCount = Number(packageData.totalCount);
+  if (!Number.isFinite(usedBefore) ||
+      !Number.isFinite(remainingBefore) ||
+      !Number.isFinite(totalCount) ||
+      usedBefore <= 0 ||
+      remainingBefore < 0 ||
+      remainingBefore >= totalCount) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private package counts cannot be restored exactly once.",
+        {blockedReasons: ["package_count_invalid"]},
+    );
+  }
+  const usedAfter = usedBefore - 1;
+  const remainingAfter = remainingBefore + 1;
+  const nextPackageStatus = getNextStudentPackageStatus(
+      packageData.status,
+      remainingAfter,
+  );
+  transaction.update(packageRef, {
+    usedCount: usedAfter,
+    remainingCount: remainingAfter,
+    status: nextPackageStatus,
+    updatedAt: now,
+  });
+  transaction.update(originalCreditRef, {
+    reversalCreditTransactionId,
+    reversedAt: now,
+    reversedByUid: identity.actorUid,
+    updatedAt: now,
+  });
+  transaction.create(reversalCreditRef, {
+    academyId: identity.academyId,
+    studentId: identity.studentId,
+    studentName: identity.studentName,
+    teacher: identity.teacher,
+    packageId: identity.packageId,
+    packageType: identity.packageType,
+    packageTitle: identity.packageTitle,
+    groupClassName: identity.groupClassName,
+    sourceType: identity.sourceType,
+    sourceId: identity.sourceId,
+    actionType: identity.actionType,
+    deltaCount: 1,
+    memo: identity.memo,
+    actorUid: identity.actorUid,
+    actorRole: identity.actorRole,
+    actorName: identity.actorName,
+    reason: identity.reason,
+    originalCreditTransactionId,
+    reversalOfTransactionId: originalCreditTransactionId,
+    ...(identity.extraCreditFields || {}),
+    createdAt: now,
+  });
+  return {
+    usedAfter,
+    remainingAfter,
+    nextPackageStatus,
+  };
+}
+
+function buildPrivateReservationOutcomeReversalPlan({
+  academyId,
+  reservationId,
+  reservation = {},
+  packageData = null,
+  originalCredit = null,
+  reversalCredit = null,
+}) {
+  const blockedReasons = [];
+  const studentId = normalizeId(reservation.studentId);
+  const packageId = normalizeId(reservation.deductionPackageId);
+  const activeDeductionId = getPrivateReservationDeductionPointer(reservation);
+  const reversalCreditTransactionId = activeDeductionId ?
+    buildPrivateReservationOutcomeReversalCreditId(activeDeductionId) :
+    "";
+  const previousOutcomeStatus = normalizeId(reservation.status).toLowerCase();
+  const alreadyReversed = isPrivateReservationDeductionReversed(reservation);
+  if (normalizeId(reservation.academyId) !== academyId) {
+    blockedReasons.push("academy_mismatch");
+  }
+  if (!studentId || !packageId || !activeDeductionId) {
+    blockedReasons.push("deduction_identity_missing");
+  }
+  if (!["completed", "no_show"].includes(previousOutcomeStatus) ||
+      reservation.deductionApplied !== true ||
+      alreadyReversed) {
+    blockedReasons.push(
+        alreadyReversed ?
+          "deduction_already_reversed" :
+          "outcome_not_reversible",
+    );
+  }
+  if (!packageData) {
+    blockedReasons.push("package_missing");
+  } else {
+    if (normalizeId(packageData.academyId) !== academyId) {
+      blockedReasons.push("package_academy_mismatch");
+    }
+    if (normalizeId(packageData.studentId) !== studentId ||
+        normalizeId(packageData.packageType).toLowerCase() !== "private") {
+      blockedReasons.push("package_mismatch");
+    }
+  }
+  if (!originalCredit ||
+      normalizeId(originalCredit.academyId) !== academyId ||
+      normalizeId(originalCredit.sourceType) !== "privateReservation" ||
+      normalizeId(originalCredit.sourceId) !== reservationId ||
+      normalizeId(originalCredit.studentId) !== studentId ||
+      normalizeId(originalCredit.packageId) !== packageId ||
+      Number(originalCredit.deltaCount) !== -1 ||
+      normalizeId(originalCredit.reversalCreditTransactionId) ||
+      normalizeId(originalCredit.reversalOfTransactionId)) {
+    blockedReasons.push("deduction_evidence_conflict");
+  }
+  if (reversalCredit) {
+    blockedReasons.push("reversal_evidence_conflict");
+  }
+  const currentUsedCount = packageData ?
+    Number(packageData.usedCount) :
+    null;
+  const currentRemainingCount = packageData ?
+    Number(packageData.remainingCount) :
+    null;
+  const totalCount = packageData ? Number(packageData.totalCount) : null;
+  if (packageData && (
+    !Number.isFinite(currentUsedCount) ||
+    !Number.isFinite(currentRemainingCount) ||
+    !Number.isFinite(totalCount) ||
+    currentUsedCount <= 0 ||
+    currentRemainingCount < 0 ||
+    currentRemainingCount >= totalCount
+  )) {
+    blockedReasons.push("package_count_invalid");
+  }
+  const packageImpact = {
+    packageId,
+    currentStatus: normalizeId(packageData && packageData.status),
+    currentUsedCount,
+    currentRemainingCount,
+    usedCountDelta: -1,
+    remainingCountDelta: 1,
+    restoredPackageLessons: 1,
+    nextUsedCount: Number.isFinite(currentUsedCount) ?
+      currentUsedCount - 1 :
+      null,
+    nextRemainingCount: Number.isFinite(currentRemainingCount) ?
+      currentRemainingCount + 1 :
+      null,
+    nextStatus: packageData && Number.isFinite(currentRemainingCount) ?
+      getNextStudentPackageStatus(
+          packageData.status,
+          currentRemainingCount + 1,
+      ) :
+      "",
+  };
+  return {
+    ok: blockedReasons.length === 0,
+    blockedReasons: Array.from(new Set(blockedReasons)),
+    packageImpact,
+    normalizedPlan: {
+      academyId,
+      reservationId,
+      previousOutcomeStatus,
+      nextReservationStatus: "active",
+      studentId,
+      packageId,
+      activeDeductionId,
+      reversalCreditTransactionId,
+      deductionCycleNumber: Math.max(
+          1,
+          normalizePositiveAttempt(reservation.deductionCycleNumber) ||
+            normalizePositiveAttempt(reservation.deductionAttemptNumber),
+      ),
+      deductionStatus: normalizeId(reservation.deductionStatus),
+      deductionReversed: alreadyReversed,
+      packageImpact,
+    },
+  };
+}
+
+function buildPrivateReservationOutcomeReversalPlanHash({
+  actorUid,
+  plan,
+}) {
+  return hashPrivateReservationOutcomeActionValue({
+    version: 1,
+    actorUid: normalizeId(actorUid),
+    actionType: "reverse_deduction",
+    allowed: plan && plan.ok === true,
+    blockedReasons: Array.from(
+        new Set((plan && plan.blockedReasons) || []),
+    ).sort(),
+    normalizedPlan: plan && plan.normalizedPlan ? plan.normalizedPlan : {},
+  });
+}
+
+function buildLegacyPrivateReservationReversalRequestId({
+  academyId,
+  reservationId,
+  activeDeductionId,
+}) {
+  const digest = hashPrivateReservationOutcomeActionValue({
+    version: 1,
+    academyId: normalizeId(academyId),
+    reservationId: normalizeId(reservationId),
+    activeDeductionId: normalizeId(activeDeductionId),
+  }).slice(0, 32);
+  return `legacyPrivateReservationReversal_${digest}`;
+}
+
+function buildPrivateReservationOutcomeReversalResult({
+  academyId,
+  reservationId,
+  requestId,
+  previousOutcomeStatus,
+  packageId,
+  originalCreditTransactionId,
+  creditTransactionId,
+  planHash,
+  packageImpact,
+  requestMode,
+  idempotentReplay,
+}) {
+  return {
+    ok: true,
+    reversed: true,
+    committed: true,
+    actionType: "reverse_deduction",
+    academyId,
+    reservationId,
+    requestId,
+    previousOutcomeStatus,
+    packageId,
+    originalCreditTransactionId,
+    reversalOfTransactionId: originalCreditTransactionId,
+    creditTransactionId,
+    planHash,
+    packageImpact,
+    restoredPackageLessons: 1,
+    requestMode,
+    idempotentReplay,
+  };
+}
+
+function assertPrivateReservationReversalCredit({
+  credit,
+  academyId,
+  reservationId,
+  studentId,
+  packageId,
+  originalCreditTransactionId,
+}) {
+  if (!credit ||
+      normalizeId(credit.academyId) !== academyId ||
+      normalizeId(credit.sourceId) !== reservationId ||
+      normalizeId(credit.studentId) !== studentId ||
+      normalizeId(credit.packageId) !== packageId ||
+      Number(credit.deltaCount) !== 1 ||
+      normalizeId(credit.reversalOfTransactionId) !==
+        originalCreditTransactionId) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation reversal evidence is inconsistent.",
+        {blockedReasons: ["reversal_evidence_conflict"]},
+    );
+  }
+}
+
+async function reversePrivateReservationOutcomeInTransaction(
+    transaction,
+    {
+      db,
+      auth,
+      academyId,
+      reservationId,
+      requestId,
+      planHash,
+      requestMode,
+      canonicalIds,
+      reason,
+    },
+) {
+  const uid = getAuthUid(auth);
+  const membershipSnap = await transaction.get(
+      db.collection("academyMemberships").doc(`${academyId}_${uid}`),
+  );
+  const outcomeActor = buildPrivateLessonOutcomeActorFromMembership({
+    auth,
+    membership: membershipSnap.exists ?
+      membershipSnap.data() || {} :
+      null,
+  });
+  const reservationRef = db
+      .collection("privateLessonReservations")
+      .doc(reservationId);
+  const reservationSnap = await transaction.get(reservationRef);
+  if (!reservationSnap.exists) {
+    throw new HttpsError("not-found", "Private reservation not found.");
+  }
+  const reservation = reservationSnap.data() || {};
+  if (normalizeId(reservation.academyId) !== academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Private reservation academy mismatch.",
+    );
+  }
+  assertNotFixedPrivateDirectReservation(reservation);
+  const studentId = normalizeId(reservation.studentId);
+  const packageId = normalizeId(reservation.deductionPackageId);
+  const originalCreditTransactionId =
+    getPrivateReservationDeductionPointer(reservation);
+  if (requestMode === "legacy") {
+    requestId = buildLegacyPrivateReservationReversalRequestId({
+      academyId,
+      reservationId,
+      activeDeductionId: originalCreditTransactionId,
+    });
+  }
+  if (!studentId || !packageId || !originalCreditTransactionId) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Canonical private reservation deduction identity is missing.",
+        {blockedReasons: ["deduction_identity_missing"]},
+    );
+  }
+  const reversalCreditTransactionId =
+    buildPrivateReservationOutcomeReversalCreditId(
+        originalCreditTransactionId,
+    );
+  if (requestMode === "current" && (
+    normalizeId(canonicalIds && canonicalIds.packageId) !== packageId ||
+    normalizeId(canonicalIds && canonicalIds.activeDeductionId) !==
+      originalCreditTransactionId ||
+    normalizeId(canonicalIds && canonicalIds.reversalCreditTransactionId) !==
+      reversalCreditTransactionId
+  )) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation reversal identity is stale.",
+        {blockedReasons: ["reversal_identity_mismatch"]},
+    );
+  }
+  const packageRef = db.collection("studentPackages").doc(packageId);
+  const studentRef = db.collection("privateStudents").doc(studentId);
+  const slotId = normalizeId(reservation.slotId);
+  if (!slotId) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation slot linkage is missing.",
+        {blockedReasons: ["reservation_linkage_missing"]},
+    );
+  }
+  const slotRef = db.collection("privateLessonSlots").doc(slotId);
+  const originalCreditRef = db.collection("creditTransactions")
+      .doc(originalCreditTransactionId);
+  const reversalCreditRef = db.collection("creditTransactions")
+      .doc(reversalCreditTransactionId);
+  const [
+    packageSnap,
+    studentSnap,
+    slotSnap,
+    originalCreditSnap,
+    reversalCreditSnap,
+  ] = await Promise.all([
+    transaction.get(packageRef),
+    transaction.get(studentRef),
+    transaction.get(slotRef),
+    transaction.get(originalCreditRef),
+    transaction.get(reversalCreditRef),
+  ]);
+  const packageData = packageSnap.exists ? packageSnap.data() || {} : null;
+  const student = studentSnap.exists ? studentSnap.data() || {} : null;
+  const slot = slotSnap.exists ? slotSnap.data() || {} : null;
+  const linkedLessonId = normalizeId(
+      reservation.lessonId ||
+      reservation.fixedLessonId ||
+      (slot && (slot.lessonId || slot.fixedLessonId)),
+  );
+  const linkedLessonSnap = linkedLessonId ?
+    await transaction.get(db.collection("lessons").doc(linkedLessonId)) :
+    null;
+  const linkedLesson = linkedLessonSnap && linkedLessonSnap.exists ?
+    linkedLessonSnap.data() || {} :
+    null;
+  assertNotFixedPrivateDirectReservation(reservation, slot, linkedLesson);
+  if (!packageData || !student || !slot || !originalCreditSnap.exists) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Canonical private reservation reversal relations are incomplete.",
+        {blockedReasons: ["reversal_relation_missing"]},
+    );
+  }
+  if (normalizeId(packageData.academyId) !== academyId ||
+      normalizeId(student.academyId) !== academyId ||
+      normalizeId(slot.academyId) !== academyId ||
+      linkedLesson &&
+        normalizeId(linkedLesson.academyId) !== academyId) {
+    throw new HttpsError(
+        "permission-denied",
+        "Private reservation reversal academy mismatch.",
+    );
+  }
+  if (normalizeId(packageData.studentId) !== studentId ||
+      normalizeId(packageData.packageType).toLowerCase() !== "private") {
+    throw new HttpsError(
+        "failed-precondition",
+        "Linked private package does not match reservation.",
+        {blockedReasons: ["package_mismatch"]},
+    );
+  }
+  const teacherRelationReason = getDirectPrivateTeacherRelationBlockedReason({
+    reservation,
+    slot,
+    lesson: linkedLesson,
+    packageData,
+  });
+  if (teacherRelationReason) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation teacher identity does not match its package.",
+        {blockedReasons: [teacherRelationReason]},
+    );
+  }
+  const originalCredit = originalCreditSnap.data() || {};
+  if (normalizeId(originalCredit.academyId) !== academyId ||
+      normalizeId(originalCredit.sourceType) !== "privateReservation" ||
+      normalizeId(originalCredit.sourceId) !== reservationId ||
+      normalizeId(originalCredit.studentId) !== studentId ||
+      normalizeId(originalCredit.packageId) !== packageId ||
+      Number(originalCredit.deltaCount) !== -1 ||
+      normalizeId(originalCredit.reversalOfTransactionId)) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Original private reservation deduction evidence is inconsistent.",
+        {blockedReasons: ["deduction_evidence_conflict"]},
+    );
+  }
+  const canonicalDeductionId = buildDeductionKey({
+    academyId,
+    lessonId: reservationId,
+    studentId,
+    packageId,
+  });
+  if (originalCreditTransactionId !== canonicalDeductionId) {
+    const expectedCycleIdentity =
+      buildPrivateReservationOutcomeDeductionCycleIdentity({
+        academyId,
+        reservationId,
+        studentId,
+        packageId,
+        reservation: {
+          deductionApplied: false,
+          deductionReversed: true,
+          deductionCreditTransactionId: normalizeId(
+              originalCredit.previousDeductionCreditTransactionId,
+          ),
+          deductionTransactionId: normalizeId(
+              originalCredit.previousDeductionCreditTransactionId,
+          ),
+          reversalCreditTransactionId: normalizeId(
+              originalCredit.predecessorReversalCreditTransactionId,
+          ),
+          deductionCycleNumber:
+            normalizePositiveAttempt(originalCredit.deductionCycleNumber) - 1,
+        },
+      });
+    if (normalizeId(originalCredit.canonicalDeductionId) !==
+          canonicalDeductionId ||
+        expectedCycleIdentity.creditTransactionId !==
+          originalCreditTransactionId) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Private reservation deduction cycle identity does not match.",
+          {blockedReasons: ["deduction_identity_mismatch"]},
+      );
+    }
+  }
+  const storedPreviousOutcome = normalizeId(
+      reservation.originalOutcomeStatus ||
+      reservation.previousOutcomeStatus,
+  );
+  const alreadyReversed = reservation.deductionReversed === true ||
+    normalizeId(reservation.deductionStatus).toLowerCase() === "reversed" ||
+    Boolean(reservation.outcomeReversedAt);
+  if (alreadyReversed) {
+    if (!reversalCreditSnap.exists ||
+        normalizeId(originalCredit.reversalCreditTransactionId) !==
+          reversalCreditTransactionId) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Private reservation reversal checkpoint is incomplete.",
+          {blockedReasons: ["reversal_checkpoint_incomplete"]},
+      );
+    }
+    assertPrivateReservationReversalCredit({
+      credit: reversalCreditSnap.data() || {},
+      academyId,
+      reservationId,
+      studentId,
+      packageId,
+      originalCreditTransactionId,
+    });
+    const reversalCredit = reversalCreditSnap.data() || {};
+    const reversedPlan = buildPrivateReservationOutcomeReversalPlan({
+      academyId,
+      reservationId,
+      reservation,
+      packageData,
+      originalCredit,
+      reversalCredit,
+    });
+    const reversedPlanHash =
+      buildPrivateReservationOutcomeReversalPlanHash({
+        actorUid: uid,
+        plan: reversedPlan,
+      });
+    if (requestMode === "current" &&
+        planHash !== normalizeId(reversalCredit.planHash) &&
+        planHash !== reversedPlanHash) {
+      throw new HttpsError(
+          "failed-precondition",
+          "Private reservation reversal preview is stale.",
+          {
+            blockedReasons: ["preview_stale"],
+            planHash,
+            actualPlanHash: reversedPlanHash,
+          },
+      );
+    }
+    return buildPrivateReservationOutcomeReversalResult({
+      academyId,
+      reservationId,
+      requestId,
+      previousOutcomeStatus: storedPreviousOutcome,
+      packageId,
+      originalCreditTransactionId,
+      creditTransactionId: reversalCreditTransactionId,
+      planHash: normalizeId(reversalCredit.planHash) || reversedPlanHash,
+      packageImpact: reversalCredit.packageImpact || {
+        packageId,
+        usedCountDelta: -1,
+        remainingCountDelta: 1,
+        restoredPackageLessons: 1,
+      },
+      requestMode,
+      idempotentReplay: true,
+    });
+  }
+  const reversalPlan = buildPrivateReservationOutcomeReversalPlan({
+    academyId,
+    reservationId,
+    reservation,
+    packageData,
+    originalCredit,
+    reversalCredit: reversalCreditSnap.exists ?
+      reversalCreditSnap.data() || {} :
+      null,
+  });
+  const actualPlanHash = buildPrivateReservationOutcomeReversalPlanHash({
+    actorUid: uid,
+    plan: reversalPlan,
+  });
+  if (requestMode === "current" && actualPlanHash !== planHash) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation reversal preview is stale.",
+        {
+          blockedReasons: ["preview_stale"],
+          planHash,
+          actualPlanHash,
+          packageImpact: reversalPlan.packageImpact,
+          normalizedPlan: reversalPlan.normalizedPlan,
+        },
+    );
+  }
+  if (!reversalPlan.ok) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation reversal is blocked.",
+        {
+          blockedReasons: reversalPlan.blockedReasons,
+          planHash: requestMode === "current" ? planHash : actualPlanHash,
+          actualPlanHash,
+          packageImpact: reversalPlan.packageImpact,
+          normalizedPlan: reversalPlan.normalizedPlan,
+        },
+    );
+  }
+  const previousOutcomeStatus = normalizeId(reservation.status).toLowerCase();
+  if (!["completed", "no_show"].includes(previousOutcomeStatus) ||
+      reservation.deductionApplied !== true) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Only a deducted completed or no-show reservation can be reversed.",
+        {blockedReasons: ["outcome_not_reversible"]},
+    );
+  }
+  const linkedConflict = getDirectPrivateLinkedConflictReason({
+    reservationId,
+    reservation,
+    slot,
+    lesson: linkedLesson,
+    normalizedOutcome: previousOutcomeStatus,
+  });
+  if (linkedConflict) {
+    throw new HttpsError(
+        "failed-precondition",
+        `Private reservation relation is invalid: ${linkedConflict}.`,
+        {blockedReasons: [linkedConflict]},
+    );
+  }
+  if (reversalCreditSnap.exists) {
+    throw new HttpsError(
+        "failed-precondition",
+        "Private reservation reversal evidence already exists.",
+        {blockedReasons: ["reversal_evidence_conflict"]},
+    );
+  }
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const reversalAttemptNumber =
+    normalizePositiveAttempt(reservation.reversalAttemptNumber) + 1;
+  const studentName =
+    getOptionalStudentName({student, membership: null, reservation}) ||
+    studentId;
+  const actionType = previousOutcomeStatus === "completed" ?
+    "private_reservation_completed_deduct_reversal" :
+    "private_reservation_no_show_deduct_reversal";
+  const accountingIdentity = buildDirectPrivateReversalAccountingIdentity({
+    academyId,
+    reservationId,
+    studentId,
+    studentName,
+    packageId,
+    packageData,
+    reservation,
+    slot,
+    actorUid: uid,
+    outcomeActor,
+    actionType,
+    reason,
+    requestId,
+    requestMode,
+    planHash: actualPlanHash,
+    packageImpact: reversalPlan.packageImpact,
+    previousOutcomeStatus,
+  });
+  applyPrivateReservationOutcomeReversalAccountingInTransaction(
+      transaction,
+      {
+        packageRef,
+        packageData,
+        originalCreditRef,
+        reversalCreditRef,
+        originalCreditTransactionId,
+        reversalCreditTransactionId,
+        identity: accountingIdentity,
+        now,
+      },
+  );
+  transaction.update(reservationRef, {
+    status: "active",
+    deductionApplied: false,
+    deductionReversed: true,
+    deductionStatus: "reversed",
+    originalOutcomeStatus: previousOutcomeStatus,
+    originalDeductionCreditTransactionId: originalCreditTransactionId,
+    outcomeReversedAt: now,
+    outcomeReversedByUid: uid,
+    outcomeReversedByRole: outcomeActor.actorRole,
+    outcomeReversedByName: outcomeActor.actorName,
+    outcomeReversalReason: reason,
+    outcomeReversalRequestId: requestId,
+    previousOutcomeStatus,
+    reversalAttemptNumber,
+    reversalCreditTransactionId,
+    outcomeReversalPlanHash: actualPlanHash,
+    outcomeReversalRequestMode: requestMode,
+    updatedAt: now,
+  });
+  return buildPrivateReservationOutcomeReversalResult({
+    academyId,
+    reservationId,
+    requestId,
+    previousOutcomeStatus,
+    packageId,
+    originalCreditTransactionId,
+    creditTransactionId: reversalCreditTransactionId,
+    planHash: actualPlanHash,
+    packageImpact: reversalPlan.packageImpact,
+    requestMode,
+    idempotentReplay: false,
+  });
+}
+
 exports.reversePrivateReservationOutcome = onCall(
     {region: REGION, cors: true},
     async (request) => {
@@ -21386,6 +23993,53 @@ exports.reversePrivateReservationOutcome = onCall(
             requireString(data, "reservationId"),
             "reservationId",
         );
+        const providedRequestId = optionalString(data, "requestId");
+        const providedPlanHash = optionalString(data, "planHash").toLowerCase();
+        const hasRequestId = Boolean(providedRequestId);
+        const hasPlanHash = Boolean(providedPlanHash);
+        if (hasRequestId !== hasPlanHash) {
+          throw new HttpsError(
+              "invalid-argument",
+              "requestId and planHash must be provided together.",
+              {blockedReasons: ["mixed_reversal_request_shape"]},
+          );
+        }
+        const requestMode = hasRequestId ? "current" : "legacy";
+        const requestId = hasRequestId ?
+          validateCallableRequestId(providedRequestId) :
+          "";
+        if (hasPlanHash && !/^[a-f0-9]{64}$/.test(providedPlanHash)) {
+          throw new HttpsError(
+              "invalid-argument",
+              "invalid_plan_hash",
+              {blockedReasons: ["invalid_plan_hash"]},
+          );
+        }
+        const providedCanonicalIds = {
+          packageId: optionalString(data, "packageId"),
+          activeDeductionId: optionalString(data, "activeDeductionId"),
+          reversalCreditTransactionId: optionalString(
+              data,
+              "reversalCreditTransactionId",
+          ),
+        };
+        const hasAnyCanonicalId = Object.values(providedCanonicalIds)
+            .some(Boolean);
+        const hasAllCanonicalIds = Object.values(providedCanonicalIds)
+            .every(Boolean);
+        if ((requestMode === "current" && !hasAllCanonicalIds) ||
+            (requestMode === "legacy" && hasAnyCanonicalId)) {
+          throw new HttpsError(
+              "invalid-argument",
+              "Reversal canonical IDs must match the request shape.",
+              {blockedReasons: ["mixed_reversal_request_shape"]},
+          );
+        }
+        if (requestMode === "current") {
+          Object.entries(providedCanonicalIds).forEach(([fieldName, value]) => {
+            validateCallableDocumentId(value, fieldName);
+          });
+        }
         const reason = requireString(data, "reason");
         validateAcademyId(academyId);
         if (reason.length < 2) {
@@ -21396,12 +24050,6 @@ exports.reversePrivateReservationOutcome = onCall(
         }
 
         const db = admin.firestore();
-        const uid = request.auth.uid;
-        const outcomeActor =
-          await canMarkPrivateReservationOutcome(db, academyId, request.auth);
-        const reservationRef = db
-            .collection("privateLessonReservations")
-            .doc(reservationId);
 
         return await db.runTransaction(async (transaction) => {
           await guardAcademyWrite({
@@ -21410,204 +24058,20 @@ exports.reversePrivateReservationOutcome = onCall(
             academyId,
             writeSurfaceId: "reversePrivateReservationOutcome",
           });
-          const reservationSnap = await transaction.get(reservationRef);
-          if (!reservationSnap.exists) {
-            throw new HttpsError(
-                "not-found",
-                "Private reservation not found.",
-            );
-          }
-
-          const reservation = reservationSnap.data() || {};
-          if (normalizeId(reservation.academyId) !== academyId) {
-            throw new HttpsError(
-                "permission-denied",
-                "Private reservation academy mismatch.",
-            );
-          }
-          assertNotFixedPrivateDirectReservation(reservation);
-
-          const previousOutcomeStatus = String(reservation.status || "")
-              .trim();
-          if (!["completed", "no_show"].includes(previousOutcomeStatus)) {
-            throw new HttpsError(
-                "failed-precondition",
-                "완료/노쇼 처리된 1:1 예약만 취소할 수 있습니다.",
-            );
-          }
-          const deductionPackageId = normalizeId(
-              reservation.deductionPackageId,
+          return await reversePrivateReservationOutcomeInTransaction(
+              transaction,
+              {
+                db,
+                auth: request.auth,
+                academyId,
+                reservationId,
+                requestId,
+                planHash: providedPlanHash,
+                requestMode,
+                canonicalIds: providedCanonicalIds,
+                reason,
+              },
           );
-          if (
-            reservation.deductionApplied !== true ||
-            !deductionPackageId
-          ) {
-            throw new HttpsError(
-                "failed-precondition",
-                "차감된 1:1 예약만 처리 취소할 수 있습니다.",
-            );
-          }
-
-          const studentId = normalizeId(reservation.studentId);
-          if (!studentId) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Private reservation is missing student linkage.",
-            );
-          }
-
-          const packageRef = db
-              .collection("studentPackages")
-              .doc(deductionPackageId);
-          const studentRef = db.collection("privateStudents").doc(studentId);
-          const slotId = normalizeId(reservation.slotId);
-          const slotRef = slotId ?
-            db.collection("privateLessonSlots").doc(slotId) :
-            null;
-          const [packageSnap, studentSnap, slotSnap] = await Promise.all([
-            transaction.get(packageRef),
-            transaction.get(studentRef),
-            slotRef ? transaction.get(slotRef) : Promise.resolve(null),
-          ]);
-          if (!packageSnap.exists) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Linked private package not found.",
-            );
-          }
-          const packageData = packageSnap.data() || {};
-          const student = studentSnap.exists ? studentSnap.data() || {} : null;
-          const slot = slotSnap && slotSnap.exists ?
-            slotSnap.data() || {} :
-            null;
-          const linkedLessonId = normalizeId(
-              reservation.lessonId ||
-              reservation.fixedLessonId ||
-              (slot && (slot.lessonId || slot.fixedLessonId)),
-          );
-          const linkedLessonSnap = linkedLessonId ?
-            await transaction.get(
-                db.collection("lessons").doc(linkedLessonId),
-            ) :
-            null;
-          const linkedLesson =
-            linkedLessonSnap && linkedLessonSnap.exists ?
-              linkedLessonSnap.data() || {} :
-              null;
-          assertNotFixedPrivateDirectReservation(
-              reservation,
-              slot,
-              linkedLesson,
-          );
-          if (normalizeId(packageData.academyId) !== academyId) {
-            throw new HttpsError(
-                "permission-denied",
-                "Package academy mismatch.",
-            );
-          }
-          if (normalizeId(packageData.studentId) !== studentId) {
-            throw new HttpsError(
-                "failed-precondition",
-                "Linked private package does not match reservation.",
-            );
-          }
-          if (student && normalizeId(student.academyId) !== academyId) {
-            throw new HttpsError(
-                "permission-denied",
-                "Student academy mismatch.",
-            );
-          }
-          if (slot && normalizeId(slot.academyId) !== academyId) {
-            throw new HttpsError(
-                "permission-denied",
-                "Private lesson slot academy mismatch.",
-            );
-          }
-
-          const now = admin.firestore.FieldValue.serverTimestamp();
-          const usedBefore = Number(packageData.usedCount || 0);
-          const remainingBefore = Number(packageData.remainingCount || 0);
-          const totalCount = Number(packageData.totalCount);
-          const usedAfter = Math.max(
-              0,
-              Number.isFinite(usedBefore) ? usedBefore - 1 : 0,
-          );
-          const restoredRemaining = (
-            Number.isFinite(remainingBefore) ? remainingBefore : 0
-          ) + 1;
-          const remainingAfter =
-            Number.isFinite(totalCount) && totalCount >= 0 ?
-              Math.min(totalCount, restoredRemaining) :
-              restoredRemaining;
-          const nextPackageStatus = getNextStudentPackageStatus(
-              packageData.status,
-              remainingAfter,
-          );
-          const reversalAttemptNumber =
-            normalizePositiveAttempt(reservation.reversalAttemptNumber) + 1;
-          const creditTransactionId =
-            `privateReservationDeductionReversal__${reservationId}__` +
-            `${reversalAttemptNumber}`;
-          const creditRef = db
-              .collection("creditTransactions")
-              .doc(creditTransactionId);
-          const teacher = getReservationTeacherKey(reservation, slot);
-          const studentName =
-            getOptionalStudentName({student, membership: null, reservation}) ||
-            studentId;
-          const actionType = previousOutcomeStatus === "completed" ?
-            "private_reservation_completed_deduct_reversal" :
-            "private_reservation_no_show_deduct_reversal";
-
-          transaction.update(packageRef, {
-            usedCount: usedAfter,
-            remainingCount: remainingAfter,
-            status: nextPackageStatus,
-            updatedAt: now,
-          });
-          transaction.update(reservationRef, {
-            status: "active",
-            deductionApplied: false,
-            outcomeReversedAt: now,
-            outcomeReversedByUid: uid,
-            outcomeReversedByRole: outcomeActor.actorRole,
-            outcomeReversedByName: outcomeActor.actorName,
-            outcomeReversalReason: reason,
-            previousOutcomeStatus,
-            reversalAttemptNumber,
-            reversalCreditTransactionId: creditTransactionId,
-            updatedAt: now,
-          });
-          transaction.set(creditRef, {
-            academyId,
-            studentId,
-            studentName,
-            teacher,
-            packageId: packageRef.id,
-            packageType: "private",
-            packageTitle: String(packageData.packageTitle || ""),
-            groupClassName: "",
-            sourceType: "privateReservation",
-            sourceId: reservationId,
-            actionType,
-            deltaCount: 1,
-            memo: `1:1 예약 처리 취소: ${reason}`,
-            actorUid: uid,
-            actorRole: outcomeActor.actorRole,
-            actorName: outcomeActor.actorName,
-            reason,
-            reversalReason: reason,
-            createdAt: now,
-          }, {merge: false});
-
-          return {
-            ok: true,
-            academyId,
-            reservationId,
-            previousOutcomeStatus,
-            packageId: packageRef.id,
-            creditTransactionId,
-          };
         });
       } catch (error) {
         throw asHttpsError(error);

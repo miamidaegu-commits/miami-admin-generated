@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore'
 import { httpsCallable } from 'firebase/functions'
 import { db, functions as firebaseFunctions } from '../../../../firebase'
+import { useTranslation } from '../../../i18n/LocalizationProvider.jsx'
 import {
   formatCreditTransactionActionTypeLabel,
   formatCreditTransactionCreatedAtDisplay,
@@ -22,6 +23,7 @@ import {
   getLessonStorageDateString,
   getTeacherName,
   formatTime,
+  getCreditTransactionSourceHistoryKind,
   isStudentPackageRowActive,
   sanitizePhoneForTel,
   parseYmdToLocalDate,
@@ -42,18 +44,8 @@ function cleanText(value, fallback = '-') {
   return text || fallback
 }
 
-const STUDENT_INVITATION_APP_URL_BY_PROJECT_ID = {
-  'daegu-miami-production': 'https://daegumiami.com',
-  'miami-e2e': 'https://miami-e2e.web.app',
-}
-
 function getStudentInvitationAppUrl() {
-  const configuredUrl = String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
-  if (configuredUrl) return configuredUrl
-  return (
-    STUDENT_INVITATION_APP_URL_BY_PROJECT_ID[import.meta.env.VITE_FIREBASE_PROJECT_ID] ||
-    'https://miami-e2e.web.app'
-  )
+  return String(import.meta.env.VITE_PUBLIC_APP_URL || '').trim().replace(/\/+$/, '')
 }
 
 const STUDENT_INVITATION_APP_URL = getStudentInvitationAppUrl()
@@ -484,18 +476,40 @@ function privateCancellationDetailLabel(row, pkg) {
   return labels.filter(Boolean).join(' · ')
 }
 
-function creditTransactionHistoryStatus(row) {
+function creditTransactionHistoryStatus(row, translate) {
   const actionType = String(row?.actionType || '').trim()
   const delta = Number(row?.deltaCount ?? 0)
-  if (actionType === 'group_deduct' || delta < 0) return '출석 처리됨'
+  const sourceHistoryKind = getCreditTransactionSourceHistoryKind(row)
+  const sourceStatusKey = {
+    fixed_no_show: 'student.history.status.fixedNoShowProcessed',
+    fixed_completed: 'student.history.status.fixedLessonCompleted',
+    fixed_no_show_reversal: 'student.history.status.fixedNoShowCanceled',
+  }[sourceHistoryKind]
+  if (sourceStatusKey) return translate(sourceStatusKey)
+  if (actionType === 'group_deduct') return '출석 처리됨'
   if (actionType === 'package_revoked') return '회수됨'
-  if (actionType.includes('restore') || actionType.includes('cancel') || delta > 0) {
+  if (actionType.includes('restore') || actionType.includes('cancel')) {
     return '차감 취소'
   }
+  const hasSourceMetadata = Boolean(
+    actionType ||
+      String(row?.sourceType || '').trim() ||
+      String(
+        row?.normalizedOutcome ||
+          row?.outcomeStatus ||
+          row?.outcome ||
+          row?.attendanceStatus ||
+          row?.reason ||
+          ''
+      ).trim()
+  )
+  if (!hasSourceMetadata && delta < 0) return '출석 처리됨'
+  if (!hasSourceMetadata && delta > 0) return '차감 취소'
   return formatCreditTransactionActionTypeLabel(actionType)
 }
 
 function buildStudentInvitationMessage({ email, resetLink }) {
+  if (!STUDENT_INVITATION_APP_URL) return ''
   return [
     '안녕하세요. 수업 예약 페이지 로그인 안내입니다.',
     '아래 링크를 눌러 비밀번호를 설정한 뒤 로그인해 주세요.',
@@ -617,6 +631,7 @@ export default function StudentsSection({
   formatStudentPackageCellSummary,
   studentPrivateBookingStats = [],
 }) {
+  const { t } = useTranslation()
   const [studentAccountLinkModalStudent, setStudentAccountLinkModalStudent] = useState(null)
   const [studentAccountEmail, setStudentAccountEmail] = useState('')
   const [studentAccountDisplayName, setStudentAccountDisplayName] = useState('')
@@ -880,14 +895,24 @@ export default function StudentsSection({
 
     const creditRows = studentHistoryCreditTransactions.map((row) => {
       const pkg = row.packageId ? studentHistoryPackageById.get(String(row.packageId)) : null
+      const sourceHistoryKind = getCreditTransactionSourceHistoryKind(row)
+      const fixedActionLabelKey =
+        sourceHistoryKind === 'fixed_no_show_reversal'
+          ? 'student.history.action.fixedNoShowReversal'
+          : ['fixed_no_show', 'fixed_completed'].includes(sourceHistoryKind)
+            ? 'student.history.action.fixedOutcomeDeduction'
+            : ''
+      const fixedActionLabel = fixedActionLabelKey
+        ? `${t(fixedActionLabelKey)} · ${formatCreditTransactionDeltaCountDisplay(row.deltaCount)}`
+        : ''
       return {
         key: `credit-${row.id}`,
         date: formatCreditTransactionCreatedAtDisplay(row.createdAt),
         time: '-',
         type: packageKindLabel(row.packageType) === '1:1' ? '1:1 수업' : '단체반 수업',
         teacher: cleanText(row.teacher),
-        title: cleanText(row.memo, '차감 이력'),
-        status: creditTransactionHistoryStatus(row),
+        title: fixedActionLabel || cleanText(row.memo, '차감 이력'),
+        status: creditTransactionHistoryStatus(row, t),
         packageTitle: cleanText(row.packageTitle || pkg?.title, '-'),
         delta: formatCreditTransactionDeltaCountDisplay(row.deltaCount),
         sortMs: docDateToMillis(row.createdAt),
@@ -903,6 +928,7 @@ export default function StudentsSection({
     studentHistoryPackageById,
     studentHistoryPrivateLessonById,
     studentHistoryPrivateReservations,
+    t,
   ])
 
   function openStudentAccountLinkModal(student) {

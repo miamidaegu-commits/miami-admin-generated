@@ -1,4 +1,5 @@
-import { test, expect } from '@playwright/test';
+import test from 'node:test';
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 test('teacher group page hides today schedule summary cards in source wiring', () => {
@@ -8,9 +9,9 @@ test('teacher group page hides today schedule summary cards in source wiring', (
     'utf8'
   );
 
-  expect(todaySchedulePanelSource).toContain("summaryVariant === 'hidden'");
-  expect(todaySchedulePanelSource).toContain('const summaryItems = (hideSummary');
-  expect(dashboardSource).toContain("activeSection === 'groups' && !isAdmin");
-  expect(dashboardSource).toContain("? 'hidden'");
-  expect(dashboardSource).toContain(": 'teacherPrivate'");
+  assert.match(todaySchedulePanelSource, /summaryVariant === 'hidden'/);
+  assert.match(todaySchedulePanelSource, /const summaryItems = \(hideSummary/);
+  assert.match(dashboardSource, /activeSection === 'groups' && !isAdmin/);
+  assert.match(dashboardSource, /\? 'hidden'/);
+  assert.match(dashboardSource, /: 'teacherPrivate'/);
 });

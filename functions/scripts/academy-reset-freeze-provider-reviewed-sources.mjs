@@ -5,7 +5,7 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
   }),
   Object.freeze({
     path: "functions/package.json",
-    sha256: "e1db767d0587d36da11a8d95e79a15f1204c0b51d288b6d46c4e35b7d6895309",
+    sha256: "ac831e32227100ac312d7c162c7de9721f3b40508de10d3330e2a2c4af8c3a52",
   }),
   Object.freeze({
     path: "functions/scripts/academy-functions-build-scope-contract.mjs",
@@ -62,4 +62,4 @@ export const PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITIES = Object.freeze([
 ]);
 
 export const EXPECTED_PROVIDER_ADAPTER_REVIEWED_SOURCE_IDENTITY_DIGEST =
-  "8bc830d688e98557cad1c945756740f9a1da1315230be690be242507fd6fc331";
+  "7ecee65f6c4010ec3bfe476a1dba504f8a8f50f671959d2e7b28fd3495275cd8";
